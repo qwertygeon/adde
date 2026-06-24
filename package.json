@@ -1,0 +1,40 @@
+{
+  "name": "adde",
+  "version": "0.1.0",
+  "description": "AI Driven Development Engine — ACP 기반으로 AI CLI 엔진을 채널에서 원격 구동하는 게이트웨이",
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "adde": "dist/cli/adde.js",
+    "add": "dist/cli/add.js"
+  },
+  "files": [
+    "dist",
+    "VERSION"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/cli/adde.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.1",
+    "eslint": "^9.39.1",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vitest": "^3.2.4"
+  }
+}

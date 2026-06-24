@@ -1,0 +1,59 @@
+name: Release
+
+# main 에 VERSION 변경이 push 되면 게이트 재실행 후 v{VERSION} 태그·GitHub Release 발행.
+# 서버측 자동화(github.token). 로컬 git/gh 변경은 사용자 확인(A-P004)과 별개 경로.
+# 근거: docs/_internal/RELEASING.md, design/08 §5, 루트 CLAUDE.md "릴리스·CI 자동화 경계".
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Re-run gates
+        run: |
+          pnpm run typecheck
+          pnpm run lint
+          pnpm test
+
+      - name: Read version
+        id: ver
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; skipping release."
+            exit 0
+          fi
+          NOTES=$(awk -v v="$VERSION" '
+            $0 ~ "^## \\[?" v "\\]?" {f=1; next}
+            f && /^## / {exit}
+            f {print}
+          ' CHANGELOG.md)
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "$TAG" --notes "${NOTES:-Release $TAG}"

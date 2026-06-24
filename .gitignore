@@ -1,0 +1,28 @@
+# === 비공개 문서 (로컬 보존 + private 백업 레포; public 추적 금지) ===
+/CLAUDE.md
+/.claude/
+/docs/_internal/
+/docs/specs/
+
+# === 시크릿 · 런타임 상태 ===
+.env
+*.env
+/state/
+# ADDE 런타임 설정 루트는 ~/.config/adde (레포 밖)이지만, 레포 내 우발 생성분도 차단
+**/state/
+
+# === Node / TypeScript ===
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+coverage/
+.npm/
+.pnpm-store/
+
+# === 에디터 / OS ===
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

@@ -1,6 +1,6 @@
 # ADDE — Ai Driven Development Engine
 
-> ⚠️ **상태: 설계 단계 (pre-implementation).** 아직 코드가 없다.
+> ⚠️ **상태: 초기 개발.** 설계 + 개발환경 스캐폴드(TypeScript) 완료, 기능 구현 착수 전.
 
 ADDE 는 tmux 위에서 도는 **AI CLI**(Claude Code / Codex 등)를 **채널**(Telegram / Obsidian; Discord 보류)에서 원격 구동하는 게이트웨이입니다. AI 가 개발 작업을 수행하고, 사람은 채팅으로 지시·승인·관찰합니다.
 
@@ -26,7 +26,8 @@ add    # adde 단축 별칭
 ## 상태 / 로드맵
 
 - [x] 설계 (ACP 우선 재설계 완료)
-- [ ] PoC (ACP 스파이크 · 권한 라우팅)
+- [x] 개발환경 스캐폴드 (TypeScript · pnpm · CI)
+- [~] PoC (ACP 스파이크 · 권한 라우팅)
 - [ ] MVP: `obsidian | telegram → claude(ACP)` 수직 슬라이스
 - [ ] Codex 백엔드 · Discord(보류) · 비-ACP CLI 스크래핑(보류)
 

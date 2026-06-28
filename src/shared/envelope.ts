@@ -19,7 +19,7 @@ export interface Envelope {
   v: 1;
   id: string;
   lane: string;
-  source: "telegram";
+  source: "telegram" | "obsidian";
   backend: "acp";
   engine: string;
   project: string;

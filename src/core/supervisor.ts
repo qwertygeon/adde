@@ -13,7 +13,8 @@ import { lanePaths, defaultBase } from "../shared/paths.js";
 import { AcpBackendImpl } from "../backend/acp/client.js";
 import type { AcpBackend } from "../backend/acp/client.js";
 import { createInjector } from "./injector.js";
-import { createTelegramSource } from "../src-adapters/telegram.js";
+import { createTelegramSource, createObsidianSource } from "../src-adapters/index.js";
+import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
 
 /** 런타임 ACP 어댑터 바이너리 경로. */
@@ -108,6 +109,8 @@ export async function supervisorUp(
 
     const paths = lanePaths(baseDir, proj, lane);
 
+    const channel: "telegram" | "obsidian" = conf.source === "obsidian" ? "obsidian" : "telegram";
+
     let backend: AcpBackend;
     if (opts?.acpFactory) {
       backend = opts.acpFactory(lane, adapterBin);
@@ -116,20 +119,25 @@ export async function supervisorUp(
       impl.configureLane(lane, {
         paths,
         addePolicy: { perm_tier: conf.perm_tier, allowlist: conf.allowlist },
+        cwd: conf.cwd,
+        channel,
       });
       backend = impl;
     }
 
     const pendingDecisions = new Map<string, (decision: "allow" | "deny") => void>();
 
-    const source = createTelegramSource({
-      lane,
-      proj,
-      engine: conf.engine || "claude",
-      paths,
-    });
+    const engine = conf.engine || "claude";
+    let source: Source;
+    if (conf.source === "obsidian") {
+      source = createObsidianSource({ lane, proj, engine, paths, conf });
+    } else {
+      const chatId =
+        conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
+      source = createTelegramSource({ lane, proj, engine, paths, chatId });
+    }
 
-    source.onCallbackQuery((reqId, decision) => {
+    source.onDecision((reqId, decision) => {
       const resolve = pendingDecisions.get(reqId);
       if (resolve) {
         pendingDecisions.delete(reqId);
@@ -144,7 +152,7 @@ export async function supervisorUp(
         });
 
       const sendPermPrompt = async () => {
-        await source.sendPermPrompt(0, req.id, req);
+        await source.requestPermission(req);
       };
 
       return gateRequestDecision(req, { sendPermPrompt, waitForDecision });

@@ -13,6 +13,7 @@ import type { LanePaths } from "../shared/paths.js";
 import { enqueue } from "../core/queue.js";
 import type { Envelope } from "../shared/envelope.js";
 import type { PermRequest } from "../gate/gate.js";
+import type { Source, DecisionCallback } from "./source.js";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const POLL_TIMEOUT_SECS = 30;
@@ -22,6 +23,8 @@ export interface TelegramConfig {
   proj: string;
   engine: string;
   paths: LanePaths;
+  /** 회신·권한 프롬프트 대상 chat id (conf chat_id). 미지정 시 out watch 비활성. */
+  chatId?: number | undefined;
 }
 
 interface TelegramUpdate {
@@ -42,9 +45,7 @@ interface TelegramUpdate {
 
 export type GateDecisionCallback = (requestId: string, decision: "allow" | "deny") => void;
 
-export interface TelegramSource {
-  start(): void;
-  stop(): void;
+export interface TelegramSource extends Source {
   sendReply(chatId: number, text: string, replyToMsgId?: number): Promise<void>;
   sendPermPrompt(chatId: number, reqId: string, req: PermRequest): Promise<{ messageId: number }>;
   onCallbackQuery(cb: GateDecisionCallback): void;
@@ -262,14 +263,25 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     return () => watcher.close();
   }
 
-  function start(defaultChatId: number = 0): void {
+  function start(): void {
     running = true;
     void pollLoop();
+    const defaultChatId = cfg.chatId ?? 0;
     if (defaultChatId) {
       void startOutWatch(defaultChatId).then((stop) => {
         stopWatcher = stop;
       });
     }
+  }
+
+  /** Source 계약: 권한 요청을 inline 버튼으로 표면화(chat_id 는 conf self-resolve). */
+  async function requestPermission(req: PermRequest): Promise<void> {
+    await sendPermPrompt(cfg.chatId ?? 0, req.id, req);
+  }
+
+  /** Source 계약: 결정 콜백 등록(= onCallbackQuery). */
+  function onDecision(cb: DecisionCallback): void {
+    onCallbackQuery(cb);
   }
 
   function stop(): void {
@@ -280,5 +292,13 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     }
   }
 
-  return { start, stop, sendReply, sendPermPrompt, onCallbackQuery };
+  return {
+    start,
+    stop,
+    sendReply,
+    sendPermPrompt,
+    onCallbackQuery,
+    requestPermission,
+    onDecision,
+  };
 }

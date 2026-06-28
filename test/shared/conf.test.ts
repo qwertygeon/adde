@@ -44,4 +44,32 @@ channel=telegram
     const result = parseLaneConf(conf);
     expect(result.allowlist).toBeDefined();
   });
+
+  it("cwd(프로젝트 폴더) 를 파싱한다 — 미지정 시 undefined", () => {
+    expect(parseLaneConf(minimalConf).cwd).toBeUndefined();
+    const conf = minimalConf + "cwd=/abs/project/dir\n";
+    expect(parseLaneConf(conf).cwd).toBe("/abs/project/dir");
+  });
+
+  it("chat_id 를 문자열로 보존한다", () => {
+    const conf = minimalConf + "chat_id=12345\n";
+    expect(parseLaneConf(conf).chat_id).toBe("12345");
+  });
+
+  it("obsidian 키(vault/inbox/approvals/outbox)를 파싱한다", () => {
+    const conf =
+      "source=obsidian\nchannel=obsidian\n" +
+      "vault=/abs/Vault\ninbox=adde/L/inbox.md\napprovals=adde/L/approvals.md\noutbox=adde/L/out/\n";
+    const result = parseLaneConf(conf);
+    expect(result.source).toBe("obsidian");
+    expect(result.vault).toBe("/abs/Vault");
+    expect(result.inbox).toBe("adde/L/inbox.md");
+    expect(result.approvals).toBe("adde/L/approvals.md");
+    expect(result.outbox).toBe("adde/L/out/");
+  });
+
+  it("빈 값 optional 키는 undefined 로 둔다", () => {
+    const conf = minimalConf + "cwd=\n";
+    expect(parseLaneConf(conf).cwd).toBeUndefined();
+  });
 });

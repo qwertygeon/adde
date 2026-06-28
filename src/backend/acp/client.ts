@@ -42,6 +42,10 @@ interface LaneConfig {
   paths?: LanePaths;
   addePolicy?: AddePolicy;
   channelWarn?: (msg: string) => void;
+  /** 레인별 엔진 작업 폴더(프로젝트 폴더 매핑). 미지정 시 process.cwd(). */
+  cwd?: string | undefined;
+  /** 권한 정규화 시 채널 표기. 미지정 시 telegram. */
+  channel?: "telegram" | "obsidian" | undefined;
 }
 
 interface LaneState {
@@ -91,6 +95,8 @@ export class AcpBackendImpl implements AcpBackend {
     const paths = config?.paths;
     const addePolicy = config?.addePolicy;
     const channelWarn = config?.channelWarn;
+    const laneCwd = config?.cwd && config.cwd.length > 0 ? config.cwd : process.cwd();
+    const channel = config?.channel ?? "telegram";
 
     const child = spawnEngine(this.adapterBin, []);
 
@@ -157,10 +163,10 @@ export class AcpBackendImpl implements AcpBackend {
             v: 1,
             id: params.sessionId,
             lane,
-            channel: "telegram",
+            channel,
             tool: params.toolCall.title ?? "unknown",
             detail: JSON.stringify(params.toolCall),
-            cwd: "",
+            cwd: laneCwd,
             ts: new Date().toISOString(),
           };
 
@@ -198,7 +204,7 @@ export class AcpBackendImpl implements AcpBackend {
     });
 
     const sessionResp = await conn.newSession({
-      cwd: process.cwd(),
+      cwd: laneCwd,
       mcpServers: [],
     });
 

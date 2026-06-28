@@ -36,5 +36,9 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "0.14.1",
+    "@zed-industries/claude-code-acp": "0.16.2"
   }
 }

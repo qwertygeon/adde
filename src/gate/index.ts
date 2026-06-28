@@ -3,4 +3,5 @@
  * fail-closed(A-P006): 타임아웃·오류·채널 도달 실패의 기본값은 deny.
  * 설계: docs/_internal/design/01-architecture.md §6.
  */
-export {};
+export { gateRequestDecision, DEFAULT_GATE_TIMEOUT_MS } from "./gate.js";
+export type { PermRequest, PermResponse, SendPermPrompt, GateOptions } from "./gate.js";

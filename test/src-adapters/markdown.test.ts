@@ -9,8 +9,8 @@ import {
   parseApprovals,
   finalizeApprovalDeny,
   isConflictFile,
-  createObsidianSource,
-} from "../../src/src-adapters/obsidian.js";
+  createMarkdownSource,
+} from "../../src/src-adapters/markdown.js";
 import type { Source } from "../../src/src-adapters/source.js";
 import type { PermRequest } from "../../src/gate/gate.js";
 import { lanePaths } from "../../src/shared/paths.js";
@@ -82,7 +82,7 @@ describe("approvals 파싱", () => {
     v: 1,
     id: "req-1",
     lane: "L",
-    channel: "obsidian",
+    channel: "markdown",
     tool: "Bash",
     detail: "rm -rf build/",
     cwd: "/proj",
@@ -140,15 +140,15 @@ describe("approvals 파싱", () => {
   });
 });
 
-describe("createObsidianSource (통합)", () => {
+describe("createMarkdownSource (통합)", () => {
   let tmpBase: string;
-  let vaultDir: string;
+  let rootDir: string;
   let paths: ReturnType<typeof lanePaths>;
   let conf: LaneConf;
   let source: Source | null = null;
 
   function makeSource(): Source {
-    return createObsidianSource({ lane: "L", proj: "myproj", engine: "claude", paths, conf });
+    return createMarkdownSource({ lane: "L", proj: "myproj", engine: "claude", paths, conf });
   }
 
   /** queueDir 부재 시 0 — readdirSync ENOENT 회피. */
@@ -158,20 +158,20 @@ describe("createObsidianSource (통합)", () => {
   }
 
   beforeEach(() => {
-    tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-obsidian-"));
-    vaultDir = path.join(tmpBase, "Vault");
-    fs.mkdirSync(vaultDir, { recursive: true });
+    tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-markdown-"));
+    rootDir = path.join(tmpBase, "Notes");
+    fs.mkdirSync(rootDir, { recursive: true });
     paths = lanePaths(tmpBase, "myproj", "L");
     fs.mkdirSync(paths.outDir, { recursive: true });
     conf = {
-      source: "obsidian",
+      source: "markdown",
       backend: "acp",
       engine: "claude",
-      channel: "obsidian",
+      channel: "markdown",
       perm_tier: "acp",
       acp_version: "v1",
       allowlist: [],
-      vault: vaultDir,
+      root: rootDir,
       inbox: "inbox.md",
     };
   });
@@ -182,21 +182,21 @@ describe("createObsidianSource (통합)", () => {
     fs.rmSync(tmpBase, { recursive: true, force: true });
   });
 
-  it("vault/inbox conf 누락 시 생성에서 throw (fail-closed)", () => {
+  it("root/inbox conf 누락 시 생성에서 throw (fail-closed)", () => {
     const bad: LaneConf = { ...conf };
-    delete bad.vault;
-    expect(() => createObsidianSource({ lane: "L", proj: "p", engine: "e", paths, conf: bad })).toThrow();
+    delete bad.root;
+    expect(() => createMarkdownSource({ lane: "L", proj: "p", engine: "e", paths, conf: bad })).toThrow();
   });
 
-  it("없는 vault 경로로 start 시 throw", () => {
-    conf.vault = path.join(tmpBase, "NoSuchVault");
+  it("없는 root 경로로 start 시 throw", () => {
+    conf.root = path.join(tmpBase, "NoSuchRoot");
     source = makeSource();
     expect(() => source!.start()).toThrow();
   });
 
   it("인박스의 체크된 send 블록을 envelope 으로 큐잉하고 sent 로 종단한다", async () => {
-    const inboxPath = path.join(vaultDir, "inbox.md");
-    fs.writeFileSync(inboxPath, "옵시디언에서 보낸 지시\n- [x] 📤 send\n");
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "마크다운 노트에서 보낸 지시\n- [x] 📤 send\n");
 
     source = makeSource();
     source.start(); // 기동 시 초기 1회 처리
@@ -208,8 +208,8 @@ describe("createObsidianSource (통합)", () => {
       string,
       unknown
     >;
-    expect(env["source"]).toBe("obsidian");
-    expect(env["text"]).toBe("옵시디언에서 보낸 지시");
+    expect(env["source"]).toBe("markdown");
+    expect(env["text"]).toBe("마크다운 노트에서 보낸 지시");
     expect(env["lane"]).toBe("L");
 
     // 인박스가 sent 종단으로 재작성됨
@@ -221,21 +221,21 @@ describe("createObsidianSource (통합)", () => {
   });
 
   it("동기 충돌 파일은 격리되고 큐잉되지 않는다", async () => {
-    fs.writeFileSync(path.join(vaultDir, "inbox.md"), "정상\n");
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "정상\n");
     source = makeSource();
     source.start();
 
     // start 이후 충돌 파일 생성 → watch 가 격리
-    const conflict = path.join(vaultDir, "inbox.sync-conflict-20260628-abc.md");
+    const conflict = path.join(rootDir, "inbox.sync-conflict-20260628-abc.md");
     fs.writeFileSync(conflict, "악성 트리거\n- [x] 📤 send\n");
 
-    await waitFor(() => fs.existsSync(path.join(vaultDir, ".conflicts", "inbox.sync-conflict-20260628-abc.md")));
+    await waitFor(() => fs.existsSync(path.join(rootDir, ".conflicts", "inbox.sync-conflict-20260628-abc.md")));
     expect(msgCount()).toBe(0);
   });
 
   it("권한 요청 → approvals 블록 기록 → allow 체크 감지 → onDecision(allow)", async () => {
-    const approvalsPath = path.join(vaultDir, "approvals.md");
-    fs.writeFileSync(path.join(vaultDir, "inbox.md"), "");
+    const approvalsPath = path.join(rootDir, "approvals.md");
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
     source.start();
 
@@ -246,7 +246,7 @@ describe("createObsidianSource (통합)", () => {
       v: 1,
       id: "req-allow",
       lane: "L",
-      channel: "obsidian",
+      channel: "markdown",
       tool: "Bash",
       detail: "ls",
       cwd: "/proj",
@@ -267,8 +267,8 @@ describe("createObsidianSource (통합)", () => {
     await waitFor(() => fs.readFileSync(approvalsPath, "utf8").includes("status=allow"));
   });
 
-  it("out/<id>.out 생성 시 vault 출력 노트를 작성한다(reply_ref 역참조 포함)", async () => {
-    fs.writeFileSync(path.join(vaultDir, "inbox.md"), "");
+  it("out/<id>.out 생성 시 마크다운 출력 노트를 작성한다(reply_ref 역참조 포함)", async () => {
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
     source.start();
 
@@ -276,7 +276,7 @@ describe("createObsidianSource (통합)", () => {
     fs.writeFileSync(path.join(paths.outDir, "msg-1.out.json"), JSON.stringify({ reply_ref: { channel_msg_id: "orig-9" } }));
     fs.writeFileSync(path.join(paths.outDir, "msg-1.out"), "에이전트 응답입니다");
 
-    const notePath = path.join(vaultDir, "out", "msg-1.md");
+    const notePath = path.join(rootDir, "out", "msg-1.md");
     await waitFor(() => fs.existsSync(notePath));
     const note = fs.readFileSync(notePath, "utf8");
     expect(note).toContain("에이전트 응답입니다");

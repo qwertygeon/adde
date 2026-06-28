@@ -56,13 +56,13 @@ channel=telegram
     expect(parseLaneConf(conf).chat_id).toBe("12345");
   });
 
-  it("obsidian 키(vault/inbox/approvals/outbox)를 파싱한다", () => {
+  it("markdown 키(root/inbox/approvals/outbox)를 파싱한다", () => {
     const conf =
-      "source=obsidian\nchannel=obsidian\n" +
-      "vault=/abs/Vault\ninbox=adde/L/inbox.md\napprovals=adde/L/approvals.md\noutbox=adde/L/out/\n";
+      "source=markdown\nchannel=markdown\n" +
+      "root=/abs/Notes\ninbox=adde/L/inbox.md\napprovals=adde/L/approvals.md\noutbox=adde/L/out/\n";
     const result = parseLaneConf(conf);
-    expect(result.source).toBe("obsidian");
-    expect(result.vault).toBe("/abs/Vault");
+    expect(result.source).toBe("markdown");
+    expect(result.root).toBe("/abs/Notes");
     expect(result.inbox).toBe("adde/L/inbox.md");
     expect(result.approvals).toBe("adde/L/approvals.md");
     expect(result.outbox).toBe("adde/L/out/");

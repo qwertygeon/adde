@@ -1,9 +1,10 @@
 /**
- * Obsidian 소스 어댑터 — 파일 핸드셰이크(버튼 없는 채널).
- * 설계: docs/_internal/design/09-obsidian-source-adapter.md.
+ * Markdown 소스 어댑터 — 파일 핸드셰이크(버튼 없는 채널).
+ * 임의 마크다운 에디터/동기 도구(대표 예: Obsidian)에서 노트 파일 편집만으로 구동.
+ * 설계: docs/_internal/design/09-markdown-source-adapter.md.
  * 인박스 노트 편집 + send 체크박스 → envelope → 큐.
  * 권한: approvals 노트에 ⏳ 블록 append → allow/deny 체크 감지 → 게이트 반영. 무응답 → 타임아웃 deny.
- * 출력: out/<id>.out 감시 → vault 출력 노트(one-file-per-message, atomic).
+ * 출력: out/<id>.out 감시 → 마크다운 출력 노트(one-file-per-message, atomic).
  * 동기 내성: *.sync-conflict* 격리·상태 마커 멱등 자기쓰기 가드·tmp→rename.
  */
 import { watch, existsSync, mkdirSync } from "node:fs";
@@ -21,7 +22,7 @@ import type { Source, DecisionCallback, Decision } from "./source.js";
 
 const DEBOUNCE_MS = 150;
 
-export interface ObsidianConfig {
+export interface MarkdownConfig {
   lane: string;
   proj: string;
   engine: string;
@@ -31,7 +32,7 @@ export interface ObsidianConfig {
 
 // --- 순수 파싱 (테스트 대상) -------------------------------------------------
 
-/** 동기 충돌 파일 판별 — 파싱·실행 금지 대상. */
+/** 동기 충돌 파일 판별 — 파싱·실행 금지 대상(Obsidian Sync/Syncthing 등). */
 export function isConflictFile(filename: string): boolean {
   return /\.sync-conflict|conflicted copy|\.conflicted\./i.test(filename);
 }
@@ -195,29 +196,29 @@ export function finalizeApprovalDeny(content: string, reqId: string, reason: str
 
 // --- 어댑터 ------------------------------------------------------------------
 
-/** vault 상대 경로를 절대경로로 해소한다. 필수 키 누락 시 throw(fail-closed). */
+/** root 상대 경로를 절대경로로 해소한다. 필수 키 누락 시 throw(fail-closed). */
 function resolvePaths(conf: LaneConf): {
-  vaultRoot: string;
+  rootDir: string;
   inboxPath: string;
   approvalsPath: string;
   outboxDir: string;
   quarantineDir: string;
 } {
-  if (!conf.vault) throw new Error("[obsidian] conf.vault 누락 — vault 절대경로 필수");
-  if (!conf.inbox) throw new Error("[obsidian] conf.inbox 누락 — 입력 노트(vault 상대) 필수");
-  const vaultRoot = conf.vault;
-  const inboxPath = join(vaultRoot, conf.inbox);
+  if (!conf.root) throw new Error("[markdown] conf.root 누락 — 마크다운 루트 절대경로 필수");
+  if (!conf.inbox) throw new Error("[markdown] conf.inbox 누락 — 입력 노트(root 상대) 필수");
+  const rootDir = conf.root;
+  const inboxPath = join(rootDir, conf.inbox);
   const inboxDir = dirname(inboxPath);
   const approvalsPath = conf.approvals
-    ? join(vaultRoot, conf.approvals)
+    ? join(rootDir, conf.approvals)
     : join(inboxDir, "approvals.md");
-  const outboxDir = conf.outbox ? join(vaultRoot, conf.outbox) : join(inboxDir, "out");
+  const outboxDir = conf.outbox ? join(rootDir, conf.outbox) : join(inboxDir, "out");
   const quarantineDir = join(inboxDir, ".conflicts");
-  return { vaultRoot, inboxPath, approvalsPath, outboxDir, quarantineDir };
+  return { rootDir, inboxPath, approvalsPath, outboxDir, quarantineDir };
 }
 
-export function createObsidianSource(cfg: ObsidianConfig): Source {
-  const { vaultRoot, inboxPath, approvalsPath, outboxDir, quarantineDir } = resolvePaths(cfg.conf);
+export function createMarkdownSource(cfg: MarkdownConfig): Source {
+  const { rootDir, inboxPath, approvalsPath, outboxDir, quarantineDir } = resolvePaths(cfg.conf);
 
   const decisionHandlers: DecisionCallback[] = [];
   const watchers: FSWatcher[] = [];
@@ -254,7 +255,7 @@ export function createObsidianSource(cfg: ObsidianConfig): Source {
       v: 1,
       id: msg.id,
       lane: cfg.lane,
-      source: "obsidian",
+      source: "markdown",
       backend: "acp",
       engine: cfg.engine,
       project: cfg.proj,
@@ -291,7 +292,7 @@ export function createObsidianSource(cfg: ObsidianConfig): Source {
         } catch (err) {
           // 필수 동작 실패 — 흡수 금지: 로그 후 트리거 미종단(다음 이벤트 재시도).
           console.error(
-            `[obsidian] enqueue 오류 lane=${cfg.lane}: ${err instanceof Error ? err.message : String(err)}`,
+            `[markdown] enqueue 오류 lane=${cfg.lane}: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       }
@@ -330,7 +331,7 @@ export function createObsidianSource(cfg: ObsidianConfig): Source {
       await rename(join(srcDir, filename), join(quarantineDir, filename));
     } catch (err) {
       console.error(
-        `[obsidian] 충돌파일 격리 실패 ${filename}: ${err instanceof Error ? err.message : String(err)}`,
+        `[markdown] 충돌파일 격리 실패 ${filename}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -356,7 +357,7 @@ export function createObsidianSource(cfg: ObsidianConfig): Source {
       await atomicWrite(join(outboxDir, `${id}.md`), `${header}${text}`);
     } catch (err) {
       console.error(
-        `[obsidian] 출력 노트 쓰기 오류 ${filename}: ${err instanceof Error ? err.message : String(err)}`,
+        `[markdown] 출력 노트 쓰기 오류 ${filename}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -383,8 +384,8 @@ export function createObsidianSource(cfg: ObsidianConfig): Source {
   }
 
   function start(): void {
-    if (!existsSync(vaultRoot)) {
-      throw new Error(`[obsidian] vault 경로 없음: ${vaultRoot}`);
+    if (!existsSync(rootDir)) {
+      throw new Error(`[markdown] root 경로 없음: ${rootDir}`);
     }
     running = true;
 
@@ -405,7 +406,7 @@ export function createObsidianSource(cfg: ObsidianConfig): Source {
     const dirs = new Set([inboxDir, approvalsDir]);
     for (const dir of dirs) watchDir(dir, (filename) => dispatch(dir, filename));
 
-    // out 디렉터리 감시 → vault 출력 노트.
+    // out 디렉터리 감시 → 마크다운 출력 노트.
     mkdirSync(cfg.paths.outDir, { recursive: true });
     mkdirSync(outboxDir, { recursive: true });
     watchDir(cfg.paths.outDir, (filename) => {

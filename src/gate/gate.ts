@@ -10,7 +10,7 @@ export interface PermRequest {
   v: 1;
   id: string;
   lane: string;
-  channel: "telegram" | "obsidian";
+  channel: "telegram" | "markdown";
   tool: string;
   detail: string;
   cwd: string;

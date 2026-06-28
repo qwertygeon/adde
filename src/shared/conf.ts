@@ -3,7 +3,7 @@
  * 계약 03 §7: source/backend/engine/channel/perm_tier/acp_version/allowlist.
  * 누락 필드 기본값 적용, 알 수 없는 키 무시(forward-compat).
  * cwd: 레인별 엔진 작업 폴더(프로젝트 폴더 매핑). 미지정 시 슈퍼바이저 실행 cwd.
- * obsidian 전용: vault/inbox/approvals/outbox. chat_id: telegram 회신 대상.
+ * markdown 전용: root/inbox/approvals/outbox. chat_id: telegram 회신 대상.
  */
 
 export interface LaneConf {
@@ -18,13 +18,13 @@ export interface LaneConf {
   cwd?: string;
   /** telegram 회신 대상 chat id (문자열 보존, 어댑터가 숫자 변환). */
   chat_id?: string;
-  /** obsidian vault 루트(절대경로). */
-  vault?: string;
-  /** obsidian 입력 노트(vault 상대). */
+  /** markdown 루트 디렉터리(절대경로, 예: Obsidian vault). */
+  root?: string;
+  /** markdown 입력 노트(root 상대). */
   inbox?: string;
-  /** obsidian 승인 노트(vault 상대). 미지정 시 inbox 형제 approvals.md. */
+  /** markdown 승인 노트(root 상대). 미지정 시 inbox 형제 approvals.md. */
   approvals?: string;
-  /** obsidian 출력 디렉터리(vault 상대). 미지정 시 inbox 형제 out/. */
+  /** markdown 출력 디렉터리(root 상대). 미지정 시 inbox 형제 out/. */
   outbox?: string;
 }
 
@@ -60,7 +60,7 @@ export function parseLaneConf(text: string): LaneConf {
   };
 
   // optional 필드는 존재할 때만 채운다(부재 = undefined).
-  const optional = ["cwd", "chat_id", "vault", "inbox", "approvals", "outbox"] as const;
+  const optional = ["cwd", "chat_id", "root", "inbox", "approvals", "outbox"] as const;
   for (const key of optional) {
     const value = conf[key];
     if (value !== undefined && value.length > 0) {

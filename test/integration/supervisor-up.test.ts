@@ -104,17 +104,17 @@ describe("supervisorUp (SC-022 conf 수만큼 기동)", () => {
   });
 });
 
-describe("supervisorUp source 분기 (obsidian)", () => {
-  it("source=obsidian conf 는 obsidian 어댑터로 기동된다 (running)", async () => {
-    const vaultDir = path.join(tmpBase, "Vault");
-    fs.mkdirSync(vaultDir, { recursive: true });
-    const obsidianConf =
-      "source=obsidian\nbackend=acp\nengine=claude-code-acp\nchannel=obsidian\n" +
-      `perm_tier=acp\nacp_version=v1\nvault=${vaultDir}\ninbox=inbox.md\n`;
-    const { base } = setupProject("obsproj", { "obsidian-claude": obsidianConf });
+describe("supervisorUp source 분기 (markdown)", () => {
+  it("source=markdown conf 는 markdown 어댑터로 기동된다 (running)", async () => {
+    const rootDir = path.join(tmpBase, "Notes");
+    fs.mkdirSync(rootDir, { recursive: true });
+    const markdownConf =
+      "source=markdown\nbackend=acp\nengine=claude-code-acp\nchannel=markdown\n" +
+      `perm_tier=acp\nacp_version=v1\nroot=${rootDir}\ninbox=inbox.md\n`;
+    const { base } = setupProject("mdproj", { "markdown-claude": markdownConf });
     const fakeAcpFactory = makeFakeAcpFactory();
 
-    const result = await supervisorUp("obsproj", { base, acpFactory: fakeAcpFactory });
+    const result = await supervisorUp("mdproj", { base, acpFactory: fakeAcpFactory });
 
     expect(result.lanes).toHaveLength(1);
     expect(result.lanes[0]?.status).toBe("running");

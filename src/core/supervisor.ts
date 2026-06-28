@@ -13,7 +13,7 @@ import { lanePaths, defaultBase } from "../shared/paths.js";
 import { AcpBackendImpl } from "../backend/acp/client.js";
 import type { AcpBackend } from "../backend/acp/client.js";
 import { createInjector } from "./injector.js";
-import { createTelegramSource, createObsidianSource } from "../src-adapters/index.js";
+import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
 
@@ -109,7 +109,7 @@ export async function supervisorUp(
 
     const paths = lanePaths(baseDir, proj, lane);
 
-    const channel: "telegram" | "obsidian" = conf.source === "obsidian" ? "obsidian" : "telegram";
+    const channel: "telegram" | "markdown" = conf.source === "markdown" ? "markdown" : "telegram";
 
     let backend: AcpBackend;
     if (opts?.acpFactory) {
@@ -129,8 +129,8 @@ export async function supervisorUp(
 
     const engine = conf.engine || "claude";
     let source: Source;
-    if (conf.source === "obsidian") {
-      source = createObsidianSource({ lane, proj, engine, paths, conf });
+    if (conf.source === "markdown") {
+      source = createMarkdownSource({ lane, proj, engine, paths, conf });
     } else {
       const chatId =
         conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;

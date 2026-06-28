@@ -1,4 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { shouldAutoAllow } from "../../src/backend/acp/client.js";
+
+// A2/DEC-002: allowlist auto-allow 판정
+describe("shouldAutoAllow (A2 allowlist)", () => {
+  it("도구명이 allowlist 에 있으면 true", () => {
+    expect(shouldAutoAllow(["Read", "Grep"], "Read")).toBe(true);
+  });
+  it("allowlist 에 없으면 false (게이트 경로 유지)", () => {
+    expect(shouldAutoAllow(["Read"], "Bash")).toBe(false);
+  });
+  it("allowlist 미지정/빈 배열이면 false", () => {
+    expect(shouldAutoAllow(undefined, "Read")).toBe(false);
+    expect(shouldAutoAllow([], "Read")).toBe(false);
+  });
+});
 
 // SC-010: available_commands_update 이벤트를 수신해도 무크래시 처리
 // fake ACP quirk 재현: turn 완료 전 prompt 큐잉·protocolVersion 1 스키마 형태

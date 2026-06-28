@@ -119,6 +119,26 @@ export async function isDone(paths: LanePaths, id: string): Promise<boolean> {
   }
 }
 
+/**
+ * 해당 id 가 큐/처리/출력 어디든 이미 존재하는지 검사 — 크래시 재개 시 중복 enqueue 방지.
+ * queue/<ts>-<id>.msg · processing/<id>.msg · out/<id>.out 중 하나라도 있으면 true.
+ */
+export async function hasId(paths: LanePaths, id: string): Promise<boolean> {
+  if (await isDone(paths, id)) return true;
+  try {
+    await access(join(paths.processingDir, processingFileName(id)));
+    return true;
+  } catch {
+    // processing 에 없음 — 큐 검사로 진행
+  }
+  try {
+    const files = await readdir(paths.queueDir);
+    return files.some((f) => f.endsWith(`-${id}.msg`));
+  } catch {
+    return false;
+  }
+}
+
 export interface OutSidecar {
   reply_ref?: { channel_msg_id: string; thread?: string };
   ts?: string;

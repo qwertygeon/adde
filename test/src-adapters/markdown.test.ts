@@ -4,7 +4,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import {
   parseInbox,
-  inboxTerminalLine,
+  sentLine,
+  sendingLine,
   renderApprovalBlock,
   parseApprovals,
   finalizeApprovalDeny,
@@ -15,9 +16,6 @@ import type { Source } from "../../src/src-adapters/source.js";
 import type { PermRequest } from "../../src/gate/gate.js";
 import { lanePaths } from "../../src/shared/paths.js";
 import type { LaneConf } from "../../src/shared/conf.js";
-
-let idSeq = 0;
-const genId = (): string => `id-${++idSeq}`;
 
 /** 실시간 폴링 대기 — fs.watch 이벤트 지연 흡수. */
 async function waitFor(cond: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -38,42 +36,58 @@ describe("isConflictFile", () => {
   });
 });
 
-describe("parseInbox", () => {
-  beforeEach(() => {
-    idSeq = 0;
+describe("parseInbox (actions)", () => {
+  it("체크된 send 트리거 직전 세그먼트를 fresh 액션으로 추출한다", () => {
+    const r = parseInbox("첫 메시지\n- [x] 📤 send\n");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh", text: "첫 메시지", lineIndex: 1 });
   });
 
-  it("체크된 send 박스 직전 세그먼트를 메시지로 추출한다", () => {
-    const content = "첫 메시지\n- [x] 📤 send\n";
-    const r = parseInbox(content, genId);
-    expect(r.messages).toHaveLength(1);
-    expect(r.messages[0]!.text).toBe("첫 메시지");
-    expect(r.messages[0]!.lineIndex).toBe(1);
+  it("미체크 send 트리거는 액션을 만들지 않는다", () => {
+    expect(parseInbox("작성 중\n- [ ] 📤 send\n").actions).toHaveLength(0);
   });
 
-  it("미체크 send 박스는 메시지를 만들지 않는다", () => {
-    const r = parseInbox("작성 중\n- [ ] 📤 send\n", genId);
-    expect(r.messages).toHaveLength(0);
+  it("빈 세그먼트의 체크 send 는 empty 액션", () => {
+    const r = parseInbox("- [x] 📤 send\n");
+    expect(r.actions).toEqual([{ kind: "empty", text: "", lineIndex: 0 }]);
   });
 
-  it("빈 세그먼트의 체크 send 는 empty 로 종단 마킹한다(메시지 없음)", () => {
-    const r = parseInbox("- [x] 📤 send\n", genId);
-    expect(r.messages).toHaveLength(0);
-    expect(r.changed).toBe(true);
-    expect(r.lines[0]).toContain("empty");
-  });
-
-  it("종단(sent) 마커는 세그먼트 경계로 작동한다 — 다중 메시지", () => {
-    const content = ["보낸 메시지", inboxTerminalLine("old"), "두 번째", "- [x] 📤 send"].join("\n");
-    const r = parseInbox(content, genId);
-    expect(r.messages).toHaveLength(1);
-    expect(r.messages[0]!.text).toBe("두 번째");
+  it("종단(sent) 마커는 경계로 작동한다 — 다중 메시지", () => {
+    const content = ["보낸 메시지", sentLine("old"), "두 번째", "- [x] 📤 send"].join("\n");
+    const r = parseInbox(content);
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh", text: "두 번째" });
   });
 
   it("종단 마커는 다시 트리거로 인식되지 않는다(멱등)", () => {
-    const content = "x\n" + inboxTerminalLine("id-x") + "\n";
-    const r = parseInbox(content, genId);
-    expect(r.messages).toHaveLength(0);
+    expect(parseInbox("x\n" + sentLine("id-x") + "\n").actions).toHaveLength(0);
+  });
+
+  // A4: 전용 라벨 고정 — 'send' 정확 일치만 트리거
+  it("A4: 본문에 send 가 포함된 체크박스는 트리거가 아니다", () => {
+    const r = parseInbox("please send the file to me\n- [x] please send the file\n");
+    expect(r.actions).toHaveLength(0);
+  });
+
+  it("A4: 라벨이 정확히 send 면(이모지 허용) 트리거", () => {
+    expect(parseInbox("msg\n- [x] send\n").actions[0]).toMatchObject({ kind: "fresh" });
+    expect(parseInbox("msg\n- [x] 🚀 send\n").actions[0]).toMatchObject({ kind: "fresh" });
+  });
+
+  it("A4: 트리거가 아닌 사용자 체크박스는 본문에 포함(경계 아님)", () => {
+    const r = parseInbox("- [ ] buy milk\n해주세요\n- [x] send\n");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]!.text).toContain("buy milk");
+    expect(r.actions[0]!.text).toContain("해주세요");
+  });
+
+  // A3: sending 마커는 resume 액션
+  it("A3: sending 마커는 resume 액션으로 id 를 보존한다", () => {
+    const content = ["재개 메시지", sendingLine("crash-id")].join("\n");
+    const r = parseInbox(content);
+    expect(r.actions).toEqual([
+      { kind: "resume", id: "crash-id", text: "재개 메시지", lineIndex: 1 },
+    ]);
   });
 });
 
@@ -194,6 +208,21 @@ describe("createMarkdownSource (통합)", () => {
     expect(() => source!.start()).toThrow();
   });
 
+  // A1: 제어 노트가 AI 작업폴더(cwd) 내부면 fail-closed 기동 거부
+  it("A1: inbox 가 cwd 내부면 start 거부(자기승인 방지)", () => {
+    conf.cwd = rootDir; // 작업폴더 = 노트 루트 → inbox 가 cwd 내부
+    source = makeSource();
+    expect(() => source!.start()).toThrow(/자기승인|cwd/);
+  });
+
+  it("A1: 제어 노트가 cwd 밖이면 정상 기동", () => {
+    conf.cwd = path.join(tmpBase, "project"); // 노트 루트와 분리
+    fs.mkdirSync(conf.cwd, { recursive: true });
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
+    source = makeSource();
+    expect(() => source!.start()).not.toThrow();
+  });
+
   it("인박스의 체크된 send 블록을 envelope 으로 큐잉하고 sent 로 종단한다", async () => {
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "마크다운 노트에서 보낸 지시\n- [x] 📤 send\n");
@@ -218,6 +247,42 @@ describe("createMarkdownSource (통합)", () => {
     // 자기쓰기 가드: 종단 후 추가 enqueue 없음
     await new Promise((r) => setTimeout(r, 200));
     expect(msgCount()).toBe(1);
+  });
+
+  // A3: 크래시(enqueue 전 sending 마킹만 남음) → 재기동 시 정확히 1회 enqueue
+  it("A3: sending 마커가 큐에 없으면 재기동 시 재enqueue 후 sent 종단", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    // 크래시 시뮬레이션: sending <id> 만 남고 enqueue 는 안 된 상태
+    fs.writeFileSync(inboxPath, `복구될 메시지\n${sendingLine("crash-1")}\n`);
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => msgCount() >= 1);
+    const files = fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg"));
+    expect(files.some((f) => f.includes("crash-1"))).toBe(true);
+    const env = JSON.parse(fs.readFileSync(path.join(paths.queueDir, files[0]!), "utf8")) as Record<string, unknown>;
+    expect(env["id"]).toBe("crash-1");
+    expect(env["text"]).toBe("복구될 메시지");
+
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("sent crash-1"));
+    // 중복 없음
+    await new Promise((r) => setTimeout(r, 150));
+    expect(msgCount()).toBe(1);
+  });
+
+  // A3: 이미 처리된 sending(out 존재) → 재enqueue 없이 종단만
+  it("A3: sending 마커의 id 가 이미 out 에 있으면 재enqueue 하지 않는다", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, `이미 처리됨\n${sendingLine("done-1")}\n`);
+    // out/<id>.out 존재 = 이미 완료된 메시지
+    fs.writeFileSync(path.join(paths.outDir, "done-1.out"), "응답");
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("sent done-1"));
+    expect(msgCount()).toBe(0); // 큐에 재enqueue 되지 않음
   });
 
   it("동기 충돌 파일은 격리되고 큐잉되지 않는다", async () => {

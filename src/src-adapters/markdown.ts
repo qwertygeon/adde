@@ -10,11 +10,11 @@
 import { watch, existsSync, mkdirSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
-import { join, dirname, basename } from "node:path";
+import { join, dirname, basename, relative, isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
 import type { LaneConf } from "../shared/conf.js";
-import { enqueue } from "../core/queue.js";
+import { enqueue, hasId } from "../core/queue.js";
 import type { Envelope } from "../shared/envelope.js";
 import type { PermRequest } from "../gate/gate.js";
 import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
@@ -37,66 +37,91 @@ export function isConflictFile(filename: string): boolean {
   return /\.sync-conflict|conflicted copy|\.conflicted\./i.test(filename);
 }
 
-const SEND_BOX = /^\s*-\s*\[[ x]\]\s+.*\bsend\b/i;
-const CHECKED_SEND = /^\s*-\s*\[x\]\s+.*\bsend\b/i;
-const INBOX_TERMINAL = /^\s*-\s*\[x\]\s+.*\b(sent|empty)\b/i;
+/** 체크박스 라인 파싱: `- [ ]`/`- [x]` + 라벨. */
+const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)$/;
 
-export interface InboxMessage {
-  id: string;
-  text: string;
+/** 라벨 앞쪽의 이모지·기호·공백을 제거하고 소문자화한 코어 토큰. */
+function labelCore(label: string): string {
+  return label.replace(/^[^\p{L}]+/u, "").toLowerCase();
+}
+
+/** send 트리거 라벨 판별 — 코어가 정확히 'send'(A4: 부분일치 금지). */
+function isSendLabel(label: string): boolean {
+  return labelCore(label) === "send";
+}
+
+/** 인박스 액션 — main 이 id 부여·enqueue·종단 마킹을 수행. */
+export interface InboxAction {
+  /** fresh=신규 트리거(새 id 필요) · resume=`sending <id>` 재개 · empty=빈 트리거. */
+  kind: "fresh" | "resume" | "empty";
   lineIndex: number;
+  text: string;
+  /** resume 시 기존 id. */
+  id?: string;
 }
 
 export interface InboxParse {
-  messages: InboxMessage[];
+  actions: InboxAction[];
   lines: string[];
   trailingNewline: boolean;
-  /** 빈 트리거 종단화 등으로 lines 가 이미 변경됐는지. */
-  changed: boolean;
+}
+
+/** send 트리거 라인을 단계별 마커로 재작성하는 헬퍼(A3 2단계 내구 마킹). */
+export function sendingLine(id: string): string {
+  return `- [x] ⏳ sending ${id}`;
+}
+export function sentLine(id: string): string {
+  return `- [x] ✅ sent ${id}`;
+}
+export function emptyLine(): string {
+  return "- [x] ⚠️ empty (no message)";
 }
 
 /**
- * 인박스 본문에서 actionable send 블록을 추출한다(파일은 쓰지 않음).
- * - 경계: send 체크박스(체크/미체크) 또는 종단 마커(sent/empty) 라인.
- * - 체크된 send 박스의 직전 세그먼트가 메시지. 빈 세그먼트는 즉시 종단 마킹(재발화 방지).
- * 호출자가 enqueue 성공 후 messages[].lineIndex 라인을 종단 마커로 재작성한다.
+ * 인박스 본문을 파싱해 액션 목록을 만든다(파일은 쓰지 않음, id 부여도 main 책임).
+ * - 경계 라인: send 트리거(라벨=send)·`sending <id>`·종단(`sent`/`empty`) 체크박스.
+ * - 그 외 체크박스(사용자 todo 등)는 메시지 본문으로 취급(경계 아님).
+ * - 체크된 send 트리거 직전 세그먼트가 메시지(빈 세그먼트는 empty 액션).
+ * - `sending <id>` 는 크래시 재개 후보(resume) — main 이 hasId 로 존재검사 후 보정.
  */
-export function parseInbox(content: string, genId: () => string): InboxParse {
+export function parseInbox(content: string): InboxParse {
   const trailingNewline = content.endsWith("\n");
   const lines = content.split("\n");
-  const messages: InboxMessage[] = [];
+  const actions: InboxAction[] = [];
   let segmentStart = 0;
-  let changed = false;
+
+  const segment = (end: number): string => lines.slice(segmentStart, end).join("\n").trim();
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
+    const cb = CHECKBOX.exec(lines[i]!);
+    if (!cb) continue; // 일반 텍스트 — 세그먼트 본문
 
-    if (INBOX_TERMINAL.test(line)) {
+    const checked = cb[1]!.toLowerCase() === "x";
+    const label = cb[2]!.trim();
+    const core = labelCore(label);
+
+    if (core.startsWith("sending")) {
+      const m = /sending\s+(\S+)/i.exec(label);
+      if (m) actions.push({ kind: "resume", id: m[1]!, text: segment(i), lineIndex: i });
       segmentStart = i + 1;
       continue;
     }
-
-    if (SEND_BOX.test(line)) {
-      if (CHECKED_SEND.test(line)) {
-        const text = lines.slice(segmentStart, i).join("\n").trim();
-        if (text.length > 0) {
-          const id = genId();
-          messages.push({ id, text, lineIndex: i });
-        } else {
-          lines[i] = "- [x] ⚠️ empty (no message)";
-          changed = true;
-        }
-      }
-      segmentStart = i + 1;
+    if (core.startsWith("sent") || core.startsWith("empty")) {
+      segmentStart = i + 1; // 종단 마커 — 경계
+      continue;
     }
+    if (isSendLabel(label)) {
+      if (checked) {
+        const text = segment(i);
+        actions.push(text.length > 0 ? { kind: "fresh", text, lineIndex: i } : { kind: "empty", text: "", lineIndex: i });
+      }
+      segmentStart = i + 1; // 체크/미체크 무관 경계
+      continue;
+    }
+    // send/sent/sending/empty 가 아닌 체크박스 → 본문(경계 아님, segmentStart 유지)
   }
 
-  return { messages, lines, trailingNewline, changed };
-}
-
-/** 인박스 send 트리거 라인을 종단(sent) 마커로 재작성. */
-export function inboxTerminalLine(id: string): string {
-  return `- [x] ✅ sent ${id}`;
+  return { actions, lines, trailingNewline };
 }
 
 const PERM_MARKER = /<!--\s*adde:perm\s+id=(\S+)\s+status=(\S+)\s*-->/;
@@ -250,18 +275,18 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     return run;
   }
 
-  function normalize(msg: InboxMessage): Envelope {
+  function normalize(id: string, text: string): Envelope {
     return {
       v: 1,
-      id: msg.id,
+      id,
       lane: cfg.lane,
       source: "markdown",
       backend: "acp",
       engine: cfg.engine,
       project: cfg.proj,
       ts: new Date().toISOString(),
-      text: msg.text,
-      reply_ref: { channel_msg_id: msg.id },
+      text,
+      reply_ref: { channel_msg_id: id },
     };
   }
 
@@ -273,6 +298,10 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     }
   }
 
+  function joinLines(lines: string[], trailingNewline: boolean): string {
+    return lines.join("\n") + (trailingNewline ? "\n" : "");
+  }
+
   async function handleInbox(): Promise<void> {
     if (inboxBusy) return;
     inboxBusy = true;
@@ -281,25 +310,50 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       if (content === null) return;
       if (lastSelfWrite.get(inboxPath) === content) return; // 자기쓰기 echo
 
-      const parsed = parseInbox(content, randomUUID);
-      let dirty = parsed.changed;
+      const { actions, lines, trailingNewline } = parseInbox(content);
+      if (actions.length === 0) return;
 
-      for (const m of parsed.messages) {
+      // Phase A: fresh→id 부여+sending 마킹, empty→마킹 (내구 기록 후 enqueue).
+      const pending: Array<{ id: string; text: string; lineIndex: number; resume: boolean }> = [];
+      let dirtyA = false;
+      for (const a of actions) {
+        if (a.kind === "empty") {
+          lines[a.lineIndex] = emptyLine();
+          dirtyA = true;
+        } else if (a.kind === "fresh") {
+          const id = randomUUID();
+          lines[a.lineIndex] = sendingLine(id);
+          dirtyA = true;
+          pending.push({ id, text: a.text, lineIndex: a.lineIndex, resume: false });
+        } else {
+          // resume: 라인은 이미 `sending <id>` — 그대로 두고 존재검사 후 종단.
+          pending.push({ id: a.id!, text: a.text, lineIndex: a.lineIndex, resume: true });
+        }
+      }
+      if (dirtyA) await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
+
+      // enqueue (resume 이고 이미 존재하면 스킵) → 성공분만 종단 후보.
+      const finalize: Array<{ id: string; lineIndex: number }> = [];
+      for (const p of pending) {
         try {
-          await enqueue(cfg.paths, normalize(m));
-          parsed.lines[m.lineIndex] = inboxTerminalLine(m.id);
-          dirty = true;
+          if (p.resume && (await hasId(cfg.paths, p.id))) {
+            finalize.push(p); // 이미 enqueue 됨 — 종단만
+            continue;
+          }
+          await enqueue(cfg.paths, normalize(p.id, p.text));
+          finalize.push(p);
         } catch (err) {
-          // 필수 동작 실패 — 흡수 금지: 로그 후 트리거 미종단(다음 이벤트 재시도).
+          // 필수 동작 실패 — 흡수 금지: 로그 후 sending 유지(재기동/다음 이벤트 재개).
           console.error(
-            `[markdown] enqueue 오류 lane=${cfg.lane}: ${err instanceof Error ? err.message : String(err)}`,
+            `[markdown] enqueue 오류 lane=${cfg.lane} id=${p.id}: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       }
 
-      if (dirty) {
-        const next = parsed.lines.join("\n") + (parsed.trailingNewline ? "\n" : "");
-        await atomicWrite(inboxPath, next);
+      // Phase B: enqueue 확정분을 sent 로 종단.
+      if (finalize.length > 0) {
+        for (const f of finalize) lines[f.lineIndex] = sentLine(f.id);
+        await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
       }
     } finally {
       inboxBusy = false;
@@ -387,6 +441,26 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     if (!existsSync(rootDir)) {
       throw new Error(`[markdown] root 경로 없음: ${rootDir}`);
     }
+
+    // A1: 제어 노트가 AI 작업폴더(cwd) 내부면 자기승인 위험 → fail-closed 기동 거부.
+    const effectiveCwd =
+      cfg.conf.cwd && cfg.conf.cwd.length > 0 ? resolve(cfg.conf.cwd) : process.cwd();
+    const isInside = (child: string, parent: string): boolean => {
+      const rel = relative(parent, child);
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    };
+    for (const [name, p] of [
+      ["inbox", inboxPath],
+      ["approvals", approvalsPath],
+      ["outbox", outboxDir],
+    ] as const) {
+      if (isInside(p, effectiveCwd)) {
+        throw new Error(
+          `[markdown] 제어 노트(${name})가 AI 작업폴더 내부에 있음: ${p} (cwd=${effectiveCwd}) — 자기승인 위험, cwd 밖으로 분리 필요`,
+        );
+      }
+    }
+
     running = true;
 
     const inboxDir = dirname(inboxPath);

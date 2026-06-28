@@ -24,6 +24,11 @@ import type { PermRequest, PermResponse } from "../../gate/gate.js";
 import type { AddePolicy, EngineEffective } from "./perm-diff.js";
 import { comparePerm, formatWarn } from "./perm-diff.js";
 
+/** allowlist 자동 허용 판정 — 도구명이 레인 allowlist 에 있으면 true (A2/DEC-002). */
+export function shouldAutoAllow(allowlist: string[] | undefined, toolName: string): boolean {
+  return allowlist?.includes(toolName) ?? false;
+}
+
 /** backend 가 코어에 노출하는 동사 인터페이스 (plan §인터페이스계약). */
 export interface AcpBackend {
   caps(): {
@@ -155,6 +160,25 @@ export class AcpBackendImpl implements AcpBackend {
         async requestPermission(
           params: RequestPermissionRequest,
         ): Promise<RequestPermissionResponse> {
+          const toolName = params.toolCall.title ?? "unknown";
+
+          // A2: allowlist 자동 허용 — 채널 프롬프트 없이 allow 로 결정(게이트는 끄지 않고 결정).
+          // 투명성(A-P006 no-silent): 트랜스크립트에 auto-allow 기록.
+          if (shouldAutoAllow(addePolicy?.allowlist, toolName)) {
+            const allowOption = params.options.find(
+              (o) => o.kind === "allow_once" || o.kind === "allow_always",
+            );
+            if (allowOption) {
+              if (paths) {
+                await appendTranscript(paths, {
+                  sessionUpdate: "adde_auto_allow",
+                  message: `auto-allow (allowlist): ${toolName}`,
+                }).catch(() => {});
+              }
+              return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
+            }
+          }
+
           if (!laneRef.state?.permHandler) {
             return { outcome: { outcome: "cancelled" } };
           }
@@ -164,7 +188,7 @@ export class AcpBackendImpl implements AcpBackend {
             id: params.sessionId,
             lane,
             channel,
-            tool: params.toolCall.title ?? "unknown",
+            tool: toolName,
             detail: JSON.stringify(params.toolCall),
             cwd: laneCwd,
             ts: new Date().toISOString(),

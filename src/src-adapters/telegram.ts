@@ -43,6 +43,18 @@ const STOP_WAIT_MS = 3_000;
 const ENQUEUE_FAIL_THRESHOLD = 3;
 /** enqueue 실패 지속 동안 폴 사이에 적용하는 백오프. */
 const ENQUEUE_BACKOFF_MS = 5_000;
+/** 429 레이트리밋 최대 재시도 횟수(012-P). */
+const MAX_RATE_LIMIT_RETRIES = 3;
+/** retry_after 대기 상한(012-P) — 비정상적으로 큰 값으로 영구 hang 방지. */
+const RETRY_AFTER_CAP_MS = 60_000;
+/** 폴 오류 지수 백오프 base·상한(012-Q). */
+const POLL_BACKOFF_BASE_MS = 1_000;
+const POLL_BACKOFF_MAX_MS = 30_000;
+
+/** 폴 오류 지수 백오프 간격(012-Q): min(base·2^(n-1), max). n=연속 실패 횟수(1부터). */
+export function pollBackoffMs(failures: number): number {
+  return Math.min(POLL_BACKOFF_BASE_MS * 2 ** Math.max(0, failures - 1), POLL_BACKOFF_MAX_MS);
+}
 
 /** abort 가능한 sleep — 신호 시 즉시 resolve(정지 응답성 유지). */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -117,22 +129,38 @@ async function callBotApi(
   signal?: AbortSignal,
 ): Promise<unknown> {
   const url = `${TELEGRAM_API}/bot${token}/${method}`;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-    ...(signal ? { signal } : {}),
-  });
 
-  if (!resp.ok) {
-    throw new Error(`[telegram] ${method} 실패: HTTP ${resp.status}`);
-  }
+  for (let attempt = 0; ; attempt++) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+      ...(signal ? { signal } : {}),
+    });
 
-  const body = (await resp.json()) as { ok: boolean; result?: unknown };
-  if (!body.ok) {
-    throw new Error(`[telegram] ${method} 응답 오류: ${JSON.stringify(body)}`);
+    // 레이트 리밋(429): retry_after 만큼 대기 후 재시도(012-P). 유계 재시도·대기 상한.
+    if (resp.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+      const body = (await resp.json().catch(() => ({}))) as {
+        parameters?: { retry_after?: number };
+      };
+      const headerRetry = Number(resp.headers.get("retry-after"));
+      const retryAfterSec = body.parameters?.retry_after ?? (headerRetry || 1);
+      const waitMs = Math.min(Math.max(0, retryAfterSec) * 1000, RETRY_AFTER_CAP_MS);
+      console.warn(`[telegram] ${method} 429 레이트리밋 — ${waitMs}ms 후 재시도(${attempt + 1})`);
+      await sleep(waitMs, signal);
+      continue;
+    }
+
+    if (!resp.ok) {
+      throw new Error(`[telegram] ${method} 실패: HTTP ${resp.status}`);
+    }
+
+    const body = (await resp.json()) as { ok: boolean; result?: unknown };
+    if (!body.ok) {
+      throw new Error(`[telegram] ${method} 응답 오류: ${JSON.stringify(body)}`);
+    }
+    return body.result;
   }
-  return body.result;
 }
 
 export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
@@ -225,6 +253,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   /** long-poll 루프 */
   async function pollLoop(): Promise<void> {
     const tok = await getToken();
+    let pollFailures = 0; // 폴 오류 지수 백오프 카운터(012-Q) — getUpdates 성공 시 리셋.
     while (running) {
       try {
         const result = await callBotApi(
@@ -238,6 +267,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
           pollAbort?.signal,
         );
 
+        pollFailures = 0; // getUpdates 성공 → 백오프 리셋
         const updates = result as TelegramUpdate[];
 
         for (const update of updates) {
@@ -288,10 +318,13 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
         }
       } catch (err) {
         if (!running) break;
+        pollFailures++;
+        // 지수 백오프(012-Q): 연속 실패가 누적될수록 재시도 간격 증가(상한 고정). 성공 시 리셋.
+        const backoff = pollBackoffMs(pollFailures);
         console.error(
-          `[telegram] poll 오류(재시도): ${err instanceof Error ? err.message : String(err)}`,
+          `[telegram] poll 오류(${pollFailures}회 연속, ${backoff}ms 후 재시도): ${err instanceof Error ? err.message : String(err)}`,
         );
-        await sleep(2_000, pollAbort?.signal);
+        await sleep(backoff, pollAbort?.signal);
       }
     }
   }

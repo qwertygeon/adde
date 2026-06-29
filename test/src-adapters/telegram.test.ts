@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { TelegramSource } from "../../src/src-adapters/telegram.js";
-import { createTelegramSource, splitForTelegram } from "../../src/src-adapters/telegram.js";
+import {
+  createTelegramSource,
+  splitForTelegram,
+  pollBackoffMs,
+} from "../../src/src-adapters/telegram.js";
 import { lanePaths } from "../../src/shared/paths.js";
 
 // SC-014: long-poll→envelope→queue 저장
@@ -426,6 +430,60 @@ describe("splitForTelegram (011-A 4096 청킹)", () => {
     const chunks = splitForTelegram(text);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((c) => c.length <= 4096)).toBe(true);
+  });
+});
+
+describe("pollBackoffMs 지수 백오프 (012-Q)", () => {
+  it("연속 실패가 늘수록 지수 증가, 상한 30s 고정", () => {
+    expect(pollBackoffMs(1)).toBe(1000);
+    expect(pollBackoffMs(2)).toBe(2000);
+    expect(pollBackoffMs(3)).toBe(4000);
+    expect(pollBackoffMs(4)).toBe(8000);
+    expect(pollBackoffMs(20)).toBe(30000); // 상한
+    expect(pollBackoffMs(0)).toBe(1000); // 방어적 하한
+  });
+});
+
+describe("callBotApi 429 레이트리밋 재시도 (012-P)", () => {
+  it("429(retry_after) 후 재시도해 성공한다", async () => {
+    let sendCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        const method = url.split("/").pop() ?? "";
+        if (method === "getUpdates") return { ok: true, json: async () => ({ ok: true, result: [] }) };
+        if (method === "sendMessage") {
+          sendCalls++;
+          if (sendCalls === 1) {
+            return {
+              ok: false,
+              status: 429,
+              headers: { get: () => "0" },
+              json: async () => ({ ok: false, error_code: 429, parameters: { retry_after: 0 } }),
+            };
+          }
+          return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) };
+        }
+        return { ok: true, json: async () => ({ ok: true, result: true }) };
+      }),
+    );
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-code-acp",
+      paths,
+      chatId: 99,
+    });
+    fs.writeFileSync(
+      path.join(paths.outDir, "rl.out.json"),
+      JSON.stringify({ reply_ref: { channel_msg_id: "42" } }),
+    );
+    fs.writeFileSync(path.join(paths.outDir, "rl.out"), "응답");
+
+    await source.renderOut("rl");
+
+    expect(sendCalls).toBe(2); // 429 1회 → 재시도 성공
   });
 });
 

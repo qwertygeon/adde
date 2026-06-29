@@ -12,12 +12,32 @@ import type { LanePaths } from "../shared/paths.js";
 import { enqueue } from "../core/queue.js";
 import type { Envelope } from "../shared/envelope.js";
 import type { PermRequest } from "../gate/gate.js";
+import { formatException } from "../shared/notify.js";
 import type { Source, DecisionCallback } from "./source.js";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const POLL_TIMEOUT_SECS = 30;
 /** stop() 이 pollLoop 종료를 기다리는 상한 (H3/DEC-004). 초과 시 포기하고 진행. */
 const STOP_WAIT_MS = 3_000;
+/** enqueue 연속 실패가 이 횟수에 도달하면 운영자에게 1회 알림 + 백오프 (DEC-003). */
+const ENQUEUE_FAIL_THRESHOLD = 3;
+/** enqueue 실패 지속 동안 폴 사이에 적용하는 백오프. */
+const ENQUEUE_BACKOFF_MS = 5_000;
+
+/** abort 가능한 sleep — 신호 시 즉시 resolve(정지 응답성 유지). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(t);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
 
 export interface TelegramConfig {
   lane: string;
@@ -102,6 +122,8 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   // in-flight long-poll fetch 를 stop 에서 중단(H3/DEC-004). pollLoop 종료를 stop 이 대기.
   let pollAbort: AbortController | null = null;
   let pollPromise: Promise<void> | null = null;
+  // enqueue 연속 실패 카운터 — 성공 시 0 리셋, 임계 도달 시 1회 알림(DEC-003).
+  let consecutiveEnqueueFailures = 0;
   const callbackHandlers: GateDecisionCallback[] = [];
 
   async function getToken(): Promise<string> {
@@ -201,11 +223,17 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
             const envelope = normalizeMessage(update.message, cfg.lane, cfg.proj, cfg.engine);
             try {
               await enqueue(cfg.paths, envelope);
+              consecutiveEnqueueFailures = 0; // 성공 → 연속 실패 리셋
               cfg.onInbound?.(); // injector 깨우기(in-process)
             } catch (err) {
+              consecutiveEnqueueFailures++;
               console.error(
-                `[telegram] enqueue 오류: ${err instanceof Error ? err.message : String(err)}`,
+                `[telegram] enqueue 오류(${consecutiveEnqueueFailures}회 연속): ${err instanceof Error ? err.message : String(err)}`,
               );
+              // 임계 도달 시점에만 1회 알림 — 매 폴 알림 폭주 방지(DEC-003).
+              if (consecutiveEnqueueFailures === ENQUEUE_FAIL_THRESHOLD) {
+                await alertEnqueueFailure(consecutiveEnqueueFailures);
+              }
             }
           }
 
@@ -229,14 +257,34 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
             }
           }
         }
+
+        // enqueue 가 연속 실패 중이면 다음 폴 전 백오프(자원 낭비·로그 폭주 완화). 정지 신호에 즉시 중단.
+        if (running && consecutiveEnqueueFailures >= ENQUEUE_FAIL_THRESHOLD) {
+          await sleep(ENQUEUE_BACKOFF_MS, pollAbort?.signal);
+        }
       } catch (err) {
         if (!running) break;
         console.error(
           `[telegram] poll 오류(재시도): ${err instanceof Error ? err.message : String(err)}`,
         );
-        await new Promise((r) => setTimeout(r, 2_000));
+        await sleep(2_000, pollAbort?.signal);
       }
     }
+  }
+
+  /** enqueue 연속 실패 임계 도달 시 운영자 채널로 1회 액션형 알림(DEC-003). */
+  async function alertEnqueueFailure(count: number): Promise<void> {
+    if (cfg.chatId === undefined) return; // 알림 대상 미지정 — 로그로만 남음
+    const note = formatException({
+      situation: `수신 메시지 큐 적재(enqueue)가 연속 ${count}회 실패했습니다`,
+      action:
+        "서버 디스크 용량과 state 디렉터리 권한을 확인하세요. 해소되기 전까지 수신 메시지가 처리되지 않을 수 있습니다.",
+    });
+    await sendReply(cfg.chatId, note).catch((e: unknown) =>
+      console.error(
+        `[telegram] enqueue 실패 알림 전송 오류: ${e instanceof Error ? e.message : String(e)}`,
+      ),
+    );
   }
 
   /** out/<id>.out (+ sidecar) → quote-reply 전송. injector 가 writeOut 직후 in-process 호출(DEC-001). */

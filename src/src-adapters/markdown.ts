@@ -521,6 +521,21 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       throw new Error(`[markdown] root 경로 없음: ${rootDir}`);
     }
 
+    // 입력 검증(C): 상대 경로(inbox/approvals/outbox)는 root 안에 머물러야 한다 — '..'·절대경로로
+    // root 를 탈출하면 임의 위치 읽기/쓰기 위험 → fail-closed 기동 거부.
+    for (const [name, rel] of [
+      ["inbox", cfg.conf.inbox],
+      ["approvals", cfg.conf.approvals],
+      ["outbox", cfg.conf.outbox],
+    ] as const) {
+      if (rel === undefined) continue;
+      if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) {
+        throw new Error(
+          `[markdown] ${name} 경로는 root 상대여야 하며 '..'·절대경로 금지: ${rel}`,
+        );
+      }
+    }
+
     // A1: 제어 노트가 AI 작업폴더(cwd) 내부면 자기승인 위험 → fail-closed 기동 거부.
     const effectiveCwd =
       cfg.conf.cwd && cfg.conf.cwd.length > 0 ? resolve(cfg.conf.cwd) : process.cwd();

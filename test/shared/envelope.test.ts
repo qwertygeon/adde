@@ -15,6 +15,54 @@ const validEnvelope = {
   text: "안녕하세요",
 };
 
+describe("parseEnvelope 입력 검증·보안 (011-C)", () => {
+  it("text 256KB 초과는 거부한다", () => {
+    const big = { ...validEnvelope, text: "x".repeat(256 * 1024 + 1) };
+    expect(() => parseEnvelope(JSON.stringify(big))).toThrow();
+  });
+
+  it("256KB 이하 text 는 통과", () => {
+    const ok = { ...validEnvelope, text: "x".repeat(1000) };
+    expect(parseEnvelope(JSON.stringify(ok)).text.length).toBe(1000);
+  });
+
+  it("channel_msg_id 형식 위반(경로문자)을 거부한다", () => {
+    const bad = { ...validEnvelope, reply_ref: { channel_msg_id: "../etc/passwd" } };
+    expect(() => parseEnvelope(JSON.stringify(bad))).toThrow();
+  });
+
+  it("정상 channel_msg_id(숫자/uuid)는 통과", () => {
+    const num = { ...validEnvelope, reply_ref: { channel_msg_id: "12345" } };
+    expect(parseEnvelope(JSON.stringify(num)).reply_ref?.channel_msg_id).toBe("12345");
+    const uuid = { ...validEnvelope, reply_ref: { channel_msg_id: "a1b2-c3d4-e5" } };
+    expect(parseEnvelope(JSON.stringify(uuid)).reply_ref?.channel_msg_id).toBe("a1b2-c3d4-e5");
+  });
+
+  it("attachment name 경로 traversal 을 거부한다", () => {
+    const bad = {
+      ...validEnvelope,
+      attachments: [{ kind: "file", path: "/x", name: "../evil", mime: "text/plain" }],
+    };
+    expect(() => parseEnvelope(JSON.stringify(bad))).toThrow();
+  });
+
+  it("attachment kind 위반을 거부한다", () => {
+    const bad = {
+      ...validEnvelope,
+      attachments: [{ kind: "exe", path: "/x", name: "a", mime: "x" }],
+    };
+    expect(() => parseEnvelope(JSON.stringify(bad))).toThrow();
+  });
+
+  it("정상 attachment 는 통과", () => {
+    const ok = {
+      ...validEnvelope,
+      attachments: [{ kind: "image", path: "/x.png", name: "x.png", mime: "image/png" }],
+    };
+    expect(parseEnvelope(JSON.stringify(ok)).attachments?.length).toBe(1);
+  });
+});
+
 describe("parseEnvelope (SC-014 envelope 정규화)", () => {
   it("유효한 v1 JSON 을 파싱한다", () => {
     const json = JSON.stringify(validEnvelope);

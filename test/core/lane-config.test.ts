@@ -40,6 +40,12 @@ describe("laneAdd 사전 검증 경고 (007 SC4)", () => {
     expect(res.warnings.some((w) => w.includes("root"))).toBe(true);
   });
 
+  it("allowlist 도구명 문자셋 위반은 거부한다 (011-C)", async () => {
+    await expect(
+      laneAdd("proj", "tg", { base, allowlist: ["Read", "rm -rf /"] }),
+    ).rejects.toThrow(LaneConfigError);
+  });
+
   it("telegram 토큰 형식이 이상하면 경고, 정상이면 없음", async () => {
     const bad = await laneAdd("proj", "tg1", { base, token: "not-a-token" });
     expect(bad.warnings.some((w) => w.includes("토큰 형식"))).toBe(true);

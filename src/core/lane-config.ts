@@ -13,6 +13,8 @@ import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
 /** telegram chat id — 그룹은 음수일 수 있음. */
 const CHAT_ID_RE = /^-?\d+$/;
+/** allowlist 도구명 — 도구 식별자 안전 문자셋(C). */
+const ALLOWLIST_ITEM_RE = /^[A-Za-z0-9_.-]+$/;
 
 const SUPPORTED_SOURCES = ["telegram", "markdown"] as const;
 type SupportedSource = (typeof SUPPORTED_SOURCES)[number];
@@ -159,6 +161,13 @@ export async function laneAdd(
   }
   if (opts.token !== undefined && src !== "telegram") {
     throw new LaneConfigError("token 은 source=telegram 레인에서만 사용합니다");
+  }
+  if (opts.allowlist) {
+    for (const tool of opts.allowlist) {
+      if (!ALLOWLIST_ITEM_RE.test(tool)) {
+        throw new LaneConfigError(`allowlist 도구명 "${tool}" 가 올바르지 않습니다 — 영숫자/_/./- 만 허용`);
+      }
+    }
   }
 
   const conf: LaneConf = {

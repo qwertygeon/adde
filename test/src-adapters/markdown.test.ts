@@ -208,6 +208,18 @@ describe("createMarkdownSource (통합)", () => {
     expect(() => source!.start()).toThrow();
   });
 
+  it("inbox 상대경로에 '..' 면 start 시 throw (root 탈출 방지, 011-C)", () => {
+    conf.inbox = "../escape.md";
+    source = makeSource();
+    expect(() => source!.start()).toThrow();
+  });
+
+  it("outbox 절대경로면 start 시 throw (011-C)", () => {
+    conf.outbox = path.join(tmpBase, "evil");
+    source = makeSource();
+    expect(() => source!.start()).toThrow();
+  });
+
   // A1: 제어 노트가 AI 작업폴더(cwd) 내부면 fail-closed 기동 거부
   it("A1: inbox 가 cwd 내부면 start 거부(자기승인 방지)", () => {
     conf.cwd = rootDir; // 작업폴더 = 노트 루트 → inbox 가 cwd 내부

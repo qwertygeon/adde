@@ -1,12 +1,11 @@
 /**
  * Telegram 소스 어댑터 — 수신·출력·inline 버튼.
  * FR-014/015/016/017/018: long-poll → envelope → queue.
- * out watch → sendMessage(quote-reply).
+ * renderOut(id) → sendMessage(quote-reply) (injector in-process 호출).
  * 권한 요청 → inline keyboard [[allow, deny]].
  * 토큰은 state/.env 에서만 읽기(SC-016).
  */
-import { watch } from "node:fs";
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
@@ -23,8 +22,10 @@ export interface TelegramConfig {
   proj: string;
   engine: string;
   paths: LanePaths;
-  /** 회신·권한 프롬프트 대상 chat id (conf chat_id). 미지정 시 out watch 비활성. */
+  /** 회신·권한 프롬프트 대상 chat id (conf chat_id). 미지정 시 렌더 비활성. */
   chatId?: number | undefined;
+  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요(DEC-001). */
+  onInbound?: (() => void) | undefined;
 }
 
 interface TelegramUpdate {
@@ -94,9 +95,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   let token: string | null = null;
   let offset = 0;
   let running = false;
-  let stopWatcher: (() => void) | null = null;
   const callbackHandlers: GateDecisionCallback[] = [];
-  const seenOutFiles = new Set<string>();
 
   async function getToken(): Promise<string> {
     if (!token) {
@@ -188,11 +187,14 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
 
           if (update.message?.text) {
             const envelope = normalizeMessage(update.message, cfg.lane, cfg.proj, cfg.engine);
-            await enqueue(cfg.paths, envelope).catch((err) => {
+            try {
+              await enqueue(cfg.paths, envelope);
+              cfg.onInbound?.(); // injector 깨우기(in-process)
+            } catch (err) {
               console.error(
                 `[telegram] enqueue 오류: ${err instanceof Error ? err.message : String(err)}`,
               );
-            });
+            }
           }
 
           if (update.callback_query) {
@@ -225,53 +227,39 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     }
   }
 
-  /** out 디렉토리 감시 → quote-reply 전송 */
-  async function startOutWatch(defaultChatId: number): Promise<() => void> {
-    await mkdir(cfg.paths.outDir, { recursive: true });
+  /** out/<id>.out (+ sidecar) → quote-reply 전송. injector 가 writeOut 직후 in-process 호출(DEC-001). */
+  async function renderOut(id: string): Promise<void> {
+    const defaultChatId = cfg.chatId ?? 0;
+    if (!defaultChatId) return; // 회신 대상 미지정 시 렌더 생략
 
-    const watcher = watch(cfg.paths.outDir, async (event, filename) => {
-      if (!filename || !filename.endsWith(".out")) return;
-      if (seenOutFiles.has(filename)) return;
-      seenOutFiles.add(filename);
+    const outPath = join(cfg.paths.outDir, `${id}.out`);
+    const sidecarPath = join(cfg.paths.outDir, `${id}.out.json`);
 
-      try {
-        const outPath = join(cfg.paths.outDir, filename);
-        const id = filename.replace(/\.out$/, "");
-        const sidecarPath = join(cfg.paths.outDir, `${id}.out.json`);
-
-        let replyTo: number | undefined;
-        try {
-          const sidecar = JSON.parse(await readFile(sidecarPath, "utf8")) as {
-            reply_ref?: { channel_msg_id: string };
-          };
-          if (sidecar.reply_ref?.channel_msg_id) {
-            replyTo = parseInt(sidecar.reply_ref.channel_msg_id, 10);
-          }
-        } catch {
-          // sidecar 없으면 reply_to 없이 전송
-        }
-
-        const text = await readFile(outPath, "utf8");
-        await sendReply(defaultChatId, text, replyTo);
-      } catch (err) {
-        console.error(
-          `[telegram] out watch 전송 오류: ${err instanceof Error ? err.message : String(err)}`,
-        );
+    let replyTo: number | undefined;
+    try {
+      const sidecar = JSON.parse(await readFile(sidecarPath, "utf8")) as {
+        reply_ref?: { channel_msg_id: string };
+      };
+      if (sidecar.reply_ref?.channel_msg_id) {
+        replyTo = parseInt(sidecar.reply_ref.channel_msg_id, 10);
       }
-    });
+    } catch {
+      // sidecar 없으면 reply_to 없이 전송
+    }
 
-    return () => watcher.close();
+    const text = await readFile(outPath, "utf8");
+    await sendReply(defaultChatId, text, replyTo);
   }
 
   function start(): void {
     running = true;
-    void pollLoop();
-    const defaultChatId = cfg.chatId ?? 0;
-    if (defaultChatId) {
-      void startOutWatch(defaultChatId).then((stop) => {
-        stopWatcher = stop;
-      });
-    }
+    // fire-and-forget 루프 — rejection 이 unhandled 가 되지 않도록 로깅(토큰 읽기 실패 등).
+    void pollLoop().catch((err: unknown) => {
+      console.error(
+        `[telegram] poll 루프 종료: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+    // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거, DEC-001).
   }
 
   /** Source 계약: 권한 요청을 inline 버튼으로 표면화(chat_id 는 conf self-resolve). */
@@ -286,15 +274,12 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
 
   function stop(): void {
     running = false;
-    if (stopWatcher) {
-      stopWatcher();
-      stopWatcher = null;
-    }
   }
 
   return {
     start,
     stop,
+    renderOut,
     sendReply,
     sendPermPrompt,
     onCallbackQuery,

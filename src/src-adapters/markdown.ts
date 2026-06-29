@@ -28,6 +28,8 @@ export interface MarkdownConfig {
   engine: string;
   paths: LanePaths;
   conf: LaneConf;
+  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요(DEC-001). */
+  onInbound?: (() => void) | undefined;
 }
 
 // --- 순수 파싱 (테스트 대상) -------------------------------------------------
@@ -249,7 +251,6 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   const watchers: FSWatcher[] = [];
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const permTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const seenOut = new Set<string>();
   const lastSelfWrite = new Map<string, string>();
   let inboxBusy = false;
   let running = false;
@@ -354,6 +355,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       if (finalize.length > 0) {
         for (const f of finalize) lines[f.lineIndex] = sentLine(f.id);
         await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
+        cfg.onInbound?.(); // injector 깨우기(in-process)
       }
     } finally {
       inboxBusy = false;
@@ -390,30 +392,21 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     }
   }
 
-  async function handleOut(filename: string): Promise<void> {
-    if (!filename.endsWith(".out")) return;
-    if (seenOut.has(filename)) return;
-    seenOut.add(filename);
-    try {
-      const id = filename.replace(/\.out$/, "");
-      const text = await readFile(join(cfg.paths.outDir, filename), "utf8");
-      let replyRef: string | undefined;
-      const sidecarRaw = await readMaybe(join(cfg.paths.outDir, `${id}.out.json`));
-      if (sidecarRaw) {
-        try {
-          const sidecar = JSON.parse(sidecarRaw) as { reply_ref?: { channel_msg_id?: string } };
-          replyRef = sidecar.reply_ref?.channel_msg_id;
-        } catch {
-          // sidecar 파손 → reply_ref 없이 진행(보조 정보).
-        }
+  /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOut 직후 in-process 호출(DEC-001). */
+  async function renderOut(id: string): Promise<void> {
+    const text = await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
+    let replyRef: string | undefined;
+    const sidecarRaw = await readMaybe(join(cfg.paths.outDir, `${id}.out.json`));
+    if (sidecarRaw) {
+      try {
+        const sidecar = JSON.parse(sidecarRaw) as { reply_ref?: { channel_msg_id?: string } };
+        replyRef = sidecar.reply_ref?.channel_msg_id;
+      } catch {
+        // sidecar 파손 → reply_ref 없이 진행(보조 정보).
       }
-      const header = replyRef ? `> ↩ ${replyRef}\n\n` : "";
-      await atomicWrite(join(outboxDir, `${id}.md`), `${header}${text}`);
-    } catch (err) {
-      console.error(
-        `[markdown] 출력 노트 쓰기 오류 ${filename}: ${err instanceof Error ? err.message : String(err)}`,
-      );
     }
+    const header = replyRef ? `> ↩ ${replyRef}\n\n` : "";
+    await atomicWrite(join(outboxDir, `${id}.md`), `${header}${text}`);
   }
 
   function debounce(key: string, fn: () => void): void {
@@ -480,13 +473,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     const dirs = new Set([inboxDir, approvalsDir]);
     for (const dir of dirs) watchDir(dir, (filename) => dispatch(dir, filename));
 
-    // out 디렉터리 감시 → 마크다운 출력 노트.
+    // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거, DEC-001).
     mkdirSync(cfg.paths.outDir, { recursive: true });
     mkdirSync(outboxDir, { recursive: true });
-    watchDir(cfg.paths.outDir, (filename) => {
-      if (isConflictFile(filename)) return;
-      debounce(`out:${filename}`, () => void handleOut(filename));
-    });
 
     // 기동 시 기존 인박스/승인 노트 1회 처리(능동 세션 재개).
     void handleInbox();
@@ -528,5 +517,5 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     decisionHandlers.push(cb);
   }
 
-  return { start, stop, requestPermission, onDecision };
+  return { start, stop, requestPermission, onDecision, renderOut };
 }

@@ -24,6 +24,16 @@ export interface LanePaths {
   confFile: string;
 }
 
+/**
+ * 선행 `~`/`~/` 를 홈 디렉터리로 확장. (Node 는 셸과 달리 ~ 를 자동 확장하지 않음)
+ * conf 의 cwd/root 같은 사용자 입력 경로에 적용한다. ~user 형태는 미지원.
+ */
+export function expandTilde(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  return p;
+}
+
 export function lanePaths(base: string, proj: string, lane: string): LanePaths {
   const root = join(base, proj);
   const stateDir = join(root, "state", lane);

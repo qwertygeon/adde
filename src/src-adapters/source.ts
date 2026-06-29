@@ -20,4 +20,9 @@ export interface Source {
   requestPermission(req: PermRequest): Promise<void>;
   /** 사용자 결정 수신 콜백 등록(telegram=callback_query, markdown=승인 노트 편집 감지). */
   onDecision(cb: DecisionCallback): void;
+  /**
+   * out/<id>.out (+ sidecar) 를 읽어 채널로 렌더한다(telegram=sendMessage, markdown=출력 노트).
+   * in-process 호출(injector 가 writeOut 직후) — out/ fs.watch 를 대체(DEC-001).
+   */
+  renderOut(id: string): Promise<void>;
 }

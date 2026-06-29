@@ -105,6 +105,16 @@ export class AcpBackendImpl implements AcpBackend {
 
     const child = spawnEngine(this.adapterBin, []);
 
+    // child 'error'(예: 바이너리 ENOENT) 는 미처리 시 프로세스를 크래시시킨다.
+    // 핸드셰이크 완료 전에는 launch 실패로 전환하고, 이후에는 로깅한다(상시 리스너 유지).
+    let onSpawnError: (err: Error) => void = (err) =>
+      console.error(`[acp] lane=${lane} 엔진 프로세스 오류: ${err.message}`);
+    const spawnFailed = new Promise<never>((_, reject) => {
+      onSpawnError = (err) =>
+        reject(new Error(`[acp] 엔진 spawn 실패 (${this.adapterBin}): ${err.message}`));
+    });
+    child.on("error", (err: Error) => onSpawnError(err));
+
     const toAgent = Writable.toWeb(child.stdin!) as WritableStream<Uint8Array>;
     const fromAgent = Readable.toWeb(child.stdout!) as ReadableStream<Uint8Array>;
     const stream = acp.ndJsonStream(toAgent, fromAgent);
@@ -220,17 +230,28 @@ export class AcpBackendImpl implements AcpBackend {
       return clientImpl;
     }, stream);
 
-    await conn.initialize({
-      protocolVersion: acp.PROTOCOL_VERSION,
-      clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
-      },
-    });
+    // 핸드셰이크 단계에서 spawn 실패가 나면 즉시 reject (행 방지).
+    await Promise.race([
+      conn.initialize({
+        protocolVersion: acp.PROTOCOL_VERSION,
+        clientCapabilities: {
+          fs: { readTextFile: true, writeTextFile: true },
+        },
+      }),
+      spawnFailed,
+    ]);
 
-    const sessionResp = await conn.newSession({
-      cwd: laneCwd,
-      mcpServers: [],
-    });
+    const sessionResp = await Promise.race([
+      conn.newSession({
+        cwd: laneCwd,
+        mcpServers: [],
+      }),
+      spawnFailed,
+    ]);
+
+    // 핸드셰이크 성공 — 이후 child 'error' 는 크래시 대신 로깅(spawnFailed 는 더 이상 소비 안 됨).
+    onSpawnError = (err) =>
+      console.error(`[acp] lane=${lane} 엔진 프로세스 오류: ${err.message}`);
 
     const sessionId = sessionResp.sessionId;
 

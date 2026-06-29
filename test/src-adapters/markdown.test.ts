@@ -18,7 +18,7 @@ import { lanePaths } from "../../src/shared/paths.js";
 import type { LaneConf } from "../../src/shared/conf.js";
 
 /** 실시간 폴링 대기 — fs.watch 이벤트 지연 흡수. */
-async function waitFor(cond: () => boolean, timeoutMs = 3000): Promise<void> {
+async function waitFor(cond: () => boolean, timeoutMs = 8000): Promise<void> {
   const start = Date.now();
   while (!cond()) {
     if (Date.now() - start > timeoutMs) throw new Error("waitFor timeout");
@@ -332,17 +332,19 @@ describe("createMarkdownSource (통합)", () => {
     await waitFor(() => fs.readFileSync(approvalsPath, "utf8").includes("status=allow"));
   });
 
-  it("out/<id>.out 생성 시 마크다운 출력 노트를 작성한다(reply_ref 역참조 포함)", async () => {
+  it("renderOut(id) 호출 시 마크다운 출력 노트를 작성한다(reply_ref 역참조 포함)", async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
     source.start();
 
-    // start 이후 out 파일 생성 → watch
+    // injector 가 writeOut 후 in-process 로 renderOut 호출(out/ watch 제거)
     fs.writeFileSync(path.join(paths.outDir, "msg-1.out.json"), JSON.stringify({ reply_ref: { channel_msg_id: "orig-9" } }));
     fs.writeFileSync(path.join(paths.outDir, "msg-1.out"), "에이전트 응답입니다");
 
+    await source.renderOut("msg-1");
+
     const notePath = path.join(rootDir, "out", "msg-1.md");
-    await waitFor(() => fs.existsSync(notePath));
+    expect(fs.existsSync(notePath)).toBe(true);
     const note = fs.readFileSync(notePath, "utf8");
     expect(note).toContain("에이전트 응답입니다");
     expect(note).toContain("orig-9");

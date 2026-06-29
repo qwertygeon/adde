@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { lanePaths } from "../../src/shared/paths.js";
+import { homedir } from "node:os";
+import { lanePaths, expandTilde } from "../../src/shared/paths.js";
+
+describe("expandTilde", () => {
+  it("'~' 를 홈 디렉터리로 확장한다", () => {
+    expect(expandTilde("~")).toBe(homedir());
+  });
+  it("'~/' 접두사를 홈 기준으로 확장한다", () => {
+    expect(expandTilde("~/Documents/x")).toBe(`${homedir()}/Documents/x`);
+  });
+  it("절대경로·상대경로는 그대로 둔다", () => {
+    expect(expandTilde("/abs/path")).toBe("/abs/path");
+    expect(expandTilde("rel/path")).toBe("rel/path");
+  });
+  it("'~user' 형태는 확장하지 않는다(미지원)", () => {
+    expect(expandTilde("~other/x")).toBe("~other/x");
+  });
+});
 
 // SC-025 일부: lanePaths 가 lane 파라미터로만 경로를 구성(하드코딩 금지)
 

@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { parseLaneConf } from "../shared/conf.js";
-import { lanePaths, defaultBase } from "../shared/paths.js";
+import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 import { AcpBackendImpl } from "../backend/acp/client.js";
 import type { AcpBackend } from "../backend/acp/client.js";
 import { createInjector } from "./injector.js";
@@ -17,18 +17,33 @@ import { createTelegramSource, createMarkdownSource } from "../src-adapters/inde
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
 
-/** 런타임 ACP 어댑터 바이너리 경로. */
+/** 런타임 ACP 어댑터 바이너리 경로. package.json 의 bin 항목을 SoT 로 해석. */
 function resolveAdapterBin(): string {
   const require = createRequire(import.meta.url);
   try {
-    const pkg = require.resolve("@zed-industries/claude-code-acp/package.json");
-    const dir = pkg.slice(0, pkg.lastIndexOf("/package.json"));
-    const candidate = join(dir, "dist", "claude-code-acp");
-    return candidate;
+    const pkgPath = require.resolve("@zed-industries/claude-code-acp/package.json");
+    const dir = pkgPath.slice(0, pkgPath.lastIndexOf("/package.json"));
+    const pkg = require(pkgPath) as { bin?: string | Record<string, string> };
+    const binRel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.["claude-code-acp"];
+    if (binRel) return resolve(dir, binRel);
   } catch {
-    const thisDir = fileURLToPath(new URL(".", import.meta.url));
-    return resolve(thisDir, "../../../node_modules/.bin/claude-code-acp");
+    // 폴백(.bin shim)으로 진행
   }
+  const thisDir = fileURLToPath(new URL(".", import.meta.url));
+  return resolve(thisDir, "../../../node_modules/.bin/claude-code-acp");
+}
+
+/** unknown 오류를 사람이 읽을 수 있는 문자열로 — ACP 오류는 Error 가 아닌 객체일 수 있다. */
+function errMsg(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object") {
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
 }
 
 interface LaneHandle {
@@ -107,6 +122,10 @@ export async function supervisorUp(
     const confText = await readFile(confPath, "utf8");
     const conf = parseLaneConf(confText);
 
+    // 사용자 입력 경로의 ~ 확장 (Node 는 자동 확장 안 함).
+    if (conf.cwd) conf.cwd = expandTilde(conf.cwd);
+    if (conf.root) conf.root = expandTilde(conf.root);
+
     const paths = lanePaths(baseDir, proj, lane);
 
     const channel: "telegram" | "markdown" = conf.source === "markdown" ? "markdown" : "telegram";
@@ -129,12 +148,18 @@ export async function supervisorUp(
 
     const engine = conf.engine || "claude";
     let source: Source;
+
+    // injector 를 source 보다 먼저 생성 — render 는 source 를 지연 참조(closure, turn 종료 시 호출).
+    // in-process 배선(DEC-001): source.onInbound → injector.notify, injector.render → source.renderOut.
+    const injector = createInjector(paths, lane, backend, (id) => source.renderOut(id));
+    const onInbound = () => injector.notify();
+
     if (conf.source === "markdown") {
-      source = createMarkdownSource({ lane, proj, engine, paths, conf });
+      source = createMarkdownSource({ lane, proj, engine, paths, conf, onInbound });
     } else {
       const chatId =
         conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
-      source = createTelegramSource({ lane, proj, engine, paths, chatId });
+      source = createTelegramSource({ lane, proj, engine, paths, chatId, onInbound });
     }
 
     source.onDecision((reqId, decision) => {
@@ -145,25 +170,33 @@ export async function supervisorUp(
       }
     });
 
-    backend.onPermissionRequest(lane, async (req) => {
-      const waitForDecision = () =>
-        new Promise<"allow" | "deny">((resolveFn) => {
-          pendingDecisions.set(req.id, resolveFn);
-        });
-
-      const sendPermPrompt = async () => {
-        await source.requestPermission(req);
-      };
-
-      return gateRequestDecision(req, { sendPermPrompt, waitForDecision });
-    });
-
-    const injector = createInjector(paths, lane, backend);
-
     try {
+      // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
       await backend.launch(lane);
 
-      void injector.start();
+      // 엔진 세션 이벤트 → injector(응답 누적). injector 가 turn 종료에 writeOut + renderOut(B).
+      backend.subscribe(lane, (e) => injector.onSessionEvent(e));
+
+      backend.onPermissionRequest(lane, async (req) => {
+        const waitForDecision = () =>
+          new Promise<"allow" | "deny">((resolveFn) => {
+            pendingDecisions.set(req.id, resolveFn);
+          });
+
+        const sendPermPrompt = async () => {
+          await source.requestPermission(req);
+        };
+
+        return gateRequestDecision(req, { sendPermPrompt, waitForDecision });
+      });
+
+      // 인젝터 기동은 비차단(첫 inject 가 turn 종료까지 블록될 수 있어 await 하지 않음).
+      // fire-and-forget 이므로 rejection 은 unhandled 가 되지 않도록 로깅한다.
+      void injector.start().catch((err: unknown) => {
+        console.error(
+          `[supervisor] lane=${lane} injector 기동 오류: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
       source.start();
 
       console.log(`[supervisor] lane=${lane} running`);
@@ -177,9 +210,7 @@ export async function supervisorUp(
 
       results.push({ lane, status: "running" });
     } catch (err) {
-      console.error(
-        `[supervisor] lane=${lane} 기동 실패: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      console.error(`[supervisor] lane=${lane} 기동 실패: ${errMsg(err)}`);
       results.push({ lane, status: "error" });
     }
   }

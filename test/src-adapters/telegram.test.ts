@@ -229,10 +229,9 @@ describe("TelegramSource long-poll (SC-014)", () => {
 });
 
 describe("TelegramSource out→quote-reply (SC-015)", () => {
-  it("out/<id>.out 파일 생성 감지 시 sendMessage(reply_to=원본 id) 를 호출한다", async () => {
+  it("renderOut(id) 호출 시 out/<id>.out 를 읽어 sendMessage(reply_to=sidecar id)", async () => {
     const sentMessages: Record<string, unknown>[] = [];
 
-    // SC-015 는 sendReply 직접 호출 — poll loop 없으므로 setupFetchMock 으로 충분
     setupFetchMock((method, params) => {
       if (method === "getUpdates") return [];
       if (method === "sendMessage") {
@@ -242,15 +241,22 @@ describe("TelegramSource out→quote-reply (SC-015)", () => {
       return true;
     });
 
+    // renderOut 은 chatId 미지정 시 렌더 생략 → chatId 필요
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
       engine: "claude-code-acp",
       paths,
+      chatId: 99,
     });
 
-    // sendReply 를 직접 호출하여 SC-015 핵심 동작 검증 (poll loop 미사용)
-    await source.sendReply(99, "응답 텍스트", 42);
+    fs.writeFileSync(
+      path.join(paths.outDir, "m1.out.json"),
+      JSON.stringify({ reply_ref: { channel_msg_id: "42" } }),
+    );
+    fs.writeFileSync(path.join(paths.outDir, "m1.out"), "응답 텍스트");
+
+    await source.renderOut("m1");
 
     expect(sentMessages.length).toBeGreaterThanOrEqual(1);
     const lastMsg = sentMessages[sentMessages.length - 1];

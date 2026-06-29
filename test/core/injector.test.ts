@@ -11,12 +11,13 @@ import type { Envelope } from "../../src/shared/envelope.js";
 // SC-003: 크래시 후 processing 잔존 파일 재처리
 // SC-004: active 동안 다음 envelope 미주입 (idle 게이트)
 // SC-005: out 존재 id dedup — backend.inject 미호출
-// SC-011: stopReason=end_turn → idle 전환
+// SC-A1: notify() 로 idle 레인 깨우기  · SC-A2: turn 종료 후 다음 메시지 자동 진행
+// SC-B1: agent_message_chunk 누적 → writeOut(out/<id>.out + sidecar)  · SC-B2: render(id) 호출
 
 let tmpBase: string;
 let paths: ReturnType<typeof lanePaths>;
 
-const makeEnvelope = (id: string, text = "test"): Envelope => ({
+const makeEnvelope = (id: string, text = "test", replyMsgId?: string): Envelope => ({
   v: 1,
   id,
   lane: "test-lane",
@@ -26,7 +27,30 @@ const makeEnvelope = (id: string, text = "test"): Envelope => ({
   project: "myproj",
   ts: new Date().toISOString(),
   text,
+  ...(replyMsgId ? { reply_ref: { channel_msg_id: replyMsgId } } : {}),
 });
+
+/** setImmediate 큐 flush — injectNext 의 비동기 진행 1틱. */
+const flush = () => new Promise<void>((r) => setImmediate(r));
+
+/** 조건 충족까지 틱 진행(injectNext 의 fs IO 가 여러 await 라 폴링 대기). */
+async function waitUntil(cond: () => boolean, tries = 100): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    if (cond()) return;
+    await flush();
+  }
+}
+
+/** 즉시 resolve 하는 기본 backend 더블. */
+function makeBackend(inject = vi.fn().mockResolvedValue(undefined)) {
+  return {
+    inject,
+    caps: vi.fn(),
+    launch: vi.fn(),
+    subscribe: vi.fn(),
+    onPermissionRequest: vi.fn(),
+  };
+}
 
 beforeEach(() => {
   tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-injector-"));
@@ -35,141 +59,164 @@ beforeEach(() => {
   fs.mkdirSync(paths.processingDir, { recursive: true });
   fs.mkdirSync(paths.outDir, { recursive: true });
   fs.mkdirSync(paths.stateDir, { recursive: true });
-  vi.useFakeTimers();
 });
 
 afterEach(() => {
   fs.rmSync(tmpBase, { recursive: true, force: true });
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-describe("Injector state machine (SC-011 idle 전환)", () => {
+describe("Injector 상태기계", () => {
   it("초기 상태는 idle 이다", () => {
-    const mockBackend = {
-      inject: vi.fn().mockResolvedValue(undefined),
-      caps: vi.fn(),
-      launch: vi.fn(),
-      subscribe: vi.fn(),
-      onPermissionRequest: vi.fn(),
-    };
-    const injector: Injector = createInjector(paths, "test-lane", mockBackend);
+    const injector: Injector = createInjector(paths, "test-lane", makeBackend());
     expect(injector.getState()).toBe("idle");
   });
 
-  it("start() 후 idle 상태를 유지한다 (빈 큐)", async () => {
-    const mockBackend = {
-      inject: vi.fn().mockResolvedValue(undefined),
-      caps: vi.fn(),
-      launch: vi.fn(),
-      subscribe: vi.fn(),
-      onPermissionRequest: vi.fn(),
-    };
-    const injector: Injector = createInjector(paths, "test-lane", mockBackend);
+  it("start() 후 빈 큐면 idle 유지, inject 미호출", async () => {
+    const backend = makeBackend();
+    const injector: Injector = createInjector(paths, "test-lane", backend);
     await injector.start();
     expect(injector.getState()).toBe("idle");
-    expect(mockBackend.inject).not.toHaveBeenCalled();
+    expect(backend.inject).not.toHaveBeenCalled();
   });
 
-  it("onIdle() 호출 시 상태가 idle 로 전환된다 (SC-011)", async () => {
-    const mockBackend = {
-      inject: vi.fn().mockResolvedValue(undefined),
-      caps: vi.fn(),
-      launch: vi.fn(),
-      subscribe: vi.fn(),
-      onPermissionRequest: vi.fn(),
-    };
-    const injector: Injector = createInjector(paths, "test-lane", mockBackend);
-    await enqueue(paths, makeEnvelope("sc011-id"));
+  it("turn 종료(inject resolve) 후 idle 로 복귀한다", async () => {
+    const backend = makeBackend();
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await enqueue(paths, makeEnvelope("t1"));
     await injector.start();
-    // active 상태에서 onIdle 호출
-    injector.onIdle();
-    // Node 이벤트 루프 처리를 위해 마이크로태스크 flush
-    await Promise.resolve();
+    await flush();
+    expect(backend.inject).toHaveBeenCalledWith("test-lane", "test");
     expect(injector.getState()).toBe("idle");
   });
 });
 
-describe("SC-004: active 동안 다음 envelope 미주입", () => {
-  it("첫 번째 inject 가 진행 중일 때 두 번째 envelope 은 queue 에 대기한다", async () => {
-    // inject 는 즉시 resolve — start() 가 첫 번째만 처리하고 반환한 뒤 상태 검증.
-    // state 는 inject 완료 후에도 active 를 유지한다 (onIdle() 호출 전까지).
-    const mockBackend = {
-      inject: vi.fn().mockResolvedValue(undefined),
-      caps: vi.fn(),
-      launch: vi.fn(),
-      subscribe: vi.fn(),
-      onPermissionRequest: vi.fn(),
-    };
+describe("SC-A1: notify() 로 idle 레인 깨우기", () => {
+  it("start 후 enqueue + notify() 하면 해당 메시지를 inject 한다", async () => {
+    const backend = makeBackend();
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await injector.start(); // 빈 큐 → idle
+    expect(backend.inject).not.toHaveBeenCalled();
 
-    await enqueue(paths, makeEnvelope("first"));
-    await enqueue(paths, makeEnvelope("second"));
+    await enqueue(paths, makeEnvelope("late", "지각 메시지"));
+    injector.notify();
+    await waitUntil(() => backend.inject.mock.calls.length > 0);
 
-    const injector: Injector = createInjector(paths, "test-lane", mockBackend);
-
-    // start() 는 injectNext() 를 한 번 호출한다 — claimNext→inject(first).
-    // inject 가 즉시 resolve 되므로 start() 도 완료된다.
-    await injector.start();
-
-    // inject 는 첫 번째 envelope 에 대해서만 1번 호출되어야 한다.
-    // (injectNext 는 start() 내부에서 단 1회 호출 — 두 번째는 onIdle() 트리거 필요)
-    expect(mockBackend.inject).toHaveBeenCalledTimes(1);
-
-    // start() 완료 후 state 는 active(inject 후 onIdle 미호출) 또는 idle(구현에 따라 다름)
-    // 핵심 불변식: 두 번째 envelope 은 처리되지 않았어야 한다.
-    // queue 에 second 가 있거나 processing 에 first 가 남아있어야 함.
-    const queueFiles = fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg"));
-    const processingFiles = fs.readdirSync(paths.processingDir).filter((f) => f.endsWith(".msg"));
-    // 두 envelope 중 하나는 아직 처리 대기 상태여야 한다
-    expect(queueFiles.length + processingFiles.length).toBeGreaterThanOrEqual(1);
-    // inject 는 1번만 호출 — 두 번째 미주입
-    expect(mockBackend.inject).toHaveBeenCalledTimes(1);
+    expect(backend.inject).toHaveBeenCalledWith("test-lane", "지각 메시지");
   });
 });
 
-describe("SC-005: out 존재 id dedup — backend.inject 미호출", () => {
-  it("out/<id>.out 가 존재하면 processing 잔존 파일을 dedup 처리하고 inject 를 호출하지 않는다", async () => {
-    const mockBackend = {
-      inject: vi.fn().mockResolvedValue(undefined),
-      caps: vi.fn(),
-      launch: vi.fn(),
-      subscribe: vi.fn(),
-      onPermissionRequest: vi.fn(),
-    };
+describe("SC-004: active 동안 다음 envelope 미주입 (idle 게이트)", () => {
+  it("inject 가 진행 중이면 다음 메시지는 큐 대기, turn 종료 후 진행(SC-A2)", async () => {
+    // 첫 inject 는 수동 resolve — turn 이 끝나기 전 상태를 검증.
+    let resolveFirst!: () => void;
+    const inject = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<void>((r) => (resolveFirst = r)))
+      .mockResolvedValue(undefined);
+    const backend = makeBackend(inject);
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+
+    await enqueue(paths, makeEnvelope("first", "첫째"));
+    await enqueue(paths, makeEnvelope("second", "둘째"));
+
+    const startP = injector.start(); // first inject 에서 pending
+    await waitUntil(() => inject.mock.calls.length >= 1);
+
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenLastCalledWith("test-lane", "첫째");
+    expect(injector.getState()).toBe("active");
+
+    // turn 종료 → 둘째 자동 진행(SC-A2)
+    resolveFirst();
+    await startP;
+    await waitUntil(() => inject.mock.calls.length >= 2 && injector.getState() === "idle");
+
+    expect(inject).toHaveBeenCalledTimes(2);
+    expect(inject).toHaveBeenLastCalledWith("test-lane", "둘째");
+    expect(injector.getState()).toBe("idle");
+  });
+});
+
+describe("SC-005: out 존재 id dedup — inject 미호출", () => {
+  it("out/<id>.out 가 존재하면 dedup, inject 미호출", async () => {
+    const backend = makeBackend();
     const env = makeEnvelope("dedup-id");
-
-    // processing 에 파일 배치 (크래시 상황 시뮬레이션)
     fs.writeFileSync(path.join(paths.processingDir, "dedup-id.msg"), JSON.stringify(env));
-    // out 에 이미 결과 파일 존재
     fs.writeFileSync(path.join(paths.outDir, "dedup-id.out"), "이미 처리됨");
 
-    const injector: Injector = createInjector(paths, "test-lane", mockBackend);
+    const injector: Injector = createInjector(paths, "test-lane", backend);
     await injector.start();
 
-    // inject 가 호출되면 안 됨 (dedup)
-    expect(mockBackend.inject).not.toHaveBeenCalled();
+    expect(backend.inject).not.toHaveBeenCalled();
   });
 });
 
 describe("SC-003: 크래시 후 processing 잔존 파일 재처리", () => {
-  it("processing 에 파일이 있고 out 에 없으면 재처리 대상으로 인식한다", async () => {
-    const mockBackend = {
-      inject: vi.fn().mockResolvedValue(undefined),
-      caps: vi.fn(),
-      launch: vi.fn(),
-      subscribe: vi.fn(),
-      onPermissionRequest: vi.fn(),
-    };
+  it("processing 에 있고 out 에 없으면 재처리(inject 호출)", async () => {
+    const backend = makeBackend();
     const env = makeEnvelope("crash-recover");
-
-    // processing 에 크래시 잔존 파일
     fs.writeFileSync(path.join(paths.processingDir, "crash-recover.msg"), JSON.stringify(env));
-    // out 에는 없음
 
-    const injector: Injector = createInjector(paths, "test-lane", mockBackend);
+    const injector: Injector = createInjector(paths, "test-lane", backend);
     await injector.start();
+    await flush();
 
-    // inject 가 호출되어야 함 (재처리)
-    expect(mockBackend.inject).toHaveBeenCalledWith("test-lane", env.text);
+    expect(backend.inject).toHaveBeenCalledWith("test-lane", env.text);
+  });
+});
+
+describe("SC-B1: 응답 누적 → writeOut(out/<id>.out + sidecar)", () => {
+  it("agent_message_chunk 를 누적해 turn 종료 시 out 에 기록(reply_ref 포함)", async () => {
+    let resolveInject!: () => void;
+    const inject = vi.fn().mockImplementation(() => new Promise<void>((r) => (resolveInject = r)));
+    const backend = makeBackend(inject);
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+
+    await enqueue(paths, makeEnvelope("b1", "질문", "orig-42"));
+    const startP = injector.start();
+    await waitUntil(() => typeof resolveInject === "function");
+
+    // inject 진행(active) 중 엔진 청크 수신 → 누적
+    injector.onSessionEvent({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "안녕" } });
+    injector.onSessionEvent({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "하세요" } });
+
+    resolveInject();
+    await startP;
+    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "b1.out.json")));
+
+    const outText = fs.readFileSync(path.join(paths.outDir, "b1.out"), "utf8");
+    expect(outText).toBe("안녕하세요");
+    const sidecar = JSON.parse(fs.readFileSync(path.join(paths.outDir, "b1.out.json"), "utf8"));
+    expect(sidecar.reply_ref.channel_msg_id).toBe("orig-42");
+  });
+});
+
+describe("SC-B2: writeOut 후 render(id) 호출", () => {
+  it("turn 종료 시 render 콜백을 active id 로 호출한다", async () => {
+    const backend = makeBackend();
+    const rendered: string[] = [];
+    const render = vi.fn().mockImplementation(async (id: string) => {
+      rendered.push(id);
+    });
+    const injector: Injector = createInjector(paths, "test-lane", backend, render);
+
+    await enqueue(paths, makeEnvelope("r1"));
+    await injector.start();
+    await flush();
+
+    expect(rendered).toContain("r1");
+  });
+
+  it("render 실패해도 out/ 는 유지되고 예외가 전파되지 않는다(fail-closed)", async () => {
+    const backend = makeBackend();
+    const render = vi.fn().mockRejectedValue(new Error("render boom"));
+    const injector: Injector = createInjector(paths, "test-lane", backend, render);
+
+    await enqueue(paths, makeEnvelope("r2"));
+    await expect(injector.start()).resolves.toBeUndefined();
+    await flush();
+
+    expect(fs.existsSync(path.join(paths.outDir, "r2.out"))).toBe(true);
   });
 });

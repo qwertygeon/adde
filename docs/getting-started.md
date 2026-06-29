@@ -9,6 +9,7 @@ ADDE 는 AI CLI 엔진(Claude Code 등)을 채널(Telegram / 마크다운 노트
 - [핵심 개념](#핵심-개념)
 - [레인 설정](#레인-설정)
 - [기동·종료](#기동종료)
+- [상태·진단](#상태진단)
 - [프로젝트 폴더 매핑](#프로젝트-폴더-매핑)
 - [다음 단계](#다음-단계)
 
@@ -55,7 +56,12 @@ adde lane show myproj tg-claude    # conf 출력
 adde lane rm myproj tg-claude      # conf 삭제
 ```
 
-기본값: `--source telegram`, `--backend acp`, `--engine claude-code-acp`, `--channel`=source, `--perm-tier acp`, `--acp-version v1`. 기존 conf 는 `--force` 없이는 덮어쓰지 않습니다. 전체 옵션은 `adde lane help`.
+```bash
+# 플래그 암기 없이 대화형으로 생성 (TTY 전용, 토큰은 묻지 않음)
+adde lane add myproj tg-claude --interactive
+```
+
+기본값: `--source telegram`, `--backend acp`, `--engine claude-code-acp`, `--channel`=source, `--perm-tier acp`, `--acp-version v1`. 기존 conf 는 `--force` 없이는 덮어쓰지 않습니다. 생성 시 `cwd`·markdown `root` 부재나 토큰 형식 이상은 경고로 안내합니다(생성은 진행). 전체 옵션은 `adde lane help` 또는 [명령 레퍼런스](commands.md#lane-add-옵션).
 
 ### conf 키 (직접 편집 시)
 
@@ -74,16 +80,26 @@ allowlist=Read,Grep      # 선택: 승인 빈도 축소(게이트 유지)
 
 채널별 추가 키:
 
-- **telegram**: `chat_id=<회신 대상>`. 봇 토큰은 conf 가 아니라 `~/.config/adde/<proj>/state/<lane>/.env` 에 `TELEGRAM_BOT_TOKEN=...` 으로 둡니다(인자·로그 비노출).
+- **telegram**: `chat_id=<회신 대상>`. 봇 토큰은 conf 가 아니라 `~/.config/adde/<proj>/state/<lane>/.env` 에 `TELEGRAM_BOT_TOKEN=...` 으로 둡니다(인자·로그 비노출). 단계별: [telegram.md](telegram.md).
 - **markdown**: `root=<절대경로, 예: Obsidian vault>`, `inbox=<root 상대>`, (선택) `approvals=`·`outbox=`. → [마크다운 가이드](markdown.md).
 
 ## 기동·종료
 
 ```bash
-adde up <proj>     # lanes.d 의 모든 레인 기동
+adde up <proj>     # lanes.d 의 모든 레인 기동(포그라운드 상주)
 adde down <proj>   # 레인 종료
 adde --version
 ```
+
+## 상태·진단
+
+```bash
+adde status <proj>            # 레인 상태: running / dead(크래시) / stopped
+adde doctor <proj>            # 환경·설정 정적 점검(기동 전 자가 진단)
+adde logs <proj> <lane>       # 레인 최근 활동(transcript)
+```
+
+기동이 안 되거나 응답이 없으면 `adde doctor` 로 먼저 점검하세요. 전체 명령은 [명령 레퍼런스](commands.md), 증상별 조치는 [트러블슈팅](troubleshooting.md)을 참고하세요.
 
 ## 프로젝트 폴더 매핑
 
@@ -91,5 +107,8 @@ adde --version
 
 ## 다음 단계
 
+- Telegram 봇으로 구동: [telegram.md](telegram.md)
 - 마크다운 노트(예: Obsidian)로 메모 기반 구동: [markdown.md](markdown.md)
+- 전체 명령: [commands.md](commands.md)
+- 문제 해결: [troubleshooting.md](troubleshooting.md)
 - 문서 인덱스: [README.md](README.md)

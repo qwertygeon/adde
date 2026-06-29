@@ -70,7 +70,7 @@ adde up <proj>     # lanes.d 의 모든 레인을 기동
 adde down <proj>   # 레인 종료
 ```
 
-기동되면 ADDE 가 inbox·approvals 노트와 출력 디렉터리를 감시하기 시작합니다.
+기동되면 ADDE 가 inbox·approvals 노트와 출력 디렉터리를 감시하기 시작합니다. 상태 확인은 `adde status <proj>`, 설정 점검은 `adde doctor <proj>` — 전체 명령은 [명령 레퍼런스](commands.md).
 
 ## 3. 지시 보내기 (인박스)
 
@@ -153,3 +153,5 @@ AI 가 파일 쓰기·Bash 실행 등 권한이 필요한 도구를 호출하면
 | 레인이 안 뜸 | `root` 절대경로가 실제 존재하는지(없으면 fail-closed 로 기동 거부) |
 | 권한이 항상 거부됨 | 10분 타임아웃 전에 allow 를 체크했는지, 정확히 하나만 체크했는지 |
 | 응답 노트가 안 보임 | `outbox` 디렉터리 경로 확인, AI 턴이 끝났는지(idle) |
+
+증상별 진단·조치 전반은 [트러블슈팅](troubleshooting.md)을 참고하세요.

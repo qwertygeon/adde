@@ -8,8 +8,10 @@ import {
   writeRuntime,
   readRuntime,
   removeRuntime,
+  touchRuntime,
   isPidAlive,
   livenessOf,
+  HEARTBEAT_STALE_MS,
 } from "../../src/core/runtime-state.js";
 import type { RuntimeInfo } from "../../src/core/runtime-state.js";
 import { lanePaths } from "../../src/shared/paths.js";
@@ -89,5 +91,44 @@ describe("라이브니스 판정 (SC2)", () => {
     expect(livenessOf(null)).toBe("stopped");
     expect(livenessOf(info(process.pid))).toBe("running");
     expect(livenessOf(info(await deadPid()))).toBe("dead");
+  });
+
+  // SC-S2: 하트비트(mtime) 신선도 기반 stale 판정.
+  it("livenessOf: pid 생존 + mtime 신선=running, 임계 초과=stale", () => {
+    const now = 1_000_000_000_000;
+    const fresh = now - 1000;
+    const old = now - (HEARTBEAT_STALE_MS + 1000);
+    expect(livenessOf(info(process.pid), { mtimeMs: fresh, now })).toBe("running");
+    expect(livenessOf(info(process.pid), { mtimeMs: old, now })).toBe("stale");
+  });
+
+  it("livenessOf: mtime 미주입이면 stale 판정 안 함(pid-only running)", () => {
+    expect(livenessOf(info(process.pid), {})).toBe("running");
+  });
+
+  it("livenessOf: pid 종료면 mtime 무관하게 dead", async () => {
+    const now = 1_000_000_000_000;
+    expect(livenessOf(info(await deadPid()), { mtimeMs: now, now })).toBe("dead");
+  });
+});
+
+describe("touchRuntime 하트비트 (SC-S1)", () => {
+  it("runtime.json mtime 을 전진시킨다(내용 불변)", async () => {
+    const paths = lanePaths(tmpBase, "proj", "telegram-claude");
+    await writeRuntime(paths, info(process.pid));
+    const before = fs.statSync(paths.runtimeJson).mtimeMs;
+    const contentBefore = fs.readFileSync(paths.runtimeJson, "utf8");
+    // mtime 은 과거로 강제(touch 전진 검증 — 실시간 간격 의존 제거).
+    const past = new Date(before - 10_000);
+    fs.utimesSync(paths.runtimeJson, past, past);
+    await touchRuntime(paths);
+    const after = fs.statSync(paths.runtimeJson).mtimeMs;
+    expect(after).toBeGreaterThan(past.getTime());
+    expect(fs.readFileSync(paths.runtimeJson, "utf8")).toBe(contentBefore);
+  });
+
+  it("파일 부재 시 멱등(throw 없음)", async () => {
+    const paths = lanePaths(tmpBase, "proj", "ghost");
+    await expect(touchRuntime(paths)).resolves.toBeUndefined();
   });
 });

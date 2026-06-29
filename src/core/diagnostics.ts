@@ -29,6 +29,8 @@ export interface LaneStatusRow {
   startedAt: string | null;
   /** running 일 때 startedAt 기준 경과 ms(그 외 null). */
   uptimeMs: number | null;
+  /** 마지막 하트비트 시각(runtime.json mtime) ISO. 파일 없거나 stat 실패 시 null. */
+  lastSeenAt: string | null;
 }
 
 /**
@@ -45,7 +47,16 @@ export async function collectStatus(
   for (const lane of lanes) {
     const paths = lanePaths(base, proj, lane);
     const info = await readRuntime(paths);
-    const status = livenessOf(info);
+    // 하트비트 신선도 — runtime.json mtime 을 stat. 실패(부재 등)면 미주입(pid-only 판정).
+    let mtimeMs: number | undefined;
+    if (info) {
+      try {
+        mtimeMs = (await stat(paths.runtimeJson)).mtimeMs;
+      } catch {
+        mtimeMs = undefined;
+      }
+    }
+    const status = livenessOf(info, { mtimeMs });
     rows.push({
       lane,
       status,
@@ -59,6 +70,7 @@ export async function collectStatus(
         status === "running" && info?.startedAt
           ? Math.max(0, Date.now() - Date.parse(info.startedAt))
           : null,
+      lastSeenAt: mtimeMs !== undefined ? new Date(mtimeMs).toISOString() : null,
     });
   }
   return rows;

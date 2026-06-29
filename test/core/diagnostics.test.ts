@@ -83,6 +83,21 @@ describe("collectStatus (SC2)", () => {
   it("conf 없는 proj 는 빈 배열", async () => {
     expect(await collectStatus("nope", { base: tmpBase })).toEqual([]);
   });
+
+  // SC-S3: pid 생존 + runtime.json mtime 이 임계 초과로 오래되면 stale.
+  it("pid 생존이나 하트비트(mtime) 가 오래되면 stale + lastSeenAt 노출", async () => {
+    writeConf("p", "hung", conf());
+    const lp = lanePaths(tmpBase, "p", "hung");
+    await writeRuntime(lp, rt(process.pid, "hung"));
+    // mtime 을 임계(180s) 초과 과거로 강제 — 행(hung) 시뮬레이션.
+    const past = new Date(Date.now() - 10 * 60 * 1000);
+    fs.utimesSync(lp.runtimeJson, past, past);
+
+    const rows = await collectStatus("p", { base: tmpBase });
+    const hung = rows.find((r) => r.lane === "hung");
+    expect(hung?.status).toBe("stale");
+    expect(hung?.lastSeenAt).not.toBeNull();
+  });
 });
 
 describe("runDoctor (SC3)", () => {

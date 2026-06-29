@@ -17,15 +17,23 @@ function formatUptime(ms: number | null): string {
   return `${h}h${m % 60}m`;
 }
 
+/** ISO 시각 → 현재 기준 경과(예: 12s, 3m4s). null 이면 "-". */
+function formatAge(iso: string | null): string {
+  if (iso === null) return "-";
+  const ms = Date.now() - Date.parse(iso);
+  return formatUptime(Number.isFinite(ms) ? Math.max(0, ms) : null);
+}
+
 function statusTable(rows: LaneStatusRow[]): string {
   if (rows.length === 0)
     return "레인 없음 — lanes.d 에 conf 가 없습니다 (adde lane add <proj> <lane>).";
-  const header = ["LANE", "STATUS", "PID", "UPTIME", "SOURCE"];
+  const header = ["LANE", "STATUS", "PID", "UPTIME", "SEEN", "SOURCE"];
   const body = rows.map((r) => [
     r.lane,
     r.status,
     r.pid === null ? "-" : String(r.pid),
     formatUptime(r.uptimeMs),
+    formatAge(r.lastSeenAt),
     r.source ?? "-",
   ]);
   const widths = header.map((h, i) =>
@@ -54,9 +62,16 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
           `  ↳ 조치: adde down ${proj} 로 상태를 정리한 뒤 adde up ${proj} 로 재기동하세요.\n`,
       );
     }
+    const stale = rows.filter((r) => r.status === "stale");
+    if (stale.length > 0) {
+      process.stdout.write(
+        `\n경고: ${stale.map((r) => r.lane).join(", ")} 레인이 응답 없음(stale — 프로세스는 살아있으나 하트비트 끊김).\n` +
+          `  ↳ 조치: 행(hang) 가능성. adde logs ${proj} <lane> --engine 으로 진단 후 adde down/up ${proj} 로 재기동하세요.\n`,
+      );
+    }
   }
-  // 크래시(dead) 잔존을 종료 코드로 신호 — 모니터링 친화.
-  return rows.some((r) => r.status === "dead") ? 1 : 0;
+  // 비정상(dead 크래시·stale 행) 잔존을 종료 코드로 신호 — 모니터링 친화.
+  return rows.some((r) => r.status === "dead" || r.status === "stale") ? 1 : 0;
 }
 
 function checkSymbol(level: DoctorCheck["level"]): string {

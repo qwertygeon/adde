@@ -192,6 +192,19 @@ export async function writeOut(
   await rename(tmpOut, finalOut);
 }
 
+/**
+ * inject 실패 등 처리 실패를 out/<id>.failed 로 기록(E1, 가시성).
+ * dedup 마커(.out)가 아니므로 processing/<id>.msg 는 남아 재기동 시 재처리된다(at-least-once 유지).
+ */
+export async function writeFailed(paths: LanePaths, id: string, reason: string): Promise<void> {
+  await mkdir(paths.outDir, { recursive: true });
+  const name = `${id}.failed`;
+  const tmp = join(paths.outDir, tmpName(name));
+  const final = join(paths.outDir, name);
+  await writeFile(tmp, reason, "utf8");
+  await rename(tmp, final);
+}
+
 /** processing/<id>.msg 경로를 직접 반환 (재처리 복원 등에 사용). */
 export function processingFilePath(paths: LanePaths, id: string): string {
   return join(paths.processingDir, processingFileName(id));

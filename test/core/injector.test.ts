@@ -227,3 +227,20 @@ describe("SC-B2: writeOut 후 render(id) 호출", () => {
     expect(fs.existsSync(path.join(paths.outDir, "r2.out"))).toBe(true);
   });
 });
+
+describe("inject 실패 보존 (011-E1)", () => {
+  it("inject 실패 시 out/<id>.failed 를 남기고 processing 은 유지(재처리), .out 은 없음", async () => {
+    const inject = vi.fn().mockRejectedValue(new Error("boom"));
+    const backend = makeBackend(inject);
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+
+    await enqueue(paths, makeEnvelope("ef1", "실패 메시지"));
+    injector.notify();
+    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "ef1.failed")));
+
+    expect(fs.existsSync(path.join(paths.outDir, "ef1.failed"))).toBe(true);
+    // processing 잔존 → 재기동 시 재처리(at-least-once). dedup 마커(.out)는 미생성.
+    expect(fs.existsSync(path.join(paths.processingDir, "ef1.msg"))).toBe(true);
+    expect(fs.existsSync(path.join(paths.outDir, "ef1.out"))).toBe(false);
+  });
+});

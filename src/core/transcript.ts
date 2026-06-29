@@ -87,8 +87,15 @@ export async function appendTranscript(paths: LanePaths, event: SessionEvent): P
     await mkdir(dirname(paths.transcriptLog), { recursive: true });
     await appendFile(paths.transcriptLog, line, "utf8");
   } catch (err) {
-    console.warn(
-      `[transcript] append 실패(보조 — 흡수): ${err instanceof Error ? err.message : String(err)}`,
-    );
+    // 감사 이벤트(차단 경고·자동허용)는 소실 시 감사 추적이 불완전해진다 → error 로 승격(E2).
+    // 일반 이벤트는 보조 분류로 warn 후 흡수.
+    const kind = getEventKind(event);
+    const isAudit = kind === "adde_warn" || kind === "adde_auto_allow";
+    const detail = err instanceof Error ? err.message : String(err);
+    if (isAudit) {
+      console.error(`[transcript] 감사 이벤트(${kind}) append 실패 — 감사 추적 불완전: ${detail}`);
+    } else {
+      console.warn(`[transcript] append 실패(보조 — 흡수): ${detail}`);
+    }
   }
 }

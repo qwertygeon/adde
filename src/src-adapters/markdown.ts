@@ -23,6 +23,8 @@ import type { Source, DecisionCallback, Decision } from "./source.js";
 const DEBOUNCE_MS = 150;
 /** fs.watch 가 놓친 편집을 보정하는 저빈도 폴링 주기(B2 백스톱). */
 const POLL_INTERVAL_MS = 2_000;
+/** 내용 안정화 재확인 간격(B1) — 동기 중 잘린 파일 읽기 방지. */
+const READ_SETTLE_MS = 50;
 
 export interface MarkdownConfig {
   lane: string;
@@ -309,6 +311,20 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     }
   }
 
+  /**
+   * 내용 안정화 후 읽기(B1) — 짧은 간격 2회 read 가 동일할 때만 반환. 동기 중 절반만
+   * 기록된 파일을 읽어 잘린 메시지를 보내는 것을 막는다. 변경 진행 중이면 null(다음
+   * watch/폴 이벤트가 안정된 상태로 재시도). atomic-rename 저장은 즉시 안정이라 지연 없음.
+   */
+  async function readStable(filePath: string): Promise<string | null> {
+    const first = await readMaybe(filePath);
+    if (first === null) return null;
+    await new Promise((r) => setTimeout(r, READ_SETTLE_MS));
+    const second = await readMaybe(filePath);
+    if (second === null || second !== first) return null;
+    return second;
+  }
+
   function joinLines(lines: string[], trailingNewline: boolean): string {
     return lines.join("\n") + (trailingNewline ? "\n" : "");
   }
@@ -317,8 +333,8 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     if (inboxBusy) return;
     inboxBusy = true;
     try {
-      const content = await readMaybe(inboxPath);
-      if (content === null) return;
+      const content = await readStable(inboxPath);
+      if (content === null) return; // 부재 또는 변경 진행 중(B1) — 다음 이벤트 재시도
       if (lastSelfWrite.get(inboxPath) === content) return; // 자기쓰기 echo
 
       const { actions, lines, trailingNewline } = parseInbox(content);
@@ -374,8 +390,8 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
 
   async function handleApprovals(): Promise<void> {
     await withApprovalsLock(async () => {
-      const content = await readMaybe(approvalsPath);
-      if (content === null) return;
+      const content = await readStable(approvalsPath);
+      if (content === null) return; // 부재 또는 변경 진행 중(B1) — 다음 이벤트 재시도
       if (lastSelfWrite.get(approvalsPath) === content) return; // 자기쓰기 echo
 
       const parsed = parseApprovals(content);

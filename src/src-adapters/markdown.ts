@@ -9,7 +9,7 @@
  */
 import { watch, existsSync, mkdirSync, statSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import { readFile, writeFile, rename, mkdir, stat } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir, stat, readdir } from "node:fs/promises";
 import { join, dirname, basename, relative, isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
@@ -231,7 +231,7 @@ export function finalizeApprovalDeny(content: string, reqId: string, reason: str
 function resolvePaths(conf: LaneConf): {
   rootDir: string;
   inboxPath: string;
-  approvalsPath: string;
+  approvalsDir: string;
   outboxDir: string;
   quarantineDir: string;
 } {
@@ -240,16 +240,15 @@ function resolvePaths(conf: LaneConf): {
   const rootDir = conf.root;
   const inboxPath = join(rootDir, conf.inbox);
   const inboxDir = dirname(inboxPath);
-  const approvalsPath = conf.approvals
-    ? join(rootDir, conf.approvals)
-    : join(inboxDir, "approvals.md");
+  // 승인은 요청당 파일 디렉터리(D, 백로그 B3) — conf.approvals 는 디렉터리(미지정 시 inbox 형제 approvals/).
+  const approvalsDir = conf.approvals ? join(rootDir, conf.approvals) : join(inboxDir, "approvals");
   const outboxDir = conf.outbox ? join(rootDir, conf.outbox) : join(inboxDir, "out");
   const quarantineDir = join(inboxDir, ".conflicts");
-  return { rootDir, inboxPath, approvalsPath, outboxDir, quarantineDir };
+  return { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir };
 }
 
 export function createMarkdownSource(cfg: MarkdownConfig): Source {
-  const { rootDir, inboxPath, approvalsPath, outboxDir, quarantineDir } = resolvePaths(cfg.conf);
+  const { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir } = resolvePaths(cfg.conf);
 
   const decisionHandlers: DecisionCallback[] = [];
   const watchers: FSWatcher[] = [];
@@ -390,20 +389,34 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
 
   async function handleApprovals(): Promise<void> {
     await withApprovalsLock(async () => {
-      const content = await readStable(approvalsPath);
-      if (content === null) return; // 부재 또는 변경 진행 중(B1) — 다음 이벤트 재시도
-      if (lastSelfWrite.get(approvalsPath) === content) return; // 자기쓰기 echo
-
-      const parsed = parseApprovals(content);
-      for (const d of parsed.decisions) {
-        const timer = permTimers.get(d.reqId);
-        if (timer) {
-          clearTimeout(timer);
-          permTimers.delete(d.reqId);
-        }
-        for (const cb of decisionHandlers) cb(d.reqId, d.decision);
+      let entries: string[];
+      try {
+        entries = await readdir(approvalsDir);
+      } catch {
+        return; // 디렉터리 부재 — 아직 요청 없음
       }
-      if (parsed.changed) await atomicWrite(approvalsPath, parsed.newContent);
+      for (const fn of entries) {
+        if (!fn.endsWith(".md")) continue;
+        if (isConflictFile(fn)) {
+          await quarantine(fn, approvalsDir);
+          continue;
+        }
+        const file = join(approvalsDir, fn);
+        const content = await readStable(file);
+        if (content === null) continue; // 부재 또는 변경 진행 중(B1)
+        if (lastSelfWrite.get(file) === content) continue; // 자기쓰기 echo
+
+        const parsed = parseApprovals(content);
+        for (const d of parsed.decisions) {
+          const timer = permTimers.get(d.reqId);
+          if (timer) {
+            clearTimeout(timer);
+            permTimers.delete(d.reqId);
+          }
+          for (const cb of decisionHandlers) cb(d.reqId, d.decision);
+        }
+        if (parsed.changed) await atomicWrite(file, parsed.newContent);
+      }
     });
   }
 
@@ -482,7 +495,26 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     }
   }
 
-  /** 기동 시 baseline 시그니처 seed(첫 폴의 불필요 재트리거 방지). 부재면 다음 폴이 생성 감지. */
+  /**
+   * 디렉터리 시그니처 — `.md` 파일별 mtime:size 집계(내용 변경 감지). 디렉터리 mtime 만으로는
+   * 파일 내용 변경(체크박스 토글)을 못 잡으므로 항목별 stat 으로 구성. 부재 시 null.
+   */
+  async function dirSig(dir: string): Promise<string | null> {
+    let files: string[];
+    try {
+      files = (await readdir(dir)).filter((f) => f.endsWith(".md")).sort();
+    } catch {
+      return null;
+    }
+    const parts: string[] = [];
+    for (const f of files) {
+      const s = await fileSig(join(dir, f));
+      if (s !== null) parts.push(`${f}:${s}`);
+    }
+    return parts.join("|");
+  }
+
+  /** 기동 시 inbox baseline 시그니처 seed(첫 폴의 불필요 재트리거 방지). 부재면 다음 폴이 생성 감지. */
   function seedSig(filePath: string): void {
     try {
       const s = statSync(filePath);
@@ -493,23 +525,22 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   }
 
   /**
-   * 폴링 백스톱 1회(B2): inbox·approvals 시그니처 변화 시 watch 와 동일한 debounce 핸들러 트리거.
-   * watch 가 놓친 이벤트를 보정. 핸들러의 self-write·busy 가드가 중복을 멱등 흡수.
+   * 폴링 백스톱 1회(B2): inbox 파일·approvals 디렉터리 시그니처 변화 시 watch 와 동일한 debounce
+   * 핸들러 트리거. watch 가 놓친 이벤트를 보정. 핸들러의 self-write·busy 가드가 중복을 멱등 흡수.
    */
   async function pollOnce(): Promise<void> {
     if (!running || pollBusy) return;
     pollBusy = true;
     try {
-      for (const [filePath, run] of [
-        [inboxPath, runInbox],
-        [approvalsPath, runApprovals],
-      ] as const) {
-        const sig = await fileSig(filePath);
-        if (sig === null) continue;
-        if (lastFileSig.get(filePath) !== sig) {
-          lastFileSig.set(filePath, sig);
-          debounce(filePath, run);
-        }
+      const inboxSig = await fileSig(inboxPath);
+      if (inboxSig !== null && lastFileSig.get(inboxPath) !== inboxSig) {
+        lastFileSig.set(inboxPath, inboxSig);
+        debounce(inboxPath, runInbox);
+      }
+      const apprSig = await dirSig(approvalsDir);
+      if (apprSig !== null && lastFileSig.get(approvalsDir) !== apprSig) {
+        lastFileSig.set(approvalsDir, apprSig);
+        debounce(approvalsDir, runApprovals);
       }
     } finally {
       pollBusy = false;
@@ -545,7 +576,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     };
     for (const [name, p] of [
       ["inbox", inboxPath],
-      ["approvals", approvalsPath],
+      ["approvals", approvalsDir],
       ["outbox", outboxDir],
     ] as const) {
       if (isInside(p, effectiveCwd)) {
@@ -558,7 +589,6 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     running = true;
 
     const inboxDir = dirname(inboxPath);
-    const approvalsDir = dirname(approvalsPath);
 
     const dispatch = (srcDir: string, filename: string): void => {
       if (isConflictFile(filename)) {
@@ -567,10 +597,12 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       }
       const full = join(srcDir, filename);
       if (full === inboxPath) debounce(inboxPath, () => runInbox());
-      else if (full === approvalsPath) debounce(approvalsPath, () => runApprovals());
+      else if (srcDir === approvalsDir && filename.endsWith(".md")) {
+        debounce(approvalsDir, () => runApprovals());
+      }
     };
 
-    // inbox·approvals 디렉터리(중복 제거) 감시.
+    // inbox 디렉터리 + approvals 요청당-파일 디렉터리 감시.
     const dirs = new Set([inboxDir, approvalsDir]);
     for (const dir of dirs) watchDir(dir, (filename) => dispatch(dir, filename));
 
@@ -582,9 +614,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     runInbox();
     runApprovals();
 
-    // 폴링 백스톱(B2): watch 가 이벤트를 놓쳐도 주기적으로 보정. baseline seed 후 인터벌 시작.
+    // 폴링 백스톱(B2): watch 가 이벤트를 놓쳐도 주기적으로 보정. inbox baseline seed 후 인터벌 시작.
+    // approvals 는 디렉터리라 첫 폴에서 시그니처를 seed(첫 폴 1회 스캔은 멱등이라 무해).
     seedSig(inboxPath);
-    seedSig(approvalsPath);
     pollTimer = setInterval(() => {
       pollOp = pollOnce().catch((err: unknown) =>
         console.error(`[markdown] 폴링 오류: ${err instanceof Error ? err.message : String(err)}`),
@@ -612,21 +644,26 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     await approvalsOp.catch(() => {});
   }
 
+  /** 요청당 승인 파일 경로(D). */
+  function approvalFile(reqId: string): string {
+    return join(approvalsDir, `${reqId}.md`);
+  }
+
   async function requestPermission(req: PermRequest): Promise<void> {
+    // 요청당 파일(D, 백로그 B3) — 단일 파일 append 대신 격리해 동시 편집 충돌면 축소.
     await withApprovalsLock(async () => {
-      const existing = (await readMaybe(approvalsPath)) ?? "";
-      const sep = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-      await atomicWrite(approvalsPath, existing + sep + renderApprovalBlock(req));
+      await atomicWrite(approvalFile(req.id), renderApprovalBlock(req));
     });
 
-    // 어댑터-로컬 타임아웃 — 무응답 시 노트 블록을 deny 로 종단(게이트도 독립 deny).
+    // 어댑터-로컬 타임아웃 — 무응답 시 해당 요청 파일을 deny 로 종단(게이트도 독립 deny).
     const timer = setTimeout(() => {
       permTimers.delete(req.id);
       void withApprovalsLock(async () => {
-        const content = await readMaybe(approvalsPath);
+        const file = approvalFile(req.id);
+        const content = await readMaybe(file);
         if (content === null) return;
         const parsed = finalizeApprovalDeny(content, req.id, "timeout");
-        if (parsed.changed) await atomicWrite(approvalsPath, parsed.newContent);
+        if (parsed.changed) await atomicWrite(file, parsed.newContent);
       });
       for (const cb of decisionHandlers) cb(req.id, "deny");
     }, DEFAULT_GATE_TIMEOUT_MS);

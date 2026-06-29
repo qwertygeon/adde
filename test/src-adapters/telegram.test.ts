@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { TelegramSource } from "../../src/src-adapters/telegram.js";
-import { createTelegramSource } from "../../src/src-adapters/telegram.js";
+import { createTelegramSource, splitForTelegram } from "../../src/src-adapters/telegram.js";
 import { lanePaths } from "../../src/shared/paths.js";
 
 // SC-014: long-poll→envelope→queue 저장
@@ -402,5 +402,65 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
     source.stop();
 
     expect(gateCallbackCalls.some((s) => s.includes("deny"))).toBe(true);
+  });
+});
+
+describe("splitForTelegram (011-A 4096 청킹)", () => {
+  it("4096 이하는 단일 청크", () => {
+    expect(splitForTelegram("짧은 응답")).toEqual(["짧은 응답"]);
+    const exact = "x".repeat(4096);
+    expect(splitForTelegram(exact)).toEqual([exact]);
+  });
+
+  it("개행 없는 초과 텍스트는 하드 분할(데이터 손실 없음)", () => {
+    const text = "a".repeat(10000);
+    const chunks = splitForTelegram(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((c) => c.length <= 4096)).toBe(true);
+    expect(chunks.join("")).toBe(text); // 개행이 없으니 손실 없이 재결합
+  });
+
+  it("줄 경계를 우선해 분할한다", () => {
+    const line = "b".repeat(1000);
+    const text = Array.from({ length: 10 }, () => line).join("\n"); // ~10kB, 개행 포함
+    const chunks = splitForTelegram(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((c) => c.length <= 4096)).toBe(true);
+  });
+});
+
+describe("renderOut 4096 초과 분할 전송 (011-A)", () => {
+  it("긴 응답을 여러 sendMessage 로 나눠 보내고 첫 청크만 reply_to", async () => {
+    const sent: Record<string, unknown>[] = [];
+    setupFetchMock((method, params) => {
+      if (method === "getUpdates") return [];
+      if (method === "sendMessage") {
+        sent.push({ ...params });
+        return { message_id: 1 };
+      }
+      return true;
+    });
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-code-acp",
+      paths,
+      chatId: 99,
+    });
+
+    fs.writeFileSync(
+      path.join(paths.outDir, "big.out.json"),
+      JSON.stringify({ reply_ref: { channel_msg_id: "42" } }),
+    );
+    fs.writeFileSync(path.join(paths.outDir, "big.out"), "y".repeat(9000));
+
+    await source.renderOut("big");
+
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.every((m) => (m["text"] as string).length <= 4096)).toBe(true);
+    expect(sent[0]?.["reply_to_message_id"]).toBe(42);
+    // 후속 청크는 reply_to 없음(클러터 방지)
+    expect(sent[1]?.["reply_to_message_id"]).toBeUndefined();
   });
 });

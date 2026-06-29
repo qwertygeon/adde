@@ -17,6 +17,26 @@ import type { Source, DecisionCallback } from "./source.js";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const POLL_TIMEOUT_SECS = 30;
+/** Telegram sendMessage 텍스트 한도(UTF-16 코드유닛). 초과 시 분할 전송(A). */
+const TELEGRAM_MSG_LIMIT = 4096;
+
+/**
+ * 텍스트를 Telegram 한도 이하 청크로 분할. 줄 경계를 우선하되, 한 줄이 한도를 넘으면 하드 분할.
+ * 빈 문자열은 빈 청크 1개([""]) — 호출부의 기존 동작 보존(분할 자체는 의미 변경 없음).
+ */
+export function splitForTelegram(text: string, max = TELEGRAM_MSG_LIMIT): string[] {
+  if (text.length <= max) return [text];
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > max) {
+    const nl = rest.lastIndexOf("\n", max);
+    const cut = nl > 0 ? nl : max; // 한도 내 개행이 없으면 하드 분할
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\n/, ""); // 분할점의 개행 1개 제거
+  }
+  if (rest.length > 0) chunks.push(rest);
+  return chunks;
+}
 /** stop() 이 pollLoop 종료를 기다리는 상한 (H3/DEC-004). 초과 시 포기하고 진행. */
 const STOP_WAIT_MS = 3_000;
 /** enqueue 연속 실패가 이 횟수에 도달하면 운영자에게 1회 알림 + 백오프 (DEC-003). */
@@ -135,11 +155,15 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
 
   async function sendReply(chatId: number, text: string, replyToMsgId?: number): Promise<void> {
     const tok = await getToken();
-    const params: Record<string, unknown> = { chat_id: chatId, text };
-    if (replyToMsgId !== undefined) {
-      params["reply_to_message_id"] = replyToMsgId;
+    // 4096자 초과 시 분할 순차 전송(A) — 첫 청크만 원본에 quote-reply, 순서 보존.
+    const chunks = splitForTelegram(text);
+    for (let i = 0; i < chunks.length; i++) {
+      const params: Record<string, unknown> = { chat_id: chatId, text: chunks[i] };
+      if (i === 0 && replyToMsgId !== undefined) {
+        params["reply_to_message_id"] = replyToMsgId;
+      }
+      await callBotApi(tok, "sendMessage", params);
     }
-    await callBotApi(tok, "sendMessage", params);
   }
 
   async function sendPermPrompt(

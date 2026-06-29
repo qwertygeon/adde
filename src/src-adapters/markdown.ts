@@ -7,9 +7,9 @@
  * 출력: out/<id>.out 감시 → 마크다운 출력 노트(one-file-per-message, atomic).
  * 동기 내성: *.sync-conflict* 격리·상태 마커 멱등 자기쓰기 가드·tmp→rename.
  */
-import { watch, existsSync, mkdirSync } from "node:fs";
+import { watch, existsSync, mkdirSync, statSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir, stat } from "node:fs/promises";
 import { join, dirname, basename, relative, isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
@@ -21,6 +21,8 @@ import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
 import type { Source, DecisionCallback, Decision } from "./source.js";
 
 const DEBOUNCE_MS = 150;
+/** fs.watch 가 놓친 편집을 보정하는 저빈도 폴링 주기(B2 백스톱). */
+const POLL_INTERVAL_MS = 2_000;
 
 export interface MarkdownConfig {
   lane: string;
@@ -252,6 +254,11 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const permTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const lastSelfWrite = new Map<string, string>();
+  // 폴링 백스톱(B2): 파일별 마지막 관측 시그니처(mtimeMs:size)와 인터벌·in-flight 추적.
+  const lastFileSig = new Map<string, string>();
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollBusy = false;
+  let pollOp: Promise<void> = Promise.resolve();
   let inboxBusy = false;
   let running = false;
   // approvals 파일 변경을 직렬화(append·결정 재작성·타임아웃 경합 방지).
@@ -449,6 +456,50 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     watchers.push(w);
   }
 
+  /** 파일 시그니처(mtimeMs:size) — 부재 시 null. mtime 1초 granularity 보완 위해 size 동반. */
+  async function fileSig(filePath: string): Promise<string | null> {
+    try {
+      const s = await stat(filePath);
+      return `${s.mtimeMs}:${s.size}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 기동 시 baseline 시그니처 seed(첫 폴의 불필요 재트리거 방지). 부재면 다음 폴이 생성 감지. */
+  function seedSig(filePath: string): void {
+    try {
+      const s = statSync(filePath);
+      lastFileSig.set(filePath, `${s.mtimeMs}:${s.size}`);
+    } catch {
+      // 부재 — seed 생략
+    }
+  }
+
+  /**
+   * 폴링 백스톱 1회(B2): inbox·approvals 시그니처 변화 시 watch 와 동일한 debounce 핸들러 트리거.
+   * watch 가 놓친 이벤트를 보정. 핸들러의 self-write·busy 가드가 중복을 멱등 흡수.
+   */
+  async function pollOnce(): Promise<void> {
+    if (!running || pollBusy) return;
+    pollBusy = true;
+    try {
+      for (const [filePath, run] of [
+        [inboxPath, runInbox],
+        [approvalsPath, runApprovals],
+      ] as const) {
+        const sig = await fileSig(filePath);
+        if (sig === null) continue;
+        if (lastFileSig.get(filePath) !== sig) {
+          lastFileSig.set(filePath, sig);
+          debounce(filePath, run);
+        }
+      }
+    } finally {
+      pollBusy = false;
+    }
+  }
+
   function start(): void {
     if (!existsSync(rootDir)) {
       throw new Error(`[markdown] root 경로 없음: ${rootDir}`);
@@ -499,18 +550,32 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     // 기동 시 기존 인박스/승인 노트 1회 처리(능동 세션 재개).
     runInbox();
     runApprovals();
+
+    // 폴링 백스톱(B2): watch 가 이벤트를 놓쳐도 주기적으로 보정. baseline seed 후 인터벌 시작.
+    seedSig(inboxPath);
+    seedSig(approvalsPath);
+    pollTimer = setInterval(() => {
+      pollOp = pollOnce().catch((err: unknown) =>
+        console.error(`[markdown] 폴링 오류: ${err instanceof Error ? err.message : String(err)}`),
+      );
+    }, POLL_INTERVAL_MS);
   }
 
   async function stop(): Promise<void> {
     running = false;
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
     for (const w of watchers) w.close();
     watchers.length = 0;
     for (const t of debounceTimers.values()) clearTimeout(t);
     debounceTimers.clear();
     for (const t of permTimers.values()) clearTimeout(t);
     permTimers.clear();
-    // in-flight 처리(approvals 락 체인 + inbox/approvals op) settle 대기 —
+    // in-flight 처리(폴 + approvals 락 체인 + inbox/approvals op) settle 대기 —
     // 임시 디렉터리 정리 뒤 살아남은 쓰기가 ENOENT 를 내지 않도록(H4).
+    await pollOp.catch(() => {});
     await approvalsLock.catch(() => {});
     await inboxOp.catch(() => {});
     await approvalsOp.catch(() => {});

@@ -20,6 +20,21 @@ export async function run(argv: readonly string[]): Promise<number> {
     return runLane(argv.slice(1));
   }
 
+  if (first === "status") {
+    const { runStatus } = await import("./ops.js");
+    return runStatus(argv.slice(1));
+  }
+
+  if (first === "doctor") {
+    const { runDoctorCli } = await import("./ops.js");
+    return runDoctorCli(argv.slice(1));
+  }
+
+  if (first === "logs") {
+    const { runLogs } = await import("./ops.js");
+    return runLogs(argv.slice(1));
+  }
+
   if (first === "up") {
     const proj = second;
     if (!proj) {

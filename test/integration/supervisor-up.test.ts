@@ -147,6 +147,27 @@ describe("supervisorUp (SC-022 conf 수만큼 기동)", () => {
   });
 });
 
+describe("supervisorUp 라이브니스 파일 (SC1)", () => {
+  it("기동 시 runtime.json 을 기록하고 down 시 제거한다", async () => {
+    const { base } = setupProject("rtproj", { "telegram-claude": minimalConf });
+    const fakeAcpFactory = makeFakeAcpFactory();
+    const lp = lanePaths(base, "rtproj", "telegram-claude");
+
+    await runUp("rtproj", { base, acpFactory: fakeAcpFactory });
+    expect(fs.existsSync(lp.runtimeJson)).toBe(true);
+    const info = JSON.parse(fs.readFileSync(lp.runtimeJson, "utf8")) as {
+      pid: number;
+      sessionId: string;
+    };
+    expect(info.pid).toBe(process.pid);
+    expect(info.sessionId).toBe("fake-session-001");
+
+    await supervisorDown("rtproj", { base });
+    startedProjs.delete("rtproj");
+    expect(fs.existsSync(lp.runtimeJson)).toBe(false);
+  });
+});
+
 describe("supervisorUp source 분기 (markdown)", () => {
   it("source=markdown conf 는 markdown 어댑터로 기동된다 (running)", async () => {
     const rootDir = path.join(tmpBase, "Notes");

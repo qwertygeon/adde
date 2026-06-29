@@ -16,9 +16,10 @@ import { createInjector } from "./injector.js";
 import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
+import { writeRuntime, removeRuntime } from "./runtime-state.js";
 
 /** 런타임 ACP 어댑터 바이너리 경로. package.json 의 bin 항목을 SoT 로 해석. */
-function resolveAdapterBin(): string {
+export function resolveAdapterBin(): string {
   const require = createRequire(import.meta.url);
   try {
     const pkgPath = require.resolve("@zed-industries/claude-code-acp/package.json");
@@ -172,7 +173,7 @@ export async function supervisorUp(
 
     try {
       // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
-      await backend.launch(lane);
+      const { sessionId } = await backend.launch(lane);
 
       // 엔진 세션 이벤트 → injector(응답 누적). injector 가 turn 종료에 writeOut + renderOut(B).
       backend.subscribe(lane, (e) => injector.onSessionEvent(e));
@@ -199,14 +200,32 @@ export async function supervisorUp(
       });
       source.start();
 
+      // 라이브니스 상태 파일 — status 가 교차 프로세스로 읽는다. 기동 성공 후 기록.
+      // 기록 실패는 보조(가시성 저하일 뿐 기동 자체는 성공) → warn 후 흡수.
+      await writeRuntime(paths, {
+        v: 1,
+        pid: process.pid,
+        lane,
+        sessionId,
+        startedAt: new Date().toISOString(),
+        source: conf.source || channel,
+        backend: conf.backend || "acp",
+        engine,
+      }).catch((err: unknown) =>
+        console.warn(`[supervisor] lane=${lane} runtime.json 기록 실패(보조): ${errMsg(err)}`),
+      );
+
       console.log(`[supervisor] lane=${lane} running`);
 
       handles.push({
         lane,
-        // 정지 순서: 소스 먼저(신규 인바운드·turn 차단) → 백엔드 child 정리(C1).
+        // 정지 순서: 소스 먼저(신규 인바운드·turn 차단) → 백엔드 child 정리(C1) → 상태 파일 제거.
         async stop() {
           await source.stop();
           await backend.close(lane);
+          await removeRuntime(paths).catch((err: unknown) =>
+            console.warn(`[supervisor] lane=${lane} runtime.json 제거 실패(보조): ${errMsg(err)}`),
+          );
         },
       });
 

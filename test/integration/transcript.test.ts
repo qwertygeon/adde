@@ -47,6 +47,7 @@ function makeFakeAcpBackend(): AcpBackend & { emit(event: SessionEvent): Promise
       subscribers.push(cb);
     }),
     onPermissionRequest: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
     emit: async (event: SessionEvent) => {
       for (const sub of subscribers) {
         await sub(event);

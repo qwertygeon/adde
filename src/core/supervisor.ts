@@ -48,7 +48,7 @@ function errMsg(err: unknown): string {
 
 interface LaneHandle {
   lane: string;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 /** 레인 기동 상태 결과. */
@@ -203,8 +203,10 @@ export async function supervisorUp(
 
       handles.push({
         lane,
-        stop() {
-          source.stop();
+        // 정지 순서: 소스 먼저(신규 인바운드·turn 차단) → 백엔드 child 정리(C1).
+        async stop() {
+          await source.stop();
+          await backend.close(lane);
         },
       });
 
@@ -236,7 +238,7 @@ export async function supervisorDown(
   const results: LaneStatus[] = [];
 
   for (const handle of handles) {
-    handle.stop();
+    await handle.stop();
     console.log(`[supervisor] lane=${handle.lane} stopped`);
     results.push({ lane: handle.lane, status: "stopped" });
   }

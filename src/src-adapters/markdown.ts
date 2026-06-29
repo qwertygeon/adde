@@ -256,6 +256,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   let running = false;
   // approvals 파일 변경을 직렬화(append·결정 재작성·타임아웃 경합 방지).
   let approvalsLock: Promise<void> = Promise.resolve();
+  // in-flight inbox/approvals 처리 추적 — stop() 이 정리 완료를 대기(H4/DEC-004).
+  let inboxOp: Promise<void> = Promise.resolve();
+  let approvalsOp: Promise<void> = Promise.resolve();
 
   /** 같은 디렉터리 tmp→rename 으로 원자 기록. */
   async function atomicWrite(filePath: string, content: string): Promise<void> {
@@ -409,6 +412,22 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     await atomicWrite(join(outboxDir, `${id}.md`), `${header}${text}`);
   }
 
+  /** handleInbox 를 추적 가능한 형태로 기동(fire-and-forget + .catch, stop 대기 대상). */
+  function runInbox(): void {
+    inboxOp = handleInbox().catch((err: unknown) =>
+      console.error(`[markdown] inbox 처리 오류: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }
+
+  /** handleApprovals 를 추적 가능한 형태로 기동. */
+  function runApprovals(): void {
+    approvalsOp = handleApprovals().catch((err: unknown) =>
+      console.error(
+        `[markdown] approvals 처리 오류: ${err instanceof Error ? err.message : String(err)}`,
+      ),
+    );
+  }
+
   function debounce(key: string, fn: () => void): void {
     const existing = debounceTimers.get(key);
     if (existing) clearTimeout(existing);
@@ -465,8 +484,8 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
         return;
       }
       const full = join(srcDir, filename);
-      if (full === inboxPath) debounce(inboxPath, () => void handleInbox());
-      else if (full === approvalsPath) debounce(approvalsPath, () => void handleApprovals());
+      if (full === inboxPath) debounce(inboxPath, () => runInbox());
+      else if (full === approvalsPath) debounce(approvalsPath, () => runApprovals());
     };
 
     // inbox·approvals 디렉터리(중복 제거) 감시.
@@ -478,11 +497,11 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     mkdirSync(outboxDir, { recursive: true });
 
     // 기동 시 기존 인박스/승인 노트 1회 처리(능동 세션 재개).
-    void handleInbox();
-    void handleApprovals();
+    runInbox();
+    runApprovals();
   }
 
-  function stop(): void {
+  async function stop(): Promise<void> {
     running = false;
     for (const w of watchers) w.close();
     watchers.length = 0;
@@ -490,6 +509,11 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     debounceTimers.clear();
     for (const t of permTimers.values()) clearTimeout(t);
     permTimers.clear();
+    // in-flight 처리(approvals 락 체인 + inbox/approvals op) settle 대기 —
+    // 임시 디렉터리 정리 뒤 살아남은 쓰기가 ENOENT 를 내지 않도록(H4).
+    await approvalsLock.catch(() => {});
+    await inboxOp.catch(() => {});
+    await approvalsOp.catch(() => {});
   }
 
   async function requestPermission(req: PermRequest): Promise<void> {

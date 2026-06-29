@@ -16,6 +16,7 @@ import type {
   ReadTextFileRequest,
   ReadTextFileResponse,
 } from "@agentclientprotocol/sdk";
+import type { ChildProcess } from "node:child_process";
 import { spawnEngine } from "./spawn.js";
 import type { LanePaths } from "../../shared/paths.js";
 import { appendTranscript } from "../../core/transcript.js";
@@ -23,6 +24,13 @@ import type { SessionEvent } from "../../core/transcript.js";
 import type { PermRequest, PermResponse } from "../../gate/gate.js";
 import type { AddePolicy, EngineEffective } from "./perm-diff.js";
 import { comparePerm, formatWarn } from "./perm-diff.js";
+import { formatBlock, formatException } from "../../shared/notify.js";
+import { withTimeout, killChild, closeChild } from "./lifecycle.js";
+
+/** 핸드셰이크(initialize·newSession) 최대 대기 (DEC-002). 초과 시 launch 실패 + child kill. */
+const HANDSHAKE_TIMEOUT_MS = 30_000;
+/** close() 시 SIGTERM 후 종료 유예 (DEC-003). 초과 시 SIGKILL. */
+const CHILD_GRACE_MS = 5_000;
 
 /** allowlist 자동 허용 판정 — 도구명이 레인 allowlist 에 있으면 true (A2/DEC-002). */
 export function shouldAutoAllow(allowlist: string[] | undefined, toolName: string): boolean {
@@ -41,6 +49,8 @@ export interface AcpBackend {
   inject(lane: string, text: string): Promise<void>;
   subscribe(lane: string, on: (e: SessionEvent) => void): void;
   onPermissionRequest(lane: string, handler: (req: PermRequest) => Promise<PermResponse>): void;
+  /** 레인 종료 — 엔진 child 프로세스 정리(SIGTERM→유예→SIGKILL). down/셧다운에서 호출. */
+  close(lane: string): Promise<void>;
 }
 
 interface LaneConfig {
@@ -56,6 +66,8 @@ interface LaneConfig {
 interface LaneState {
   conn: acp.ClientSideConnection;
   sessionId: string;
+  /** 엔진 서브프로세스 — close() 정리를 위해 보관(C1/C2). */
+  child: ChildProcess;
   subscribers: Array<(e: SessionEvent) => void>;
   permHandler: ((req: PermRequest) => Promise<PermResponse>) | null;
   paths: LanePaths;
@@ -111,7 +123,14 @@ export class AcpBackendImpl implements AcpBackend {
       console.error(`[acp] lane=${lane} 엔진 프로세스 오류: ${err.message}`);
     const spawnFailed = new Promise<never>((_, reject) => {
       onSpawnError = (err) =>
-        reject(new Error(`[acp] 엔진 spawn 실패 (${this.adapterBin}): ${err.message}`));
+        reject(
+          new Error(
+            formatException({
+              situation: `엔진 프로세스 spawn 실패 (${this.adapterBin}): ${err.message}`,
+              action: "어댑터 바이너리 설치를 확인하세요(pnpm install) 후 adde up 재시도.",
+            }),
+          ),
+        );
     });
     child.on("error", (err: Error) => onSpawnError(err));
 
@@ -130,13 +149,30 @@ export class AcpBackendImpl implements AcpBackend {
             for (const sub of laneRef.state.subscribers) {
               try {
                 sub(update);
-              } catch {
-                // 구독자 오류는 보조 — 다른 구독자 진행 유지
+              } catch (err) {
+                // 무음 흡수 금지(H1/DEC-005) — 다른 구독자는 계속하되 실패 신호는 큰소리로 기록.
+                console.error(
+                  `[acp] lane=${lane} 구독자 오류: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                if (paths) {
+                  await appendTranscript(paths, {
+                    sessionUpdate: "adde_warn",
+                    message: `구독자 처리 오류: ${err instanceof Error ? err.message : String(err)}`,
+                  }).catch((e: unknown) =>
+                    console.error(
+                      `[acp] lane=${lane} transcript 기록 실패: ${e instanceof Error ? e.message : String(e)}`,
+                    ),
+                  );
+                }
               }
             }
 
             if (paths) {
-              await appendTranscript(paths, update).catch(() => {});
+              await appendTranscript(paths, update).catch((e: unknown) =>
+                console.error(
+                  `[acp] lane=${lane} transcript 기록 실패: ${e instanceof Error ? e.message : String(e)}`,
+                ),
+              );
             }
 
             const updateKind =
@@ -230,24 +266,51 @@ export class AcpBackendImpl implements AcpBackend {
       return clientImpl;
     }, stream);
 
-    // 핸드셰이크 단계에서 spawn 실패가 나면 즉시 reject (행 방지).
-    await Promise.race([
-      conn.initialize({
-        protocolVersion: acp.PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: { readTextFile: true, writeTextFile: true },
-        },
-      }),
-      spawnFailed,
-    ]);
+    // 핸드셰이크 단계에서 spawn 실패가 나면 즉시 reject (행 방지). 추가로 시한(DEC-002)을 둬
+    // 엔진이 응답 없이 멈춰도 영구 hang 하지 않게 한다 — 실패 시 child 를 정리하고 actionable 로 던진다.
+    const handshakeTimeoutErr = (phase: string): Error =>
+      new Error(
+        formatException({
+          situation: `엔진 핸드셰이크(${phase}) ${HANDSHAKE_TIMEOUT_MS / 1000}초 내 무응답`,
+          action: "엔진 바이너리·헬스를 확인하세요 후 adde up 재시도.",
+        }),
+      );
+    try {
+      await withTimeout(
+        Promise.race([
+          conn.initialize({
+            protocolVersion: acp.PROTOCOL_VERSION,
+            clientCapabilities: {
+              fs: { readTextFile: true, writeTextFile: true },
+            },
+          }),
+          spawnFailed,
+        ]),
+        HANDSHAKE_TIMEOUT_MS,
+        () => handshakeTimeoutErr("initialize"),
+      );
+    } catch (err) {
+      killChild(child);
+      throw err;
+    }
 
-    const sessionResp = await Promise.race([
-      conn.newSession({
-        cwd: laneCwd,
-        mcpServers: [],
-      }),
-      spawnFailed,
-    ]);
+    let sessionResp: { sessionId: string };
+    try {
+      sessionResp = await withTimeout(
+        Promise.race([
+          conn.newSession({
+            cwd: laneCwd,
+            mcpServers: [],
+          }),
+          spawnFailed,
+        ]),
+        HANDSHAKE_TIMEOUT_MS,
+        () => handshakeTimeoutErr("newSession"),
+      );
+    } catch (err) {
+      killChild(child);
+      throw err;
+    }
 
     // 핸드셰이크 성공 — 이후 child 'error' 는 크래시 대신 로깅(spawnFailed 는 더 이상 소비 안 됨).
     onSpawnError = (err) =>
@@ -263,6 +326,7 @@ export class AcpBackendImpl implements AcpBackend {
     const state: LaneState = {
       conn,
       sessionId,
+      child,
       subscribers: [],
       permHandler: null,
       paths: paths ?? ({} as LanePaths),
@@ -276,13 +340,36 @@ export class AcpBackendImpl implements AcpBackend {
       const engineEffective = await this.fetchEngineEffective(lane);
       const result = comparePerm(addePolicy, engineEffective);
       if (result.diff && result.warn) {
+        if (result.warn.reason === "정책차이") {
+          // H2/DEC-001: 엔진이 정책보다 느슨함이 *확인됨* → fail-closed(launch 거부 + child 정리).
+          const note = formatBlock({
+            situation: result.warn.message,
+            action:
+              "엔진 권한 설정에서 bypassPermissions 를 해제하거나 ADDE 정책(perm_tier)에 맞게 정렬 후 재기동하세요.",
+          });
+          console.error(note);
+          if (channelWarn) channelWarn(note);
+          await appendTranscript(paths, { sessionUpdate: "adde_warn", message: note }).catch(
+            (e: unknown) =>
+              console.error(
+                `[acp] lane=${lane} transcript 기록 실패: ${e instanceof Error ? e.message : String(e)}`,
+              ),
+          );
+          await this.close(lane);
+          throw new Error(note);
+        }
+        // 조회실패(getMode 미지원 등): 확인 불가 → WARN 유지 + 계속(per-tool 게이트가 여전히 강제).
         const msg = result.warn.message;
-        console.warn(`[acp] launch perm-diff: ${msg}`);
+        console.warn(`[acp] launch perm-diff(확인불가): ${msg}`);
         if (channelWarn) channelWarn(msg);
         await appendTranscript(paths, {
           sessionUpdate: "adde_warn",
           message: msg,
-        }).catch(() => {});
+        }).catch((e: unknown) =>
+          console.error(
+            `[acp] lane=${lane} transcript 기록 실패: ${e instanceof Error ? e.message : String(e)}`,
+          ),
+        );
       }
     }
 
@@ -351,6 +438,15 @@ export class AcpBackendImpl implements AcpBackend {
   /** 인젝터 idle 콜백 등록 (inject 완료 시 호출). */
   setIdleCallback(lane: string, cb: () => void): void {
     this.idleCallbacks.set(lane, cb);
+  }
+
+  /** 레인 종료 — 엔진 child 정리(SIGTERM→유예→SIGKILL) + 상태 제거(C1/C2/DEC-003). */
+  async close(lane: string): Promise<void> {
+    const state = this.lanes.get(lane);
+    this.lanes.delete(lane);
+    this.idleCallbacks.delete(lane);
+    if (!state) return;
+    await closeChild(state.child, CHILD_GRACE_MS);
   }
 }
 

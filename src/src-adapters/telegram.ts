@@ -16,6 +16,8 @@ import type { Source, DecisionCallback } from "./source.js";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const POLL_TIMEOUT_SECS = 30;
+/** stop() 이 pollLoop 종료를 기다리는 상한 (H3/DEC-004). 초과 시 포기하고 진행. */
+const STOP_WAIT_MS = 3_000;
 
 export interface TelegramConfig {
   lane: string;
@@ -72,12 +74,14 @@ async function callBotApi(
   token: string,
   method: string,
   params: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const url = `${TELEGRAM_API}/bot${token}/${method}`;
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
+    ...(signal ? { signal } : {}),
   });
 
   if (!resp.ok) {
@@ -95,6 +99,9 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   let token: string | null = null;
   let offset = 0;
   let running = false;
+  // in-flight long-poll fetch 를 stop 에서 중단(H3/DEC-004). pollLoop 종료를 stop 이 대기.
+  let pollAbort: AbortController | null = null;
+  let pollPromise: Promise<void> | null = null;
   const callbackHandlers: GateDecisionCallback[] = [];
 
   async function getToken(): Promise<string> {
@@ -174,11 +181,16 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     const tok = await getToken();
     while (running) {
       try {
-        const result = await callBotApi(tok, "getUpdates", {
-          offset,
-          timeout: POLL_TIMEOUT_SECS,
-          allowed_updates: ["message", "callback_query"],
-        });
+        const result = await callBotApi(
+          tok,
+          "getUpdates",
+          {
+            offset,
+            timeout: POLL_TIMEOUT_SECS,
+            allowed_updates: ["message", "callback_query"],
+          },
+          pollAbort?.signal,
+        );
 
         const updates = result as TelegramUpdate[];
 
@@ -253,8 +265,10 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
 
   function start(): void {
     running = true;
+    pollAbort = new AbortController();
     // fire-and-forget 루프 — rejection 이 unhandled 가 되지 않도록 로깅(토큰 읽기 실패 등).
-    void pollLoop().catch((err: unknown) => {
+    // pollPromise 를 보관해 stop() 이 종료를 대기(H3).
+    pollPromise = pollLoop().catch((err: unknown) => {
       console.error(
         `[telegram] poll 루프 종료: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -272,8 +286,22 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     onCallbackQuery(cb);
   }
 
-  function stop(): void {
+  async function stop(): Promise<void> {
     running = false;
+    pollAbort?.abort(); // in-flight long-poll fetch 중단
+    const pending = pollPromise;
+    if (pending) {
+      // pollLoop settle 을 유계 대기 — 멈춘 fetch 가 종료를 막지 않게 상한을 둔다.
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, STOP_WAIT_MS);
+        void pending.finally(() => {
+          clearTimeout(t);
+          resolve();
+        });
+      });
+    }
+    pollPromise = null;
+    pollAbort = null;
   }
 
   return {

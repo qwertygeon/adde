@@ -93,6 +93,10 @@ function makeFakeAcpFactory() {
       onPermissionRequest: vi.fn().mockImplementation(() => {
         requireLaunch("onPermissionRequest");
       }),
+      close: vi.fn().mockImplementation(async () => {
+        requireLaunch("close");
+        launched = false;
+      }),
     };
   });
 }

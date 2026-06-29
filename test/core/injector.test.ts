@@ -49,6 +49,7 @@ function makeBackend(inject = vi.fn().mockResolvedValue(undefined)) {
     launch: vi.fn(),
     subscribe: vi.fn(),
     onPermissionRequest: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
   };
 }
 

@@ -47,6 +47,7 @@ function makeFakeAcpFactory() {
     inject: vi.fn().mockResolvedValue(undefined),
     subscribe: vi.fn(),
     onPermissionRequest: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
   });
 }
 

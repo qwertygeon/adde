@@ -60,6 +60,7 @@ function makeFakeAcpBackend(sessionId = "fake-session-abc"): AcpBackend & {
       subscribers.push(cb);
     }),
     onPermissionRequest: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
     getSubscribers: () => subscribers,
   };
 }
@@ -100,6 +101,7 @@ describe("AcpBackend launch — session.id 영속 (SC-009)", () => {
       inject: vi.fn().mockResolvedValue(undefined),
       subscribe: vi.fn(),
       onPermissionRequest: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
     };
 
     await fakeBackend.launch("test-lane");

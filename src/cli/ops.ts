@@ -79,6 +79,7 @@ export async function runDoctorCli(rest: readonly string[]): Promise<number> {
 }
 
 export async function runLogs(rest: readonly string[]): Promise<number> {
+  const engine = rest.includes("--engine");
   const positional = rest.filter((a) => !a.startsWith("--"));
   const [proj, lane, nRaw] = positional;
   if (!proj || !lane) {
@@ -86,10 +87,11 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
     return 1;
   }
   const n = nRaw !== undefined && /^\d+$/.test(nRaw) ? Number(nRaw) : 50;
-  const result = await readLogs(proj, lane, n);
+  const result = await readLogs(proj, lane, n, { engine });
   if (!result.exists) {
+    const what = engine ? "engine 로그" : "transcript";
     process.stdout.write(
-      `transcript 없음: ${result.path}\n` +
+      `${what} 없음: ${result.path}\n` +
         `  ↳ 조치: 레인이 아직 활동하지 않았거나 기동되지 않았습니다. adde status ${proj} 로 상태를 확인하세요.\n`,
     );
     return 0;

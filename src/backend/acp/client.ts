@@ -115,7 +115,8 @@ export class AcpBackendImpl implements AcpBackend {
     const laneCwd = config?.cwd && config.cwd.length > 0 ? config.cwd : process.cwd();
     const channel = config?.channel ?? "telegram";
 
-    const child = spawnEngine(this.adapterBin, []);
+    // paths 가 있으면 엔진 stderr 를 레인 engine.log 로 캡처(없으면 inherit — 테스트/레거시).
+    const child = spawnEngine(this.adapterBin, [], paths ? { stderrPath: paths.engineLog } : {});
 
     // child 'error'(예: 바이너리 ENOENT) 는 미처리 시 프로세스를 크래시시킨다.
     // 핸드셰이크 완료 전에는 launch 실패로 전환하고, 이후에는 로깅한다(상시 리스너 유지).
@@ -313,8 +314,7 @@ export class AcpBackendImpl implements AcpBackend {
     }
 
     // 핸드셰이크 성공 — 이후 child 'error' 는 크래시 대신 로깅(spawnFailed 는 더 이상 소비 안 됨).
-    onSpawnError = (err) =>
-      console.error(`[acp] lane=${lane} 엔진 프로세스 오류: ${err.message}`);
+    onSpawnError = (err) => console.error(`[acp] lane=${lane} 엔진 프로세스 오류: ${err.message}`);
 
     const sessionId = sessionResp.sessionId;
 

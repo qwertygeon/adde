@@ -215,7 +215,7 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
 // ── logs ──────────────────────────────────────────────────────────────
 
 export interface LogsResult {
-  /** transcript.log 경로. */
+  /** 읽은 로그 파일 경로. */
   path: string;
   /** 파일이 존재했는가. false 면 lines 는 빈 배열. */
   exists: boolean;
@@ -223,21 +223,27 @@ export interface LogsResult {
   lines: string[];
 }
 
-/** 레인 transcript.log 의 최근 n줄을 반환한다. 파일 없으면 exists=false. */
+export interface ReadLogsOptions extends DiagBaseOptions {
+  /** true 면 transcript.log 대신 engine.log(엔진 stderr 캡처)를 읽는다. */
+  engine?: boolean;
+}
+
+/** 레인 로그(transcript.log 기본, engine 옵션 시 engine.log)의 최근 n줄을 반환한다. 파일 없으면 exists=false. */
 export async function readLogs(
   proj: string,
   lane: string,
   n = 50,
-  opts: DiagBaseOptions = {},
+  opts: ReadLogsOptions = {},
 ): Promise<LogsResult> {
   const base = opts.base ?? defaultBase();
   const paths = lanePaths(base, proj, lane);
+  const target = opts.engine ? paths.engineLog : paths.transcriptLog;
   let text: string;
   try {
-    text = await readFile(paths.transcriptLog, "utf8");
+    text = await readFile(target, "utf8");
   } catch {
-    return { path: paths.transcriptLog, exists: false, lines: [] };
+    return { path: target, exists: false, lines: [] };
   }
   const all = text.split("\n").filter((l) => l.length > 0);
-  return { path: paths.transcriptLog, exists: true, lines: all.slice(-Math.max(1, n)) };
+  return { path: target, exists: true, lines: all.slice(-Math.max(1, n)) };
 }

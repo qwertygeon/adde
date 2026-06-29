@@ -133,4 +133,35 @@ describe("readLogs (SC4)", () => {
     expect(res.exists).toBe(false);
     expect(res.lines).toEqual([]);
   });
+
+  // SC-R2: --engine 시 engine.log 를 읽고, 기본은 transcript.log.
+  it("engine 옵션 시 engine.log 를 읽는다", async () => {
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.writeFileSync(lp.transcriptLog, "transcript-line\n");
+    fs.writeFileSync(lp.engineLog, ["err1", "err2", "err3"].join("\n") + "\n");
+    const res = await readLogs("p", "lane1", 2, { base: tmpBase, engine: true });
+    expect(res.exists).toBe(true);
+    expect(res.path).toBe(lp.engineLog);
+    expect(res.lines).toEqual(["err2", "err3"]);
+  });
+
+  it("engine 옵션 없으면 transcript.log 를 읽는다(엔진 로그가 있어도)", async () => {
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.writeFileSync(lp.transcriptLog, "transcript-line\n");
+    fs.writeFileSync(lp.engineLog, "engine-line\n");
+    const res = await readLogs("p", "lane1", 50, { base: tmpBase });
+    expect(res.path).toBe(lp.transcriptLog);
+    expect(res.lines).toEqual(["transcript-line"]);
+  });
+
+  it("engine 옵션 시 engine.log 부재면 exists=false", async () => {
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.writeFileSync(lp.transcriptLog, "transcript-line\n");
+    const res = await readLogs("p", "lane1", 50, { base: tmpBase, engine: true });
+    expect(res.exists).toBe(false);
+    expect(res.path).toBe(lp.engineLog);
+  });
 });

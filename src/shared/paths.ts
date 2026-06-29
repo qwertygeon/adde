@@ -21,6 +21,8 @@ export interface LanePaths {
   envFile: string;
   sessionIdFile: string;
   transcriptLog: string;
+  /** 엔진 서브프로세스 stderr 캡처 파일(append). ACP stdout 은 프로토콜 채널이라 대상 아님. */
+  engineLog: string;
   /** up 프로세스가 기동 시 기록하는 라이브니스 상태 파일(pid 등). 별도 status 프로세스가 교차 읽기. */
   runtimeJson: string;
   confFile: string;
@@ -48,6 +50,7 @@ export function lanePaths(base: string, proj: string, lane: string): LanePaths {
     envFile: join(stateDir, ".env"),
     sessionIdFile: join(stateDir, "session.id"),
     transcriptLog: join(stateDir, "transcript.log"),
+    engineLog: join(stateDir, "engine.log"),
     runtimeJson: join(stateDir, "runtime.json"),
     confFile: join(root, "lanes.d", `${lane}.conf`),
   };

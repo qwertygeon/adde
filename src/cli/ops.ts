@@ -4,6 +4,7 @@
  */
 import { collectStatus, runDoctor, readLogs } from "../core/diagnostics.js";
 import type { LaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
+import { USAGE } from "../core/messages.js";
 
 /** ms → 사람용 경과시간(예: 1h2m, 3m4s, 12s). */
 function formatUptime(ms: number | null): string {
@@ -38,7 +39,7 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
   const json = rest.includes("--json");
   const proj = rest.find((a) => !a.startsWith("--"));
   if (!proj) {
-    process.stderr.write("사용법: adde status <proj> [--json]\n");
+    process.stderr.write(USAGE.status + "\n");
     return 1;
   }
   const rows = await collectStatus(proj);
@@ -81,7 +82,7 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
   const positional = rest.filter((a) => !a.startsWith("--"));
   const [proj, lane, nRaw] = positional;
   if (!proj || !lane) {
-    process.stderr.write("사용법: adde logs <proj> <lane> [N]\n");
+    process.stderr.write(USAGE.logs + "\n");
     return 1;
   }
   const n = nRaw !== undefined && /^\d+$/.test(nRaw) ? Number(nRaw) : 50;

@@ -1,5 +1,5 @@
 import { readVersion } from "../core/version.js";
-import { COMMANDS, buildUsage } from "./usage.js";
+import { COMMANDS, buildUsage, USAGE, cmdError } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
 
 /**
@@ -38,7 +38,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   if (first === "up") {
     const proj = second;
     if (!proj) {
-      process.stderr.write("사용법: adde up <proj>\n");
+      process.stderr.write(USAGE.up + "\n");
       return 1;
     }
     try {
@@ -81,9 +81,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       await new Promise<never>(() => {});
       return 0; // 도달하지 않음
     } catch (err) {
-      process.stderr.write(
-        `[adde up] 오류: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
+      process.stderr.write(cmdError("up", err instanceof Error ? err.message : String(err)) + "\n");
       return 1;
     }
   }
@@ -91,7 +89,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   if (first === "down") {
     const proj = second;
     if (!proj) {
-      process.stderr.write("사용법: adde down <proj>\n");
+      process.stderr.write(USAGE.down + "\n");
       return 1;
     }
     try {
@@ -101,7 +99,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       return 0;
     } catch (err) {
       process.stderr.write(
-        `[adde down] 오류: ${err instanceof Error ? err.message : String(err)}\n`,
+        cmdError("down", err instanceof Error ? err.message : String(err)) + "\n",
       );
       return 1;
     }

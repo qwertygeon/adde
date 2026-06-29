@@ -10,6 +10,7 @@ import {
   LaneConfigError,
 } from "../core/lane-config.js";
 import type { LaneAddOptions } from "../core/lane-config.js";
+import { USAGE, LANE_USAGE, laneError, unknownLaneSub } from "../core/messages.js";
 
 /** `--key value` / `--flag` 혼합 파싱. 값이 필요한 키는 valueKeys 로 지정. */
 interface ParsedArgs {
@@ -42,29 +43,6 @@ function parseArgs(argv: readonly string[], valueKeys: ReadonlySet<string>): Par
   }
   return { positional, flags };
 }
-
-const LANE_USAGE = [
-  "사용법:",
-  "  adde lane add <proj> <lane> [옵션]   레인 conf 생성",
-  "  adde lane ls <proj>                  레인 목록",
-  "  adde lane show <proj> <lane>         레인 conf 출력",
-  "  adde lane rm <proj> <lane>           레인 conf 삭제",
-  "",
-  "lane add 옵션:",
-  "  --source <telegram|markdown>  (기본 telegram)",
-  "  --engine <name>               (기본 claude-code-acp)",
-  "  --backend <name>              (기본 acp)",
-  "  --channel <name>              (기본 source 값)",
-  "  --perm-tier <tier>            (기본 acp)",
-  "  --acp-version <v>             (기본 v1)",
-  "  --cwd <abs-path>              레인 작업 폴더(프로젝트 매핑)",
-  "  --allowlist <a,b,c>           자동 허용 도구(게이트 유지)",
-  "  --chat-id <id>                telegram 회신 대상",
-  "  --token-stdin                 telegram 봇 토큰을 stdin 에서 읽어 .env(0600) 기록",
-  "  --root <abs-path>             markdown 루트(예: Obsidian vault)",
-  "  --inbox <rel> --approvals <rel> --outbox <rel>   markdown 노트 경로",
-  "  --force                       기존 conf 덮어쓰기",
-].join("\n");
 
 const ADD_VALUE_KEYS = new Set([
   "source",
@@ -99,7 +77,7 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
   const { positional, flags } = parseArgs(rest, ADD_VALUE_KEYS);
   const [proj, lane] = positional;
   if (!proj || !lane) {
-    process.stderr.write("사용법: adde lane add <proj> <lane> [옵션]\n");
+    process.stderr.write(USAGE.laneAdd + "\n");
     return 1;
   }
 
@@ -154,7 +132,7 @@ async function handleList(rest: readonly string[]): Promise<number> {
   const { positional } = parseArgs(rest, new Set());
   const [proj] = positional;
   if (!proj) {
-    process.stderr.write("사용법: adde lane ls <proj>\n");
+    process.stderr.write(USAGE.laneLs + "\n");
     return 1;
   }
   const { lanes } = await laneList(proj);
@@ -167,7 +145,7 @@ async function handleShow(rest: readonly string[]): Promise<number> {
   const { positional } = parseArgs(rest, new Set());
   const [proj, lane] = positional;
   if (!proj || !lane) {
-    process.stderr.write("사용법: adde lane show <proj> <lane>\n");
+    process.stderr.write(USAGE.laneShow + "\n");
     return 1;
   }
   const { confPath, text } = await laneShow(proj, lane);
@@ -179,7 +157,7 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
   const { positional } = parseArgs(rest, new Set());
   const [proj, lane] = positional;
   if (!proj || !lane) {
-    process.stderr.write("사용법: adde lane rm <proj> <lane>\n");
+    process.stderr.write(USAGE.laneRm + "\n");
     return 1;
   }
   const { confPath } = await laneRemove(proj, lane);
@@ -212,12 +190,12 @@ export async function runLane(argv: readonly string[]): Promise<number> {
         process.stdout.write(`${LANE_USAGE}\n`);
         return 0;
       default:
-        process.stderr.write(`알 수 없는 lane 서브커맨드: ${sub}\n\n${LANE_USAGE}\n`);
+        process.stderr.write(unknownLaneSub(sub) + "\n");
         return 1;
     }
   } catch (err) {
     if (err instanceof LaneConfigError) {
-      process.stderr.write(`[adde lane] ${err.message}\n`);
+      process.stderr.write(laneError(err.message) + "\n");
       return 1;
     }
     throw err;

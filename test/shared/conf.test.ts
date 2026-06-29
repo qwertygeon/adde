@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseLaneConf } from "../../src/shared/conf.js";
+import { parseLaneConf, serializeLaneConf } from "../../src/shared/conf.js";
 
 // parseLaneConf: ini 형식 레인 설정 파싱 — FR-001/021
 
@@ -71,5 +71,38 @@ channel=telegram
   it("빈 값 optional 키는 undefined 로 둔다", () => {
     const conf = minimalConf + "cwd=\n";
     expect(parseLaneConf(conf).cwd).toBeUndefined();
+  });
+});
+
+describe("serializeLaneConf", () => {
+  it("필수 키를 모두 출력한다", () => {
+    const text = serializeLaneConf(parseLaneConf("source=telegram\nchannel=telegram\n"));
+    expect(text).toContain("source=telegram");
+    expect(text).toContain("backend=");
+    expect(text).toContain("engine=");
+    expect(text).toContain("channel=telegram");
+    expect(text).toContain("perm_tier=acp");
+    expect(text).toContain("acp_version=v1");
+  });
+
+  it("빈 allowlist 는 출력하지 않는다", () => {
+    const text = serializeLaneConf(parseLaneConf("source=telegram\n"));
+    expect(text).not.toContain("allowlist=");
+  });
+
+  it("optional 키는 값이 있을 때만 출력한다", () => {
+    const text = serializeLaneConf(parseLaneConf("source=telegram\ncwd=/p\n"));
+    expect(text).toContain("cwd=/p");
+    expect(text).not.toContain("root=");
+    expect(text).not.toContain("chat_id=");
+  });
+
+  it("parse→serialize→parse round-trip 이 동치이다", () => {
+    const original = parseLaneConf(
+      "source=markdown\nbackend=acp\nengine=claude-code-acp\nchannel=markdown\n" +
+        "perm_tier=acp\nacp_version=v1\nallowlist=Read,Grep\ncwd=/abs/p\nroot=/abs/Notes\ninbox=in.md\n",
+    );
+    const reparsed = parseLaneConf(serializeLaneConf(original));
+    expect(reparsed).toEqual(original);
   });
 });

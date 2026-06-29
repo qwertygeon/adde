@@ -60,8 +60,7 @@ export function parseLaneConf(text: string): LaneConf {
   };
 
   // optional 필드는 존재할 때만 채운다(부재 = undefined).
-  const optional = ["cwd", "chat_id", "root", "inbox", "approvals", "outbox"] as const;
-  for (const key of optional) {
+  for (const key of OPTIONAL_KEYS) {
     const value = conf[key];
     if (value !== undefined && value.length > 0) {
       result[key] = value;
@@ -69,4 +68,29 @@ export function parseLaneConf(text: string): LaneConf {
   }
 
   return result;
+}
+
+/** parse/serialize 가 공유하는 optional 키 목록(순서 = 직렬화 순서). */
+const OPTIONAL_KEYS = ["cwd", "chat_id", "root", "inbox", "approvals", "outbox"] as const;
+
+/**
+ * LaneConf → .conf INI 텍스트 직렬화. parseLaneConf 의 역연산.
+ * 필수 키는 항상, optional 키는 값이 있을 때만, allowlist 는 비어있지 않을 때만 출력.
+ * parseLaneConf(serializeLaneConf(c)) 는 c 와 동치(round-trip 안정).
+ */
+export function serializeLaneConf(conf: LaneConf): string {
+  const lines: string[] = [
+    `source=${conf.source}`,
+    `backend=${conf.backend}`,
+    `engine=${conf.engine}`,
+    `channel=${conf.channel}`,
+    `perm_tier=${conf.perm_tier}`,
+    `acp_version=${conf.acp_version}`,
+  ];
+  if (conf.allowlist.length > 0) lines.push(`allowlist=${conf.allowlist.join(",")}`);
+  for (const key of OPTIONAL_KEYS) {
+    const value = conf[key];
+    if (value !== undefined && value.length > 0) lines.push(`${key}=${value}`);
+  }
+  return lines.join("\n") + "\n";
 }

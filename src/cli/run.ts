@@ -3,14 +3,18 @@ import { COMMANDS, buildUsage } from "./usage.js";
 
 /**
  * CLI 진입 로직. adde / add 양쪽 진입점이 공유한다.
- * @returns 프로세스 종료 코드.
+ * @returns 프로세스 종료 코드(동기) 또는 그 Promise(비동기 서브커맨드).
  */
-export function run(argv: readonly string[]): number {
+export function run(argv: readonly string[]): number | Promise<number> {
   const [first, second] = argv;
 
   if (first === "--version" || first === "-v") {
     process.stdout.write(`${COMMANDS.primary} ${readVersion()}\n`);
     return 0;
+  }
+
+  if (first === "lane") {
+    return import("./lane.js").then(({ runLane }) => runLane(argv.slice(1)));
   }
 
   if (first === "up") {

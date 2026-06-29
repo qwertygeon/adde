@@ -36,6 +36,29 @@ pnpm build
 
 레인은 **파일 1개 = 레인 1개**입니다. `~/.config/adde/<proj>/lanes.d/<lane>.conf` 에 작성합니다.
 
+### 서브커맨드로 설정 (권장)
+
+`adde lane` 서브커맨드가 conf 파일을 대신 생성·조회·삭제합니다(직접 편집도 가능).
+
+```bash
+# telegram 레인 생성 (작업 폴더·자동허용 도구·회신 대상 지정)
+adde lane add myproj tg-claude --cwd /abs/project --allowlist Read,Grep --chat-id 12345
+
+# telegram 봇 토큰을 stdin 으로 받아 state/<lane>/.env (0600) 에 기록
+printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude --token-stdin
+
+# markdown(노트) 레인 생성
+adde lane add myproj md-claude --source markdown --root /abs/Notes --inbox inbox.md
+
+adde lane ls myproj                # 레인 목록
+adde lane show myproj tg-claude    # conf 출력
+adde lane rm myproj tg-claude      # conf 삭제
+```
+
+기본값: `--source telegram`, `--backend acp`, `--engine claude-code-acp`, `--channel`=source, `--perm-tier acp`, `--acp-version v1`. 기존 conf 는 `--force` 없이는 덮어쓰지 않습니다. 전체 옵션은 `adde lane help`.
+
+### conf 키 (직접 편집 시)
+
 공통 키:
 
 ```ini

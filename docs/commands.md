@@ -52,12 +52,14 @@ adde status <proj> [--json]
 
 | 상태 | 의미 |
 |---|---|
-| `running` | 상태 파일이 있고 기동 프로세스(pid)가 살아있음 |
+| `running` | 상태 파일이 있고 기동 프로세스(pid)가 살아있으며 하트비트가 신선함 |
+| `stale` | pid 는 살아있으나 하트비트(상태 파일 mtime)가 끊김 — **행(hung) 의심** |
 | `dead` | 상태 파일이 있으나 프로세스가 없음 — **비정상 종료(크래시) 잔존** |
 | `stopped` | 상태 파일 없음 — 정상 종료 또는 미기동 |
 
-- 기본 출력: `LANE · STATUS · PID · UPTIME · SOURCE` 표. `dead` 레인이 있으면 조치 안내를 덧붙입니다.
-- `--json`: 레인 객체 배열(모니터링/스크립트용).
+- 기본 출력: `LANE · STATUS · PID · UPTIME · SEEN · SOURCE` 표(`SEEN` = 마지막 하트비트 경과). `dead`·`stale` 레인이 있으면 조치 안내를 덧붙입니다.
+- 하트비트: `adde up` 이 주기적으로 상태 파일 mtime 을 갱신합니다. pid 가 살아있어도 갱신이 임계 시간 멈추면 `stale`(행) 로 판정합니다.
+- `--json`: 레인 객체 배열(모니터링/스크립트용, `lastSeenAt` 포함).
 - 읽기 전용(부수효과 없음).
 
 ## doctor — 환경 점검
@@ -75,10 +77,12 @@ adde doctor [<proj>]
 ## logs — 최근 활동
 
 ```bash
-adde logs <proj> <lane> [N]
+adde logs <proj> <lane> [N] [--engine]
 ```
 
 해당 레인의 `transcript.log`(ACP 세션 이벤트 기록) 최근 `N` 줄을 출력합니다(기본 50). 파일이 없으면 안내를 출력합니다.
+
+- `--engine`: transcript 대신 `engine.log`(엔진 서브프로세스 stderr 캡처)를 출력합니다. 엔진 자체의 진단 출력을 볼 때 사용합니다(`stale`/기동 실패 원인 추적 등).
 
 ## lane — 레인 설정
 
@@ -117,7 +121,7 @@ adde lane help                       # 전체 옵션
 
 | 명령 | 0 | 1 |
 |---|---|---|
-| `status` | 모두 정상 | `dead`(크래시) 레인 존재 |
+| `status` | 모두 정상 | `dead`(크래시)·`stale`(행) 레인 존재 |
 | `doctor` | FAIL 없음 | FAIL 항목 존재 |
 | `logs` | 항상(파일 없어도 안내 후 0) | — |
 | `lane *` | 성공 | 인자 누락·검증 오류 |
@@ -127,4 +131,4 @@ adde lane help                       # 전체 옵션
 - 설정 base: `~/.config/adde`(환경변수 `ADDE_HOME` 로 변경 가능).
 - 프로젝트: `<base>/<proj>/`.
 - 레인 conf: `<base>/<proj>/lanes.d/<lane>.conf`.
-- 레인 상태: `<base>/<proj>/state/<lane>/`(`.env`·`session.id`·`transcript.log`·`runtime.json`).
+- 레인 상태: `<base>/<proj>/state/<lane>/`(`.env`·`session.id`·`transcript.log`·`engine.log`·`runtime.json`).

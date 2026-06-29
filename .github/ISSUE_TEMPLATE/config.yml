@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 보안 취약점 보고
+    url: https://github.com/qwertygeon/adde/security/advisories/new
+    about: 취약점은 공개 이슈가 아니라 비공개 Security Advisory 로 보고하세요(SECURITY.md 참조).
+  - name: 사용 질문·문서
+    url: https://github.com/qwertygeon/adde/tree/main/docs
+    about: 설치·셋업·명령은 docs/ 의 가이드를 먼저 확인하세요.

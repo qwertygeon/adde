@@ -23,6 +23,34 @@ afterEach(() => {
   fs.rmSync(base, { recursive: true, force: true });
 });
 
+describe("laneAdd 사전 검증 경고 (007 SC4)", () => {
+  it("존재하는 cwd 는 경고 없음", async () => {
+    const res = await laneAdd("proj", "tg", { base, cwd: base });
+    expect(res.warnings.some((w) => w.includes("cwd"))).toBe(false);
+  });
+
+  it("없는 cwd 는 비차단 경고(생성은 진행)", async () => {
+    const res = await laneAdd("proj", "tg", { base, cwd: path.join(base, "nope") });
+    expect(fs.existsSync(res.confPath)).toBe(true);
+    expect(res.warnings.some((w) => w.includes("cwd") && w.includes("조치"))).toBe(true);
+  });
+
+  it("markdown 인데 root 없으면 경고", async () => {
+    const res = await laneAdd("proj", "md", { base, source: "markdown" });
+    expect(res.warnings.some((w) => w.includes("root"))).toBe(true);
+  });
+
+  it("telegram 토큰 형식이 이상하면 경고, 정상이면 없음", async () => {
+    const bad = await laneAdd("proj", "tg1", { base, token: "not-a-token" });
+    expect(bad.warnings.some((w) => w.includes("토큰 형식"))).toBe(true);
+    const ok = await laneAdd("proj", "tg2", {
+      base,
+      token: "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ012345678",
+    });
+    expect(ok.warnings.some((w) => w.includes("토큰 형식"))).toBe(false);
+  });
+});
+
 describe("laneAdd", () => {
   it("기본값으로 telegram 레인 conf 를 생성한다", async () => {
     const res = await laneAdd("proj", "tg", { base });

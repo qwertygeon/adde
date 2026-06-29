@@ -7,7 +7,7 @@ import { readdir, readFile, writeFile, rename, mkdir, unlink, stat } from "node:
 import { join } from "node:path";
 import { parseLaneConf, serializeLaneConf } from "../shared/conf.js";
 import type { LaneConf } from "../shared/conf.js";
-import { lanePaths, defaultBase } from "../shared/paths.js";
+import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 
 /** proj/lane 식별자 — 디렉터리·파일명이 되므로 안전 문자만 허용. */
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
@@ -53,6 +53,44 @@ export interface LaneAddResult {
   conf: LaneConf;
   /** token 을 .env 에 기록한 경우 그 경로. */
   envPath?: string;
+  /** 생성을 막지 않는 사전 검증 경고(액션형). 기동 전 점검 항목. */
+  warnings: string[];
+}
+
+/** 봇 토큰 대략 형식: <숫자id>:<영숫자/_-> (형식 오타 조기 발견용 휴리스틱). */
+const TELEGRAM_TOKEN_RE = /^\d+:[A-Za-z0-9_-]+$/;
+
+/**
+ * 쓰기를 막지 않는 사전 검증 경고 수집 — cwd/markdown root 부재·telegram 토큰 형식.
+ * 하드 오류(이름·source·chat_id 형식·중복)는 laneAdd 본문에서 throw 로 차단한다(여기 아님).
+ */
+async function collectAddWarnings(conf: LaneConf, token?: string): Promise<string[]> {
+  const warnings: string[] = [];
+  if (conf.cwd) {
+    const p = expandTilde(conf.cwd);
+    if (!(await exists(p))) {
+      warnings.push(
+        `[경고] cwd 경로가 없습니다: ${p}\n  ↳ 조치: 기동 전 폴더를 만들거나 conf 의 cwd 를 수정하세요.`,
+      );
+    }
+  }
+  if (conf.source === "markdown") {
+    if (!conf.root) {
+      warnings.push(
+        "[경고] markdown 레인에 root 가 없습니다.\n  ↳ 조치: --root <vault 절대경로> 를 지정하세요(없으면 인바운드 감시 불가).",
+      );
+    } else if (!(await exists(expandTilde(conf.root)))) {
+      warnings.push(
+        `[경고] markdown root 경로가 없습니다: ${expandTilde(conf.root)}\n  ↳ 조치: 경로를 확인하거나 생성하세요.`,
+      );
+    }
+  }
+  if (conf.source === "telegram" && token !== undefined && !TELEGRAM_TOKEN_RE.test(token)) {
+    warnings.push(
+      "[경고] 봇 토큰 형식이 예상과 다릅니다(<숫자>:<영숫자> 아님).\n  ↳ 조치: BotFather 발급 토큰을 다시 확인하세요.",
+    );
+  }
+  return warnings;
 }
 
 export interface LaneListResult {
@@ -152,7 +190,7 @@ export async function laneAdd(
   await mkdir(paths.lanesDir, { recursive: true });
   await writeAtomic(paths.confFile, serializeLaneConf(conf));
 
-  const result: LaneAddResult = { lane, confPath: paths.confFile, conf };
+  const result: LaneAddResult = { lane, confPath: paths.confFile, conf, warnings: [] };
 
   if (opts.token !== undefined) {
     const token = opts.token.trim();
@@ -169,6 +207,8 @@ export async function laneAdd(
     await writeAtomic(paths.envFile, `TELEGRAM_BOT_TOKEN=${token}\n`, 0o600);
     result.envPath = paths.envFile;
   }
+
+  result.warnings = await collectAddWarnings(conf, opts.token);
 
   return result;
 }

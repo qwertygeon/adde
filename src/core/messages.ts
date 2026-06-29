@@ -74,6 +74,7 @@ export const LANE_USAGE = [
   "  --root <abs-path>             markdown 루트(예: Obsidian vault)",
   "  --inbox <rel> --approvals <rel> --outbox <rel>   markdown 노트 경로",
   "  --force                       기존 conf 덮어쓰기",
+  "  --interactive                 대화형으로 필드 입력(TTY 전용, 토큰 제외)",
 ].join("\n");
 
 /** 최상위 명령 오류 — `[adde <cmd>] 오류: <detail>`. */

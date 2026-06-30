@@ -23,6 +23,7 @@ import { appendTranscript } from "../../core/transcript.js";
 import type { SessionEvent } from "../../core/transcript.js";
 import type { PermRequest, PermResponse } from "../../gate/gate.js";
 import type { AddePolicy, EngineEffective } from "./perm-diff.js";
+import { maskSecrets } from "../../shared/mask.js";
 import { comparePerm, formatWarn } from "./perm-diff.js";
 import { formatBlock, formatException } from "../../shared/notify.js";
 import { withTimeout, killChild, closeChild } from "./lifecycle.js";
@@ -236,7 +237,8 @@ export class AcpBackendImpl implements AcpBackend {
             lane,
             channel,
             tool: toolName,
-            detail: JSON.stringify(params.toolCall),
+            // 시크릿 마스킹(⑦) — detail 은 채널(telegram 메시지·markdown 승인 노트)에 평문 표면화된다.
+            detail: maskSecrets(JSON.stringify(params.toolCall)),
             cwd: laneCwd,
             ts: new Date().toISOString(),
           };

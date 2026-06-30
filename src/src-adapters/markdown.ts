@@ -19,6 +19,10 @@ import type { Envelope } from "../shared/envelope.js";
 import type { PermRequest } from "../gate/gate.js";
 import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
 import type { Source, DecisionCallback, Decision } from "./source.js";
+import { formatException } from "../shared/notify.js";
+
+/** enqueue 연속 실패 임계 — 도달 시 outbox 에 1회 알림(telegram 패턴과 일관, ⑫). */
+const ENQUEUE_FAIL_THRESHOLD = 3;
 
 const DEBOUNCE_MS = 150;
 /** fs.watch 가 놓친 편집을 보정하는 저빈도 폴링 주기(B2 백스톱). */
@@ -119,7 +123,11 @@ export function parseInbox(content: string): InboxParse {
     if (isSendLabel(label)) {
       if (checked) {
         const text = segment(i);
-        actions.push(text.length > 0 ? { kind: "fresh", text, lineIndex: i } : { kind: "empty", text: "", lineIndex: i });
+        actions.push(
+          text.length > 0
+            ? { kind: "fresh", text, lineIndex: i }
+            : { kind: "empty", text: "", lineIndex: i },
+        );
       }
       segmentStart = i + 1; // 체크/미체크 무관 경계
       continue;
@@ -191,9 +199,10 @@ export function parseApprovals(content: string): ApprovalsParse {
         // 헤딩 종단 표기(블록 내 첫 ### 라인).
         for (let j = blockStart; j < i; j++) {
           if (/^###\s/.test(lines[j]!)) {
-            lines[j] = lines[j]!
-              .replace(/^###\s+⏳/, `### ${decision === "allow" ? "✅" : "⛔"}`)
-              .replace(/\breq\b/, `req(${decision})`);
+            lines[j] = lines[j]!.replace(
+              /^###\s+⏳/,
+              `### ${decision === "allow" ? "✅" : "⛔"}`,
+            ).replace(/\breq\b/, `req(${decision})`);
             break;
           }
         }
@@ -209,7 +218,11 @@ export function parseApprovals(content: string): ApprovalsParse {
 }
 
 /** 타임아웃·강제 종단 시 pending 블록을 deny 로 재작성. 변경 없으면 changed=false. */
-export function finalizeApprovalDeny(content: string, reqId: string, reason: string): ApprovalsParse {
+export function finalizeApprovalDeny(
+  content: string,
+  reqId: string,
+  reason: string,
+): ApprovalsParse {
   const trailingNewline = content.endsWith("\n");
   const lines = content.split("\n");
   let changed = false;
@@ -262,6 +275,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   let pollOp: Promise<void> = Promise.resolve();
   let inboxBusy = false;
   let running = false;
+  // enqueue 연속 실패 추적(⑫) — 임계 도달 시 outbox 알림 1회, 성공 시 리셋.
+  let consecutiveEnqueueFailures = 0;
+  let enqueueAlertSent = false;
   // approvals 파일 변경을 직렬화(append·결정 재작성·타임아웃 경합 방지).
   let approvalsLock: Promise<void> = Promise.resolve();
   // in-flight inbox/approvals 처리 추적 — stop() 이 정리 완료를 대기(H4/DEC-004).
@@ -368,11 +384,19 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
           }
           await enqueue(cfg.paths, normalize(p.id, p.text));
           finalize.push(p);
+          consecutiveEnqueueFailures = 0; // 성공 → 연속 실패 리셋
+          enqueueAlertSent = false;
         } catch (err) {
           // 필수 동작 실패 — 흡수 금지: 로그 후 sending 유지(재기동/다음 이벤트 재개).
+          consecutiveEnqueueFailures++;
           console.error(
-            `[markdown] enqueue 오류 lane=${cfg.lane} id=${p.id}: ${err instanceof Error ? err.message : String(err)}`,
+            `[markdown] enqueue 오류(${consecutiveEnqueueFailures}회 연속) lane=${cfg.lane} id=${p.id}: ${err instanceof Error ? err.message : String(err)}`,
           );
+          // 임계 도달 시 1회 운영자 알림(⑫) — telegram 패턴과 일관.
+          if (consecutiveEnqueueFailures >= ENQUEUE_FAIL_THRESHOLD && !enqueueAlertSent) {
+            enqueueAlertSent = true;
+            await alertEnqueueFailure(consecutiveEnqueueFailures);
+          }
         }
       }
 
@@ -432,6 +456,20 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   }
 
   /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOut 직후 in-process 호출(DEC-001). */
+  /** enqueue 연속 실패 임계 도달 시 outbox 에 1회 액션형 알림 노트(⑫). 채널이 파일이라 outbox 로 표면화. */
+  async function alertEnqueueFailure(count: number): Promise<void> {
+    const note = formatException({
+      situation: `수신 메시지 큐 적재(enqueue)가 연속 ${count}회 실패했습니다`,
+      action:
+        "서버 디스크 용량과 state 디렉터리 권한을 확인하세요. 해소 전까지 인박스 지시가 처리되지 않을 수 있습니다.",
+    });
+    await atomicWrite(join(outboxDir, "_enqueue-alert.md"), note).catch((e: unknown) =>
+      console.error(
+        `[markdown] enqueue 실패 알림 기록 오류: ${e instanceof Error ? e.message : String(e)}`,
+      ),
+    );
+  }
+
   async function renderOut(id: string): Promise<void> {
     const text = await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
     let replyRef: string | undefined;
@@ -451,7 +489,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   /** handleInbox 를 추적 가능한 형태로 기동(fire-and-forget + .catch, stop 대기 대상). */
   function runInbox(): void {
     inboxOp = handleInbox().catch((err: unknown) =>
-      console.error(`[markdown] inbox 처리 오류: ${err instanceof Error ? err.message : String(err)}`),
+      console.error(
+        `[markdown] inbox 처리 오류: ${err instanceof Error ? err.message : String(err)}`,
+      ),
     );
   }
 
@@ -561,9 +601,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     ] as const) {
       if (rel === undefined) continue;
       if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) {
-        throw new Error(
-          `[markdown] ${name} 경로는 root 상대여야 하며 '..'·절대경로 금지: ${rel}`,
-        );
+        throw new Error(`[markdown] ${name} 경로는 root 상대여야 하며 '..'·절대경로 금지: ${rel}`);
       }
     }
 

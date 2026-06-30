@@ -64,6 +64,8 @@ interface LaneHandle {
 export interface LaneStatus {
   lane: string;
   status: "running" | "error" | "stopped";
+  /** status==="error" 일 때 실패 사유(사용자 안내·doctor 유도용). */
+  error?: string;
 }
 
 /** supervisorUp 반환값. */
@@ -279,8 +281,9 @@ export async function supervisorUp(
 
       results.push({ lane, status: "running" });
     } catch (err) {
-      console.error(`[supervisor] lane=${lane} 기동 실패: ${errMsg(err)}`);
-      results.push({ lane, status: "error" });
+      const reason = errMsg(err);
+      console.error(`[supervisor] lane=${lane} 기동 실패: ${reason}`);
+      results.push({ lane, status: "error", error: reason });
     }
   }
 

@@ -58,7 +58,10 @@ function setupProject(projName: string, laneConfs: Record<string, string>) {
     fs.mkdirSync(lp.processingDir, { recursive: true });
     fs.mkdirSync(lp.outDir, { recursive: true });
     fs.mkdirSync(lp.stateDir, { recursive: true });
-    fs.writeFileSync(lp.envFile, "TELEGRAM_BOT_TOKEN=111111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n");
+    fs.writeFileSync(
+      lp.envFile,
+      "TELEGRAM_BOT_TOKEN=111111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n",
+    );
   }
   return { base };
 }
@@ -100,6 +103,37 @@ function makeFakeAcpFactory() {
     };
   });
 }
+
+// 기동 실패(launch reject) 더블 — FR-8 error 필드 검증용.
+function makeFailingAcpFactory(msg: string) {
+  return vi.fn().mockImplementation(() => ({
+    caps: () => ({
+      plane: "acp",
+      perm_tier: "acp",
+      supports_attachments: false,
+      acp_version: "v1",
+    }),
+    launch: vi.fn().mockRejectedValue(new Error(msg)),
+    inject: vi.fn(),
+    subscribe: vi.fn(),
+    onPermissionRequest: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
+  }));
+}
+
+describe("supervisorUp 기동 실패 안내 (FR-8)", () => {
+  it("레인 launch 실패 시 status=error 와 사유를 결과에 싣는다", async () => {
+    const { base } = setupProject("failproj", { "bad-lane": minimalConf });
+    const result = await runUp("failproj", {
+      base,
+      acpFactory: makeFailingAcpFactory("엔진 spawn 실패: ENOENT"),
+    });
+
+    expect(result.lanes).toHaveLength(1);
+    expect(result.lanes[0]?.status).toBe("error");
+    expect(result.lanes[0]?.error).toContain("엔진 spawn 실패");
+  });
+});
 
 describe("supervisorUp (SC-001 레인 기동)", () => {
   it("lanes.d 에 conf 파일이 1개 있으면 레인 1개가 기동된다", async () => {

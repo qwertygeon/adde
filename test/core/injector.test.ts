@@ -185,8 +185,14 @@ describe("SC-B1: 응답 누적 → writeOut(out/<id>.out + sidecar)", () => {
     await waitUntil(() => typeof resolveInject === "function");
 
     // inject 진행(active) 중 엔진 청크 수신 → 누적
-    injector.onSessionEvent({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "안녕" } });
-    injector.onSessionEvent({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "하세요" } });
+    injector.onSessionEvent({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "안녕" },
+    });
+    injector.onSessionEvent({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "하세요" },
+    });
 
     resolveInject();
     await startP;
@@ -225,6 +231,105 @@ describe("SC-B2: writeOut 후 render(id) 호출", () => {
     await flush();
 
     expect(fs.existsSync(path.join(paths.outDir, "r2.out"))).toBe(true);
+  });
+});
+
+describe("FR-1: render 실패 시 재전송 (.sent 마커)", () => {
+  it("render 성공 시 out/<id>.sent 기록, 재호출 없음(dedup 유지)", async () => {
+    const backend = makeBackend();
+    const render = vi.fn().mockResolvedValue(undefined);
+    const injector: Injector = createInjector(paths, "test-lane", backend, render);
+
+    await enqueue(paths, makeEnvelope("s-ok"));
+    await injector.start();
+    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "s-ok.sent")));
+
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(path.join(paths.outDir, "s-ok.sent"))).toBe(true);
+
+    // 추가 notify 사이클에도 재전송하지 않는다(.sent 존재 → flushUnsent 대상 아님).
+    injector.notify();
+    await flush();
+    await flush();
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
+  it("render 실패 시 .sent 미기록 → 응답은 out/ 에 durable, 이후 사이클에서 재전송", async () => {
+    const backend = makeBackend();
+    // 첫 render 는 실패, 이후 성공 — 재전송이 일어나면 .sent 가 생긴다.
+    const render = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("send boom"))
+      .mockResolvedValue(undefined);
+    const injector: Injector = createInjector(paths, "test-lane", backend, render);
+
+    await enqueue(paths, makeEnvelope("s-retry", "응답대상"));
+    await injector.start();
+
+    // 응답은 기록되고(.out), 재전송으로 결국 .sent 가 생긴다.
+    expect(fs.existsSync(path.join(paths.outDir, "s-retry.out"))).toBe(true);
+    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "s-retry.sent")));
+    expect(render.mock.calls.length).toBeGreaterThanOrEqual(2); // 최초 실패 + 재전송
+  });
+
+  it("크래시 재개: out 있고 .sent 없으면 start() 가 재전송한다", async () => {
+    const backend = makeBackend();
+    const render = vi.fn().mockResolvedValue(undefined);
+    // 이전 실행에서 응답은 기록됐으나 전송 전 크래시한 상태를 모사.
+    fs.writeFileSync(path.join(paths.outDir, "orphan.out"), "미전송 응답");
+    fs.writeFileSync(path.join(paths.outDir, "orphan.out.json"), JSON.stringify({ ts: "x" }));
+
+    const injector: Injector = createInjector(paths, "test-lane", backend, render);
+    await injector.start();
+    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "orphan.sent")));
+
+    expect(render).toHaveBeenCalledWith("orphan");
+    // 재주입(엔진 재실행)은 하지 않는다 — 전송만 복구.
+    expect(backend.inject).not.toHaveBeenCalled();
+  });
+
+  it("start() 와 notify() 가 겹쳐도 같은 응답을 한 번만 전송한다 (이중전송 가드)", async () => {
+    const backend = makeBackend();
+    const calls: string[] = [];
+    // 느린 render 로 동시 진입 창을 키운다.
+    const render = vi.fn().mockImplementation(async (id: string) => {
+      calls.push(id);
+      await new Promise<void>((r) => setTimeout(r, 5));
+    });
+    fs.writeFileSync(path.join(paths.outDir, "dup.out"), "한 번만 전송");
+    fs.writeFileSync(path.join(paths.outDir, "dup.out.json"), JSON.stringify({ ts: "x" }));
+
+    const injector: Injector = createInjector(paths, "test-lane", backend, render);
+    // start 의 flushUnsent 와 notify 발 injectNext 의 flushUnsent 를 동시에 유발.
+    const startP = injector.start();
+    injector.notify();
+    injector.notify();
+    await startP;
+    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "dup.sent")));
+    await flush();
+    await flush();
+
+    expect(calls.filter((id) => id === "dup")).toHaveLength(1);
+  });
+});
+
+describe("FR-2: 손상 큐 메시지 격리", () => {
+  it("start() 재개 시 손상 processing 메시지를 격리(.corrupt) + .failed, 재기동 반복 안 함", async () => {
+    const backend = makeBackend();
+    fs.writeFileSync(path.join(paths.processingDir, "bad.msg"), "{ not valid json");
+
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await expect(injector.start()).resolves.toBeUndefined();
+
+    expect(fs.existsSync(path.join(paths.processingDir, "bad.msg"))).toBe(false);
+    expect(fs.existsSync(path.join(paths.processingDir, "bad.msg.corrupt"))).toBe(true);
+    expect(fs.existsSync(path.join(paths.outDir, "bad.failed"))).toBe(true);
+    expect(backend.inject).not.toHaveBeenCalled();
+
+    // 재기동해도 .corrupt 는 scanProcessing 대상이 아니라 다시 처리되지 않는다.
+    const injector2: Injector = createInjector(paths, "test-lane", backend);
+    await injector2.start();
+    expect(backend.inject).not.toHaveBeenCalled();
   });
 });
 

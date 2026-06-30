@@ -49,7 +49,9 @@ function makeSingleCycleFetch(
 
   const fetchMock = vi.fn().mockImplementation(async (url: string, options: RequestInit) => {
     const method = (url as string).split("/").pop() ?? "";
-    const body = options.body ? (JSON.parse(options.body as string) as Record<string, unknown>) : {};
+    const body = options.body
+      ? (JSON.parse(options.body as string) as Record<string, unknown>)
+      : {};
 
     if (method === "getUpdates") {
       getUpdatesCallCount++;
@@ -93,13 +95,18 @@ function makeNCycleFetch(
 
   const fetchMock = vi.fn().mockImplementation(async (url: string, options: RequestInit) => {
     const method = (url as string).split("/").pop() ?? "";
-    const body = options.body ? (JSON.parse(options.body as string) as Record<string, unknown>) : {};
+    const body = options.body
+      ? (JSON.parse(options.body as string) as Record<string, unknown>)
+      : {};
 
     if (method === "getUpdates") {
       capturedOffsets.push((body["offset"] as number) ?? 0);
       getUpdatesCallCount++;
       if (getUpdatesCallCount <= cycleResults.length) {
-        return { ok: true, json: async () => ({ ok: true, result: cycleResults[getUpdatesCallCount - 1] }) };
+        return {
+          ok: true,
+          json: async () => ({ ok: true, result: cycleResults[getUpdatesCallCount - 1] }),
+        };
       }
       // N 사이클 후 차단 — tight loop OOM 방지
       await pendingPromise;
@@ -121,7 +128,9 @@ type BotApiResponder = (method: string, params: Record<string, unknown>) => unkn
 function setupFetchMock(responder: BotApiResponder): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn().mockImplementation(async (url: string, options: RequestInit) => {
     const method = (url as string).split("/").pop() ?? "";
-    const body = options.body ? (JSON.parse(options.body as string) as Record<string, unknown>) : {};
+    const body = options.body
+      ? (JSON.parse(options.body as string) as Record<string, unknown>)
+      : {};
     const result = responder(method, body);
     return {
       ok: true,
@@ -143,7 +152,10 @@ beforeEach(() => {
   fs.mkdirSync(paths.outDir, { recursive: true });
   fs.mkdirSync(paths.stateDir, { recursive: true });
   // 봇 토큰 — 토큰 형식과 무관하게 readBotToken 이 읽으므로 임의 값 허용
-  fs.writeFileSync(paths.envFile, "TELEGRAM_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n");
+  fs.writeFileSync(
+    paths.envFile,
+    "TELEGRAM_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n",
+  );
 });
 
 afterEach(() => {
@@ -178,7 +190,9 @@ describe("TelegramSource long-poll (SC-014)", () => {
     source.start();
 
     // queue 에 .msg 파일이 생성될 때까지 대기
-    await waitFor(() => fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length >= 1);
+    await waitFor(
+      () => fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length >= 1,
+    );
 
     // 차단 해제 → poll loop 종료 가능
     releasePending();
@@ -222,7 +236,11 @@ describe("TelegramSource long-poll (SC-014)", () => {
     source.start();
 
     // 두 번째 getUpdates 가 호출되고 첫 번째 enqueue 가 완료될 때까지 대기
-    await waitFor(() => capturedOffsets.length >= 2 && fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length >= 1);
+    await waitFor(
+      () =>
+        capturedOffsets.length >= 2 &&
+        fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length >= 1,
+    );
 
     releaseAfterN();
     source.stop();
@@ -269,6 +287,39 @@ describe("TelegramSource out→quote-reply (SC-015)", () => {
     const lastMsg = sentMessages[sentMessages.length - 1];
     expect(lastMsg?.["reply_to_message_id"]).toBe(42);
     expect(lastMsg?.["text"]).toBe("응답 텍스트");
+  });
+
+  it("비숫자 channel_msg_id 면 reply_to_message_id 를 생략한다 (FR-6)", async () => {
+    const sentMessages: Record<string, unknown>[] = [];
+    setupFetchMock((method, params) => {
+      if (method === "getUpdates") return [];
+      if (method === "sendMessage") {
+        sentMessages.push({ ...params });
+        return { message_id: 100 };
+      }
+      return true;
+    });
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-code-acp",
+      paths,
+      chatId: 99,
+    });
+
+    fs.writeFileSync(
+      path.join(paths.outDir, "nan.out.json"),
+      JSON.stringify({ reply_ref: { channel_msg_id: "not-a-number" } }),
+    );
+    fs.writeFileSync(path.join(paths.outDir, "nan.out"), "응답");
+
+    await source.renderOut("nan");
+
+    expect(sentMessages.length).toBeGreaterThanOrEqual(1);
+    // NaN 가드 — reply_to_message_id 가 전송 파라미터에 포함되지 않아야 한다.
+    expect(sentMessages[0]?.["reply_to_message_id"]).toBeUndefined();
+    expect(sentMessages[0]?.["text"]).toBe("응답");
   });
 });
 
@@ -369,6 +420,48 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
     expect(gateCallbackCalls.some((s) => s.includes("allow"))).toBe(true);
   });
 
+  it("알 수 없는 callback decision(allow/deny 외)은 게이트에 전달하지 않는다 (FR-5)", async () => {
+    const answeredCallbacks: string[] = [];
+    const gateCallbackCalls: string[] = [];
+
+    const bogusUpdate = {
+      update_id: 5001,
+      callback_query: {
+        id: "cbq-bogus",
+        from: { id: 99, first_name: "Dev" },
+        message: { message_id: 102, chat: { id: 99 } },
+        data: "bogus:req-zzz", // allow/deny 가 아님
+      },
+    };
+
+    const { releasePending } = makeSingleCycleFetch([bogusUpdate], {
+      answerCallbackQuery: (params) => {
+        answeredCallbacks.push(params["callback_query_id"] as string);
+        return true;
+      },
+    });
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-code-acp",
+      paths,
+    });
+    source.onCallbackQuery((reqId, decision) => {
+      gateCallbackCalls.push(`${reqId}:${decision}`);
+    });
+
+    source.start();
+    // ack(스피너 해제)는 여전히 수행됨.
+    await waitFor(() => answeredCallbacks.length >= 1);
+    releasePending();
+    source.stop();
+
+    expect(answeredCallbacks).toContain("cbq-bogus");
+    // 미지 decision 은 핸들러에 디스패치되지 않음(fail-closed — 게이트는 타임아웃 deny).
+    expect(gateCallbackCalls).toHaveLength(0);
+  });
+
   it("callback_query data=deny 수신 시 deny 결정을 게이트에 전달한다", async () => {
     const gateCallbackCalls: string[] = [];
 
@@ -451,7 +544,8 @@ describe("callBotApi 429 레이트리밋 재시도 (012-P)", () => {
       "fetch",
       vi.fn().mockImplementation(async (url: string) => {
         const method = url.split("/").pop() ?? "";
-        if (method === "getUpdates") return { ok: true, json: async () => ({ ok: true, result: [] }) };
+        if (method === "getUpdates")
+          return { ok: true, json: async () => ({ ok: true, result: [] }) };
         if (method === "sendMessage") {
           sendCalls++;
           if (sendCalls === 1) {

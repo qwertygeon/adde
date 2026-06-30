@@ -296,7 +296,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
             const data = cq.data ?? "";
             const colonIdx = data.indexOf(":");
             if (colonIdx !== -1) {
-              const decision = data.slice(0, colonIdx) as "allow" | "deny";
+              const rawDecision = data.slice(0, colonIdx);
               const reqId = data.slice(colonIdx + 1);
 
               await answerCallbackQuery(cq.id).catch((err) => {
@@ -305,8 +305,14 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
                 );
               });
 
-              for (const handler of callbackHandlers) {
-                handler(reqId, decision);
+              // callback_data 검증(FR-5) — allow/deny 외 값은 무시·로그(타입 어설션 우회 차단).
+              // 미디스패치 시 게이트는 타임아웃으로 deny(fail-closed).
+              if (rawDecision !== "allow" && rawDecision !== "deny") {
+                console.warn(`[telegram] 알 수 없는 callback decision 무시: ${rawDecision}`);
+              } else {
+                for (const handler of callbackHandlers) {
+                  handler(reqId, rawDecision);
+                }
               }
             }
           }
@@ -358,7 +364,9 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
         reply_ref?: { channel_msg_id: string };
       };
       if (sidecar.reply_ref?.channel_msg_id) {
-        replyTo = parseInt(sidecar.reply_ref.channel_msg_id, 10);
+        // 비숫자 channel_msg_id 가드(FR-6) — NaN 이면 reply_to_message_id 생략(전송 파라미터 오염 방지).
+        const parsed = parseInt(sidecar.reply_ref.channel_msg_id, 10);
+        if (!Number.isNaN(parsed)) replyTo = parsed;
       }
     } catch {
       // sidecar 없으면 reply_to 없이 전송

@@ -12,6 +12,10 @@ import {
   writeOut,
   writeFailed,
   processingFilePath,
+  markSent,
+  isSent,
+  findUnsent,
+  quarantineCorrupt,
 } from "./queue.js";
 import type { OutSidecar } from "./queue.js";
 import type { LanePaths } from "../shared/paths.js";
@@ -69,6 +73,10 @@ export function createInjector(
   // 창에서 두 injectNext 가 각각 다른 메시지를 claim 해 동시 turn 이 뜨는 경합 방지(rename 은 동일
   // 메시지 중복만 막음). advancing 은 injectNext 전 구간을 감싸 한 번에 하나만 진행하게 한다.
   let advancing = false;
+  // 전송 중인 id — start() 의 flushUnsent 는 advancing 가드 밖이라, 기동 중 notify 발 injectNext 의
+  // flushUnsent 와 동시 진입할 수 있다. deliver 진입 가드(in-flight Set + isSent 재확인)로 같은 응답의
+  // 이중 전송(중복 render)을 차단한다.
+  const delivering = new Set<string>();
 
   function onSessionEvent(event: SessionEvent): void {
     if (state !== "active") return;
@@ -87,14 +95,7 @@ export function createInjector(
         sidecar.reply_ref = { channel_msg_id: envelope.reply_ref.channel_msg_id };
       }
       await writeOut(paths, id, maskSecrets(responseText), sidecar);
-      if (render) {
-        await render(id).catch((err: unknown) => {
-          // 렌더는 보조 — 실패해도 durable out/ 는 남아 재개 가능(NFR-2 fail-closed).
-          console.error(
-            `[injector] 렌더 오류 lane=${lane} id=${id}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
-      }
+      await deliver(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error(`[injector] inject 오류 lane=${lane} id=${id}: ${detail}`);
@@ -109,6 +110,39 @@ export function createInjector(
       state = "idle";
       responseText = "";
     }
+  }
+
+  /**
+   * 응답을 채널로 전송하고 성공 시 .sent 마커 기록(DEC-001/002).
+   * render 실패(부분 청크 실패 포함)는 .sent 미기록 → out/ 에 durable 하게 남아 재전송 대상(flushUnsent).
+   */
+  async function deliver(id: string): Promise<void> {
+    // 이중 전송 가드: in-flight 클레임은 await 이전에 동기적으로 잡아야 두 동시 호출이 모두 통과하는
+    // 창이 없다. add 후 .sent 재확인으로 직전(완료된) flush 가 이미 보낸 경우(stale 목록)도 건너뛴다.
+    if (delivering.has(id)) return;
+    delivering.add(id);
+    try {
+      if (await isSent(paths, id)) return;
+      if (!render) {
+        // 렌더 대상 없음(예: chat_id 미설정) — 전송 개념 부재로 즉시 종결 처리.
+        await markSent(paths, id);
+        return;
+      }
+      await render(id);
+      await markSent(paths, id);
+    } catch (err) {
+      console.error(
+        `[injector] 렌더 오류 lane=${lane} id=${id} — 재전송 대기: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      delivering.delete(id);
+    }
+  }
+
+  /** out/ 에 응답은 있으나(.out) 미전송(.sent 부재)인 항목 재전송 — render 실패·크래시 복구. */
+  async function flushUnsent(): Promise<void> {
+    const ids = await findUnsent(paths);
+    for (const id of ids) await deliver(id);
   }
 
   /** 다음 injectNext 를 비동기 예약 — rejection(예: 일시적 fs 오류)은 로깅(unhandled 방지). */
@@ -126,6 +160,9 @@ export function createInjector(
     if (state !== "idle" || advancing) return;
     advancing = true;
     try {
+      // 미전송(.out 있고 .sent 부재) 응답을 먼저 재전송 — render 실패·크래시 복구(FR-1).
+      await flushUnsent();
+
       const claimed = await claimNext(paths);
       if (!claimed) return;
 
@@ -146,19 +183,22 @@ export function createInjector(
   }
 
   async function start(): Promise<void> {
-    // 크래시 재개: processing 잔존 파일을 순차 재처리.
+    // 크래시 재개: 응답은 기록됐으나 미전송된 항목 먼저 재전송(FR-1).
+    await flushUnsent();
+    // processing 잔존 파일을 순차 재처리.
     const pendingIds = await scanProcessing(paths);
     for (const id of pendingIds) {
       if (await isDone(paths, id)) continue; // dedup — 이미 out 있음
+      let envelope: Envelope;
       try {
         const { readFile } = await import("node:fs/promises");
-        const json = await readFile(processingFilePath(paths, id), "utf8");
-        await processOne(id, parseEnvelope(json));
+        envelope = parseEnvelope(await readFile(processingFilePath(paths, id), "utf8"));
       } catch (err) {
-        console.error(
-          `[injector] 재처리 오류 lane=${lane} id=${id}: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        // 손상 메시지 — 격리 후 다음으로(매 기동 동일 파싱오류 반복 차단, FR-2).
+        await quarantineCorrupt(paths, id, err);
+        continue;
       }
+      await processOne(id, envelope); // processOne 은 자체 try/catch(.failed)로 throw 하지 않음
     }
     await injectNext();
   }

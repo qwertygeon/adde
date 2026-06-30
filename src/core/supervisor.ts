@@ -229,7 +229,13 @@ export async function supervisorUp(
           await source.requestPermission(req);
         };
 
-        return gateRequestDecision(req, { sendPermPrompt, waitForDecision });
+        try {
+          return await gateRequestDecision(req, { sendPermPrompt, waitForDecision });
+        } finally {
+          // 모든 종결 경로(timeout·전송오류·정상결정)에서 대기자 정리 — timeout 시 영구 잔존 누수 제거(FR-3).
+          // 늦게 도착한 콜백은 빈 맵에서 no-op(무해).
+          pendingDecisions.delete(req.id);
+        }
       });
 
       // 인젝터 기동은 비차단(첫 inject 가 turn 종료까지 블록될 수 있어 await 하지 않음).

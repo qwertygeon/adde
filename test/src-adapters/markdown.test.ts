@@ -208,6 +208,18 @@ describe("createMarkdownSource (통합)", () => {
     expect(() => source!.start()).toThrow();
   });
 
+  it("inbox 상대경로에 '..' 면 start 시 throw (root 탈출 방지, 011-C)", () => {
+    conf.inbox = "../escape.md";
+    source = makeSource();
+    expect(() => source!.start()).toThrow();
+  });
+
+  it("outbox 절대경로면 start 시 throw (011-C)", () => {
+    conf.outbox = path.join(tmpBase, "evil");
+    source = makeSource();
+    expect(() => source!.start()).toThrow();
+  });
+
   // A1: 제어 노트가 AI 작업폴더(cwd) 내부면 fail-closed 기동 거부
   it("A1: inbox 가 cwd 내부면 start 거부(자기승인 방지)", () => {
     conf.cwd = rootDir; // 작업폴더 = 노트 루트 → inbox 가 cwd 내부
@@ -298,8 +310,9 @@ describe("createMarkdownSource (통합)", () => {
     expect(msgCount()).toBe(0);
   });
 
-  it("권한 요청 → approvals 블록 기록 → allow 체크 감지 → onDecision(allow)", async () => {
-    const approvalsPath = path.join(rootDir, "approvals.md");
+  it("권한 요청 → 요청당 approvals 파일 기록 → allow 체크 감지 → onDecision(allow) (011-D)", async () => {
+    // 요청당 파일(D): approvals/<req-id>.md (기본 approvalsDir = inbox 형제 approvals/).
+    const reqFile = path.join(rootDir, "approvals", "req-allow.md");
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
     source.start();
@@ -319,17 +332,54 @@ describe("createMarkdownSource (통합)", () => {
     };
     await source.requestPermission(req);
 
-    await waitFor(() => fs.existsSync(approvalsPath) && fs.readFileSync(approvalsPath, "utf8").includes("req-allow"));
+    await waitFor(
+      () => fs.existsSync(reqFile) && fs.readFileSync(reqFile, "utf8").includes("req-allow"),
+    );
 
     // 사용자가 allow 체크
-    const cur = fs.readFileSync(approvalsPath, "utf8");
-    fs.writeFileSync(approvalsPath, cur.replace("- [ ] allow", "- [x] allow"));
+    const cur = fs.readFileSync(reqFile, "utf8");
+    fs.writeFileSync(reqFile, cur.replace("- [ ] allow", "- [x] allow"));
 
     await waitFor(() => decisions.includes("req-allow:allow"));
     expect(decisions).toContain("req-allow:allow");
 
-    // approvals 가 종단 재작성됨
-    await waitFor(() => fs.readFileSync(approvalsPath, "utf8").includes("status=allow"));
+    // 해당 요청 파일이 종단 재작성됨
+    await waitFor(() => fs.readFileSync(reqFile, "utf8").includes("status=allow"));
+  });
+
+  it("동시 다중 권한 요청은 요청당 별도 파일로 격리된다 (011-D)", async () => {
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
+    source = makeSource();
+    source.start();
+
+    const mk = (id: string): PermRequest => ({
+      v: 1,
+      id,
+      lane: "L",
+      channel: "markdown",
+      tool: "Bash",
+      detail: "ls",
+      cwd: "/proj",
+      ts: "2026-06-28T00:00:00Z",
+    });
+    await source.requestPermission(mk("req-a"));
+    await source.requestPermission(mk("req-b"));
+
+    const fileA = path.join(rootDir, "approvals", "req-a.md");
+    const fileB = path.join(rootDir, "approvals", "req-b.md");
+    await waitFor(() => fs.existsSync(fileA) && fs.existsSync(fileB));
+    expect(fs.readFileSync(fileA, "utf8")).toContain("req-a");
+    expect(fs.readFileSync(fileB, "utf8")).toContain("req-b");
+
+    // req-a 만 allow 체크 → req-a 만 결정, req-b 는 pending 유지(격리)
+    const decisions: string[] = [];
+    source.onDecision((reqId, decision) => decisions.push(`${reqId}:${decision}`));
+    fs.writeFileSync(fileA, fs.readFileSync(fileA, "utf8").replace("- [ ] allow", "- [x] allow"));
+
+    await waitFor(() => decisions.includes("req-a:allow"));
+    expect(decisions).toContain("req-a:allow");
+    expect(decisions.some((d) => d.startsWith("req-b"))).toBe(false);
+    expect(fs.readFileSync(fileB, "utf8")).toContain("status=pending");
   });
 
   it("renderOut(id) 호출 시 마크다운 출력 노트를 작성한다(reply_ref 역참조 포함)", async () => {

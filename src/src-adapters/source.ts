@@ -11,8 +11,8 @@ export type DecisionCallback = (reqId: string, decision: Decision) => void;
 export interface Source {
   /** 인바운드 수신 + 아웃바운드(out 감시) 기동. 대상(chat_id/root)은 conf 에서 self-resolve. */
   start(): void;
-  /** 리스너·watcher 정지. */
-  stop(): void;
+  /** 리스너·watcher 정지 + in-flight 작업 정리 대기(비동기 — DEC-004). */
+  stop(): Promise<void>;
   /**
    * 권한 요청을 채널에 표면화한다.
    * 실패(전송/쓰기 오류)는 throw → 게이트가 fail-closed deny.

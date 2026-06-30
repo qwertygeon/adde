@@ -1,0 +1,15 @@
+# EditorConfig — https://editorconfig.org
+# prettier 설정(.prettierrc)과 정합: UTF-8 · LF · 최종 개행 · 2-space.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Markdown: 줄 끝 공백 2칸이 강제 줄바꿈 의미라 trailing whitespace 를 보존한다.
+[*.md]
+trim_trailing_whitespace = false

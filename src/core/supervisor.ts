@@ -16,9 +16,16 @@ import { createInjector } from "./injector.js";
 import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
+import {
+  writeRuntime,
+  removeRuntime,
+  touchRuntime,
+  HEARTBEAT_INTERVAL_MS,
+} from "./runtime-state.js";
+import type { LanePaths } from "../shared/paths.js";
 
 /** 런타임 ACP 어댑터 바이너리 경로. package.json 의 bin 항목을 SoT 로 해석. */
-function resolveAdapterBin(): string {
+export function resolveAdapterBin(): string {
   const require = createRequire(import.meta.url);
   try {
     const pkgPath = require.resolve("@zed-industries/claude-code-acp/package.json");
@@ -48,7 +55,9 @@ function errMsg(err: unknown): string {
 
 interface LaneHandle {
   lane: string;
-  stop(): void;
+  /** 하트비트가 mtime 을 touch 할 runtime.json 경로. */
+  paths: LanePaths;
+  stop(): Promise<void>;
 }
 
 /** 레인 기동 상태 결과. */
@@ -86,6 +95,39 @@ export interface SupervisorDownOptions {
 }
 
 const activeLanes = new Map<string, LaneHandle[]>();
+/** proj 별 하트비트 타이머 — up 이 등록, down 이 정리. */
+const heartbeats = new Map<string, NodeJS.Timeout>();
+
+/**
+ * proj 의 하트비트 타이머를 (재)설정한다. 기존 타이머는 먼저 정리(re-up 대비).
+ * 각 틱에 running 레인의 runtime.json mtime 만 touch(메타데이터 쓰기). `.unref()` 로
+ * 타이머 단독으로 프로세스를 살려두지 않는다(상주는 호출부 never-resolve promise 담당).
+ */
+function armHeartbeat(proj: string, handles: LaneHandle[]): void {
+  const existing = heartbeats.get(proj);
+  if (existing) clearInterval(existing);
+  if (handles.length === 0) {
+    heartbeats.delete(proj);
+    return;
+  }
+  const timer = setInterval(() => {
+    for (const h of handles) {
+      // 하트비트는 보조 신호 — touch 실패는 warn 후 흡수(레인 동작에 영향 없음).
+      void touchRuntime(h.paths).catch((err: unknown) =>
+        console.warn(`[supervisor] lane=${h.lane} 하트비트 touch 실패(보조): ${errMsg(err)}`),
+      );
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+  timer.unref();
+  heartbeats.set(proj, timer);
+}
+
+/** proj 하트비트 타이머 정리(down·셧다운). */
+function disarmHeartbeat(proj: string): void {
+  const timer = heartbeats.get(proj);
+  if (timer) clearInterval(timer);
+  heartbeats.delete(proj);
+}
 
 /**
  * `adde up <proj>` — lanes.d 의 conf 파일 스캔 → 레인별 기동.
@@ -172,7 +214,7 @@ export async function supervisorUp(
 
     try {
       // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
-      await backend.launch(lane);
+      const { sessionId } = await backend.launch(lane);
 
       // 엔진 세션 이벤트 → injector(응답 누적). injector 가 turn 종료에 writeOut + renderOut(B).
       backend.subscribe(lane, (e) => injector.onSessionEvent(e));
@@ -199,12 +241,33 @@ export async function supervisorUp(
       });
       source.start();
 
+      // 라이브니스 상태 파일 — status 가 교차 프로세스로 읽는다. 기동 성공 후 기록.
+      // 기록 실패는 보조(가시성 저하일 뿐 기동 자체는 성공) → warn 후 흡수.
+      await writeRuntime(paths, {
+        v: 1,
+        pid: process.pid,
+        lane,
+        sessionId,
+        startedAt: new Date().toISOString(),
+        source: conf.source || channel,
+        backend: conf.backend || "acp",
+        engine,
+      }).catch((err: unknown) =>
+        console.warn(`[supervisor] lane=${lane} runtime.json 기록 실패(보조): ${errMsg(err)}`),
+      );
+
       console.log(`[supervisor] lane=${lane} running`);
 
       handles.push({
         lane,
-        stop() {
-          source.stop();
+        paths,
+        // 정지 순서: 소스 먼저(신규 인바운드·turn 차단) → 백엔드 child 정리(C1) → 상태 파일 제거.
+        async stop() {
+          await source.stop();
+          await backend.close(lane);
+          await removeRuntime(paths).catch((err: unknown) =>
+            console.warn(`[supervisor] lane=${lane} runtime.json 제거 실패(보조): ${errMsg(err)}`),
+          );
         },
       });
 
@@ -216,7 +279,10 @@ export async function supervisorUp(
   }
 
   const existing = activeLanes.get(proj) ?? [];
-  activeLanes.set(proj, [...existing, ...handles]);
+  const merged = [...existing, ...handles];
+  activeLanes.set(proj, merged);
+  // 하트비트는 기동된 레인이 있을 때만(merged 전체 대상 — re-up 시 기존+신규 함께 touch).
+  armHeartbeat(proj, merged);
 
   const runningCount = results.filter((r) => r.status === "running").length;
   return {
@@ -235,8 +301,11 @@ export async function supervisorDown(
   const handles = activeLanes.get(proj) ?? [];
   const results: LaneStatus[] = [];
 
+  // 하트비트 먼저 정지 — 종료 중 runtime.json touch/제거 레이스 방지.
+  disarmHeartbeat(proj);
+
   for (const handle of handles) {
-    handle.stop();
+    await handle.stop();
     console.log(`[supervisor] lane=${handle.lane} stopped`);
     results.push({ lane: handle.lane, status: "stopped" });
   }

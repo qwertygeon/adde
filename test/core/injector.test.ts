@@ -33,12 +33,18 @@ const makeEnvelope = (id: string, text = "test", replyMsgId?: string): Envelope 
 /** setImmediate 큐 flush — injectNext 의 비동기 진행 1틱. */
 const flush = () => new Promise<void>((r) => setImmediate(r));
 
-/** 조건 충족까지 틱 진행(injectNext 의 fs IO 가 여러 await 라 폴링 대기). */
-async function waitUntil(cond: () => boolean, tries = 100): Promise<void> {
+/**
+ * 조건 충족까지 폴링 대기. injectNext/processOne 의 fs IO(mkdir·write·rename)는
+ * libuv 스레드풀에서 처리되므로, setImmediate 같은 CPU 틱만 돌리면 전체 스위트 병렬
+ * 실행 시 디스크 경합으로 fs 완료보다 틱이 먼저 소진돼 위양성(flaky)이 났다.
+ * → 실제 시간을 흘려보내는 타이머로 폴링하고, 시한 초과 시 조용히 통과하지 않고 throw 한다.
+ */
+async function waitUntil(cond: () => boolean, tries = 300): Promise<void> {
   for (let i = 0; i < tries; i++) {
     if (cond()) return;
-    await flush();
+    await new Promise<void>((r) => setTimeout(r, 2));
   }
+  if (!cond()) throw new Error("waitUntil: 조건이 제한 시간 내 충족되지 않음");
 }
 
 /** 즉시 resolve 하는 기본 backend 더블. */
@@ -49,6 +55,7 @@ function makeBackend(inject = vi.fn().mockResolvedValue(undefined)) {
     launch: vi.fn(),
     subscribe: vi.fn(),
     onPermissionRequest: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -218,5 +225,22 @@ describe("SC-B2: writeOut 후 render(id) 호출", () => {
     await flush();
 
     expect(fs.existsSync(path.join(paths.outDir, "r2.out"))).toBe(true);
+  });
+});
+
+describe("inject 실패 보존 (011-E1)", () => {
+  it("inject 실패 시 out/<id>.failed 를 남기고 processing 은 유지(재처리), .out 은 없음", async () => {
+    const inject = vi.fn().mockRejectedValue(new Error("boom"));
+    const backend = makeBackend(inject);
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+
+    await enqueue(paths, makeEnvelope("ef1", "실패 메시지"));
+    injector.notify();
+    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "ef1.failed")));
+
+    expect(fs.existsSync(path.join(paths.outDir, "ef1.failed"))).toBe(true);
+    // processing 잔존 → 재기동 시 재처리(at-least-once). dedup 마커(.out)는 미생성.
+    expect(fs.existsSync(path.join(paths.processingDir, "ef1.msg"))).toBe(true);
+    expect(fs.existsSync(path.join(paths.outDir, "ef1.out"))).toBe(false);
   });
 });

@@ -40,3 +40,29 @@ describe("maskSecrets (SC-007)", () => {
     expect(result).not.toContain(token);
   });
 });
+
+describe("maskSecrets 확장 패턴 (011-C)", () => {
+  it("API 키 접두(sk-/ghp_)를 마스킹한다", () => {
+    const sk = "sk-abcdefghijklmnopqrstuvwx";
+    expect(maskSecrets(`키: ${sk} 끝`)).not.toContain(sk);
+    const ghp = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    expect(maskSecrets(ghp)).not.toContain(ghp);
+  });
+
+  it("Bearer 토큰을 마스킹한다", () => {
+    const r = maskSecrets("Authorization: Bearer abcdef12345.token-x");
+    expect(r).toContain("Bearer ***");
+    expect(r).not.toContain("abcdef12345.token-x");
+  });
+
+  it("KEY=값 형태는 값만 마스킹하고 키는 보존한다", () => {
+    const r = maskSecrets("API_KEY=supersecretvalue123");
+    expect(r).toContain("API_KEY=");
+    expect(r).not.toContain("supersecretvalue123");
+  });
+
+  it("시크릿 키워드가 없는 평문은 변경하지 않는다", () => {
+    const input = "그냥 key 라는 단어가 든 일반 문장";
+    expect(maskSecrets(input)).toBe(input);
+  });
+});

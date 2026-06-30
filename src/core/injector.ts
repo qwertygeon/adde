@@ -5,7 +5,14 @@
  * 응답 캡처(DEC-002): backend.inject() resolve(=turn 종료) 시 누적 응답을 writeOut + 렌더 트리거 → 다음 큐 진행.
  *   turn 종료 신호는 inject() resolve 로 감지한다(conn.prompt 가 turn 종료에 resolve) — 별도 idleCallback 배선 불요.
  */
-import { claimNext, scanProcessing, isDone, writeOut, processingFilePath } from "./queue.js";
+import {
+  claimNext,
+  scanProcessing,
+  isDone,
+  writeOut,
+  writeFailed,
+  processingFilePath,
+} from "./queue.js";
 import type { OutSidecar } from "./queue.js";
 import type { LanePaths } from "../shared/paths.js";
 import type { AcpBackend } from "../backend/acp/client.js";
@@ -58,6 +65,10 @@ export function createInjector(
 ): Injector {
   let state: InjectorState = "idle";
   let responseText = "";
+  // claim→처리 진입을 직렬화(E4): idle 체크와 processOne(state=active) 사이의 두 await(claimNext·isDone)
+  // 창에서 두 injectNext 가 각각 다른 메시지를 claim 해 동시 turn 이 뜨는 경합 방지(rename 은 동일
+  // 메시지 중복만 막음). advancing 은 injectNext 전 구간을 감싸 한 번에 하나만 진행하게 한다.
+  let advancing = false;
 
   function onSessionEvent(event: SessionEvent): void {
     if (state !== "active") return;
@@ -85,8 +96,14 @@ export function createInjector(
         });
       }
     } catch (err) {
-      console.error(
-        `[injector] inject 오류 lane=${lane} id=${id}: ${err instanceof Error ? err.message : String(err)}`,
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error(`[injector] inject 오류 lane=${lane} id=${id}: ${detail}`);
+      // 실패를 .failed 사이드카로 보존(E1) — processing/<id>.msg 는 남아 재기동 시 재처리(at-least-once).
+      await writeFailed(paths, id, `inject 실패 @ ${new Date().toISOString()}: ${detail}`).catch(
+        (e: unknown) =>
+          console.error(
+            `[injector] .failed 기록 실패 lane=${lane} id=${id}: ${e instanceof Error ? e.message : String(e)}`,
+          ),
       );
     } finally {
       state = "idle";
@@ -106,22 +123,26 @@ export function createInjector(
   }
 
   async function injectNext(): Promise<void> {
-    if (state !== "idle") return;
+    if (state !== "idle" || advancing) return;
+    advancing = true;
+    try {
+      const claimed = await claimNext(paths);
+      if (!claimed) return;
 
-    const claimed = await claimNext(paths);
-    if (!claimed) return;
+      const { id, envelope } = claimed;
 
-    const { id, envelope } = claimed;
+      if (await isDone(paths, id)) {
+        // dedup: out 이미 존재 → prompt 미호출, 다음으로 진행.
+        scheduleNext();
+        return;
+      }
 
-    if (await isDone(paths, id)) {
-      // dedup: out 이미 존재 → prompt 미호출, 다음으로 진행.
+      await processOne(id, envelope);
+      // turn 종료 후 다음 큐 메시지로 진행(FR-A2).
       scheduleNext();
-      return;
+    } finally {
+      advancing = false;
     }
-
-    await processOne(id, envelope);
-    // turn 종료 후 다음 큐 메시지로 진행(FR-A2).
-    scheduleNext();
   }
 
   async function start(): Promise<void> {

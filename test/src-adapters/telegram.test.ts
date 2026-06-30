@@ -3,7 +3,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { TelegramSource } from "../../src/src-adapters/telegram.js";
-import { createTelegramSource } from "../../src/src-adapters/telegram.js";
+import {
+  createTelegramSource,
+  splitForTelegram,
+  pollBackoffMs,
+} from "../../src/src-adapters/telegram.js";
 import { lanePaths } from "../../src/shared/paths.js";
 
 // SC-014: long-poll→envelope→queue 저장
@@ -16,11 +20,14 @@ import { lanePaths } from "../../src/shared/paths.js";
 // makeSingleCycleFetch / makeNCycleFetch 헬퍼로 각 테스트에 필요한 사이클 수만 허용.
 
 /** 조건이 참이 될 때까지 setImmediate 로 대기 (최대 N회) */
-async function waitFor(condition: () => boolean, maxTicks = 200): Promise<void> {
-  for (let i = 0; i < maxTicks; i++) {
+// 실제 시간 기반 폴링 — poll loop 의 fetch(비동기)가 병렬 실행 경합에서도 진행하도록.
+// 시한 초과 시 throw(setImmediate 만 돌리면 fs/네트워크 완료보다 틱이 먼저 소진돼 위양성).
+async function waitFor(condition: () => boolean, tries = 300): Promise<void> {
+  for (let i = 0; i < tries; i++) {
     if (condition()) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setTimeout(resolve, 2));
   }
+  if (!condition()) throw new Error("waitFor: 조건이 제한 시간 내 충족되지 않음");
 }
 
 /**
@@ -399,5 +406,119 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
     source.stop();
 
     expect(gateCallbackCalls.some((s) => s.includes("deny"))).toBe(true);
+  });
+});
+
+describe("splitForTelegram (011-A 4096 청킹)", () => {
+  it("4096 이하는 단일 청크", () => {
+    expect(splitForTelegram("짧은 응답")).toEqual(["짧은 응답"]);
+    const exact = "x".repeat(4096);
+    expect(splitForTelegram(exact)).toEqual([exact]);
+  });
+
+  it("개행 없는 초과 텍스트는 하드 분할(데이터 손실 없음)", () => {
+    const text = "a".repeat(10000);
+    const chunks = splitForTelegram(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((c) => c.length <= 4096)).toBe(true);
+    expect(chunks.join("")).toBe(text); // 개행이 없으니 손실 없이 재결합
+  });
+
+  it("줄 경계를 우선해 분할한다", () => {
+    const line = "b".repeat(1000);
+    const text = Array.from({ length: 10 }, () => line).join("\n"); // ~10kB, 개행 포함
+    const chunks = splitForTelegram(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((c) => c.length <= 4096)).toBe(true);
+  });
+});
+
+describe("pollBackoffMs 지수 백오프 (012-Q)", () => {
+  it("연속 실패가 늘수록 지수 증가, 상한 30s 고정", () => {
+    expect(pollBackoffMs(1)).toBe(1000);
+    expect(pollBackoffMs(2)).toBe(2000);
+    expect(pollBackoffMs(3)).toBe(4000);
+    expect(pollBackoffMs(4)).toBe(8000);
+    expect(pollBackoffMs(20)).toBe(30000); // 상한
+    expect(pollBackoffMs(0)).toBe(1000); // 방어적 하한
+  });
+});
+
+describe("callBotApi 429 레이트리밋 재시도 (012-P)", () => {
+  it("429(retry_after) 후 재시도해 성공한다", async () => {
+    let sendCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        const method = url.split("/").pop() ?? "";
+        if (method === "getUpdates") return { ok: true, json: async () => ({ ok: true, result: [] }) };
+        if (method === "sendMessage") {
+          sendCalls++;
+          if (sendCalls === 1) {
+            return {
+              ok: false,
+              status: 429,
+              headers: { get: () => "0" },
+              json: async () => ({ ok: false, error_code: 429, parameters: { retry_after: 0 } }),
+            };
+          }
+          return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) };
+        }
+        return { ok: true, json: async () => ({ ok: true, result: true }) };
+      }),
+    );
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-code-acp",
+      paths,
+      chatId: 99,
+    });
+    fs.writeFileSync(
+      path.join(paths.outDir, "rl.out.json"),
+      JSON.stringify({ reply_ref: { channel_msg_id: "42" } }),
+    );
+    fs.writeFileSync(path.join(paths.outDir, "rl.out"), "응답");
+
+    await source.renderOut("rl");
+
+    expect(sendCalls).toBe(2); // 429 1회 → 재시도 성공
+  });
+});
+
+describe("renderOut 4096 초과 분할 전송 (011-A)", () => {
+  it("긴 응답을 여러 sendMessage 로 나눠 보내고 첫 청크만 reply_to", async () => {
+    const sent: Record<string, unknown>[] = [];
+    setupFetchMock((method, params) => {
+      if (method === "getUpdates") return [];
+      if (method === "sendMessage") {
+        sent.push({ ...params });
+        return { message_id: 1 };
+      }
+      return true;
+    });
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-code-acp",
+      paths,
+      chatId: 99,
+    });
+
+    fs.writeFileSync(
+      path.join(paths.outDir, "big.out.json"),
+      JSON.stringify({ reply_ref: { channel_msg_id: "42" } }),
+    );
+    fs.writeFileSync(path.join(paths.outDir, "big.out"), "y".repeat(9000));
+
+    await source.renderOut("big");
+
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.every((m) => (m["text"] as string).length <= 4096)).toBe(true);
+    expect(sent[0]?.["reply_to_message_id"]).toBe(42);
+    // 후속 청크는 reply_to 없음(클러터 방지)
+    expect(sent[1]?.["reply_to_message_id"]).toBeUndefined();
   });
 });

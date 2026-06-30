@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { cleanEnv } from "../../src/backend/acp/spawn.js";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { cleanEnv, spawnEngine } from "../../src/backend/acp/spawn.js";
 
 // SC-008: clean env — CLAUDECODE·CLAUDE_CODE_ENTRYPOINT 제거
 // cleanEnv 함수는 spawnEngine 에서 분리 export 되어 단위 테스트 주입 가능
@@ -62,5 +65,68 @@ describe("cleanEnv (SC-008 clean env spawn)", () => {
     const original = { ...env };
     cleanEnv(env);
     expect(env).toEqual(original);
+  });
+});
+
+// SC-R1/R3: stderr 캡처 — 실프로세스로 검증(스트림·종료 로직은 mock 으로 못 잡음).
+describe("spawnEngine stderr 캡처 (SC-R1)", () => {
+  /** 파일이 기대 내용을 담을 때까지 실타이머로 폴링(setImmediate 폴링은 부하 시 위양성). */
+  async function waitForContent(path: string, needle: string, timeoutMs = 3000): Promise<string> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      try {
+        const text = await readFile(path, "utf8");
+        if (text.includes(needle)) return text;
+      } catch {
+        // 아직 생성 전 — 재시도.
+      }
+      if (Date.now() > deadline) throw new Error(`타임아웃: "${needle}" 를 ${path} 에서 못 봄`);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
+
+  it("stderrPath 지정 시 엔진 stderr 를 파일로 append 한다 (디렉터리 자동 생성)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "adde-spawn-"));
+    // 중첩 경로 — mkdirSync(recursive) 가 디렉터리를 만드는지 함께 검증.
+    const logPath = join(dir, "state", "lane1", "engine.log");
+    try {
+      const child = spawnEngine(
+        process.execPath,
+        ["-e", "process.stderr.write('hello-stderr\\n')"],
+        { stderrPath: logPath },
+      );
+      const text = await waitForContent(logPath, "hello-stderr");
+      expect(text).toContain("hello-stderr");
+      // stdout 은 ACP 채널이라 pipe 로 남는다(inherit 아님).
+      expect(child.stdout).not.toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("같은 경로에 두 번째 spawn 은 append 한다 (덮어쓰지 않음)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "adde-spawn-"));
+    const logPath = join(dir, "engine.log");
+    try {
+      spawnEngine(process.execPath, ["-e", "process.stderr.write('first\\n')"], {
+        stderrPath: logPath,
+      });
+      await waitForContent(logPath, "first");
+      spawnEngine(process.execPath, ["-e", "process.stderr.write('second\\n')"], {
+        stderrPath: logPath,
+      });
+      const text = await waitForContent(logPath, "second");
+      expect(text).toContain("first");
+      expect(text).toContain("second");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stderrPath 미지정 시 캡처하지 않는다 (stderr=null, inherit 동작)", () => {
+    const child = spawnEngine(process.execPath, ["-e", "0"]);
+    // inherit 모드면 child.stderr 는 노출되지 않는다(null).
+    expect(child.stderr).toBeNull();
+    child.kill();
   });
 });

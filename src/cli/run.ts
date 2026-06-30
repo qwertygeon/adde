@@ -1,5 +1,6 @@
 import { readVersion } from "../core/version.js";
-import { COMMANDS, buildUsage } from "./usage.js";
+import { COMMANDS, buildUsage, USAGE, cmdError } from "../core/messages.js";
+import { formatException } from "../shared/notify.js";
 
 /**
  * CLI 진입 로직. adde / add 양쪽 진입점이 공유한다.
@@ -19,10 +20,25 @@ export async function run(argv: readonly string[]): Promise<number> {
     return runLane(argv.slice(1));
   }
 
+  if (first === "status") {
+    const { runStatus } = await import("./ops.js");
+    return runStatus(argv.slice(1));
+  }
+
+  if (first === "doctor") {
+    const { runDoctorCli } = await import("./ops.js");
+    return runDoctorCli(argv.slice(1));
+  }
+
+  if (first === "logs") {
+    const { runLogs } = await import("./ops.js");
+    return runLogs(argv.slice(1));
+  }
+
   if (first === "up") {
     const proj = second;
     if (!proj) {
-      process.stderr.write("사용법: adde up <proj>\n");
+      process.stderr.write(USAGE.up + "\n");
       return 1;
     }
     try {
@@ -34,14 +50,38 @@ export async function run(argv: readonly string[]): Promise<number> {
         // 기동된 레인이 없으면 상주할 이유가 없다 — 오류 레인이 있으면 1.
         return result.lanes.some((l) => l.status === "error") ? 1 : 0;
       }
+      // 종료 신호 시 graceful shutdown — supervisorDown 으로 엔진 child·소스를 정리한 뒤 종료(S1/DEC-006).
+      // (그냥 죽으면 child 좀비·정리 누락. typescript 규칙: down 완료 await 후에만 exit.)
+      const { supervisorDown } = await import("../core/supervisor.js");
+      let shuttingDown = false;
+      const shutdown = (sig: NodeJS.Signals): void => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        process.stderr.write(`\n[adde] ${sig} 수신 — 레인 종료 중...\n`);
+        void supervisorDown(proj)
+          .then((r) => {
+            process.stdout.write(`${r.message}\n`);
+            process.exit(0);
+          })
+          .catch((err: unknown) => {
+            process.stderr.write(
+              formatException({
+                situation: `종료 처리 중 오류: ${err instanceof Error ? err.message : String(err)}`,
+                action: "잔존 엔진 프로세스를 수동 확인/종료하세요(ps | grep claude-code-acp).",
+              }) + "\n",
+            );
+            process.exit(1);
+          });
+      };
+      process.once("SIGINT", () => shutdown("SIGINT"));
+      process.once("SIGTERM", () => shutdown("SIGTERM"));
+
       // 레인 기동 성공 → 소스 루프가 이벤트 루프를 유지하는 동안 포그라운드 상주.
       // 종료(Ctrl-C/SIGTERM)까지 resolve 하지 않아 진입점의 process.exit 를 막는다.
       await new Promise<never>(() => {});
       return 0; // 도달하지 않음
     } catch (err) {
-      process.stderr.write(
-        `[adde up] 오류: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
+      process.stderr.write(cmdError("up", err instanceof Error ? err.message : String(err)) + "\n");
       return 1;
     }
   }
@@ -49,7 +89,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   if (first === "down") {
     const proj = second;
     if (!proj) {
-      process.stderr.write("사용법: adde down <proj>\n");
+      process.stderr.write(USAGE.down + "\n");
       return 1;
     }
     try {
@@ -59,7 +99,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       return 0;
     } catch (err) {
       process.stderr.write(
-        `[adde down] 오류: ${err instanceof Error ? err.message : String(err)}\n`,
+        cmdError("down", err instanceof Error ? err.message : String(err)) + "\n",
       );
       return 1;
     }

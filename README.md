@@ -1,8 +1,15 @@
 # ADDE — Ai Driven Development Engine
 
-> ⚠️ **상태: 설계 단계 (pre-implementation).** 아직 코드가 없다.
+> ⚠️ **상태: 초기 개발.** ACP 백엔드 + Telegram/마크다운 소스 어댑터 동작(PoC 수직 슬라이스). API 변동 가능.
 
-ADDE 는 tmux 위에서 도는 **AI CLI**(Claude Code / Codex 등)를 **채널**(Telegram / Obsidian; Discord 보류)에서 원격 구동하는 게이트웨이입니다. AI 가 개발 작업을 수행하고, 사람은 채팅으로 지시·승인·관찰합니다.
+ADDE 는 **AI CLI**(Claude Code / Codex 등)를 **채널**(Telegram / 마크다운 노트(예: Obsidian); Discord 보류)에서 원격 구동하는 게이트웨이입니다. AI 가 개발 작업을 수행하고, 사람은 채팅으로 지시·승인·관찰합니다.
+
+## 사용자 문서
+
+- [시작하기](docs/getting-started.md) — 설치·레인 설정·기동·상태/진단·프로젝트 폴더 매핑
+- [Telegram 가이드](docs/telegram.md) — 봇 생성·토큰·기동 단계별
+- [마크다운 가이드](docs/markdown.md) — 노트(예: Obsidian)로 AI 구동하기(지시·응답·권한 승인 단계별)
+- [명령 레퍼런스](docs/commands.md) · [트러블슈팅](docs/troubleshooting.md)
 
 ## 핵심 설계
 
@@ -14,9 +21,19 @@ ADDE 는 tmux 위에서 도는 **AI CLI**(Claude Code / Codex 등)를 **채널**
 ## 명령
 
 ```
-adde   # 주 진입점 (슈퍼바이저·레인 제어)
-add    # adde 단축 별칭
+adde up <proj>               # 프로젝트의 모든 레인 기동
+adde down <proj>             # 레인 종료
+adde status <proj> [--json]  # 레인 상태(running/stale/dead/stopped)
+adde doctor [<proj>]         # 환경·설정 정적 점검
+adde logs <proj> <lane> [N] [--engine]  # 레인 transcript(또는 --engine 시 엔진 stderr) 최근 N줄
+adde lane add <proj> <lane>  # 레인 conf 생성 (옵션: --source/--cwd/--chat-id/--root/--interactive …)
+adde lane ls <proj>          # 레인 목록
+adde lane show <proj> <lane> # 레인 conf 출력
+adde lane rm <proj> <lane>   # 레인 conf 삭제
+add  …                       # adde 단축 별칭
 ```
+
+레인 설정 상세는 [시작하기](docs/getting-started.md#레인-설정), 전체 명령은 [명령 레퍼런스](docs/commands.md)를 참조하세요.
 
 ## 런타임
 
@@ -26,13 +43,15 @@ add    # adde 단축 별칭
 ## 상태 / 로드맵
 
 - [x] 설계 (ACP 우선 재설계 완료)
-- [ ] PoC (ACP 스파이크 · 권한 라우팅)
-- [ ] MVP: `obsidian | telegram → claude(ACP)` 수직 슬라이스
+- [x] 개발환경 스캐폴드 (TypeScript · pnpm · CI)
+- [x] PoC (ACP 스파이크 · 권한 라우팅)
+- [~] MVP: `markdown | telegram → claude(ACP)` 수직 슬라이스 (소스 어댑터·레인별 프로젝트 폴더 매핑 동작)
 - [ ] Codex 백엔드 · Discord(보류) · 비-ACP CLI 스크래핑(보류)
 
-## 라이선스 / 기여
+## 라이선스 / 보안
 
-추후 추가 예정.
+- 라이선스: [MIT](LICENSE)
+- 보안 취약점 보고: [SECURITY.md](SECURITY.md)
 
 ---
 

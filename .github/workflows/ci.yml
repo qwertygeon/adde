@@ -1,0 +1,30 @@
+name: CI
+
+# 브랜치 정책상 develop push 는 미실행, develop→main PR 과 main push 시점에 게이트 검증.
+# 근거: docs/_internal/design/08 §5 (cctg 와 동형).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run typecheck
+
+      - run: pnpm run lint
+
+      - run: pnpm test

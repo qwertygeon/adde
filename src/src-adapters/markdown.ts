@@ -682,9 +682,17 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     await approvalsOp.catch(() => {});
   }
 
-  /** 요청당 승인 파일 경로(D). */
+  /**
+   * 요청당 승인 파일 경로(D). reqId 는 엔진이 통제하는 sessionId 이므로(client.ts) 경로 탈출 차단:
+   * 승인 파일은 approvalsDir 의 *직속 자식* 이어야 한다 — `..`·`/` 등이 섞이면 fail-closed throw
+   * (게이트가 sendPermPrompt throw 를 deny 로 처리). AI 가 승인 노트를 임의 경로에 위조하는 것을 막는다.
+   */
   function approvalFile(reqId: string): string {
-    return join(approvalsDir, `${reqId}.md`);
+    const file = resolve(approvalsDir, `${reqId}.md`);
+    if (dirname(file) !== resolve(approvalsDir)) {
+      throw new Error(`잘못된 승인 요청 id "${reqId}" — 경로 탈출 차단(fail-closed deny).`);
+    }
+    return file;
   }
 
   async function requestPermission(req: PermRequest): Promise<void> {

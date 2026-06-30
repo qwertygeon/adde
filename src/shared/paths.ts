@@ -38,7 +38,22 @@ export function expandTilde(p: string): string {
   return p;
 }
 
+/** proj/lane 식별자 허용 문자셋 — 경로 세그먼트로 안전(`..`·`/`·구분자 차단). lane-config 의 NAME_RE 와 동일 규약. */
+const SAFE_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * proj/lane 이 경로 세그먼트로 안전한지 검증 — 위반 시 throw.
+ * lanePaths 가 경로 구성의 SSOT 이므로 여기서 막으면 모든 호출부(진단·수퍼바이저 등)가 일괄 보호된다(디렉터리 탈출·레인 격리 위반 차단).
+ */
+export function assertSafeSegment(kind: "proj" | "lane", value: string): void {
+  if (!SAFE_SEGMENT_RE.test(value)) {
+    throw new Error(`잘못된 ${kind} 이름 "${value}" — 영숫자·_·- 만 허용됩니다(경로 탈출 차단).`);
+  }
+}
+
 export function lanePaths(base: string, proj: string, lane: string): LanePaths {
+  assertSafeSegment("proj", proj);
+  assertSafeSegment("lane", lane);
   const root = join(base, proj);
   const stateDir = join(root, "state", lane);
   return {

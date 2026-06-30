@@ -3,14 +3,14 @@ import { maskSecrets } from "../../src/shared/mask.js";
 
 // SC-007: 봇 토큰 마스킹 — 토큰 형식 문자열이 ***로 치환되고 비토큰 텍스트는 불변
 
-// 봇 토큰 패턴: \d{5,}:[A-Za-z0-9_-]{35}  (5자 이상 숫자 + 콜론 + 35자 알파숫자)
-// 테스트 토큰은 이 패턴을 충족해야 한다.
+// 봇 토큰 패턴: \d{5,}:[A-Za-z0-9_-]{30,}  (5자 이상 숫자 + 콜론 + 30자 이상 알파숫자)
+// 테스트 토큰은 이 패턴을 충족해야 한다(35자 토큰은 하한 30 을 충족).
 const TEST_TOKEN_35 = "AAECBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob"; // 35자 알파숫자
 const TEST_TOKEN_35B = "BBECBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob"; // 35자 다른 토큰
 
 describe("maskSecrets (SC-007)", () => {
   it("봇 토큰 패턴 문자열을 *** 로 마스킹한다", () => {
-    // 패턴: \d{5,}:[A-Za-z0-9_-]{35}
+    // 패턴: \d{5,}:[A-Za-z0-9_-]{30,}
     const token = `123456789:${TEST_TOKEN_35}`;
     const input = `메시지 본문에 토큰 ${token} 포함`;
     const result = maskSecrets(input);
@@ -30,6 +30,14 @@ describe("maskSecrets (SC-007)", () => {
     const result = maskSecrets(input);
     expect(result).not.toContain(token1);
     expect(result).not.toContain(token2);
+  });
+
+  it("토큰부 길이가 35 가 아니어도(드리프트) 마스킹한다", () => {
+    // {35} 고정이면 누락되던 케이스 — 하한 {30,} 로 40자 토큰부도 전부 마스킹.
+    const token40 = `123456789:${"A".repeat(40)}`;
+    const result = maskSecrets(`토큰 ${token40} 포함`);
+    expect(result).not.toContain(token40);
+    expect(result).not.toContain("AAAA");
   });
 
   it("토큰 패턴이 ACP 이벤트 텍스트에 유입되어도 마스킹한다", () => {

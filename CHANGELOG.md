@@ -52,12 +52,19 @@
 - 사용자 편의 — `adde up` 이 레인 기동 실패 시 어떤 레인이 왜 실패했는지 + 조치(`doctor`/`logs`)를 함께 표면화하고, 기동할 레인이 없으면 `adde lane add` 를 안내. `docs/getting-started.md` 에 설치 후 `adde doctor` 프리플라이트 안내 추가.
 - 마크다운 enqueue 연속 실패 알림 — 임계 도달 시 outbox 노트(`_enqueue-alert.md`)로 1회 운영자 알림(telegram 패턴과 일관), 성공 시 리셋.
 
+- 엔진 child 종료 견고성 — `closeChild`/`killChild` 의 `child.kill()` 전송 실패(이미 종료·EPERM)를 흡수해, executor throw 로 인한 종료(`down`/셧다운) 중단·`exit` 리스너 잔존·`runtime.json` 미정리를 차단.
+- 죽은 배선 제거 — 미사용 `idleCallbacks`/`setIdleCallback`(inject() resolve 로 turn 종료를 감지하므로 불필요) 정리.
+
 ### Security
 
 - 권한 요청 detail 마스킹 — 권한 요청 상세(toolCall)가 채널(텔레그램 메시지·마크다운 승인 노트)에 표면화되기 전 시크릿 마스킹 적용.
 
 - 마크다운 자기승인 경계 — 제어 노트(inbox·approvals·outbox)가 AI 작업폴더(`cwd`) 내부면 fail-closed 로 레인 기동 거부(AI 의 승인/지시 노트 위조 차단).
 - 입력 검증·노출 표면 강화 — envelope 텍스트 길이/형식·`channel_msg_id`·첨부 필드 검증, 마크다운 노트 경로의 디렉터리 탈출(`..`·절대경로) 차단, allowlist 항목 문자셋 제한, 로그·전사 시크릿 마스킹 패턴 확대(API 키·Bearer·`KEY=값`).
+
+- `adde logs` 경로 탈출 차단 — `proj`/`lane` 을 경로 구성 SSOT(`lanePaths`)에서 일괄 검증(영숫자·`_`·`-` 만 허용)해, 다른 레인 명령과 달리 누락돼 있던 `..` 탈출 읽기를 차단(레인 격리 일관성 확보).
+- 마크다운 승인파일 경로 탈출 차단 — 승인 파일명에 쓰이는 엔진 제어 `req.id`(sessionId)가 `..`·구분자를 포함하면 fail-closed(게이트 deny)로 거부해, AI 가 승인 노트를 마크다운 root 밖에 위조·기록하는 것을 차단.
+- 봇 토큰 마스킹 견고성 — 토큰부 길이를 `{35}` 고정에서 `{30,}` 하한으로 완화해, 형식 드리프트(35자 비보장)로 인한 과소마스킹(토큰 누출) 가능성 축소.
 
 ### Decided
 

@@ -102,7 +102,14 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
     return 1;
   }
   const n = nRaw !== undefined && /^\d+$/.test(nRaw) ? Number(nRaw) : 50;
-  const result = await readLogs(proj, lane, n, { engine });
+  let result;
+  try {
+    result = await readLogs(proj, lane, n, { engine });
+  } catch (err) {
+    // proj/lane 검증 실패(경로 탈출 차단 등) — 친절한 메시지 후 비정상 종료코드.
+    process.stderr.write((err instanceof Error ? err.message : String(err)) + "\n");
+    return 1;
+  }
   if (!result.exists) {
     const what = engine ? "engine 로그" : "transcript";
     process.stdout.write(

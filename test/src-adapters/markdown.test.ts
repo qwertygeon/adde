@@ -374,6 +374,27 @@ describe("createMarkdownSource (통합)", () => {
     await waitFor(() => fs.readFileSync(reqFile, "utf8").includes("status=allow"));
   });
 
+  it("경로 탈출 req.id(엔진 sessionId)는 fail-closed throw — approvals 밖 쓰기 차단", async () => {
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
+    source = makeSource();
+    source.start();
+
+    const evil: PermRequest = {
+      v: 1,
+      id: "../../evil",
+      lane: "L",
+      channel: "markdown",
+      tool: "Bash",
+      detail: "ls",
+      cwd: "/proj",
+      ts: "2026-06-28T00:00:00Z",
+    };
+    // 게이트가 sendPermPrompt(=requestPermission) throw 를 deny 로 처리하므로 throw 가 곧 fail-closed.
+    await expect(source.requestPermission(evil)).rejects.toThrow();
+    // approvals 디렉터리 밖(rootDir 상위)에 evil.md 가 생기지 않아야 한다.
+    expect(fs.existsSync(path.join(rootDir, "..", "evil.md"))).toBe(false);
+  });
+
   it("동시 다중 권한 요청은 요청당 별도 파일로 격리된다 (011-D)", async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();

@@ -77,3 +77,18 @@ describe("lanePaths (SC-025 레인 경로 동적 구성)", () => {
     expect(paths.envFile.startsWith(paths.stateDir)).toBe(true);
   });
 });
+
+describe("lanePaths 경로 탈출 차단", () => {
+  it("lane 에 디렉터리 탈출(..)이 있으면 throw", () => {
+    expect(() => lanePaths("/tmp/adde-test", "proj", "../../etc")).toThrow();
+  });
+  it("proj 에 디렉터리 탈출(..)이 있으면 throw", () => {
+    expect(() => lanePaths("/tmp/adde-test", "../../etc", "lane")).toThrow();
+  });
+  it("경로 구분자가 든 lane 은 throw", () => {
+    expect(() => lanePaths("/tmp/adde-test", "proj", "a/b")).toThrow();
+  });
+  it("정상 식별자(영숫자·_·-)는 허용", () => {
+    expect(() => lanePaths("/tmp/adde-test", "proj_1", "telegram-claude")).not.toThrow();
+  });
+});

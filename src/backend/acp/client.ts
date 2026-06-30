@@ -80,7 +80,6 @@ export class AcpBackendImpl implements AcpBackend {
   private readonly adapterBin: string;
   private readonly lanes = new Map<string, LaneState>();
   private readonly laneConfigs = new Map<string, LaneConfig>();
-  private idleCallbacks = new Map<string, () => void>();
 
   constructor(adapterBin: string) {
     this.adapterBin = adapterBin;
@@ -406,21 +405,12 @@ export class AcpBackendImpl implements AcpBackend {
     const state = this.lanes.get(lane);
     if (!state) throw new Error(`[acp] lane "${lane}" not launched`);
 
-    const resp = await state.conn.prompt({
+    // prompt 는 turn 종료에 resolve 한다 — injector 는 inject() resolve 로 turn 종료를 감지해 다음 큐를
+    // 진행하므로(injector.ts) 별도 idle 콜백 배선은 불필요. stopReason 분기 없이 완료만 대기한다.
+    await state.conn.prompt({
       sessionId: state.sessionId,
       prompt: [{ type: "text", text }],
     });
-
-    if (
-      resp.stopReason === "end_turn" ||
-      resp.stopReason === "max_tokens" ||
-      resp.stopReason === "max_turn_requests" ||
-      resp.stopReason === "cancelled" ||
-      resp.stopReason === "refusal"
-    ) {
-      const idleCallback = this.idleCallbacks.get(lane);
-      if (idleCallback) idleCallback();
-    }
   }
 
   subscribe(lane: string, on: (e: SessionEvent) => void): void {
@@ -437,16 +427,10 @@ export class AcpBackendImpl implements AcpBackend {
     state.permHandler = handler;
   }
 
-  /** 인젝터 idle 콜백 등록 (inject 완료 시 호출). */
-  setIdleCallback(lane: string, cb: () => void): void {
-    this.idleCallbacks.set(lane, cb);
-  }
-
   /** 레인 종료 — 엔진 child 정리(SIGTERM→유예→SIGKILL) + 상태 제거(C1/C2/DEC-003). */
   async close(lane: string): Promise<void> {
     const state = this.lanes.get(lane);
     this.lanes.delete(lane);
-    this.idleCallbacks.delete(lane);
     if (!state) return;
     await closeChild(state.child, CHILD_GRACE_MS);
   }

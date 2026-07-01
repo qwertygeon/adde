@@ -21,10 +21,17 @@ ADDE 는 AI CLI 엔진(Claude Code 등)을 채널(Telegram / 마크다운 노트
 
 ## 설치
 
+배포 방식은 **npm 전역 설치**입니다. 최초 릴리스 발행 후부터 다음 한 줄로 설치합니다(`adde`·`add` 명령 제공):
+
 ```bash
-pnpm install
-pnpm build
+npm i -g adde        # 최초 릴리스 발행 후 제공
 ```
+
+> 발행 전(현재)에는 소스에서 빌드해 사용합니다:
+>
+> ```bash
+> pnpm install && pnpm build
+> ```
 
 설치 후 `adde doctor` 로 사전조건(Node 버전·ACP 어댑터·설정)을 한 번 점검하면, 레인 기동 단계에서야 드러나는 미비를 미리 잡을 수 있습니다.
 
@@ -92,15 +99,17 @@ allowlist=Read,Grep      # 선택: 승인 빈도 축소(게이트 유지)
 ## 기동·종료
 
 ```bash
-adde up <proj>     # lanes.d 의 모든 레인 기동(포그라운드 상주)
-adde down <proj>   # 레인 종료
+adde up <proj>     # lanes.d 의 모든 레인을 백그라운드 데몬(macOS launchd)으로 기동 — 등록 후 즉시 반환
+adde down <proj>   # 데몬 종료(어느 터미널에서든)
+adde restart <proj># 데몬 재기동(down + up)
 adde --version
 ```
 
 ## 상태·진단
 
 ```bash
-adde status <proj>            # 레인 상태: running / dead(크래시) / stopped
+adde status <proj>            # 레인 상태: running / stale(응답없음) / dead(크래시) / stopped
+adde status                   # 인자 생략: 전 프로젝트에서 실행 중 레인 집계 (--all: 정지 포함)
 adde doctor <proj>            # 환경·설정 정적 점검(기동 전 자가 진단)
 adde logs <proj> <lane>       # 레인 최근 활동(transcript)
 ```

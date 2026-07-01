@@ -61,7 +61,7 @@ adde restart <proj>
 ## status — 레인 상태
 
 ```bash
-adde status <proj> [--json]
+adde status [<proj>] [--all] [--json]
 ```
 
 `lanes.d` 의 각 레인을 스캔해 상태를 판정합니다.
@@ -73,9 +73,12 @@ adde status <proj> [--json]
 | `dead` | 상태 파일이 있으나 프로세스가 없음 — **비정상 종료(크래시) 잔존** |
 | `stopped` | 상태 파일 없음 — 정상 종료 또는 미기동 |
 
-- 기본 출력: `LANE · STATUS · PID · UPTIME · SEEN · SOURCE` 표(`SEEN` = 마지막 하트비트 경과). `dead`·`stale` 레인이 있으면 조치 안내를 덧붙입니다.
+- **`<proj>` 지정**: 해당 프로젝트의 모든 레인(정지 포함)을 `LANE · STATUS · PID · UPTIME · SEEN · SOURCE` 표로 출력.
+- **`<proj>` 생략**: 전 프로젝트(`~/.config/adde/*/`)를 집계해 **실행 중(정지 제외) 레인**을 `PROJECT · LANE · …` 표로 출력. 실행 중 레인이 없으면 안내 메시지.
+- **`--all`**(`<proj>` 생략 시): 정지(`stopped`) 포함 전 레인을 표시.
+- `dead`·`stale` 레인이 있으면 조치 안내를 덧붙입니다(`SEEN` = 마지막 하트비트 경과).
 - 하트비트: `adde up` 이 주기적으로 상태 파일 mtime 을 갱신합니다. pid 가 살아있어도 갱신이 임계 시간 멈추면 `stale`(행) 로 판정합니다.
-- `--json`: 레인 객체 배열(모니터링/스크립트용, `lastSeenAt` 포함).
+- `--json`: 레인 객체 배열(모니터링/스크립트용, `lastSeenAt` 포함; 집계 시 `proj` 부기).
 - 읽기 전용(부수효과 없음).
 
 ## doctor — 환경 점검

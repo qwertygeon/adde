@@ -2,12 +2,13 @@
  * 운영 가시성 — status / doctor / logs 의 코어 로직(읽기 전용, 부수효과 없음).
  * CLI 계층(cli/ops.ts)이 결과를 표/JSON/텍스트로 표면화한다.
  */
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { laneList } from "./lane-config.js";
 import { resolveAdapterBin } from "./supervisor.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
-import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
+import { lanePaths, defaultBase, expandTilde, isSafeSegment } from "../shared/paths.js";
 import { parseLaneConf } from "../shared/conf.js";
 import { daemonRegState } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
@@ -79,6 +80,48 @@ export async function collectStatus(
           : null,
       lastSeenAt: mtimeMs !== undefined ? new Date(mtimeMs).toISOString() : null,
     });
+  }
+  return rows;
+}
+
+/** 집계 status 행 — 레인 상태에 소속 프로젝트를 부기(다중 프로젝트 뷰). */
+export type AggregatedLaneStatusRow = LaneStatusRow & { proj: string };
+
+/**
+ * base 하위에서 lanes.d 를 가진 프로젝트 디렉터리를 열거한다(정렬).
+ * 안전 세그먼트(경로 위생) 통과분만 — 비안전 이름은 조용히 제외(열거는 진단성 조회라 흡수).
+ * base 부재 시 빈 배열.
+ */
+export async function listRegisteredProjects(opts: DiagBaseOptions = {}): Promise<string[]> {
+  const base = opts.base ?? defaultBase();
+  let names: string[];
+  try {
+    const entries = await readdir(base, { withFileTypes: true });
+    names = entries.filter((e) => e.isDirectory() && isSafeSegment(e.name)).map((e) => e.name);
+  } catch {
+    return [];
+  }
+  const projs: string[] = [];
+  for (const name of names) {
+    // lanes.d 를 가진 디렉터리만 프로젝트로 간주(state·queue 등 부속 디렉터리 제외).
+    if (await pathExists(join(base, name, "lanes.d"))) projs.push(name);
+  }
+  return projs.sort();
+}
+
+/**
+ * 전 프로젝트의 레인 상태를 집계한다(각 행에 proj 부기).
+ * 인자 없는 `adde status` 의 다중 프로젝트 뷰용. 실행 중/전체 필터는 표면 계층(cli/ops)이 결정한다.
+ */
+export async function collectAllStatus(
+  opts: DiagBaseOptions = {},
+): Promise<AggregatedLaneStatusRow[]> {
+  const base = opts.base ?? defaultBase();
+  const projs = await listRegisteredProjects({ ...opts, base });
+  const rows: AggregatedLaneStatusRow[] = [];
+  for (const proj of projs) {
+    const projRows = await collectStatus(proj, { ...opts, base });
+    for (const r of projRows) rows.push({ ...r, proj });
   }
   return rows;
 }

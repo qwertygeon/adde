@@ -4,7 +4,13 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { collectStatus, runDoctor, readLogs } from "../../src/core/diagnostics.js";
+import {
+  collectStatus,
+  collectAllStatus,
+  listRegisteredProjects,
+  runDoctor,
+  readLogs,
+} from "../../src/core/diagnostics.js";
 import { writeRuntime } from "../../src/core/runtime-state.js";
 import type { RuntimeInfo } from "../../src/core/runtime-state.js";
 import { lanePaths } from "../../src/shared/paths.js";
@@ -99,6 +105,41 @@ describe("collectStatus (SC2)", () => {
     const hung = rows.find((r) => r.lane === "hung");
     expect(hung?.status).toBe("stale");
     expect(hung?.lastSeenAt).not.toBeNull();
+  });
+});
+
+describe("listRegisteredProjects (status parity)", () => {
+  it("lanes.d 를 가진 프로젝트만 열거하고 정렬한다", async () => {
+    writeConf("beta", "l1", conf());
+    writeConf("alpha", "l1", conf());
+    // lanes.d 없는 부속 디렉터리는 프로젝트로 보지 않는다.
+    fs.mkdirSync(path.join(tmpBase, "not-a-proj"), { recursive: true });
+    expect(await listRegisteredProjects({ base: tmpBase })).toEqual(["alpha", "beta"]);
+  });
+
+  it("base 부재 시 빈 배열", async () => {
+    expect(await listRegisteredProjects({ base: path.join(tmpBase, "nope") })).toEqual([]);
+  });
+});
+
+describe("collectAllStatus (status parity — 다중 프로젝트 집계)", () => {
+  it("전 프로젝트 레인을 proj 부기와 함께 집계한다", async () => {
+    writeConf("p1", "alive", conf());
+    writeConf("p2", "down", conf());
+    await writeRuntime(lanePaths(tmpBase, "p1", "alive"), rt(process.pid, "alive"));
+    // p2/down 은 runtime.json 없음 → stopped
+
+    const rows = await collectAllStatus({ base: tmpBase });
+    const key = (r: (typeof rows)[number]): string => `${r.proj}/${r.lane}`;
+    const byKey = Object.fromEntries(rows.map((r) => [key(r), r.status]));
+    expect(byKey["p1/alive"]).toBe("running");
+    expect(byKey["p2/down"]).toBe("stopped");
+    // 각 행에 proj 가 부기된다.
+    expect(rows.every((r) => typeof r.proj === "string" && r.proj.length > 0)).toBe(true);
+  });
+
+  it("프로젝트가 없으면 빈 배열", async () => {
+    expect(await collectAllStatus({ base: path.join(tmpBase, "empty") })).toEqual([]);
   });
 });
 

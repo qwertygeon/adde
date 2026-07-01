@@ -51,6 +51,11 @@ export function assertSafeSegment(kind: "proj" | "lane", value: string): void {
   }
 }
 
+/** proj/lane 세그먼트 안전성 여부(throw 없이). 디렉터리 열거 등에서 비안전 이름을 걸러낼 때 사용. */
+export function isSafeSegment(value: string): boolean {
+  return SAFE_SEGMENT_RE.test(value);
+}
+
 export function lanePaths(base: string, proj: string, lane: string): LanePaths {
   assertSafeSegment("proj", proj);
   assertSafeSegment("lane", lane);

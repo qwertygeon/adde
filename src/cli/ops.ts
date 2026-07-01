@@ -2,8 +2,8 @@
  * `adde status|doctor|logs` — 운영 가시성 명령의 CLI 표면.
  * core/diagnostics 의 읽기 전용 로직을 호출하고 표/JSON/텍스트로 표면화한다.
  */
-import { collectStatus, runDoctor, readLogs } from "../core/diagnostics.js";
-import type { LaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
+import { collectStatus, collectAllStatus, runDoctor, readLogs } from "../core/diagnostics.js";
+import type { LaneStatusRow, AggregatedLaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
 import { USAGE } from "../core/messages.js";
 
 /** ms → 사람용 경과시간(예: 1h2m, 3m4s, 12s). */
@@ -43,13 +43,64 @@ function statusTable(rows: LaneStatusRow[]): string {
   return [fmt(header), ...body.map(fmt)].join("\n");
 }
 
+/**
+ * 집계 status 표 — PROJECT 컬럼을 앞에 둔다(다중 프로젝트 뷰).
+ * 단일 프로젝트 표(statusTable)와 분리 — 기존 `status <proj>` 출력은 불변.
+ */
+function statusTableAggregate(rows: AggregatedLaneStatusRow[], all: boolean): string {
+  if (rows.length === 0) {
+    return all
+      ? "레인 없음 — 등록된 레인이 없습니다 (adde lane add <proj> <lane>)."
+      : "실행 중인 레인 없음 — 정지 포함 전체는 `adde status --all`, 특정 프로젝트는 `adde status <proj>`.";
+  }
+  const header = ["PROJECT", "LANE", "STATUS", "PID", "UPTIME", "SEEN", "SOURCE"];
+  const body = rows.map((r) => [
+    r.proj,
+    r.lane,
+    r.status,
+    r.pid === null ? "-" : String(r.pid),
+    formatUptime(r.uptimeMs),
+    formatAge(r.lastSeenAt),
+    r.source ?? "-",
+  ]);
+  const widths = header.map((h, i) =>
+    Math.max(h.length, ...body.map((row) => (row[i] ?? "").length)),
+  );
+  const fmt = (cols: string[]): string => cols.map((c, i) => c.padEnd(widths[i] ?? 0)).join("  ");
+  return [fmt(header), ...body.map(fmt)].join("\n");
+}
+
 export async function runStatus(rest: readonly string[]): Promise<number> {
   const json = rest.includes("--json");
+  const all = rest.includes("--all");
   const proj = rest.find((a) => !a.startsWith("--"));
+
+  // 인자 없음 → 전 프로젝트 집계(CCTG parity). 기본은 실행 중(정지 제외), --all 은 정지 포함 전체.
   if (!proj) {
-    process.stderr.write(USAGE.status + "\n");
-    return 1;
+    const allRows = await collectAllStatus();
+    const rows = all ? allRows : allRows.filter((r) => r.status !== "stopped");
+    if (json) {
+      process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+    } else {
+      process.stdout.write(statusTableAggregate(rows, all) + "\n");
+      const dead = rows.filter((r) => r.status === "dead");
+      if (dead.length > 0) {
+        process.stdout.write(
+          `\n경고: ${dead.map((r) => `${r.proj}/${r.lane}`).join(", ")} 레인이 비정상 종료(dead)했습니다.\n` +
+            `  ↳ 조치: adde down <proj> 로 정리한 뒤 adde up <proj> 로 재기동하세요.\n`,
+        );
+      }
+      const stale = rows.filter((r) => r.status === "stale");
+      if (stale.length > 0) {
+        process.stdout.write(
+          `\n경고: ${stale.map((r) => `${r.proj}/${r.lane}`).join(", ")} 레인이 응답 없음(stale — 하트비트 끊김).\n` +
+            `  ↳ 조치: adde logs <proj> <lane> --engine 으로 진단 후 adde down/up <proj> 로 재기동하세요.\n`,
+        );
+      }
+    }
+    return rows.some((r) => r.status === "dead" || r.status === "stale") ? 1 : 0;
   }
+
   const rows = await collectStatus(proj);
   if (json) {
     process.stdout.write(JSON.stringify(rows, null, 2) + "\n");

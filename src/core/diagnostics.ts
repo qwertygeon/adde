@@ -9,10 +9,17 @@ import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
 import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 import { parseLaneConf } from "../shared/conf.js";
+import { daemonRegState } from "./launchd.js";
+import type { LaunchctlExec } from "./launchd.js";
 
 export interface DiagBaseOptions {
   /** 설정 base 경로(테스트 override). 미지정 시 $ADDE_HOME 또는 ~/.config/adde. */
   base?: string;
+  /**
+   * launchctl 실행자 주입(테스트용 fake). 미주입 시 실 launchctl 호출.
+   * doctor daemon 점검이 CI에서 실 launchctl 을 때리지 않도록 주입 가능 구조로.
+   */
+  launchctlExec?: LaunchctlExec;
 }
 
 // ── status ──────────────────────────────────────────────────────────────
@@ -144,6 +151,50 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
   );
 
   if (proj === undefined) return checks;
+
+  // daemon 등록 상태 점검 (macOS 전용 — 비-darwin 은 항목 스킵).
+  if (process.platform === "darwin") {
+    try {
+      const launchdDeps = opts.launchctlExec ? { exec: opts.launchctlExec } : undefined;
+      const regState = await daemonRegState(proj, launchdDeps);
+      const { plistExists, launchctlRegistered } = regState;
+
+      if (plistExists && launchctlRegistered) {
+        // 둘 다 true — 정상 등록.
+        checks.push({
+          name: `daemon 등록 (${proj})`,
+          level: "PASS",
+          detail: `plist 존재 + launchctl 등록 완료`,
+        });
+      } else if (!plistExists && !launchctlRegistered) {
+        // 둘 다 false — 데몬 미기동 상태(정상 — 기동 전 또는 down 후).
+        checks.push({
+          name: `daemon 등록 (${proj})`,
+          level: "PASS",
+          detail: `데몬 미기동 상태 (adde up ${proj} 으로 기동 가능)`,
+        });
+      } else {
+        // 불일치(plist XOR launchctl) — 복구 가능 경고.
+        const mismatch = plistExists
+          ? `plist 존재하나 launchctl 미등록`
+          : `launchctl 등록되어 있으나 plist 없음`;
+        checks.push({
+          name: `daemon 등록 (${proj})`,
+          level: "WARN",
+          detail: mismatch,
+          hint: `등록 불일치 상태입니다. adde down ${proj} 후 adde up ${proj} 으로 재등록하세요.`,
+        });
+      }
+    } catch {
+      // daemonRegState 오류 — 정보 부재로 WARN 처리(진단이므로 throw 대신 흡수).
+      checks.push({
+        name: `daemon 등록 (${proj})`,
+        level: "WARN",
+        detail: `등록 상태 조회 실패`,
+        hint: `adde down ${proj} 후 adde up ${proj} 으로 재등록하거나, launchctl list | grep com.rtm.adde.${proj} 로 수동 확인하세요.`,
+      });
+    }
+  }
 
   // 레인별 점검
   const { lanes } = await laneList(proj, { base });

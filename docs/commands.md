@@ -5,14 +5,16 @@ ADDE CLI 의 전체 명령·옵션입니다. 주 진입점은 `adde`, 단축 별
 ## 목차
 
 - [전역 옵션](#전역-옵션)
-- [up — 레인 기동](#up--레인-기동)
+- [up — 레인 기동 (데몬)](#up--레인-기동-데몬)
 - [down — 레인 종료](#down--레인-종료)
+- [restart — 레인 재기동](#restart--레인-재기동)
 - [status — 레인 상태](#status--레인-상태)
 - [doctor — 환경 점검](#doctor--환경-점검)
 - [logs — 최근 활동](#logs--최근-활동)
 - [lane — 레인 설정](#lane--레인-설정)
 - [종료 코드](#종료-코드)
 - [경로](#경로)
+- [macOS 전용 기능](#macos-전용-기능)
 
 ## 전역 옵션
 
@@ -23,16 +25,20 @@ ADDE CLI 의 전체 명령·옵션입니다. 주 진입점은 `adde`, 단축 별
 
 인자 없이 `adde` 를 실행하면 사용법을 출력합니다.
 
-## up — 레인 기동
+## up — 레인 기동 (데몬)
 
 ```bash
 adde up <proj>
 ```
 
-`~/.config/adde/<proj>/lanes.d/` 의 모든 `*.conf` 레인을 기동하고 **포그라운드로 상주**합니다(소스 루프 유지). 기동 시 각 레인의 상태 파일(`state/<lane>/runtime.json`)을 기록합니다.
+`~/.config/adde/<proj>/lanes.d/` 의 모든 `*.conf` 레인을 **macOS launchd LaunchAgent 데몬**으로 기동합니다. `adde up` 자체는 plist 등록 후 즉시 종료되고, 실제 레인은 백그라운드 데몬(`launchd` 관리)으로 상주합니다.
 
-- 종료: `Ctrl-C`(SIGINT) 또는 SIGTERM 수신 시 graceful shutdown — 엔진 서브프로세스·소스를 정리하고 상태 파일을 제거한 뒤 종료합니다.
-- 기동된(running) 레인이 하나도 없으면 상주하지 않고 종료합니다.
+- **터미널 독립**: 터미널을 닫아도 데몬이 계속 동작합니다.
+- **자동 복구**: macOS 재부팅·로그아웃 후에도 launchd가 자동으로 데몬을 재기동합니다.
+- **중복 기동 가드**: 이미 실행 중인 레인은 경고 메시지와 조치 힌트를 출력하고 스킵합니다. 이중 기동은 발생하지 않습니다.
+- **macOS 전용**: launchd 기능은 macOS에서만 동작합니다. 상세는 [macOS 전용 기능](#macos-전용-기능)을 참조하세요.
+
+기동 시 plist 파일(`~/Library/LaunchAgents/com.rtm.adde.<proj>.plist`)이 생성되고 launchd에 등록됩니다. 각 레인의 상태는 `state/<lane>/runtime.json`에 기록됩니다.
 
 ## down — 레인 종료
 
@@ -40,7 +46,17 @@ adde up <proj>
 adde down <proj>
 ```
 
-해당 프로젝트의 레인을 종료합니다(엔진 child 정리 + 상태 파일 제거). 같은 프로세스에서 기동한 레인에 적용됩니다.
+해당 프로젝트의 launchd 데몬을 종료하고 plist 파일을 제거합니다. **어느 터미널에서든** 실행 가능합니다(교차 프로세스 종료).
+
+## restart — 레인 재기동
+
+```bash
+adde restart <proj>
+```
+
+`down` 후 `up`을 순서대로 수행합니다. 설정 변경 후 데몬을 다시 기동하거나, 데몬 상태를 초기화할 때 사용합니다.
+
+- `down` 성공 후 `up` 실패 시, `up` 오류를 표면화하고 종료 코드 1을 반환합니다.
 
 ## status — 레인 상태
 
@@ -72,6 +88,7 @@ adde doctor [<proj>]
 
 - 전역: Node 버전(≥22) · ACP 어댑터 바이너리 해석 · 설정 base 디렉터리.
 - `<proj>` 지정 시 레인별: source 유효성 · `cwd` 존재 · (telegram) `.env` 토큰 존재.
+- `<proj>` 지정 시 macOS에서는 launchd 데몬 등록 상태도 점검합니다 — plist 존재 여부와 launchctl 등록 여부를 교차 확인하고, 불일치(plist는 있으나 launchd 미등록, 또는 그 역)를 `WARN`으로 표면화합니다.
 - 읽기 전용. 기동 전 "왜 안 뜨나"를 자가 진단하는 용도입니다.
 
 ## logs — 최근 활동
@@ -121,6 +138,9 @@ adde lane help                       # 전체 옵션
 
 | 명령 | 0 | 1 |
 |---|---|---|
+| `up` | 데몬 등록 성공 | launchd 등록 실패·인자 누락 |
+| `down` | 데몬 종료 성공(이미 없어도 0) | 오류 발생 |
+| `restart` | down+up 모두 성공 | down 또는 up 실패 |
 | `status` | 모두 정상 | `dead`(크래시)·`stale`(행) 레인 존재 |
 | `doctor` | FAIL 없음 | FAIL 항목 존재 |
 | `logs` | 항상(파일 없어도 안내 후 0) | — |
@@ -132,3 +152,18 @@ adde lane help                       # 전체 옵션
 - 프로젝트: `<base>/<proj>/`.
 - 레인 conf: `<base>/<proj>/lanes.d/<lane>.conf`.
 - 레인 상태: `<base>/<proj>/state/<lane>/`(`.env`·`session.id`·`transcript.log`·`engine.log`·`runtime.json`).
+- launchd plist: `~/Library/LaunchAgents/com.rtm.adde.<proj>.plist` (macOS 전용, `adde up` 이 생성·관리).
+
+## macOS 전용 기능
+
+`adde up`/`down`/`restart` 의 데몬 관리 기능은 macOS launchd에 의존합니다. Linux/WSL 환경에서는 이 명령들이 오류를 반환합니다.
+
+**재부팅 자동복구**: `adde up` 으로 등록한 데몬은 macOS 재부팅·로그아웃 후에도 자동으로 재기동됩니다(`KeepAlive`/`RunAtLoad` 설정). 재부팅 후 `adde status <proj>` 로 복구를 직접 확인하는 것을 권장합니다.
+
+**운영 검증 체크리스트**: 아래 항목은 자동 검증 범위 밖으로, 실 macOS 환경에서 직접 확인해야 합니다.
+
+1. `adde up <proj>` → 터미널 종료 → 새 터미널에서 `adde status <proj>` 가 `running` 인지 확인
+2. 다른 터미널에서 `adde down <proj>` 후 `adde status <proj>` 가 `stopped` 인지 확인
+3. macOS 재부팅 후 `adde status <proj>` — 자동 복구 확인
+4. `adde up <proj>` 연속 두 번 실행 — 이중 기동 없음 확인(경고 메시지 출력 후 스킵)
+5. `adde down <proj>` 후 `ps aux | grep claude-code-acp` — orphan 프로세스 없음 확인

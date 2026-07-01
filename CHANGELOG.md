@@ -6,6 +6,12 @@
 
 ### Added
 
+- `adde up <proj>` — macOS launchd LaunchAgent 데몬으로 기동. `adde up` 자체는 plist 등록 후 즉시 종료되고, 실제 레인은 백그라운드에서 상주. 터미널을 닫아도 동작, 재부팅·로그아웃 후 자동 복구(`KeepAlive`/`RunAtLoad`).
+- `adde down <proj>` — 어느 터미널에서든 launchd 데몬을 종료(교차 프로세스 종료). 이전의 동일 프로세스 내 종료(in-memory) 방식에서 변경.
+- `adde restart <proj>` — `down` + `up` 편의 래퍼. 설정 변경 후 데몬 재기동에 사용.
+- `adde up` 중복 기동 가드 — 이미 실행 중인 레인은 경고 메시지(`↳ 조치:` 힌트 포함)와 함께 스킵. Telegram getUpdates 이중 롱폴·409 충돌 방지.
+- `adde doctor <proj>` launchd 등록 상태 점검 — plist 존재 여부와 launchctl 등록 여부를 교차 확인. 불일치(`WARN`) 시 조치 힌트 표시.
+- graceful shutdown 강화 — launchd SIGTERM 수신 시 소스 어댑터 stop → ACP 엔진 백엔드 close 순서로 정리. 5초(`CHILD_GRACE_MS`) 내 미종료 자식은 SIGKILL. 비정상 종료(크래시) 후 재기동 시 dead runtime.json 자동 정리.
 - 레포 메타: `README.md` · `VERSION`(0.1.0) · `CHANGELOG.md` · `.gitignore`.
 - TypeScript 개발환경 스캐폴드: pnpm · `tsconfig`(strict) · ESLint/Prettier · vitest · CI/release 워크플로 · `src/` 골격.
 - ACP 백엔드 + Telegram 소스 어댑터 + 직렬 인젝터 + fail-closed 권한 게이트(PoC 수직 슬라이스).

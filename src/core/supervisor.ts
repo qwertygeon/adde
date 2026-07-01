@@ -20,6 +20,8 @@ import {
   writeRuntime,
   removeRuntime,
   touchRuntime,
+  readRuntime,
+  isPidAlive,
   HEARTBEAT_INTERVAL_MS,
 } from "./runtime-state.js";
 import type { LanePaths } from "../shared/paths.js";
@@ -172,6 +174,28 @@ export async function supervisorUp(
 
     const paths = lanePaths(baseDir, proj, lane);
 
+    // 중복 기동 가드 — backend 생성 전 runtime.json + pid 생존 확인.
+    const existingRuntime = await readRuntime(paths);
+    if (existingRuntime !== null) {
+      if (isPidAlive(existingRuntime.pid)) {
+        // 이미 running — 경고+스킵(FR-004/SC-005).
+        process.stderr.write(
+          `[adde] 레인 "${lane}" 이미 실행 중 (pid ${existingRuntime.pid})\n` +
+            `  ↳ 조치: adde down ${proj} 후 재기동 또는 adde status ${proj} 확인\n`,
+        );
+        results.push({ lane, status: "running" });
+        continue;
+      } else {
+        // dead 레인 — 크래시 잔존 runtime.json 정리 후 정상 기동(SC-012/FR-007).
+        // 자식 pid 는 runtime.json 에 미기록(스키마 한계 GAP-004) — removeRuntime 으로 파일만 정리.
+        await removeRuntime(paths).catch((err: unknown) =>
+          console.warn(
+            `[supervisor] lane=${lane} dead runtime.json 정리 실패(보조): ${errMsg(err)}`,
+          ),
+        );
+      }
+    }
+
     const channel: "telegram" | "markdown" = conf.source === "markdown" ? "markdown" : "telegram";
 
     let backend: AcpBackend;
@@ -294,9 +318,13 @@ export async function supervisorUp(
   armHeartbeat(proj, merged);
 
   const runningCount = results.filter((r) => r.status === "running").length;
+  const newlyStarted = handles.length;
+  const skipped = runningCount - newlyStarted;
+  const messageParts: string[] = [`${proj}: ${newlyStarted}개 레인 기동`];
+  if (skipped > 0) messageParts.push(`${skipped}개 이미 실행 중(스킵)`);
   return {
     lanes: results,
-    message: `${proj}: ${runningCount}개 레인 기동`,
+    message: messageParts.join(", "),
   };
 }
 

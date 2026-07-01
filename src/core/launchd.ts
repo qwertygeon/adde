@@ -41,16 +41,16 @@ export function assertMacOS(): void {
 // ── plist 경로·Label 헬퍼 ───────────────────────────────────────────────────
 
 /**
- * launchd Label: "com.rtm.adde.<proj>".
+ * launchd Label: "com.qwertygeon.adde.<proj>".
  * proj 안전성은 assertSafeSegment 로 검증(Label/파일명 인젝션 차단).
  */
 export function plistLabel(proj: string): string {
   assertSafeSegment("proj", proj);
-  return `com.rtm.adde.${proj}`;
+  return `com.qwertygeon.adde.${proj}`;
 }
 
 /**
- * plist 파일 경로: ~/Library/LaunchAgents/com.rtm.adde.<proj>.plist.
+ * plist 파일 경로: ~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist.
  * deps.home 미지정 시 os.homedir() 사용(테스트 주입 가능).
  */
 export function plistPath(proj: string, deps?: LaunchdDeps): string {
@@ -185,7 +185,7 @@ export async function unloadDaemon(proj: string, deps?: LaunchdDeps): Promise<vo
 export interface DaemonRegState {
   /** plist 파일이 ~/Library/LaunchAgents/ 에 존재하는가. */
   plistExists: boolean;
-  /** launchctl list 에 Label(com.rtm.adde.<proj>)이 등록되어 있는가. */
+  /** launchctl list 에 Label(com.qwertygeon.adde.<proj>)이 등록되어 있는가. */
   launchctlRegistered: boolean;
 }
 

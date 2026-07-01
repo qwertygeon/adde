@@ -52,9 +52,9 @@ function makeFakeExec(
 
 describe("plistLabel", () => {
   it("plistLabel_proj_고유_Label_반환", () => {
-    // plistLabel(proj) → "com.rtm.adde.<proj>"
-    expect(plistLabel("myproj")).toBe("com.rtm.adde.myproj");
-    expect(plistLabel("alpha")).toBe("com.rtm.adde.alpha");
+    // plistLabel(proj) → "com.qwertygeon.adde.<proj>"
+    expect(plistLabel("myproj")).toBe("com.qwertygeon.adde.myproj");
+    expect(plistLabel("alpha")).toBe("com.qwertygeon.adde.alpha");
   });
 
   it("서로 다른 proj 는 서로 다른 Label", () => {
@@ -70,10 +70,10 @@ describe("plistLabel", () => {
 
 describe("plistPath", () => {
   it("plistPath_LaunchAgents_경로_반환", () => {
-    // plistPath(proj) → <home>/Library/LaunchAgents/com.rtm.adde.<proj>.plist
+    // plistPath(proj) → <home>/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist
     const result = plistPath("myproj", { home: tmpHome });
     expect(result).toBe(
-      path.join(tmpHome, "Library", "LaunchAgents", "com.rtm.adde.myproj.plist"),
+      path.join(tmpHome, "Library", "LaunchAgents", "com.qwertygeon.adde.myproj.plist"),
     );
   });
 
@@ -81,7 +81,7 @@ describe("plistPath", () => {
     const result = plistPath("myproj");
     expect(result).toContain("Library");
     expect(result).toContain("LaunchAgents");
-    expect(result).toContain("com.rtm.adde.myproj.plist");
+    expect(result).toContain("com.qwertygeon.adde.myproj.plist");
     expect(result).toContain(os.homedir());
   });
 });
@@ -133,7 +133,7 @@ describe("renderPlist (SC-007 / SC-013)", () => {
 
   it("Label 에 proj Label 포함", () => {
     const xml = renderPlist("myproj", opts);
-    expect(xml).toContain("com.rtm.adde.myproj");
+    expect(xml).toContain("com.qwertygeon.adde.myproj");
   });
 
   it("EnvironmentVariables 키 미포함 (시크릿 주입 0)", () => {
@@ -156,7 +156,7 @@ describe("loadDaemon", () => {
     const loadCall = calls.find((c) => c[0] === "load");
     expect(loadCall).toBeDefined();
     expect(loadCall?.[0]).toBe("load");
-    expect(loadCall?.[1]).toContain("com.rtm.adde.myproj.plist");
+    expect(loadCall?.[1]).toContain("com.qwertygeon.adde.myproj.plist");
   });
 
   it("loadDaemon_exit_nonzero_throw_actionable", async () => {
@@ -177,7 +177,7 @@ describe("loadDaemon", () => {
       tmpHome,
       "Library",
       "LaunchAgents",
-      "com.rtm.adde.myproj.plist",
+      "com.qwertygeon.adde.myproj.plist",
     );
     expect(fs.existsSync(expectedPlist)).toBe(true);
   });
@@ -192,14 +192,14 @@ describe("unloadDaemon", () => {
     // plist 미리 생성 — unload 후 삭제 테스트
     const plistDir = path.join(tmpHome, "Library", "LaunchAgents");
     fs.mkdirSync(plistDir, { recursive: true });
-    fs.writeFileSync(path.join(plistDir, "com.rtm.adde.myproj.plist"), "<plist/>");
+    fs.writeFileSync(path.join(plistDir, "com.qwertygeon.adde.myproj.plist"), "<plist/>");
 
     await unloadDaemon("myproj", deps);
 
     const unloadCall = calls.find((c) => c[0] === "unload");
     expect(unloadCall).toBeDefined();
     expect(unloadCall?.[0]).toBe("unload");
-    expect(unloadCall?.[1]).toContain("com.rtm.adde.myproj.plist");
+    expect(unloadCall?.[1]).toContain("com.qwertygeon.adde.myproj.plist");
   });
 
   it("unloadDaemon_plist_없어도_멱등", async () => {
@@ -214,7 +214,7 @@ describe("unloadDaemon", () => {
     const { exec } = makeFakeExec("ok");
     const deps: LaunchdDeps = { exec, home: tmpHome };
     const plistDir = path.join(tmpHome, "Library", "LaunchAgents");
-    const plistFile = path.join(plistDir, "com.rtm.adde.myproj.plist");
+    const plistFile = path.join(plistDir, "com.qwertygeon.adde.myproj.plist");
     fs.mkdirSync(plistDir, { recursive: true });
     fs.writeFileSync(plistFile, "<plist/>");
 
@@ -238,7 +238,7 @@ describe("daemonRegState", () => {
   function makePlist(home: string, proj: string): string {
     const dir = path.join(home, "Library", "LaunchAgents");
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `com.rtm.adde.${proj}.plist`);
+    const file = path.join(dir, `com.qwertygeon.adde.${proj}.plist`);
     fs.writeFileSync(file, "<plist/>");
     return file;
   }

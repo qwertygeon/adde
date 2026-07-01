@@ -187,7 +187,7 @@ describe("readLogs (SC4)", () => {
 // fake launchctlExec 주입 — CI 에서 실 launchctl 미접촉
 
 function makeLaunchctlExec(launchctlHasLabel: boolean, proj: string): LaunchctlExecType {
-  const label = `com.rtm.adde.${proj}`;
+  const label = `com.qwertygeon.adde.${proj}`;
   return async (args) => {
     if (args[0] === "list") {
       const stdout = launchctlHasLabel

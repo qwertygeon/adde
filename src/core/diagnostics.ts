@@ -191,7 +191,7 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
         name: `daemon 등록 (${proj})`,
         level: "WARN",
         detail: `등록 상태 조회 실패`,
-        hint: `adde down ${proj} 후 adde up ${proj} 으로 재등록하거나, launchctl list | grep com.rtm.adde.${proj} 로 수동 확인하세요.`,
+        hint: `adde down ${proj} 후 adde up ${proj} 으로 재등록하거나, launchctl list | grep com.qwertygeon.adde.${proj} 로 수동 확인하세요.`,
       });
     }
   }

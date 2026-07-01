@@ -38,7 +38,7 @@ adde up <proj>
 - **중복 기동 가드**: 이미 실행 중인 레인은 경고 메시지와 조치 힌트를 출력하고 스킵합니다. 이중 기동은 발생하지 않습니다.
 - **macOS 전용**: launchd 기능은 macOS에서만 동작합니다. 상세는 [macOS 전용 기능](#macos-전용-기능)을 참조하세요.
 
-기동 시 plist 파일(`~/Library/LaunchAgents/com.rtm.adde.<proj>.plist`)이 생성되고 launchd에 등록됩니다. 각 레인의 상태는 `state/<lane>/runtime.json`에 기록됩니다.
+기동 시 plist 파일(`~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist`)이 생성되고 launchd에 등록됩니다. 각 레인의 상태는 `state/<lane>/runtime.json`에 기록됩니다.
 
 ## down — 레인 종료
 
@@ -152,7 +152,7 @@ adde lane help                       # 전체 옵션
 - 프로젝트: `<base>/<proj>/`.
 - 레인 conf: `<base>/<proj>/lanes.d/<lane>.conf`.
 - 레인 상태: `<base>/<proj>/state/<lane>/`(`.env`·`session.id`·`transcript.log`·`engine.log`·`runtime.json`).
-- launchd plist: `~/Library/LaunchAgents/com.rtm.adde.<proj>.plist` (macOS 전용, `adde up` 이 생성·관리).
+- launchd plist: `~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist` (macOS 전용, `adde up` 이 생성·관리).
 
 ## macOS 전용 기능
 

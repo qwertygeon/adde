@@ -218,3 +218,43 @@ describe("supervisorUp source 분기 (markdown)", () => {
     expect(result.lanes[0]?.status).toBe("running");
   });
 });
+
+describe("supervisorUp autopass 기동 배너 (005)", () => {
+  it("perm_tier=autopass 레인은 기동 시 채널에 자동 허용 모드 경고 배너를 남긴다", async () => {
+    const rootDir = path.join(tmpBase, "NotesAp");
+    fs.mkdirSync(rootDir, { recursive: true });
+    // markdown 소스 — notify 가 outbox 노트로 표면화되어 네트워크 없이 관찰 가능.
+    const conf =
+      "source=markdown\nbackend=acp\nengine=claude-code-acp\nchannel=markdown\n" +
+      `perm_tier=autopass\ndenylist=Bash\nacp_version=v1\nroot=${rootDir}\ninbox=inbox.md\n`;
+    const { base } = setupProject("approj", { "md-ap": conf });
+
+    const result = await runUp("approj", { base, acpFactory: makeFakeAcpFactory() });
+    expect(result.lanes[0]?.status).toBe("running");
+
+    // notify 는 fire-and-forget — 파일 기록을 폴링 대기(최대 2초).
+    const noticePath = path.join(rootDir, "out", "_adde-notice.md");
+    const deadline = Date.now() + 2000;
+    while (!fs.existsSync(noticePath) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(fs.existsSync(noticePath)).toBe(true);
+    const note = fs.readFileSync(noticePath, "utf8");
+    expect(note).toContain("autopass");
+    expect(note).toContain("Bash");
+  });
+
+  it("perm_tier=acp 레인은 기동 배너를 남기지 않는다 (기본 동작 불변)", async () => {
+    const rootDir = path.join(tmpBase, "NotesAcp");
+    fs.mkdirSync(rootDir, { recursive: true });
+    const conf =
+      "source=markdown\nbackend=acp\nengine=claude-code-acp\nchannel=markdown\n" +
+      `perm_tier=acp\nacp_version=v1\nroot=${rootDir}\ninbox=inbox.md\n`;
+    const { base } = setupProject("acpproj", { "md-acp": conf });
+
+    await runUp("acpproj", { base, acpFactory: makeFakeAcpFactory() });
+    // 배너 미발생 확인 — 짧게 대기 후 부재 단언.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(fs.existsSync(path.join(rootDir, "out", "_adde-notice.md"))).toBe(false);
+  });
+});

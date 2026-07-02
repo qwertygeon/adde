@@ -55,6 +55,10 @@ outbox=adde/my-lane/out/
 
 # 선택: 자주 쓰는 도구를 미리 허용해 승인 빈도 축소(게이트는 유지)
 allowlist=Read,Grep
+
+# 선택(옵트인): denylist 외 전부 자동 허용 — denylist 도구만 승인 노트가 생성됨
+# perm_tier=autopass
+# denylist=Bash,Write
 ```
 
 - `cwd` 가 이 레인 AI 의 작업 폴더입니다. **레인마다 다른 폴더**를 지정하면 메모와 프로젝트가 1:1로 묶입니다.
@@ -62,6 +66,7 @@ allowlist=Read,Grep
 - 입력 노트(`inbox.md`)는 에디터에서 직접 만들어 두세요(없으면 지시를 받을 수 없습니다).
 - ⚠️ **제어 노트는 `cwd` 밖에 두세요**: inbox·approvals·outbox 가 AI 작업폴더(`cwd`) 내부에 있으면 AI 가 자기 작업 중 승인 노트를 위조할 수 있어 **기동이 거부**됩니다(fail-closed). vault 와 프로젝트 폴더를 분리하세요.
 - ⚠️ **allowlist 는 자동 실행**: allowlist 에 넣은 도구는 채널 승인 없이 자동 허용됩니다(프롬프트 생략, 트랜스크립트에는 기록). `Bash`·파일 쓰기 등 광범위 도구는 넣지 마세요(자기승인 위험).
+- ⚠️ **autopass 는 옵트인 자동 허용 모드**: `perm_tier=autopass` 면 denylist 에 없는 모든 도구가 자동 허용되고, denylist 도구만 승인 노트가 생성됩니다(전량 트랜스크립트 기록). 기동·운영 경고는 outbox 의 `_adde-notice.md` 노트로 도착합니다.
 
 ## 2. 레인 기동
 

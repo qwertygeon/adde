@@ -124,10 +124,11 @@ adde lane help                       # 전체 옵션
 | `--engine <name>` | `claude-code-acp` | ACP 엔진 프로필 |
 | `--backend <name>` | `acp` | 백엔드 |
 | `--channel <name>` | source 값 | 게이트 분기 |
-| `--perm-tier <tier>` | `acp` | 권한 티어 |
+| `--perm-tier <acp\|autopass>` | `acp` | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인) |
 | `--acp-version <v>` | `v1` | ACP 버전 |
 | `--cwd <abs-path>` | (supervisor cwd) | 이 레인 AI 의 작업 폴더(프로젝트 매핑) |
-| `--allowlist <a,b,c>` | (없음) | 자동 허용 도구(게이트는 유지) |
+| `--allowlist <a,b,c>` | (없음) | 자동 허용 도구(게이트는 유지, `perm_tier=acp` 용) |
+| `--denylist <a,b,c>` | (없음) | `autopass` 에서 채널 승인으로 폴백할 도구(그 외 전부 자동 허용) |
 | `--chat-id <id>` | (없음) | telegram 회신 대상 |
 | `--token-stdin` | — | telegram 봇 토큰을 stdin 에서 읽어 `.env`(0600) 기록 |
 | `--root <abs-path>` | (없음) | markdown 루트(예: Obsidian vault) |
@@ -136,6 +137,10 @@ adde lane help                       # 전체 옵션
 | `--interactive` | — | 대화형으로 필드 입력(TTY 전용, **토큰은 묻지 않음**) |
 
 `--interactive` 는 대화형 터미널(TTY)에서만 동작합니다. 봇 토큰은 화면 노출을 피하기 위해 인터랙티브에서 받지 않으며, 생성 후 `--token-stdin` 또는 `.env` 직접 기록으로 설정합니다. 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
+
+> ⚠️ `--perm-tier autopass` 는 denylist 에 없는 **모든 도구(파일 쓰기·Bash 포함)를 채널 확인 없이 자동 허용**하는 옵트인 모드입니다. 확인이 필요한 도구는 `--denylist` 에 두세요. 자동 허용 내역은 transcript 에 기록되고, 기동 시 채널로 경고 배너가 전송됩니다. 기본값(`acp`)의 동작은 변하지 않습니다.
+>
+> allowlist/denylist 매칭은 엔진이 알려주는 원시 도구명(예: `Bash`, `Write`) 기준이며, 도구명을 확인할 수 없는 요청은 자동 허용하지 않고 채널 승인으로 보냅니다(fail-closed). 현재 도구명 제공은 `claude-code-acp` 엔진에서 확인되었습니다 — 도구명을 제공하지 않는 엔진에서는 autopass 여도 모든 요청이 채널 승인을 거칩니다(안전 방향).
 
 ## 종료 코드
 

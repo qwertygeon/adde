@@ -183,3 +183,70 @@ describe("laneRemove", () => {
     await expect(laneRemove("proj", "nope", { base })).rejects.toThrow(LaneConfigError);
   });
 });
+
+describe("laneAdd — denylist·perm_tier 검증 (005 autopass)", () => {
+  it("denylist 를 conf 에 기록하고 round-trip 파싱된다", async () => {
+    const res = await laneAdd("proj", "ap", {
+      base,
+      perm_tier: "autopass",
+      denylist: ["Bash", "Write"],
+    });
+    const parsed = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(parsed.perm_tier).toBe("autopass");
+    expect(parsed.denylist).toEqual(["Bash", "Write"]);
+  });
+
+  it("denylist 도구명 문자셋 위반은 거부한다", async () => {
+    await expect(
+      laneAdd("proj", "ap2", { base, denylist: ["Bash", "rm -rf /"] }),
+    ).rejects.toThrow(LaneConfigError);
+  });
+
+  it("perm_tier=autopass 는 자동 허용 위험 경고를 낸다(비차단)", async () => {
+    const res = await laneAdd("proj", "ap3", {
+      base,
+      perm_tier: "autopass",
+      denylist: ["Bash"],
+    });
+    expect(fs.existsSync(res.confPath)).toBe(true);
+    expect(res.warnings.some((w) => w.includes("autopass") && w.includes("자동 허용"))).toBe(true);
+  });
+
+  it("autopass 인데 denylist 가 비어 있으면 추가 경고를 낸다", async () => {
+    const res = await laneAdd("proj", "ap4", { base, perm_tier: "autopass" });
+    expect(res.warnings.some((w) => w.includes("denylist 가 비어"))).toBe(true);
+  });
+
+  it("알 수 없는 perm_tier 값은 오타 경고를 낸다(비차단, acp 처럼 동작)", async () => {
+    const res = await laneAdd("proj", "typo", { base, perm_tier: "autopas" });
+    expect(fs.existsSync(res.confPath)).toBe(true);
+    expect(res.warnings.some((w) => w.includes("perm_tier") && w.includes("알려진 값"))).toBe(true);
+  });
+
+  it("기본(perm_tier=acp) 레인에는 perm_tier 경고가 없다 (기본 동작 불변)", async () => {
+    const res = await laneAdd("proj", "plain", { base });
+    expect(res.warnings.some((w) => w.includes("perm_tier"))).toBe(false);
+  });
+});
+
+describe("laneAdd — allowlist∩denylist 교집합 경고 (005 DEC-006)", () => {
+  it("autopass 에서 양쪽에 같은 도구가 있으면 denylist 우선 경고를 낸다", async () => {
+    const res = await laneAdd("proj", "ap5", {
+      base,
+      perm_tier: "autopass",
+      allowlist: ["Bash", "Read"],
+      denylist: ["Bash"],
+    });
+    expect(res.warnings.some((w) => w.includes("denylist 가 우선"))).toBe(true);
+  });
+
+  it("교집합이 없으면 해당 경고가 없다", async () => {
+    const res = await laneAdd("proj", "ap6", {
+      base,
+      perm_tier: "autopass",
+      allowlist: ["Read"],
+      denylist: ["Bash"],
+    });
+    expect(res.warnings.some((w) => w.includes("denylist 가 우선"))).toBe(false);
+  });
+});

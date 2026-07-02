@@ -25,7 +25,7 @@ import type { PermRequest, PermResponse } from "../../gate/gate.js";
 import type { AddePolicy, EngineEffective } from "./perm-diff.js";
 import { maskSecrets } from "../../shared/mask.js";
 import { comparePerm, formatWarn } from "./perm-diff.js";
-import { formatBlock, formatException } from "../../shared/notify.js";
+import { formatException, formatWarnNote } from "../../shared/notify.js";
 import { withTimeout, killChild, closeChild } from "./lifecycle.js";
 
 /** 핸드셰이크(initialize·newSession) 최대 대기 (DEC-002). 초과 시 launch 실패 + child kill. */
@@ -36,6 +36,80 @@ const CHILD_GRACE_MS = 5_000;
 /** allowlist 자동 허용 판정 — 도구명이 레인 allowlist 에 있으면 true (A2/DEC-002). */
 export function shouldAutoAllow(allowlist: string[] | undefined, toolName: string): boolean {
   return allowlist?.includes(toolName) ?? false;
+}
+
+/**
+ * autopass 자동 허용 판정 — perm_tier=autopass 이고 도구가 denylist 에 없으면 true.
+ * denylist 매칭 도구는 false → 기존 채널 승인 게이트(fail-closed)로 폴백한다(DEC-002).
+ */
+export function shouldAutopass(policy: AddePolicy | undefined, toolName: string): boolean {
+  if (policy?.perm_tier !== "autopass") return false;
+  return !(policy.denylist ?? []).includes(toolName);
+}
+
+/** toolCallId→원시 도구명 맵 상한 — 초과 시 가장 오래된 항목부터 제거(장수 세션 메모리 상한). */
+const TOOL_NAME_MAP_MAX = 512;
+
+/**
+ * tool_call 세션 업데이트에서 원시 도구명을 기록한다(DEC-006).
+ * requestPermission 의 toolCall.title 은 인자 포함 표시 문자열(예: Bash → "`rm -rf build/`")이라
+ * allowlist/denylist 매칭 키로 쓸 수 없다 — claude-code-acp 는 원시 도구명을
+ * tool_call 업데이트의 _meta.claudeCode.toolName 으로만 노출한다.
+ */
+export function recordToolName(map: Map<string, string>, update: SessionEvent): void {
+  if (update["sessionUpdate"] !== "tool_call") return;
+  const toolCallId = update["toolCallId"];
+  if (typeof toolCallId !== "string") return;
+  const meta = update["_meta"];
+  if (!meta || typeof meta !== "object") return;
+  const claudeCode = (meta as Record<string, unknown>)["claudeCode"];
+  if (!claudeCode || typeof claudeCode !== "object") return;
+  const toolName = (claudeCode as Record<string, unknown>)["toolName"];
+  if (typeof toolName !== "string" || toolName.length === 0) return;
+  map.set(toolCallId, toolName);
+  if (map.size > TOOL_NAME_MAP_MAX) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+}
+
+/** 권한 요청의 원시 도구명 해석 — 맵 우선, 요청 자체의 _meta 폴백. 미해석 시 undefined. */
+export function resolveToolName(
+  map: Map<string, string>,
+  toolCall: Record<string, unknown>,
+): string | undefined {
+  const toolCallId = toolCall["toolCallId"];
+  if (typeof toolCallId === "string") {
+    const fromMap = map.get(toolCallId);
+    if (fromMap) return fromMap;
+  }
+  const meta = toolCall["_meta"];
+  if (meta && typeof meta === "object") {
+    const claudeCode = (meta as Record<string, unknown>)["claudeCode"];
+    if (claudeCode && typeof claudeCode === "object") {
+      const toolName = (claudeCode as Record<string, unknown>)["toolName"];
+      if (typeof toolName === "string" && toolName.length > 0) return toolName;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 자동 허용 판정 통합 — 반환 "allowlist" | "autopass" | null(채널 승인 경로).
+ * fail-closed: 도구명 미해석(undefined) 시 자동 허용하지 않는다(채널 승인 폴백).
+ * autopass 의 denylist 는 allowlist 보다 우선한다 — 양쪽에 있으면 채널 승인.
+ */
+export function decideAutoAllow(
+  policy: AddePolicy | undefined,
+  toolName: string | undefined,
+): "allowlist" | "autopass" | null {
+  if (toolName === undefined) return null;
+  if (policy?.perm_tier === "autopass" && (policy.denylist ?? []).includes(toolName)) {
+    return null;
+  }
+  if (shouldAutoAllow(policy?.allowlist, toolName)) return "allowlist";
+  if (shouldAutopass(policy, toolName)) return "autopass";
+  return null;
 }
 
 /** backend 가 코어에 노출하는 동사 인터페이스 (plan §인터페이스계약). */
@@ -140,11 +214,14 @@ export class AcpBackendImpl implements AcpBackend {
     const stream = acp.ndJsonStream(toAgent, fromAgent);
 
     const laneRef: { state: LaneState | null } = { state: null };
+    // toolCallId→원시 도구명 (DEC-006) — tool_call 업데이트에서 채집, 권한 매칭에 사용.
+    const toolNames = new Map<string, string>();
 
     const conn = new acp.ClientSideConnection((_agent) => {
       const clientImpl: acp.Client = {
         async sessionUpdate(params: SessionNotification): Promise<void> {
           const update = params.update as SessionEvent;
+          recordToolName(toolNames, update);
 
           if (laneRef.state) {
             for (const sub of laneRef.state.subscribers) {
@@ -207,11 +284,19 @@ export class AcpBackendImpl implements AcpBackend {
         async requestPermission(
           params: RequestPermissionRequest,
         ): Promise<RequestPermissionResponse> {
-          const toolName = params.toolCall.title ?? "unknown";
+          // 표시용 제목(인자 포함) — 채널 프롬프트에 노출. 매칭 키가 아니다(DEC-006).
+          const toolTitle = params.toolCall.title ?? "unknown";
+          // 매칭용 원시 도구명 — tool_call 업데이트 채집 맵에서 해석. 미해석 시 자동 허용 안 함(fail-closed).
+          const rawToolName = resolveToolName(
+            toolNames,
+            params.toolCall as unknown as Record<string, unknown>,
+          );
 
-          // A2: allowlist 자동 허용 — 채널 프롬프트 없이 allow 로 결정(게이트는 끄지 않고 결정).
+          // A2: allowlist / autopass 자동 허용 — 채널 프롬프트 없이 allow 로 결정(게이트는 끄지 않고 결정).
+          // autopass(DEC-001/002): denylist 외 전 도구 자동 허용, denylist 도구는 아래 채널 승인 폴백.
           // 투명성(A-P006 no-silent): 트랜스크립트에 auto-allow 기록.
-          if (shouldAutoAllow(addePolicy?.allowlist, toolName)) {
+          const autoAllowVia = decideAutoAllow(addePolicy, rawToolName);
+          if (autoAllowVia) {
             const allowOption = params.options.find(
               (o) => o.kind === "allow_once" || o.kind === "allow_always",
             );
@@ -219,7 +304,7 @@ export class AcpBackendImpl implements AcpBackend {
               if (paths) {
                 await appendTranscript(paths, {
                   sessionUpdate: "adde_auto_allow",
-                  message: `auto-allow (allowlist): ${toolName}`,
+                  message: `auto-allow (${autoAllowVia}): ${rawToolName} — ${toolTitle}`,
                 }).catch(() => {});
               }
               return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
@@ -235,7 +320,9 @@ export class AcpBackendImpl implements AcpBackend {
             id: params.sessionId,
             lane,
             channel,
-            tool: toolName,
+            // 채널 표시: "도구명 · 제목" — 제목(인자 포함)은 사용자 판단 근거, 도구명은 식별자.
+            // 제목은 도구 인자를 포함하므로 detail 과 동일하게 마스킹한다.
+            tool: maskSecrets(rawToolName ? `${rawToolName} · ${toolTitle}` : toolTitle),
             // 시크릿 마스킹(⑦) — detail 은 채널(telegram 메시지·markdown 승인 노트)에 평문 표면화된다.
             detail: maskSecrets(JSON.stringify(params.toolCall)),
             cwd: laneCwd,
@@ -341,31 +428,21 @@ export class AcpBackendImpl implements AcpBackend {
       const engineEffective = await this.fetchEngineEffective(lane);
       const result = comparePerm(addePolicy, engineEffective);
       if (result.diff && result.warn) {
-        if (result.warn.reason === "정책차이") {
-          // H2/DEC-001: 엔진이 정책보다 느슨함이 *확인됨* → fail-closed(launch 거부 + child 정리).
-          const note = formatBlock({
-            situation: result.warn.message,
-            action:
-              "엔진 권한 설정에서 bypassPermissions 를 해제하거나 ADDE 정책(perm_tier)에 맞게 정렬 후 재기동하세요.",
-          });
-          console.error(note);
-          if (channelWarn) channelWarn(note);
-          await appendTranscript(paths, { sessionUpdate: "adde_warn", message: note }).catch(
-            (e: unknown) =>
-              console.error(
-                `[acp] lane=${lane} transcript 기록 실패: ${e instanceof Error ? e.message : String(e)}`,
-              ),
-          );
-          await this.close(lane);
-          throw new Error(note);
-        }
-        // 조회실패(getMode 미지원 등): 확인 불가 → WARN 유지 + 계속(per-tool 게이트가 여전히 강제).
-        const msg = result.warn.message;
-        console.warn(`[acp] launch perm-diff(확인불가): ${msg}`);
-        if (channelWarn) channelWarn(msg);
+        // 차이 확인(정책차이)·확인불가(조회실패) 모두 경고 후 기동 계속(DEC-004 — v0.1.1/001 의
+        // launch 거부를 사용자 요청으로 완화). A-P006 의 요구는 "차이 표기"이며 여기서 충족한다.
+        const note =
+          result.warn.reason === "정책차이"
+            ? formatWarnNote({
+                situation: result.warn.message,
+                action:
+                  "게이트가 무력화될 수 있습니다 — 엔진 권한 설정에서 bypassPermissions 를 해제하거나 ADDE 정책(perm_tier)에 맞게 정렬하세요. 기동은 계속합니다.",
+              })
+            : result.warn.message;
+        console.warn(`[acp] launch perm-diff: ${note}`);
+        if (channelWarn) channelWarn(note);
         await appendTranscript(paths, {
           sessionUpdate: "adde_warn",
-          message: msg,
+          message: note,
         }).catch((e: unknown) =>
           console.error(
             `[acp] lane=${lane} transcript 기록 실패: ${e instanceof Error ? e.message : String(e)}`,

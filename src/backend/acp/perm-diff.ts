@@ -8,6 +8,8 @@ import { maskSecrets } from "../../shared/mask.js";
 export interface AddePolicy {
   perm_tier: string;
   allowlist?: string[];
+  /** perm_tier=autopass 에서 채널 승인으로 폴백할 도구명 목록. */
+  denylist?: string[];
 }
 
 export interface EngineEffective {
@@ -51,15 +53,31 @@ export function comparePerm(
     return { diff: true, warn };
   }
 
-  const addeIsStrict = addePolicy.perm_tier === "acp";
   const engineIsBypass =
     engineEffective.bypassPermissions === true ||
     engineEffective.permissionMode === "bypassPermissions";
 
-  if (addeIsStrict && engineIsBypass) {
+  if (addePolicy.perm_tier === "acp" && engineIsBypass) {
     const warn = {
       level: "WARN" as const,
       message: formatWarn(addePolicy, engineEffective, "ADDE 정책(acp) 보다 느슨한 엔진 설정 감지"),
+      adde: addePolicy,
+      engine: engineEffective,
+      reason: "정책차이",
+    };
+    return { diff: true, warn };
+  }
+
+  if (addePolicy.perm_tier === "autopass" && engineIsBypass) {
+    // 엔진 bypass 는 권한 요청 자체를 발화하지 않는다 — autopass 의 denylist 폴백·자동허용
+    // 기록이 전부 무력화되므로 acp 와 별도 사유로 표기한다.
+    const warn = {
+      level: "WARN" as const,
+      message: formatWarn(
+        addePolicy,
+        engineEffective,
+        "엔진 bypass — 권한 요청 미발화로 autopass denylist·자동허용 기록이 무력화됨",
+      ),
       adde: addePolicy,
       engine: engineEffective,
       reason: "정책차이",

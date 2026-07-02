@@ -50,8 +50,8 @@ adde up <proj>     # 재기동
 ## 권한 관련
 
 - **항상 거부됨**: 권한 요청에 제때(기본 10분) 응답하지 않으면 fail-closed 로 자동 거부됩니다. 채널 도달 실패·오류도 거부로 처리됩니다.
-- **기동이 거부되고 권한 드리프트 경고**: 엔진의 실효 권한이 ADDE 정책보다 느슨하다고 확인되면(예: bypassPermissions) 안전을 위해 기동을 거부합니다(fail-closed). 엔진 권한 설정을 해제하거나 conf 의 `perm_tier` 에 맞게 정렬한 뒤 재기동하세요.
-- **승인이 너무 잦음**: 자주 쓰는 안전한 도구를 `--allowlist Read,Grep` 처럼 등록하면 매번 묻지 않습니다(게이트 자체는 유지, 트랜스크립트 기록). `Bash`·파일 쓰기 등 광범위 도구는 넣지 마세요.
+- **기동 시 권한 드리프트 경고**: 엔진의 실효 권한이 ADDE 정책보다 느슨하다고 확인되면(예: bypassPermissions) 콘솔·채널·transcript 에 경고를 표시하고 기동은 계속합니다. 이 상태에선 게이트가 무력화될 수 있으니 엔진 권한 설정을 해제하거나 conf 의 `perm_tier` 에 맞게 정렬하세요. 특히 `autopass` 레인은 엔진이 bypass 면 권한 요청 자체가 오지 않아 denylist 가 동작하지 않습니다.
+- **승인이 너무 잦음**: 자주 쓰는 안전한 도구를 `--allowlist Read,Grep` 처럼 등록하면 매번 묻지 않습니다(게이트 자체는 유지, 트랜스크립트 기록). `Bash`·파일 쓰기 등 광범위 도구는 넣지 마세요. 대부분을 자동 허용하고 싶으면 옵트인 `--perm-tier autopass --denylist Bash,Write`(denylist 만 확인) 를 검토하세요 — [명령 레퍼런스](commands.md#lane-add-옵션) 참고.
 
 ## Telegram 전용
 

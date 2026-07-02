@@ -16,6 +16,7 @@ import { createInjector } from "./injector.js";
 import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
+import { formatWarnNote } from "../shared/notify.js";
 import {
   writeRuntime,
   removeRuntime,
@@ -198,6 +199,16 @@ export async function supervisorUp(
 
     const channel: "telegram" | "markdown" = conf.source === "markdown" ? "markdown" : "telegram";
 
+    // 권한 경고(perm-diff 등)를 채널로도 표면화 — source 는 아래에서 생성되므로 지연 참조.
+    // 알림은 보조 신호: 전송 실패는 warn 후 흡수(레인 동작에 영향 없음).
+    const channelWarn = (msg: string): void => {
+      void source
+        .notify(msg)
+        .catch((err: unknown) =>
+          console.warn(`[supervisor] lane=${lane} 채널 경고 전송 실패(보조): ${errMsg(err)}`),
+        );
+    };
+
     let backend: AcpBackend;
     if (opts?.acpFactory) {
       backend = opts.acpFactory(lane, adapterBin);
@@ -205,9 +216,14 @@ export async function supervisorUp(
       const impl = new AcpBackendImpl(adapterBin);
       impl.configureLane(lane, {
         paths,
-        addePolicy: { perm_tier: conf.perm_tier, allowlist: conf.allowlist },
+        addePolicy: {
+          perm_tier: conf.perm_tier,
+          allowlist: conf.allowlist,
+          denylist: conf.denylist,
+        },
         cwd: conf.cwd,
         channel,
+        channelWarn,
       });
       backend = impl;
     }
@@ -272,6 +288,20 @@ export async function supervisorUp(
         );
       });
       source.start();
+
+      // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(A-P006 no-silent).
+      if (conf.perm_tier === "autopass") {
+        const denyDesc =
+          conf.denylist.length > 0
+            ? `denylist(${conf.denylist.join(", ")}) 도구만 채널 승인을 거칩니다`
+            : "denylist 가 비어 있어 모든 권한 요청이 확인 없이 통과됩니다";
+        const banner = formatWarnNote({
+          situation: `이 레인은 자동 허용 모드(perm_tier=autopass)로 기동했습니다 — ${denyDesc}. 그 외 도구(파일 쓰기·Bash 실행 포함)는 자동 허용됩니다`,
+          action: `확인이 필요한 도구는 lanes.d/${lane}.conf 의 denylist 에 추가하세요. 자동 허용 내역은 adde logs ${proj} ${lane} 으로 확인할 수 있습니다.`,
+        });
+        console.warn(`[supervisor] lane=${lane} ${banner}`);
+        channelWarn(banner);
+      }
 
       // 라이브니스 상태 파일 — status 가 교차 프로세스로 읽는다. 기동 성공 후 기록.
       // 기록 실패는 보조(가시성 저하일 뿐 기동 자체는 성공) → warn 후 흡수.

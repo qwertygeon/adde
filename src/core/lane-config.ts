@@ -13,8 +13,11 @@ import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
 /** telegram chat id — 그룹은 음수일 수 있음. */
 const CHAT_ID_RE = /^-?\d+$/;
-/** allowlist 도구명 — 도구 식별자 안전 문자셋(C). */
+/** allowlist/denylist 도구명 — 도구 식별자 안전 문자셋(C). */
 const ALLOWLIST_ITEM_RE = /^[A-Za-z0-9_.-]+$/;
+
+/** 구현된 perm_tier 값. 오타 시 acp 처럼 동작(안전 방향)하지만 의도와 다르므로 생성 시 경고. */
+export const KNOWN_PERM_TIERS = ["acp", "autopass"] as const;
 
 const SUPPORTED_SOURCES = ["telegram", "markdown"] as const;
 type SupportedSource = (typeof SUPPORTED_SOURCES)[number];
@@ -37,6 +40,7 @@ export interface LaneAddOptions extends LaneCommandBaseOptions {
   perm_tier?: string;
   acp_version?: string;
   allowlist?: string[];
+  denylist?: string[];
   cwd?: string;
   chat_id?: string;
   root?: string;
@@ -91,6 +95,27 @@ async function collectAddWarnings(conf: LaneConf, token?: string): Promise<strin
     warnings.push(
       "[경고] 봇 토큰 형식이 예상과 다릅니다(<숫자>:<영숫자> 아님).\n  ↳ 조치: BotFather 발급 토큰을 다시 확인하세요.",
     );
+  }
+  if (!(KNOWN_PERM_TIERS as readonly string[]).includes(conf.perm_tier)) {
+    warnings.push(
+      `[경고] perm_tier "${conf.perm_tier}" 는 알려진 값(${KNOWN_PERM_TIERS.join("|")})이 아닙니다 — acp 처럼 동작합니다.\n  ↳ 조치: 오타라면 conf 의 perm_tier 를 수정하세요.`,
+    );
+  }
+  if (conf.perm_tier === "autopass") {
+    warnings.push(
+      "[경고] perm_tier=autopass — denylist 외 모든 도구(파일 쓰기·Bash 실행 포함)가 채널 확인 없이 자동 허용됩니다.\n  ↳ 확인이 필요한 도구는 denylist 에 두세요(예: denylist=Bash). 자동 허용 내역은 transcript 에 기록됩니다.",
+    );
+    if (conf.denylist.length === 0) {
+      warnings.push(
+        "[경고] autopass 레인에 denylist 가 비어 있습니다 — 모든 권한 요청이 무확인 통과됩니다.",
+      );
+    }
+    const overlap = conf.denylist.filter((t) => conf.allowlist.includes(t));
+    if (overlap.length > 0) {
+      warnings.push(
+        `[경고] allowlist 와 denylist 에 같은 도구가 있습니다: ${overlap.join(", ")} — denylist 가 우선하여 채널 승인을 거칩니다.\n  ↳ 조치: 의도가 아니라면 한쪽에서 제거하세요.`,
+      );
+    }
   }
   return warnings;
 }
@@ -162,10 +187,15 @@ export async function laneAdd(
   if (opts.token !== undefined && src !== "telegram") {
     throw new LaneConfigError("token 은 source=telegram 레인에서만 사용합니다");
   }
-  if (opts.allowlist) {
-    for (const tool of opts.allowlist) {
+  for (const [listName, list] of [
+    ["allowlist", opts.allowlist],
+    ["denylist", opts.denylist],
+  ] as const) {
+    for (const tool of list ?? []) {
       if (!ALLOWLIST_ITEM_RE.test(tool)) {
-        throw new LaneConfigError(`allowlist 도구명 "${tool}" 가 올바르지 않습니다 — 영숫자/_/./- 만 허용`);
+        throw new LaneConfigError(
+          `${listName} 도구명 "${tool}" 가 올바르지 않습니다 — 영숫자/_/./- 만 허용`,
+        );
       }
     }
   }
@@ -178,6 +208,7 @@ export async function laneAdd(
     perm_tier: opts.perm_tier ?? "acp",
     acp_version: opts.acp_version ?? "v1",
     allowlist: opts.allowlist ?? [],
+    denylist: opts.denylist ?? [],
   };
   // exactOptionalPropertyTypes: undefined 대입 금지 — 값이 있을 때만 설정.
   if (opts.cwd) conf.cwd = opts.cwd;

@@ -185,6 +185,7 @@ describe("createMarkdownSource (통합)", () => {
       perm_tier: "acp",
       acp_version: "v1",
       allowlist: [],
+      denylist: [],
       root: rootDir,
       inbox: "inbox.md",
     };

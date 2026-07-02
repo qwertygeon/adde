@@ -394,6 +394,12 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     await sendPermPrompt(cfg.chatId ?? 0, req.id, req);
   }
 
+  /** Source 계약: 운영 알림 — 회신 대상 미지정 시 생략(콘솔·transcript 로만 남음). */
+  async function notify(text: string): Promise<void> {
+    if (cfg.chatId === undefined) return;
+    await sendReply(cfg.chatId, text);
+  }
+
   /** Source 계약: 결정 콜백 등록(= onCallbackQuery). */
   function onDecision(cb: DecisionCallback): void {
     onCallbackQuery(cb);
@@ -426,5 +432,6 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     onCallbackQuery,
     requestPermission,
     onDecision,
+    notify,
   };
 }

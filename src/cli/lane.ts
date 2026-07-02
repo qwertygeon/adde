@@ -55,6 +55,7 @@ const ADD_VALUE_KEYS = new Set([
   "acp-version",
   "cwd",
   "allowlist",
+  "denylist",
   "chat-id",
   "root",
   "inbox",
@@ -94,15 +95,20 @@ export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
   opts.engine = await ask("engine", "claude-code-acp");
   opts.backend = await ask("backend", "acp");
   opts.channel = await ask("channel", source);
-  opts.perm_tier = await ask("perm_tier", "acp");
+  opts.perm_tier = await ask("perm_tier (acp/autopass)", "acp");
   opts.acp_version = await ask("acp_version", "v1");
 
-  const allow = await ask("allowlist (콤마 구분, 없으면 비움)", "");
-  if (allow) {
-    opts.allowlist = allow
+  const splitTools = (raw: string): string[] =>
+    raw
       .split(",")
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
+
+  const allow = await ask("allowlist (콤마 구분, 없으면 비움)", "");
+  if (allow) opts.allowlist = splitTools(allow);
+  if (opts.perm_tier === "autopass") {
+    const deny = await ask("denylist (채널 승인으로 폴백할 도구, 콤마 구분)", "");
+    if (deny) opts.denylist = splitTools(deny);
   }
   const cwd = await ask("cwd (레인 작업 폴더 절대경로, 없으면 비움)", "");
   if (cwd) opts.cwd = cwd;
@@ -179,13 +185,15 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     if (approvals !== undefined) opts.approvals = approvals;
     const outbox = flagStr(flags, "outbox");
     if (outbox !== undefined) opts.outbox = outbox;
-    const allowlist = flagStr(flags, "allowlist");
-    if (allowlist !== undefined) {
-      opts.allowlist = allowlist
+    const splitTools = (raw: string): string[] =>
+      raw
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
-    }
+    const allowlist = flagStr(flags, "allowlist");
+    if (allowlist !== undefined) opts.allowlist = splitTools(allowlist);
+    const denylist = flagStr(flags, "denylist");
+    if (denylist !== undefined) opts.denylist = splitTools(denylist);
     if (flags["force"] === true) opts.force = true;
     if (flags["token-stdin"] === true) opts.token = (await readStdin()).trim();
   }

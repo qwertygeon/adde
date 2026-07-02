@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { shouldAutoAllow } from "../../src/backend/acp/client.js";
+import {
+  shouldAutoAllow,
+  shouldAutopass,
+  decideAutoAllow,
+  recordToolName,
+  resolveToolName,
+} from "../../src/backend/acp/client.js";
 
 // A2/DEC-002: allowlist auto-allow 판정
 describe("shouldAutoAllow (A2 allowlist)", () => {
@@ -58,5 +64,108 @@ describe("AcpBackend fake — turn 완료 전 큐잉 quirk (SC-004 연계)", () 
     const fakeAcpState = { isProcessing: true };
     const canAcceptPrompt = !fakeAcpState.isProcessing;
     expect(canAcceptPrompt).toBe(false);
+  });
+});
+
+// DEC-001/002 (005-gate-auto-respond): autopass 판정 — denylist 외 자동 허용, denylist 는 채널 승인 폴백
+describe("shouldAutopass (005 autopass)", () => {
+
+  it("perm_tier=autopass 이고 denylist 에 없는 도구는 true (자동 허용)", () => {
+    expect(shouldAutopass({ perm_tier: "autopass", denylist: ["Bash"] }, "Read")).toBe(true);
+  });
+
+  it("denylist 에 있는 도구는 false (채널 승인 폴백)", () => {
+    expect(shouldAutopass({ perm_tier: "autopass", denylist: ["Bash"] }, "Bash")).toBe(false);
+  });
+
+  it("denylist 미지정 autopass 는 전 도구 true", () => {
+    expect(shouldAutopass({ perm_tier: "autopass" }, "Bash")).toBe(true);
+  });
+
+  it("perm_tier=acp 또는 정책 미지정이면 항상 false (기본 동작 불변)", () => {
+    expect(shouldAutopass({ perm_tier: "acp", denylist: ["Bash"] }, "Read")).toBe(false);
+    expect(shouldAutopass(undefined, "Read")).toBe(false);
+  });
+
+  it("알 수 없는 perm_tier(오타)는 false — acp 처럼 동작(안전 방향)", () => {
+    expect(shouldAutopass({ perm_tier: "autopas" }, "Read")).toBe(false);
+  });
+});
+
+// DEC-006: 매칭 키는 toolCall.title 이 아니라 원시 도구명이다.
+// 실제 claude-code-acp quirk 재현: requestPermission.toolCall = {toolCallId, rawInput, title} 뿐이고
+// title 은 인자 포함 표시 문자열(Bash → "`rm -rf build/`", Write → "Write /abs/path") —
+// 원시 도구명은 tool_call 세션 업데이트의 _meta.claudeCode.toolName 으로만 온다.
+describe("도구명 채집·해석·자동 허용 판정 (DEC-006)", () => {
+  it("tool_call 업데이트에서 도구명을 채집하고 toolCallId 로 해석한다", () => {
+    const map = new Map<string, string>();
+    recordToolName(map, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "`rm -rf build/`",
+      kind: "execute",
+      _meta: { claudeCode: { toolName: "Bash" } },
+    });
+    expect(resolveToolName(map, { toolCallId: "t1", title: "`rm -rf build/`" })).toBe("Bash");
+  });
+
+  it("실제 형식 title 의 Bash 도 denylist=Bash 에 걸린다 (title 정확일치 매칭이면 가짜 통과)", () => {
+    const map = new Map<string, string>();
+    recordToolName(map, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t2",
+      title: "`rm -rf build/`",
+      _meta: { claudeCode: { toolName: "Bash" } },
+    });
+    const resolved = resolveToolName(map, { toolCallId: "t2", title: "`rm -rf build/`" });
+    expect(
+      decideAutoAllow({ perm_tier: "autopass", denylist: ["Bash"] }, resolved),
+    ).toBeNull(); // 채널 승인 폴백
+  });
+
+  it("도구명 미해석(맵 미채집·_meta 부재) 시 자동 허용하지 않는다 (fail-closed)", () => {
+    const resolved = resolveToolName(new Map(), { toolCallId: "unknown", title: "Write /etc/x" });
+    expect(resolved).toBeUndefined();
+    expect(decideAutoAllow({ perm_tier: "autopass", denylist: [] }, resolved)).toBeNull();
+    expect(decideAutoAllow({ perm_tier: "acp", allowlist: ["Write"] }, resolved)).toBeNull();
+  });
+
+  it("autopass 에서 denylist 가 allowlist 보다 우선한다 (교집합 도구는 채널 승인)", () => {
+    expect(
+      decideAutoAllow({ perm_tier: "autopass", allowlist: ["Bash"], denylist: ["Bash"] }, "Bash"),
+    ).toBeNull();
+  });
+
+  it("autopass 에서 denylist 외 도구는 autopass 로, allowlist 도구는 allowlist 로 판정", () => {
+    const policy = { perm_tier: "autopass", allowlist: ["Read"], denylist: ["Bash"] };
+    expect(decideAutoAllow(policy, "Read")).toBe("allowlist");
+    expect(decideAutoAllow(policy, "Write")).toBe("autopass");
+    expect(decideAutoAllow(policy, "Bash")).toBeNull();
+  });
+
+  it("acp 티어는 allowlist 만 자동 허용, 그 외 null (기본 동작 불변)", () => {
+    expect(decideAutoAllow({ perm_tier: "acp", allowlist: ["Read"] }, "Read")).toBe("allowlist");
+    expect(decideAutoAllow({ perm_tier: "acp", allowlist: ["Read"] }, "Bash")).toBeNull();
+  });
+
+  it("tool_call 이 아닌 업데이트·_meta 없는 업데이트는 채집하지 않는다", () => {
+    const map = new Map<string, string>();
+    recordToolName(map, { sessionUpdate: "agent_message_chunk", toolCallId: "t3" });
+    recordToolName(map, { sessionUpdate: "tool_call", toolCallId: "t4", title: "Write" });
+    expect(map.size).toBe(0);
+  });
+
+  it("채집 맵은 상한 초과 시 오래된 항목부터 제거한다", () => {
+    const map = new Map<string, string>();
+    for (let i = 0; i < 600; i++) {
+      recordToolName(map, {
+        sessionUpdate: "tool_call",
+        toolCallId: `t${i}`,
+        _meta: { claudeCode: { toolName: "Read" } },
+      });
+    }
+    expect(map.size).toBeLessThanOrEqual(512);
+    expect(map.has("t0")).toBe(false);
+    expect(map.has("t599")).toBe(true);
   });
 });

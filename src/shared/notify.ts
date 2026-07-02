@@ -21,3 +21,8 @@ export function formatBlock(note: ActionableNote): string {
 export function formatException(note: ActionableNote): string {
   return maskSecrets(`[ADDE 오류] ${note.situation}\n  ↳ 조치: ${note.action}`);
 }
+
+/** 비차단 경고 알림 — 진행은 계속하되 사용자가 인지해야 하는 상황. */
+export function formatWarnNote(note: ActionableNote): string {
+  return maskSecrets(`[ADDE 경고] ${note.situation}\n  ↳ 조치: ${note.action}`);
+}

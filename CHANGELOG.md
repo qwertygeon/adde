@@ -6,6 +6,12 @@
 
 ### Added
 
+- 권한 티어 `autopass`(레인별 옵트인) — `--perm-tier autopass --denylist Bash,Write` 로 생성. denylist 도구만 채널 승인(fail-closed 게이트 유지)을 거치고 그 외 전 도구는 자동 허용, 자동 허용 내역은 전량 transcript 기록. 기본 티어(`acp`) 동작 불변.
+- 레인 conf `denylist` 필드 + `adde lane add --denylist` 옵션(대화형 `--interactive` 는 autopass 선택 시에만 질문).
+- autopass 레인 기동 시 채널 경고 배너 — 자동 허용 모드임과 denylist 구성을 채널(telegram 메시지 / markdown `_adde-notice.md` 노트)로 고지.
+- 소스 어댑터 운영 알림(`notify`) — 권한 설정 드리프트 경고 등 운영 경고가 콘솔·transcript 외에 채널로도 전달.
+- `adde lane add` 생성 경고 확장 — 알 수 없는 `perm_tier` 값(오타) 경고, autopass 위험 고지·빈 denylist 경고.
+
 - `adde up <proj>` — macOS launchd LaunchAgent 데몬으로 기동. `adde up` 자체는 plist 등록 후 즉시 종료되고, 실제 레인은 백그라운드에서 상주. 터미널을 닫아도 동작, 재부팅·로그아웃 후 자동 복구(`KeepAlive`/`RunAtLoad`).
 - `adde down <proj>` — 어느 터미널에서든 launchd 데몬을 종료(교차 프로세스 종료). 이전의 동일 프로세스 내 종료(in-memory) 방식에서 변경.
 - `adde restart <proj>` — `down` + `up` 편의 래퍼. 설정 변경 후 데몬 재기동에 사용.
@@ -32,7 +38,9 @@
 ### Fixed
 
 - 신뢰성 하드닝(P0): `adde down`/셧다운 시 ACP 엔진 자식 프로세스를 정리(SIGTERM→유예→SIGKILL)해 좀비 누수 차단. 엔진 핸드셰이크에 타임아웃을 둬 무응답 시 영구 대기 대신 기동 실패. 소스 정지(`stop`)를 비동기화해 진행 중 작업·롱폴 정리 후 종료(임시 리소스 정리 뒤 오류 방지). ACP 세션 이벤트 구독자 오류를 무음 흡수하지 않고 기록.
-- 권한 설정 차이가 _확인되면_(엔진이 정책보다 느슨) 기동을 fail-closed 로 거부. 단 엔진이 실효 설정 조회를 미지원하는 경우는 경고 후 계속(요청별 권한 게이트가 계속 강제).
+- 권한 설정 차이(엔진이 정책보다 느슨, 예: bypassPermissions) 확인·확인불가 모두 콘솔·채널·transcript 경고 후 기동 계속(요청별 권한 게이트는 계속 강제). autopass 레인은 엔진 bypass 시 denylist 가 무력화됨을 별도 사유로 고지.
+- allowlist/denylist 매칭 키를 권한 요청의 표시 제목(`toolCall.title`, 인자 포함 문자열)에서 **원시 도구명**(tool_call 업데이트 `_meta.claudeCode.toolName` 채집)으로 교체 — 제목 정확일치라 allowlist 자동 허용이 사실상 발화하지 않던 결함 수정. 도구명 미해석 시 자동 허용하지 않음(fail-closed, 채널 승인 폴백). allowlist·denylist 에 같은 도구가 있으면 denylist 우선(생성 시 경고).
+- 권한 승인 프롬프트의 도구 표시를 "도구명 · 제목" 으로 확장하고 마스킹 적용 — 제목에 도구 인자(명령 문자열 등)가 포함되어 시크릿이 노출될 수 있던 경로 차단.
 
 - `adde up` 이 레인 기동 후 메시지를 처리·응답하지 못하던 문제 — 수신 트리거(소스 enqueue→injector in-process 통지)·turn 연쇄·엔진 응답 캡처(`agent_message_chunk` 누적→`out/`→채널 렌더)를 배선. 내부 핸드오프는 fs.watch 대신 in-process 콜백(외부 inbox 감지만 watch 유지).
 - `adde up` CLI 가 supervisor 기동 전 즉시 종료되던 문제 — 진입 로직 비동기화 및 포그라운드 상주.

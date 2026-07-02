@@ -720,5 +720,16 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     decisionHandlers.push(cb);
   }
 
-  return { start, stop, requestPermission, onDecision, renderOut };
+  /**
+   * Source 계약: 운영 알림 — outbox 의 _adde-notice.md 에 시각과 함께 append
+   * (채널이 파일이라 노트로 표면화. outbox 는 인바운드 감시 밖이라 자기쓰기 루프 없음).
+   */
+  async function notify(text: string): Promise<void> {
+    const file = join(outboxDir, "_adde-notice.md");
+    const existing = (await readMaybe(file)) ?? "";
+    const stamp = new Date().toISOString();
+    await atomicWrite(file, `${existing}${existing ? "\n" : ""}> ${stamp}\n\n${text}\n`);
+  }
+
+  return { start, stop, requestPermission, onDecision, renderOut, notify };
 }

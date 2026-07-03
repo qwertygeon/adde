@@ -624,6 +624,39 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       }
     }
 
+    // 상호 배타: 승인/출력/입력/격리 경로가 같거나 포함 관계면 자기쓰기 재발화·승인
+    // 오파싱 위험(출력·알림 노트가 승인 감시에 잡힘) → fail-closed 기동 거부.
+    // macOS 기본 FS 는 대소문자 무시라 Shared/shared 가 같은 물리 디렉터리 — darwin 은
+    // 소문자 정규화 후 비교한다(대소문자 구분 볼륨에선 과차단이나 fail-closed 방향이라 수용).
+    const normCase = (p: string): string => (process.platform === "darwin" ? p.toLowerCase() : p);
+    const overlaps = (a: string, b: string): boolean =>
+      isInside(normCase(a), normCase(b)) || isInside(normCase(b), normCase(a));
+    const rApprovals = resolve(approvalsDir);
+    const rOutbox = resolve(outboxDir);
+    const rInbox = resolve(inboxPath);
+    const rQuarantine = resolve(quarantineDir);
+    for (const [nameA, a, nameB, b] of [
+      ["approvals", rApprovals, "outbox", rOutbox],
+      ["approvals", rApprovals, "quarantine(.conflicts)", rQuarantine],
+      ["outbox", rOutbox, "quarantine(.conflicts)", rQuarantine],
+    ] as const) {
+      if (overlaps(a, b)) {
+        throw new Error(
+          `[markdown] ${nameA}(${a})와 ${nameB}(${b})가 같거나 포함 관계 — 출력·알림·격리 노트가 승인/입력 감시에 잡힙니다. 경로를 분리하세요.`,
+        );
+      }
+    }
+    for (const [name, dir] of [
+      ["approvals", rApprovals],
+      ["outbox", rOutbox],
+    ] as const) {
+      if (isInside(normCase(rInbox), normCase(dir))) {
+        throw new Error(
+          `[markdown] 입력 노트(${rInbox})가 ${name} 디렉터리(${dir}) 내부 — 입력/제어 경로가 겹칩니다. 경로를 분리하세요.`,
+        );
+      }
+    }
+
     running = true;
 
     const inboxDir = dirname(inboxPath);

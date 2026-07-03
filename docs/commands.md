@@ -128,7 +128,7 @@ adde lane help                       # 전체 옵션
 | `--acp-version <v>` | `v1` | ACP 버전 |
 | `--cwd <abs-path>` | (supervisor cwd) | 이 레인 AI 의 작업 폴더(프로젝트 매핑) |
 | `--allowlist <a,b,c>` | (없음) | 자동 허용 도구(게이트는 유지, `perm_tier=acp` 용) |
-| `--denylist <a,b,c>` | (없음) | `autopass` 에서 채널 승인으로 폴백할 도구(그 외 전부 자동 허용) |
+| `--denylist <항목,...>` | autopass 시 내장 기본 목록(아래 **기본 denylist**) | `autopass` 에서 채널 승인으로 폴백할 도구·패턴 — `Bash`(도구 전체) 또는 `"Bash(git push*)"`(대표 인자 글롭) |
 | `--chat-id <id>` | (없음) | telegram 회신 대상 |
 | `--token-stdin` | — | telegram 봇 토큰을 stdin 에서 읽어 `.env`(0600) 기록 |
 | `--root <abs-path>` | (없음) | markdown 루트(예: Obsidian vault) |
@@ -141,6 +141,10 @@ adde lane help                       # 전체 옵션
 > ⚠️ `--perm-tier autopass` 는 denylist 에 없는 **모든 도구(파일 쓰기·Bash 포함)를 채널 확인 없이 자동 허용**하는 옵트인 모드입니다. 확인이 필요한 도구는 `--denylist` 에 두세요. 자동 허용 내역은 transcript 에 기록되고, 기동 시 채널로 경고 배너가 전송됩니다. 기본값(`acp`)의 동작은 변하지 않습니다.
 >
 > allowlist/denylist 매칭은 엔진이 알려주는 원시 도구명(예: `Bash`, `Write`) 기준이며, 도구명을 확인할 수 없는 요청은 자동 허용하지 않고 채널 승인으로 보냅니다(fail-closed). 현재 도구명 제공은 `claude-code-acp` 엔진에서 확인되었습니다 — 도구명을 제공하지 않는 엔진에서는 autopass 여도 모든 요청이 채널 승인을 거칩니다(안전 방향).
+>
+> **denylist 패턴**: `Tool(글롭)` 형식으로 대표 인자를 매칭합니다 — Bash 는 명령 문자열, Read/Write/Edit 는 파일 경로, WebFetch 는 URL. `*` 는 임의 문자열(경로 구분자 포함)이고 전체 일치 기준이라 접두 차단은 `Bash(git push*)`, 포함 차단은 `Bash(*sudo *)` 처럼 씁니다. 인자를 확인할 수 없는 요청·패턴을 지원하지 않는 도구는 도구명만 맞아도 채널 승인으로 갑니다(과매칭=안전 방향). 도구명 비교는 대소문자를 무시합니다. **한계**: 매칭은 명령 문자열 전체 기준이라 셸 체이닝(`echo x && sudo y`)은 접두 패턴(`sudo *`)에 걸리지 않습니다 — 포함 패턴(`*sudo *`)을 추가하거나, 확실한 차단이 필요하면 도구 전체(`Bash`)를 지정하세요.
+>
+> **기본 denylist**: `--perm-tier autopass` 에서 `--denylist` 를 생략하면 파괴적 셸 명령과 자격증명 읽기를 승인으로 돌리는 내장 기본 목록을 conf 에 기록합니다 — `Bash(sudo *)` · `Bash(rm -rf /*)` · `Bash(rm -rf ~*)` · `Bash(rm -rf .*)` · `Bash(git push --force*)` · `Bash(git push -f*)` · `Bash(git reset --hard*)` · `Bash(git clean -fd*)` · `Read(~/.ssh/**)` · `Read(~/.aws/**)`. 항목은 목록일 뿐 완전한 방어가 아닙니다(위 셸 체이닝 한계 참고) — 프로젝트에 맞게 조정하세요.
 
 ## 종료 코드
 

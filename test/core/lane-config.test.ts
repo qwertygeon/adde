@@ -212,8 +212,8 @@ describe("laneAdd — denylist·perm_tier 검증 (005 autopass)", () => {
     expect(res.warnings.some((w) => w.includes("autopass") && w.includes("자동 허용"))).toBe(true);
   });
 
-  it("autopass 인데 denylist 가 비어 있으면 추가 경고를 낸다", async () => {
-    const res = await laneAdd("proj", "ap4", { base, perm_tier: "autopass" });
+  it("autopass 인데 denylist 를 명시적으로 비우면 추가 경고를 낸다 (미지정은 006 기본값 적용)", async () => {
+    const res = await laneAdd("proj", "ap4", { base, perm_tier: "autopass", denylist: [] });
     expect(res.warnings.some((w) => w.includes("denylist 가 비어"))).toBe(true);
   });
 
@@ -248,5 +248,60 @@ describe("laneAdd — allowlist∩denylist 교집합 경고 (005 DEC-006)", () =
       denylist: ["Bash"],
     });
     expect(res.warnings.some((w) => w.includes("denylist 가 우선"))).toBe(false);
+  });
+});
+
+describe("laneAdd — denylist 패턴·기본값 (006)", () => {
+  it("autopass + denylist 미지정 → 내장 기본 denylist 를 conf 에 명시 기록", async () => {
+    const res = await laneAdd("proj", "apdef", { base, perm_tier: "autopass" });
+    const parsed = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(parsed.denylist.length).toBeGreaterThan(0);
+    expect(parsed.denylist).toContain("Bash(sudo *)");
+    expect(parsed.denylist).toContain("Read(~/.ssh/**)");
+  });
+
+  it("명시 --denylist 는 기본값을 대체하고, acp 티어는 기본 denylist 를 받지 않는다", async () => {
+    const explicit = await laneAdd("proj", "apexp", {
+      base,
+      perm_tier: "autopass",
+      denylist: ["Bash(git push*)"],
+    });
+    expect(explicit.conf.denylist).toEqual(["Bash(git push*)"]);
+    const acp = await laneAdd("proj", "plain2", { base });
+    expect(acp.conf.denylist).toEqual([]);
+  });
+
+  it("Tool(glob) 패턴을 허용하고 형식 위반은 거부한다", async () => {
+    const ok = await laneAdd("proj", "appat", {
+      base,
+      perm_tier: "autopass",
+      denylist: ["Bash", "Write(/etc/*)", "Read(~/.ssh/**)"],
+    });
+    expect(ok.conf.denylist).toHaveLength(3);
+    await expect(laneAdd("proj", "apbad", { base, denylist: ["Bash("] })).rejects.toThrow(
+      LaneConfigError,
+    );
+  });
+
+  it("markdown 경로 겹침(approvals=outbox)이면 생성 경고를 낸다 (기동은 거부됨 안내)", async () => {
+    const res = await laneAdd("proj", "mdolap", {
+      base,
+      source: "markdown",
+      root: base,
+      inbox: "in.md",
+      approvals: "shared/",
+      outbox: "shared/",
+    });
+    expect(res.warnings.some((w) => w.includes("경로가 겹칩니다"))).toBe(true);
+  });
+
+  it("markdown 기본 경로 배치(approvals·out 형제)는 겹침 경고가 없다", async () => {
+    const res = await laneAdd("proj", "mdok", {
+      base,
+      source: "markdown",
+      root: base,
+      inbox: "in.md",
+    });
+    expect(res.warnings.some((w) => w.includes("경로가 겹칩니다"))).toBe(false);
   });
 });

@@ -50,7 +50,7 @@ adde lane add myproj tg-claude --interactive
 
 > `--allowlist` 에 넣은 도구는 채널 승인 없이 자동 허용됩니다(트랜스크립트에는 기록). `Bash`·파일 쓰기 같은 광범위 도구는 넣지 마세요.
 
-> ⚠️ 반대로 대부분을 자동 허용하고 지정한 도구만 물어보게 하려면 `--perm-tier autopass --denylist Bash,Write` 처럼 만듭니다(옵트인). denylist 도구만 Allow/Deny 버튼이 오고 나머지는 자동 허용됩니다(전량 트랜스크립트 기록, 기동 시 채널 경고 배너). 상세: [명령 레퍼런스](commands.md#lane-add-옵션).
+> ⚠️ 반대로 대부분을 자동 허용하고 지정한 도구만 물어보게 하려면 `--perm-tier autopass` 로 만듭니다(옵트인). denylist 도구·패턴(예: `"Bash(sudo *)"` — 생략 시 내장 기본 목록: 파괴적 명령·자격증명 읽기 차단)만 Allow/Deny 버튼이 오고 나머지는 자동 허용됩니다(전량 트랜스크립트 기록, 기동 시 채널 경고 배너). 상세: [명령 레퍼런스](commands.md#lane-add-옵션).
 
 ## 4. 봇 토큰 저장
 

@@ -11,6 +11,10 @@
 - autopass 레인 기동 시 채널 경고 배너 — 자동 허용 모드임과 denylist 구성을 채널(telegram 메시지 / markdown `_adde-notice.md` 노트)로 고지.
 - 소스 어댑터 운영 알림(`notify`) — 권한 설정 드리프트 경고 등 운영 경고가 콘솔·transcript 외에 채널로도 전달.
 - `adde lane add` 생성 경고 확장 — 알 수 없는 `perm_tier` 값(오타) 경고, autopass 위험 고지·빈 denylist 경고.
+- denylist `Tool(글롭)` 패턴 — 도구의 대표 인자(Bash=명령, Read/Write/Edit=경로, WebFetch=URL)를 글롭으로 매칭해 "git push --force 만 확인" 같은 세분 제어 지원. 인자 미확인·미지원 도구는 도구명 일치만으로 채널 승인(과매칭=안전 방향).
+- autopass 기본 denylist — `--denylist` 생략 시 파괴적 명령·자격증명 읽기를 차단하는 내장 기본 목록(sudo·rm -rf·git force-push/reset --hard/clean·`~/.ssh`·`~/.aws` 읽기 — 전신 프로젝트 운영값 승계)을 conf 에 명시 기록.
+- markdown 레인 경로 상호 배타 가드 — inbox/approvals/outbox 가 같거나 포함 관계면 기동 거부(fail-closed) + 생성 시 사전 경고(출력·알림 노트가 승인 감시에 잡히는 오동작 예방).
+- 문서: 동기화 vault 민감 정보 노출 가이드(`docs/markdown.md`) — 노트로 나가는 내용·로컬에만 남는 것·민감 프로젝트 권장 배치.
 
 - `adde up <proj>` — macOS launchd LaunchAgent 데몬으로 기동. `adde up` 자체는 plist 등록 후 즉시 종료되고, 실제 레인은 백그라운드에서 상주. 터미널을 닫아도 동작, 재부팅·로그아웃 후 자동 복구(`KeepAlive`/`RunAtLoad`).
 - `adde down <proj>` — 어느 터미널에서든 launchd 데몬을 종료(교차 프로세스 종료). 이전의 동일 프로세스 내 종료(in-memory) 방식에서 변경.

@@ -26,6 +26,7 @@ import type { AddePolicy, EngineEffective } from "./perm-diff.js";
 import { maskSecrets } from "../../shared/mask.js";
 import { comparePerm, formatWarn } from "./perm-diff.js";
 import { formatException, formatWarnNote } from "../../shared/notify.js";
+import { matchesDenylist } from "../../shared/deny-match.js";
 import { withTimeout, killChild, closeChild } from "./lifecycle.js";
 
 /** 핸드셰이크(initialize·newSession) 최대 대기 (DEC-002). 초과 시 launch 실패 + child kill. */
@@ -39,19 +40,24 @@ export function shouldAutoAllow(allowlist: string[] | undefined, toolName: strin
 }
 
 /**
- * autopass 자동 허용 판정 — perm_tier=autopass 이고 도구가 denylist 에 없으면 true.
- * denylist 매칭 도구는 false → 기존 채널 승인 게이트(fail-closed)로 폴백한다(DEC-002).
+ * autopass 자동 허용 판정 — perm_tier=autopass 이고 denylist 에 걸리지 않으면 true.
+ * denylist 는 `Tool`(전체)·`Tool(glob)`(대표 인자 패턴) 을 지원하며,
+ * 매칭 도구는 false → 기존 채널 승인 게이트(fail-closed)로 폴백한다.
  */
-export function shouldAutopass(policy: AddePolicy | undefined, toolName: string): boolean {
+export function shouldAutopass(
+  policy: AddePolicy | undefined,
+  toolName: string,
+  rawInput?: unknown,
+): boolean {
   if (policy?.perm_tier !== "autopass") return false;
-  return !(policy.denylist ?? []).includes(toolName);
+  return !matchesDenylist(policy.denylist, toolName, rawInput);
 }
 
 /** toolCallId→원시 도구명 맵 상한 — 초과 시 가장 오래된 항목부터 제거(장수 세션 메모리 상한). */
 const TOOL_NAME_MAP_MAX = 512;
 
 /**
- * tool_call 세션 업데이트에서 원시 도구명을 기록한다(DEC-006).
+ * tool_call 세션 업데이트에서 원시 도구명을 기록한다.
  * requestPermission 의 toolCall.title 은 인자 포함 표시 문자열(예: Bash → "`rm -rf build/`")이라
  * allowlist/denylist 매칭 키로 쓸 수 없다 — claude-code-acp 는 원시 도구명을
  * tool_call 업데이트의 _meta.claudeCode.toolName 으로만 노출한다.
@@ -97,18 +103,19 @@ export function resolveToolName(
 /**
  * 자동 허용 판정 통합 — 반환 "allowlist" | "autopass" | null(채널 승인 경로).
  * fail-closed: 도구명 미해석(undefined) 시 자동 허용하지 않는다(채널 승인 폴백).
- * autopass 의 denylist 는 allowlist 보다 우선한다 — 양쪽에 있으면 채널 승인.
+ * autopass 의 denylist 는 allowlist 보다 우선한다 — 매칭되면 채널 승인.
  */
 export function decideAutoAllow(
   policy: AddePolicy | undefined,
   toolName: string | undefined,
+  rawInput?: unknown,
 ): "allowlist" | "autopass" | null {
   if (toolName === undefined) return null;
-  if (policy?.perm_tier === "autopass" && (policy.denylist ?? []).includes(toolName)) {
+  if (policy?.perm_tier === "autopass" && matchesDenylist(policy.denylist, toolName, rawInput)) {
     return null;
   }
   if (shouldAutoAllow(policy?.allowlist, toolName)) return "allowlist";
-  if (shouldAutopass(policy, toolName)) return "autopass";
+  if (shouldAutopass(policy, toolName, rawInput)) return "autopass";
   return null;
 }
 
@@ -214,7 +221,7 @@ export class AcpBackendImpl implements AcpBackend {
     const stream = acp.ndJsonStream(toAgent, fromAgent);
 
     const laneRef: { state: LaneState | null } = { state: null };
-    // toolCallId→원시 도구명 (DEC-006) — tool_call 업데이트에서 채집, 권한 매칭에 사용.
+    // toolCallId→원시 도구명 — tool_call 업데이트에서 채집, 권한 매칭에 사용.
     const toolNames = new Map<string, string>();
 
     const conn = new acp.ClientSideConnection((_agent) => {
@@ -284,7 +291,7 @@ export class AcpBackendImpl implements AcpBackend {
         async requestPermission(
           params: RequestPermissionRequest,
         ): Promise<RequestPermissionResponse> {
-          // 표시용 제목(인자 포함) — 채널 프롬프트에 노출. 매칭 키가 아니다(DEC-006).
+          // 표시용 제목(인자 포함) — 채널 프롬프트에 노출. 매칭 키가 아니다(인자 포함 문자열이라 도구명과 불일치).
           const toolTitle = params.toolCall.title ?? "unknown";
           // 매칭용 원시 도구명 — tool_call 업데이트 채집 맵에서 해석. 미해석 시 자동 허용 안 함(fail-closed).
           const rawToolName = resolveToolName(
@@ -293,9 +300,10 @@ export class AcpBackendImpl implements AcpBackend {
           );
 
           // A2: allowlist / autopass 자동 허용 — 채널 프롬프트 없이 allow 로 결정(게이트는 끄지 않고 결정).
-          // autopass(DEC-001/002): denylist 외 전 도구 자동 허용, denylist 도구는 아래 채널 승인 폴백.
+          // autopass: denylist 외 전 도구 자동 허용, denylist 도구는 아래 채널 승인 폴백.
           // 투명성(A-P006 no-silent): 트랜스크립트에 auto-allow 기록.
-          const autoAllowVia = decideAutoAllow(addePolicy, rawToolName);
+          const rawInput = (params.toolCall as unknown as Record<string, unknown>)["rawInput"];
+          const autoAllowVia = decideAutoAllow(addePolicy, rawToolName, rawInput);
           if (autoAllowVia) {
             const allowOption = params.options.find(
               (o) => o.kind === "allow_once" || o.kind === "allow_always",
@@ -428,8 +436,8 @@ export class AcpBackendImpl implements AcpBackend {
       const engineEffective = await this.fetchEngineEffective(lane);
       const result = comparePerm(addePolicy, engineEffective);
       if (result.diff && result.warn) {
-        // 차이 확인(정책차이)·확인불가(조회실패) 모두 경고 후 기동 계속(DEC-004 — v0.1.1/001 의
-        // launch 거부를 사용자 요청으로 완화). A-P006 의 요구는 "차이 표기"이며 여기서 충족한다.
+        // 차이 확인(정책차이)·확인불가(조회실패) 모두 경고 후 기동 계속 — 이전의 launch 거부를
+        // 사용자 요청으로 완화. A-P006 의 요구는 "차이 표기"이며 여기서 충족한다.
         const note =
           result.warn.reason === "정책차이"
             ? formatWarnNote({

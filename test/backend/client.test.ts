@@ -169,3 +169,23 @@ describe("도구명 채집·해석·자동 허용 판정 (DEC-006)", () => {
     expect(map.has("t599")).toBe(true);
   });
 });
+
+// 006 DEC-001/003: decideAutoAllow 가 rawInput 패턴 매칭을 반영한다
+describe("decideAutoAllow — denylist 패턴 (006)", () => {
+  const policy = {
+    perm_tier: "autopass",
+    denylist: ["Bash(git push --force*)", "Read(~/.ssh/**)"],
+  };
+
+  it("패턴 매칭 명령은 채널 승인 폴백, 비매칭은 자동 허용", () => {
+    expect(decideAutoAllow(policy, "Bash", { command: "git push --force origin" })).toBeNull();
+    expect(decideAutoAllow(policy, "Bash", { command: "git push origin" })).toBe("autopass");
+  });
+
+  it("패턴 항목인데 rawInput 이 없으면 채널 승인 폴백 (fail-closed)", () => {
+    expect(decideAutoAllow(policy, "Bash", undefined)).toBeNull();
+    expect(decideAutoAllow(policy, "Read", undefined)).toBeNull();
+    // denylist 에 없는 도구는 인자 무관 자동 허용
+    expect(decideAutoAllow(policy, "Write", undefined)).toBe("autopass");
+  });
+});

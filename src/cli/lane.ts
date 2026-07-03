@@ -12,6 +12,7 @@ import {
 import type { LaneAddOptions } from "../core/lane-config.js";
 import { USAGE, LANE_USAGE, laneError, unknownLaneSub } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
+import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
 import * as readline from "node:readline/promises";
 
 /** `--key value` / `--flag` 혼합 파싱. 값이 필요한 키는 valueKeys 로 지정. */
@@ -107,7 +108,10 @@ export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
   const allow = await ask("allowlist (콤마 구분, 없으면 비움)", "");
   if (allow) opts.allowlist = splitTools(allow);
   if (opts.perm_tier === "autopass") {
-    const deny = await ask("denylist (채널 승인으로 폴백할 도구, 콤마 구분)", "");
+    const deny = await ask(
+      "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
+      DEFAULT_AUTOPASS_DENYLIST.join(","),
+    );
     if (deny) opts.denylist = splitTools(deny);
   }
   const cwd = await ask("cwd (레인 작업 폴더 절대경로, 없으면 비움)", "");

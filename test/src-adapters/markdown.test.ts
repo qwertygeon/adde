@@ -238,6 +238,36 @@ describe("createMarkdownSource (통합)", () => {
     expect(() => source!.start()).not.toThrow();
   });
 
+  it("상호 배타(006): approvals 와 outbox 가 같은 경로면 start 거부", () => {
+    conf.approvals = "shared";
+    conf.outbox = "shared";
+    source = makeSource();
+    expect(() => source!.start()).toThrow(/포함 관계|분리/);
+  });
+
+  it("상호 배타(006): inbox 노트가 outbox 디렉터리 내부면 start 거부", () => {
+    conf.inbox = "out/inbox.md";
+    conf.outbox = "out";
+    source = makeSource();
+    expect(() => source!.start()).toThrow(/겹칩니다|분리/);
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "상호 배타(006): 대소문자만 다른 경로(macOS 대소문자 무시 FS)도 start 거부",
+    () => {
+      conf.approvals = "Shared";
+      conf.outbox = "shared";
+      source = makeSource();
+      expect(() => source!.start()).toThrow(/포함 관계|분리/);
+    },
+  );
+
+  it("상호 배타(006): approvals 를 격리 디렉터리(.conflicts)와 겹치게 두면 start 거부", () => {
+    conf.approvals = ".conflicts";
+    source = makeSource();
+    expect(() => source!.start()).toThrow(/포함 관계|분리/);
+  });
+
   it("인박스의 체크된 send 블록을 envelope 으로 큐잉하고 sent 로 종단한다", async () => {
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "마크다운 노트에서 보낸 지시\n- [x] 📤 send\n");

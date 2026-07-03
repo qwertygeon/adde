@@ -4,10 +4,11 @@
  * 모든 검증을 통과한 뒤에만 디스크에 쓴다(validate-then-commit). 쓰기는 tmp→rename 원자적.
  */
 import { readdir, readFile, writeFile, rename, mkdir, unlink, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { parseLaneConf, serializeLaneConf } from "../shared/conf.js";
 import type { LaneConf } from "../shared/conf.js";
 import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
+import { parseDenyEntry, DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
 
 /** proj/lane 식별자 — 디렉터리·파일명이 되므로 안전 문자만 허용. */
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
@@ -89,6 +90,34 @@ async function collectAddWarnings(conf: LaneConf, token?: string): Promise<strin
       warnings.push(
         `[경고] markdown root 경로가 없습니다: ${expandTilde(conf.root)}\n  ↳ 조치: 경로를 확인하거나 생성하세요.`,
       );
+    }
+    // 경로 상호 배타 사전 경고 — 기동 시 fail-closed 거부되는 조합을 생성 시점에 미리 안내.
+    // 해석 규칙은 markdown 어댑터 resolvePaths·기동 가드와 동일(미지정 시 inbox 형제, darwin 대소문자 정규화).
+    if (conf.root && conf.inbox) {
+      const root = expandTilde(conf.root);
+      const inboxPath = resolve(join(root, conf.inbox));
+      const inboxDir = dirname(inboxPath);
+      const approvalsDir = resolve(conf.approvals ? join(root, conf.approvals) : join(inboxDir, "approvals"));
+      const outboxDir = resolve(conf.outbox ? join(root, conf.outbox) : join(inboxDir, "out"));
+      const quarantineDir = resolve(join(inboxDir, ".conflicts"));
+      const normCase = (p: string): string =>
+        process.platform === "darwin" ? p.toLowerCase() : p;
+      const inside = (child: string, parent: string): boolean => {
+        const rel = relative(normCase(parent), normCase(child));
+        return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+      };
+      const overlaps = (a: string, b: string): boolean => inside(a, b) || inside(b, a);
+      if (
+        overlaps(outboxDir, approvalsDir) ||
+        overlaps(approvalsDir, quarantineDir) ||
+        overlaps(outboxDir, quarantineDir) ||
+        inside(inboxPath, approvalsDir) ||
+        inside(inboxPath, outboxDir)
+      ) {
+        warnings.push(
+          `[경고] markdown 경로가 겹칩니다(inbox=${inboxPath} / approvals=${approvalsDir} / outbox=${outboxDir}) — 기동이 거부됩니다.\n  ↳ 조치: 승인·출력·입력 경로를 서로 분리하세요.`,
+        );
+      }
     }
   }
   if (conf.source === "telegram" && token !== undefined && !TELEGRAM_TOKEN_RE.test(token)) {
@@ -187,28 +216,35 @@ export async function laneAdd(
   if (opts.token !== undefined && src !== "telegram") {
     throw new LaneConfigError("token 은 source=telegram 레인에서만 사용합니다");
   }
-  for (const [listName, list] of [
-    ["allowlist", opts.allowlist],
-    ["denylist", opts.denylist],
-  ] as const) {
-    for (const tool of list ?? []) {
-      if (!ALLOWLIST_ITEM_RE.test(tool)) {
-        throw new LaneConfigError(
-          `${listName} 도구명 "${tool}" 가 올바르지 않습니다 — 영숫자/_/./- 만 허용`,
-        );
-      }
+  for (const tool of opts.allowlist ?? []) {
+    if (!ALLOWLIST_ITEM_RE.test(tool)) {
+      throw new LaneConfigError(
+        `allowlist 도구명 "${tool}" 가 올바르지 않습니다 — 영숫자/_/./- 만 허용`,
+      );
+    }
+  }
+  // denylist 는 `Tool` 또는 `Tool(글롭)` 형식. 콤마는 목록 구분자라 항목 내 금지.
+  for (const entry of opts.denylist ?? []) {
+    if (entry.includes(",") || !parseDenyEntry(entry)) {
+      throw new LaneConfigError(
+        `denylist 항목 "${entry}" 가 올바르지 않습니다 — "Bash" 또는 "Bash(git push*)" 형식(콤마 불가)`,
+      );
     }
   }
 
+  const permTier = opts.perm_tier ?? "acp";
   const conf: LaneConf = {
     source: src,
     backend: opts.backend ?? "acp",
     engine: opts.engine ?? "claude-code-acp",
     channel: opts.channel ?? src,
-    perm_tier: opts.perm_tier ?? "acp",
+    perm_tier: permTier,
     acp_version: opts.acp_version ?? "v1",
     allowlist: opts.allowlist ?? [],
-    denylist: opts.denylist ?? [],
+    // autopass 인데 denylist 미지정 → 내장 기본 denylist. conf 에 구체 목록을
+    // 명시 기록한다(암묵 기본값이 파일에 안 보이는 상태 회피). 명시 지정(빈 배열 포함)이 우선.
+    denylist:
+      opts.denylist ?? (permTier === "autopass" ? [...DEFAULT_AUTOPASS_DENYLIST] : []),
   };
   // exactOptionalPropertyTypes: undefined 대입 금지 — 값이 있을 때만 설정.
   if (opts.cwd) conf.cwd = opts.cwd;

@@ -4,8 +4,12 @@
  * 트랜스크립트·WARN·로그에 시크릿이 노출되지 않도록 한다.
  */
 
-/** Telegram 봇 토큰 패턴: <bot_id>:<token_part> */
-const BOT_TOKEN_PATTERN = /\d{5,}:[A-Za-z0-9_-]{35}/g;
+/**
+ * Telegram 봇 토큰 패턴: <bot_id>:<token_part>.
+ * token_part 길이를 {30,} 로 둔다 — Telegram 이 35자를 계약상 보장하지 않으므로(형식 드리프트)
+ * 고정 {35} 는 마지막 방어선으로 취약. 하한만 두어 과소마스킹을 막는다(과대마스킹은 안전한 방향).
+ */
+const BOT_TOKEN_PATTERN = /\d{5,}:[A-Za-z0-9_-]{30,}/g;
 
 /** 마스킹 대상 민감 키워드 패턴 (state/.env 경로 등) */
 const SENSITIVE_PATH_PATTERN = /(?:state\/[^/\s]+\/\.env)[^\s]*/g;

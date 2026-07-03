@@ -185,6 +185,7 @@ describe("createMarkdownSource (통합)", () => {
       perm_tier: "acp",
       acp_version: "v1",
       allowlist: [],
+      denylist: [],
       root: rootDir,
       inbox: "inbox.md",
     };
@@ -199,7 +200,9 @@ describe("createMarkdownSource (통합)", () => {
   it("root/inbox conf 누락 시 생성에서 throw (fail-closed)", () => {
     const bad: LaneConf = { ...conf };
     delete bad.root;
-    expect(() => createMarkdownSource({ lane: "L", proj: "p", engine: "e", paths, conf: bad })).toThrow();
+    expect(() =>
+      createMarkdownSource({ lane: "L", proj: "p", engine: "e", paths, conf: bad }),
+    ).toThrow();
   });
 
   it("없는 root 경로로 start 시 throw", () => {
@@ -235,6 +238,36 @@ describe("createMarkdownSource (통합)", () => {
     expect(() => source!.start()).not.toThrow();
   });
 
+  it("상호 배타(006): approvals 와 outbox 가 같은 경로면 start 거부", () => {
+    conf.approvals = "shared";
+    conf.outbox = "shared";
+    source = makeSource();
+    expect(() => source!.start()).toThrow(/포함 관계|분리/);
+  });
+
+  it("상호 배타(006): inbox 노트가 outbox 디렉터리 내부면 start 거부", () => {
+    conf.inbox = "out/inbox.md";
+    conf.outbox = "out";
+    source = makeSource();
+    expect(() => source!.start()).toThrow(/겹칩니다|분리/);
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "상호 배타(006): 대소문자만 다른 경로(macOS 대소문자 무시 FS)도 start 거부",
+    () => {
+      conf.approvals = "Shared";
+      conf.outbox = "shared";
+      source = makeSource();
+      expect(() => source!.start()).toThrow(/포함 관계|분리/);
+    },
+  );
+
+  it("상호 배타(006): approvals 를 격리 디렉터리(.conflicts)와 겹치게 두면 start 거부", () => {
+    conf.approvals = ".conflicts";
+    source = makeSource();
+    expect(() => source!.start()).toThrow(/포함 관계|분리/);
+  });
+
   it("인박스의 체크된 send 블록을 envelope 으로 큐잉하고 sent 로 종단한다", async () => {
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "마크다운 노트에서 보낸 지시\n- [x] 📤 send\n");
@@ -261,6 +294,26 @@ describe("createMarkdownSource (통합)", () => {
     expect(msgCount()).toBe(1);
   });
 
+  // FR-12: enqueue 연속 실패 임계 도달 시 outbox 알림 노트 1회
+  it("enqueue 연속 실패가 임계에 도달하면 outbox 에 알림 노트를 1회 기록한다 (FR-12)", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    // 3개 send 블록 — 한 처리 패스에서 enqueue 가 3회 연속 실패하도록.
+    fs.writeFileSync(
+      inboxPath,
+      "메시지1\n- [x] 📤 send\n메시지2\n- [x] 📤 send\n메시지3\n- [x] 📤 send\n",
+    );
+    // enqueue 실패 강제: queueDir 경로에 (디렉터리 대신) 파일을 둬 mkdir(recursive) 가 실패하게 한다.
+    fs.mkdirSync(path.dirname(paths.queueDir), { recursive: true });
+    fs.writeFileSync(paths.queueDir, "block");
+
+    source = makeSource();
+    source.start();
+
+    const alertPath = path.join(rootDir, "out", "_enqueue-alert.md");
+    await waitFor(() => fs.existsSync(alertPath));
+    expect(fs.readFileSync(alertPath, "utf8")).toContain("enqueue");
+  });
+
   // A3: 크래시(enqueue 전 sending 마킹만 남음) → 재기동 시 정확히 1회 enqueue
   it("A3: sending 마커가 큐에 없으면 재기동 시 재enqueue 후 sent 종단", async () => {
     const inboxPath = path.join(rootDir, "inbox.md");
@@ -273,7 +326,10 @@ describe("createMarkdownSource (통합)", () => {
     await waitFor(() => msgCount() >= 1);
     const files = fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg"));
     expect(files.some((f) => f.includes("crash-1"))).toBe(true);
-    const env = JSON.parse(fs.readFileSync(path.join(paths.queueDir, files[0]!), "utf8")) as Record<string, unknown>;
+    const env = JSON.parse(fs.readFileSync(path.join(paths.queueDir, files[0]!), "utf8")) as Record<
+      string,
+      unknown
+    >;
     expect(env["id"]).toBe("crash-1");
     expect(env["text"]).toBe("복구될 메시지");
 
@@ -306,7 +362,9 @@ describe("createMarkdownSource (통합)", () => {
     const conflict = path.join(rootDir, "inbox.sync-conflict-20260628-abc.md");
     fs.writeFileSync(conflict, "악성 트리거\n- [x] 📤 send\n");
 
-    await waitFor(() => fs.existsSync(path.join(rootDir, ".conflicts", "inbox.sync-conflict-20260628-abc.md")));
+    await waitFor(() =>
+      fs.existsSync(path.join(rootDir, ".conflicts", "inbox.sync-conflict-20260628-abc.md")),
+    );
     expect(msgCount()).toBe(0);
   });
 
@@ -345,6 +403,27 @@ describe("createMarkdownSource (통합)", () => {
 
     // 해당 요청 파일이 종단 재작성됨
     await waitFor(() => fs.readFileSync(reqFile, "utf8").includes("status=allow"));
+  });
+
+  it("경로 탈출 req.id(엔진 sessionId)는 fail-closed throw — approvals 밖 쓰기 차단", async () => {
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
+    source = makeSource();
+    source.start();
+
+    const evil: PermRequest = {
+      v: 1,
+      id: "../../evil",
+      lane: "L",
+      channel: "markdown",
+      tool: "Bash",
+      detail: "ls",
+      cwd: "/proj",
+      ts: "2026-06-28T00:00:00Z",
+    };
+    // 게이트가 sendPermPrompt(=requestPermission) throw 를 deny 로 처리하므로 throw 가 곧 fail-closed.
+    await expect(source.requestPermission(evil)).rejects.toThrow();
+    // approvals 디렉터리 밖(rootDir 상위)에 evil.md 가 생기지 않아야 한다.
+    expect(fs.existsSync(path.join(rootDir, "..", "evil.md"))).toBe(false);
   });
 
   it("동시 다중 권한 요청은 요청당 별도 파일로 격리된다 (011-D)", async () => {
@@ -388,7 +467,10 @@ describe("createMarkdownSource (통합)", () => {
     source.start();
 
     // injector 가 writeOut 후 in-process 로 renderOut 호출(out/ watch 제거)
-    fs.writeFileSync(path.join(paths.outDir, "msg-1.out.json"), JSON.stringify({ reply_ref: { channel_msg_id: "orig-9" } }));
+    fs.writeFileSync(
+      path.join(paths.outDir, "msg-1.out.json"),
+      JSON.stringify({ reply_ref: { channel_msg_id: "orig-9" } }),
+    );
     fs.writeFileSync(path.join(paths.outDir, "msg-1.out"), "에이전트 응답입니다");
 
     await source.renderOut("msg-1");

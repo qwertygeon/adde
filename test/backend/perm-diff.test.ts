@@ -71,3 +71,28 @@ describe("comparePerm (SC-012/013)", () => {
     expect(second.diff).toBe(true);
   });
 });
+
+describe("comparePerm — perm_tier=autopass (005)", () => {
+  it("autopass vs 엔진 bypassPermissions → diff=true + denylist 무력화 사유", () => {
+    const result = comparePerm(
+      { perm_tier: "autopass", denylist: ["Bash"] },
+      { permissionMode: "bypassPermissions" },
+    );
+    expect(result.diff).toBe(true);
+    expect(result.warn?.message).toMatch(/무력화/);
+  });
+
+  it("autopass vs 엔진 default → diff=false (권한 요청이 게이트로 온다)", () => {
+    const result = comparePerm(
+      { perm_tier: "autopass", denylist: ["Bash"] },
+      { permissionMode: "default" },
+    );
+    expect(result.diff).toBe(false);
+  });
+
+  it("autopass 조회 실패 → 보수적 WARN(확인불가) 유지", () => {
+    const result = comparePerm({ perm_tier: "autopass" }, null);
+    expect(result.diff).toBe(true);
+    expect(result.warn?.reason).toBe("조회실패");
+  });
+});

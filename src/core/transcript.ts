@@ -3,6 +3,7 @@
  * FR-006/007: session/update 이벤트를 사람이 읽을 텍스트로 렌더 → mask → append.
  * append 실패는 보조(warn↑ 로그 후 흡수) — error-handling.md 보조 분류.
  */
+import { t } from "../shared/i18n.js";
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { maskSecrets } from "../shared/mask.js";
@@ -52,7 +53,7 @@ export function renderEvent(event: SessionEvent): string {
       return `[${ts}] agent: ${text}`;
     }
     case "available_commands_update":
-      return `[${ts}] commands_update: (갱신)`;
+      return t("transcript.commandsUpdated", { ts });
     case "current_mode_update": {
       const mode = event["mode"];
       return `[${ts}] mode_update: ${JSON.stringify(mode)}`;
@@ -93,9 +94,9 @@ export async function appendTranscript(paths: LanePaths, event: SessionEvent): P
     const isAudit = kind === "adde_warn" || kind === "adde_auto_allow";
     const detail = err instanceof Error ? err.message : String(err);
     if (isAudit) {
-      console.error(`[transcript] 감사 이벤트(${kind}) append 실패 — 감사 추적 불완전: ${detail}`);
+      console.error(t("log.transcript.auditAppendFail", { kind, detail }));
     } else {
-      console.warn(`[transcript] append 실패(보조 — 흡수): ${detail}`);
+      console.warn(t("log.transcript.appendFail", { detail }));
     }
   }
 }

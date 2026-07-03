@@ -1,15 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   COMMANDS,
   buildUsage,
   USAGE,
-  LANE_USAGE,
+  buildLaneUsage,
   cmdError,
   laneError,
   unknownLaneSub,
 } from "../../src/core/messages.js";
+import { setLocale } from "../../src/shared/i18n.js";
 
-// SC3: messages.ts 가 CLI 사용자 노출 문자열의 SoT.
+// SC3: messages.ts 가 CLI 사용자 노출 문자열의 SoT (문구 본문은 i18n 카탈로그 소유).
+// 문구 어서션은 로케일 의존 → ko 고정 후 검증(실행 환경 LANG 비의존).
+
+beforeAll(() => setLocale("ko"));
 
 describe("messages — 도움말/사용법 SoT", () => {
   it("buildUsage 는 명령 표면과 신규 명령(status/doctor/logs)을 노출한다", () => {
@@ -28,9 +32,10 @@ describe("messages — 도움말/사용법 SoT", () => {
     }
   });
 
-  it("LANE_USAGE 는 4개 서브커맨드를 모두 포함", () => {
+  it("buildLaneUsage 는 4개 서브커맨드를 모두 포함", () => {
+    const laneUsage = buildLaneUsage();
     for (const sub of ["lane add", "lane ls", "lane show", "lane rm"]) {
-      expect(LANE_USAGE).toContain(sub);
+      expect(laneUsage).toContain(sub);
     }
   });
 });

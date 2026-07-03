@@ -106,3 +106,25 @@ describe("serializeLaneConf", () => {
     expect(reparsed).toEqual(original);
   });
 });
+
+describe("denylist (005 autopass)", () => {
+  it("denylist 를 콤마 목록으로 파싱하고, 미지정 시 빈 배열이다", () => {
+    expect(parseLaneConf("source=telegram\n").denylist).toEqual([]);
+    const result = parseLaneConf("source=telegram\ndenylist=Bash, Write\n");
+    expect(result.denylist).toEqual(["Bash", "Write"]);
+  });
+
+  it("denylist 는 비어있지 않을 때만 직렬화한다", () => {
+    expect(serializeLaneConf(parseLaneConf("source=telegram\n"))).not.toContain("denylist=");
+    expect(serializeLaneConf(parseLaneConf("source=telegram\ndenylist=Bash\n"))).toContain(
+      "denylist=Bash",
+    );
+  });
+
+  it("denylist 포함 parse→serialize→parse round-trip 이 동치이다", () => {
+    const original = parseLaneConf(
+      "source=telegram\nperm_tier=autopass\nallowlist=Read\ndenylist=Bash,Write\n",
+    );
+    expect(parseLaneConf(serializeLaneConf(original))).toEqual(original);
+  });
+});

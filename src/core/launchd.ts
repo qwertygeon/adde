@@ -20,6 +20,8 @@ export type LaunchctlExec = (args: string[]) => Promise<{ stdout: string; code: 
 export interface LaunchdDeps {
   exec?: LaunchctlExec;
   home?: string;
+  /** 플랫폼 가드 주입(테스트 전용 — 미지정 시 process.platform). */
+  platform?: NodeJS.Platform;
 }
 
 // ── macOS 가드 ──────────────────────────────────────────────────────────────
@@ -28,11 +30,11 @@ export interface LaunchdDeps {
  * macOS(darwin) 이 아닌 환경에서 actionable throw.
  * launchd 코드 경로의 SSOT 가드 — 개별 함수에서 직접 process.platform 체크 금지(ADR-007).
  */
-export function assertMacOS(): void {
-  if (process.platform !== "darwin") {
+export function assertMacOS(platform: NodeJS.Platform = process.platform): void {
+  if (platform !== "darwin") {
     throw new Error(
       formatBlock({
-        situation: t("launchd.macOnly.situation", { platform: process.platform }),
+        situation: t("launchd.macOnly.situation", { platform }),
         action: t("launchd.macOnly.action"),
       }),
     );
@@ -127,7 +129,7 @@ function defaultExec(args: string[]): Promise<{ stdout: string; code: number }> 
  * exit code ≠ 0 이면 actionable throw(NFR-003).
  */
 export async function loadDaemon(proj: string, deps?: LaunchdDeps): Promise<void> {
-  assertMacOS();
+  assertMacOS(deps?.platform);
   const exec = deps?.exec ?? defaultExec;
 
   const nodeBin = process.execPath;
@@ -163,7 +165,7 @@ export async function loadDaemon(proj: string, deps?: LaunchdDeps): Promise<void
  * 순서: unload 먼저(KeepAlive 재기동 차단) → plist rm.
  */
 export async function unloadDaemon(proj: string, deps?: LaunchdDeps): Promise<void> {
-  assertMacOS();
+  assertMacOS(deps?.platform);
   const exec = deps?.exec ?? defaultExec;
   const targetPlist = plistPath(proj, deps);
 

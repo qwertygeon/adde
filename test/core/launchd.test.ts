@@ -148,7 +148,7 @@ describe("renderPlist (SC-007 / SC-013)", () => {
 describe("loadDaemon", () => {
   it("loadDaemon_fake_exec_load_argv_검증", async () => {
     const { exec, calls } = makeFakeExec("ok");
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     await loadDaemon("myproj", deps);
 
@@ -161,7 +161,7 @@ describe("loadDaemon", () => {
 
   it("loadDaemon_exit_nonzero_throw_actionable", async () => {
     const { exec } = makeFakeExec("fail");
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     // exit code 비정상 시 actionable 메시지와 함께 throw — NFR-003
     await expect(loadDaemon("myproj", deps)).rejects.toThrow();
@@ -169,7 +169,7 @@ describe("loadDaemon", () => {
 
   it("loadDaemon 성공 시 plist 파일이 LaunchAgents 에 생성된다", async () => {
     const { exec } = makeFakeExec("ok");
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     await loadDaemon("myproj", deps);
 
@@ -188,7 +188,7 @@ describe("loadDaemon", () => {
 describe("unloadDaemon", () => {
   it("unloadDaemon_fake_exec_unload_argv_검증", async () => {
     const { exec, calls } = makeFakeExec("ok");
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
     // plist 미리 생성 — unload 후 삭제 테스트
     const plistDir = path.join(tmpHome, "Library", "LaunchAgents");
     fs.mkdirSync(plistDir, { recursive: true });
@@ -205,14 +205,14 @@ describe("unloadDaemon", () => {
   it("unloadDaemon_plist_없어도_멱등", async () => {
     // plist 미존재 시에도 throw 없이 완료(멱등성)
     const { exec } = makeFakeExec("ok");
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     await expect(unloadDaemon("myproj", deps)).resolves.toBeUndefined();
   });
 
   it("unload 후 plist 파일이 제거된다", async () => {
     const { exec } = makeFakeExec("ok");
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
     const plistDir = path.join(tmpHome, "Library", "LaunchAgents");
     const plistFile = path.join(plistDir, "com.qwertygeon.adde.myproj.plist");
     fs.mkdirSync(plistDir, { recursive: true });
@@ -226,7 +226,7 @@ describe("unloadDaemon", () => {
   it("unload 실패(launchctl 비정상 exit)는 흡수하고 멱등 완료", async () => {
     // unloadDaemon 은 unload 실패를 흡수(멱등) — ADR-006 명세
     const { exec } = makeFakeExec("fail");
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     await expect(unloadDaemon("myproj", deps)).resolves.toBeUndefined();
   });
@@ -247,7 +247,7 @@ describe("daemonRegState", () => {
     makePlist(tmpHome, "myproj");
     const label = plistLabel("myproj");
     const { exec } = makeFakeExec("list-match", label);
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     const state = await daemonRegState("myproj", deps);
 
@@ -258,7 +258,7 @@ describe("daemonRegState", () => {
   it("daemonRegState_plist_없음_미등록", async () => {
     // plist 미생성, list 에도 없음
     const { exec } = makeFakeExec("list-no-match");
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     const state = await daemonRegState("myproj", deps);
 
@@ -270,7 +270,7 @@ describe("daemonRegState", () => {
     // plist 미존재 + launchctl list 에 있음 (비정상 상태)
     const label = plistLabel("myproj");
     const { exec } = makeFakeExec("list-match", label);
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     const state = await daemonRegState("myproj", deps);
 
@@ -282,7 +282,7 @@ describe("daemonRegState", () => {
     // plist 존재 + launchctl list 에 없음 (비정상 상태)
     makePlist(tmpHome, "myproj");
     const { exec } = makeFakeExec("list-no-match");
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     const state = await daemonRegState("myproj", deps);
 
@@ -301,7 +301,7 @@ describe("daemonRegState", () => {
       }
       return { stdout: "", code: 0 };
     };
-    const deps: LaunchdDeps = { exec, home: tmpHome };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
 
     const state = await daemonRegState("myproj", deps);
     expect(state.launchctlRegistered).toBe(true);

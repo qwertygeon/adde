@@ -24,7 +24,10 @@ beforeEach(() => {
   fs.mkdirSync(paths.queueDir, { recursive: true });
   fs.mkdirSync(paths.processingDir, { recursive: true });
   fs.mkdirSync(paths.outDir, { recursive: true });
-  fs.writeFileSync(paths.envFile, "TELEGRAM_BOT_TOKEN=111111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n");
+  fs.writeFileSync(
+    paths.envFile,
+    "TELEGRAM_BOT_TOKEN=111111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n",
+  );
 });
 
 afterEach(() => {
@@ -93,11 +96,7 @@ describe("설정 차이 WARN (SC-012)", () => {
   it("설정이 동일하면 WARN 이 기록되지 않는다", async () => {
     const fakeSendMessage = vi.fn().mockResolvedValue({ ok: true, result: { message_id: 1 } });
 
-    await simulatePermWarn(
-      { perm_tier: "acp" },
-      { permissionMode: "default" },
-      fakeSendMessage,
-    );
+    await simulatePermWarn({ perm_tier: "acp" }, { permissionMode: "default" }, fakeSendMessage);
 
     const warnCalls = (fakeSendMessage.mock.calls as unknown[][]).filter((call) => {
       const arg = call[0] as Record<string, unknown> | undefined;

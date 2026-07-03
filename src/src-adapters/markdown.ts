@@ -21,6 +21,7 @@ import type { PermRequest } from "../gate/gate.js";
 import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
 import type { Source, DecisionCallback, Decision } from "./source.js";
 import { formatException } from "../shared/notify.js";
+import type { NotifyT } from "../shared/notify.js";
 
 /** enqueue 연속 실패 임계 — 도달 시 outbox 에 1회 알림(telegram 패턴과 일관, ⑫). */
 const ENQUEUE_FAIL_THRESHOLD = 3;
@@ -61,6 +62,42 @@ function isSendLabel(label: string): boolean {
   return labelCore(label) === "send";
 }
 
+// --- 전송 스탬프 (DEC-001/003/007) -------------------------------------------
+// 형식 `YYYYMMDD-HHmmss`(로컬 시각) — 파일명 안전(콜론 없음)하면서 inbox 마커와
+// out 노트 파일명에 동일 표기. 기준 시각은 전송(enqueue) 시각이며 envelope.ts 로
+// 영속돼 재렌더에도 파일명이 결정론적이다.
+
+/** 전송 스탬프 표기 — 로컬 시각 `YYYYMMDD-HHmmss`. */
+export function formatStamp(d: Date): string {
+  const p = (n: number, w = 2): string => String(n).padStart(w, "0");
+  return (
+    `${p(d.getFullYear(), 4)}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+  );
+}
+
+/** ISO 타임스탬프(envelope.ts/sidecar)로부터 스탬프 도출. */
+export function stampFromIso(iso: string): string {
+  return formatStamp(new Date(iso));
+}
+
+/** out 응답 노트 basename(확장자 제외) — sent 위키링크 텍스트와 동일해야 한다. */
+export function outNoteBase(stamp: string, id: string): string {
+  return `${stamp} ${id}`;
+}
+
+/**
+ * 스탬프를 로컬 시각으로 되돌려 ISO 로 복원 — 재개(re-enqueue) 시 envelope.ts 가
+ * sending 라인의 스탬프와 같은 값을 재현해야 sent 위키링크와 노트 파일명이 일치한다.
+ * 형식 불일치(구버전 라인 등)면 null.
+ */
+export function isoFromStamp(stamp: string): string | null {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(stamp);
+  if (!m) return null;
+  const d = new Date(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 /** 인박스 액션 — main 이 id 부여·enqueue·종단 마킹을 수행. */
 export interface InboxAction {
   /** fresh=신규 트리거(새 id 필요) · resume=`sending <id>` 재개 · empty=빈 트리거. */
@@ -69,6 +106,8 @@ export interface InboxAction {
   text: string;
   /** resume 시 기존 id. */
   id?: string;
+  /** resume 시 sending 라인에 기록된 전송 스탬프(구버전 라인엔 없음). */
+  stamp?: string;
 }
 
 export interface InboxParse {
@@ -78,11 +117,13 @@ export interface InboxParse {
 }
 
 /** send 트리거 라인을 단계별 마커로 재작성하는 헬퍼(A3 2단계 내구 마킹). */
-export function sendingLine(id: string): string {
-  return `- [x] ⏳ sending ${id}`;
+// 스탬프는 id 뒤에 둔다(DEC-004) — 재개 파서가 sending 다음 첫 토큰을 id 로 읽는다.
+export function sendingLine(id: string, stamp: string): string {
+  return `- [x] ⏳ sending ${id} ${stamp}`;
 }
-export function sentLine(id: string): string {
-  return `- [x] ✅ sent ${id}`;
+// 위키링크 텍스트 = out 노트 basename(스탬프+id) — 노트 생성 시 링크가 해소된다(DEC-005).
+export function sentLine(id: string, stamp: string): string {
+  return `- [x] ✅ sent [[${outNoteBase(stamp, id)}]]`;
 }
 export function emptyLine(): string {
   return "- [x] ⚠️ empty (no message)";
@@ -112,8 +153,12 @@ export function parseInbox(content: string): InboxParse {
     const core = labelCore(label);
 
     if (core.startsWith("sending")) {
-      const m = /sending\s+(\S+)/i.exec(label);
-      if (m) actions.push({ kind: "resume", id: m[1]!, text: segment(i), lineIndex: i });
+      const m = /sending\s+(\S+)(?:\s+(\S+))?/i.exec(label);
+      if (m) {
+        const action: InboxAction = { kind: "resume", id: m[1]!, text: segment(i), lineIndex: i };
+        if (m[2]) action.stamp = m[2];
+        actions.push(action);
+      }
       segmentStart = i + 1;
       continue;
     }
@@ -144,11 +189,18 @@ const ALLOW_CHECKED = /^\s*-\s*\[x\]\s+.*\ballow\b/i;
 const DENY_CHECKED = /^\s*-\s*\[x\]\s+.*\bdeny\b/i;
 
 /** 권한 요청 1건을 approvals 노트 블록 문자열로 렌더(append 용, 말미 개행 포함). */
-export function renderApprovalBlock(req: PermRequest): string {
+// now 주입: 요청 시각·자동 deny 기한 표기(테스트 결정론 확보). 기한은 게이트 타임아웃과 동일 기준.
+export function renderApprovalBlock(
+  req: PermRequest,
+  tl: NotifyT = t,
+  now: Date = new Date(),
+): string {
   const detail = req.detail.replace(/\s+/g, " ").trim();
+  const deadline = new Date(now.getTime() + DEFAULT_GATE_TIMEOUT_MS);
   return [
     `### ⏳ req ${req.id} · ${req.tool}`,
     `> ${detail}  (cwd: ${req.cwd})`,
+    `> ${tl("markdown.approvalMeta", { requested: formatStamp(now), deadline: formatStamp(deadline) })}`,
     `- [ ] allow`,
     `- [ ] deny`,
     `<!-- adde:perm id=${req.id} status=pending -->`,
@@ -305,7 +357,8 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     return run;
   }
 
-  function normalize(id: string, text: string): Envelope {
+  // ts 는 전송 스탬프의 원본(SoT) — 호출자가 스탬프와 같은 순간의 값을 넘긴다(DEC-003).
+  function normalize(id: string, text: string, ts: string): Envelope {
     return {
       v: 1,
       id,
@@ -314,7 +367,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       backend: "acp",
       engine: cfg.engine,
       project: cfg.proj,
-      ts: new Date().toISOString(),
+      ts,
       text,
       reply_ref: { channel_msg_id: id },
     };
@@ -358,7 +411,14 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       if (actions.length === 0) return;
 
       // Phase A: fresh→id 부여+sending 마킹, empty→마킹 (내구 기록 후 enqueue).
-      const pending: Array<{ id: string; text: string; lineIndex: number; resume: boolean }> = [];
+      const pending: Array<{
+        id: string;
+        text: string;
+        lineIndex: number;
+        resume: boolean;
+        stamp: string;
+        ts: string;
+      }> = [];
       let dirtyA = false;
       for (const a of actions) {
         if (a.kind === "empty") {
@@ -366,25 +426,45 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
           dirtyA = true;
         } else if (a.kind === "fresh") {
           const id = randomUUID();
-          lines[a.lineIndex] = sendingLine(id);
+          const d = new Date();
+          const stamp = formatStamp(d);
+          lines[a.lineIndex] = sendingLine(id, stamp);
           dirtyA = true;
-          pending.push({ id, text: a.text, lineIndex: a.lineIndex, resume: false });
+          pending.push({
+            id,
+            text: a.text,
+            lineIndex: a.lineIndex,
+            resume: false,
+            stamp,
+            ts: d.toISOString(),
+          });
         } else {
-          // resume: 라인은 이미 `sending <id>` — 그대로 두고 존재검사 후 종단.
-          pending.push({ id: a.id!, text: a.text, lineIndex: a.lineIndex, resume: true });
+          // resume: 라인은 이미 `sending <id> [<stamp>]` — 스탬프를 라인에서 복원해
+          // sent 링크·envelope.ts 와 일치시킨다. 구버전 라인(스탬프 없음)은 now 폴백.
+          const d = new Date();
+          const stamp = a.stamp ?? formatStamp(d);
+          const ts = (a.stamp ? isoFromStamp(a.stamp) : null) ?? d.toISOString();
+          pending.push({
+            id: a.id!,
+            text: a.text,
+            lineIndex: a.lineIndex,
+            resume: true,
+            stamp,
+            ts,
+          });
         }
       }
       if (dirtyA) await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
 
       // enqueue (resume 이고 이미 존재하면 스킵) → 성공분만 종단 후보.
-      const finalize: Array<{ id: string; lineIndex: number }> = [];
+      const finalize: Array<{ id: string; lineIndex: number; stamp: string }> = [];
       for (const p of pending) {
         try {
           if (p.resume && (await hasId(cfg.paths, p.id))) {
             finalize.push(p); // 이미 enqueue 됨 — 종단만
             continue;
           }
-          await enqueue(cfg.paths, normalize(p.id, p.text));
+          await enqueue(cfg.paths, normalize(p.id, p.text, p.ts));
           finalize.push(p);
           consecutiveEnqueueFailures = 0; // 성공 → 연속 실패 리셋
           enqueueAlertSent = false;
@@ -409,7 +489,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
 
       // Phase B: enqueue 확정분을 sent 로 종단.
       if (finalize.length > 0) {
-        for (const f of finalize) lines[f.lineIndex] = sentLine(f.id);
+        for (const f of finalize) lines[f.lineIndex] = sentLine(f.id, f.stamp);
         await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
         cfg.onInbound?.(); // injector 깨우기(in-process)
       }
@@ -484,18 +564,36 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
 
   async function renderOut(id: string): Promise<void> {
     const text = await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
-    let replyRef: string | undefined;
+    interface RenderSidecar {
+      reply_ref?: { channel_msg_id?: string };
+      origin_ts?: string;
+      ts?: string;
+      question?: string;
+    }
+    let sidecar: RenderSidecar | null = null;
     const sidecarRaw = await readMaybe(join(cfg.paths.outDir, `${id}.out.json`));
     if (sidecarRaw) {
       try {
-        const sidecar = JSON.parse(sidecarRaw) as { reply_ref?: { channel_msg_id?: string } };
-        replyRef = sidecar.reply_ref?.channel_msg_id;
+        sidecar = JSON.parse(sidecarRaw) as RenderSidecar;
       } catch {
-        // sidecar 파손 → reply_ref 없이 진행(보조 정보).
+        // sidecar 파손 → 메타 없이 진행(보조 정보).
       }
     }
-    const header = replyRef ? `> ↩ ${replyRef}\n\n` : "";
-    await atomicWrite(join(outboxDir, `${id}.md`), `${header}${text}`);
+    // 파일명 스탬프는 전송 시각(origin_ts) 유래 — 재렌더에도 결정론적(DEC-003).
+    // origin_ts 부재(구버전 sidecar)는 종전 `<id>.md` 유지.
+    const stamp = sidecar?.origin_ts ? stampFromIso(sidecar.origin_ts) : null;
+    const noteName = stamp ? `${outNoteBase(stamp, id)}.md` : `${id}.md`;
+    const headerLines: string[] = [];
+    const replyRef = sidecar?.reply_ref?.channel_msg_id;
+    if (replyRef) headerLines.push(`> ↩ ${replyRef}`);
+    if (sidecar?.question) headerLines.push(`> ❓ ${sidecar.question}`);
+    if (stamp && sidecar?.ts) {
+      headerLines.push(
+        `> ${tl("markdown.outMeta", { sent: stamp, done: stampFromIso(sidecar.ts) })}`,
+      );
+    }
+    const header = headerLines.length > 0 ? `${headerLines.join("\n")}\n\n` : "";
+    await atomicWrite(join(outboxDir, noteName), `${header}${text}`);
   }
 
   /** handleInbox 를 추적 가능한 형태로 기동(fire-and-forget + .catch, stop 대기 대상). */
@@ -741,7 +839,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   async function requestPermission(req: PermRequest): Promise<void> {
     // 요청당 파일(D, 백로그 B3) — 단일 파일 append 대신 격리해 동시 편집 충돌면 축소.
     await withApprovalsLock(async () => {
-      await atomicWrite(approvalFile(req.id), renderApprovalBlock(req));
+      await atomicWrite(approvalFile(req.id), renderApprovalBlock(req, tl));
     });
 
     // 어댑터-로컬 타임아웃 — 무응답 시 해당 요청 파일을 deny 로 종단(게이트도 독립 deny).

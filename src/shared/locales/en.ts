@@ -256,6 +256,8 @@ lane add options:
       "[markdown] input note ({{inbox}}) is inside the {{name}} directory ({{dir}}) — input/control paths overlap. Separate the paths.",
     badApprovalId:
       'invalid approval request id "{{reqId}}" — path escape blocked (fail-closed deny).',
+    outMeta: "🕒 sent {{sent}} · done {{done}}",
+    approvalMeta: "🕒 requested {{requested}} · auto-deny at {{deadline}} if no response",
   },
   supervisor: {
     noLanesMsg: "{{proj}}: 0 lanes — no conf in lanes.d",
@@ -295,6 +297,11 @@ lane add options:
   },
   injector: {
     injectFailed: "inject failed @ {{ts}}: {{detail}}",
+    failNote: {
+      situation: "message processing failed — id {{id}}: {{detail}}",
+      action:
+        "The message is preserved and will be reprocessed on restart. If it recurs, check the transcript and logs.",
+    },
   },
   transcript: {
     commandsUpdated: "[{{ts}}] commands_update: (updated)",
@@ -347,6 +354,8 @@ lane add options:
       renderError:
         "[injector] render error lane={{lane}} id={{id}} — awaiting redelivery: {{error}}",
       advanceError: "[injector] advance error lane={{lane}}: {{error}}",
+      failNotifyError:
+        "[injector] failure notice delivery error lane={{lane}} id={{id}}: {{error}}",
     },
     telegram: {
       rateLimit: "[telegram] {{method}} 429 rate limited — retrying in {{waitMs}}ms ({{attempt}})",

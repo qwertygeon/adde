@@ -43,9 +43,11 @@ function makeFakeAcpBackend(): AcpBackend & { emit(event: SessionEvent): Promise
     }),
     launch: vi.fn().mockResolvedValue({ sessionId: "transcript-sess" }),
     inject: vi.fn().mockResolvedValue(undefined),
-    subscribe: vi.fn().mockImplementation((_lane: string, cb: (e: SessionEvent) => Promise<void> | void) => {
-      subscribers.push(cb);
-    }),
+    subscribe: vi
+      .fn()
+      .mockImplementation((_lane: string, cb: (e: SessionEvent) => Promise<void> | void) => {
+        subscribers.push(cb);
+      }),
     onPermissionRequest: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
     emit: async (event: SessionEvent) => {

@@ -31,6 +31,12 @@ export type InjectorState = "idle" | "active";
 /** 처리 결과를 채널로 렌더하는 in-process 콜백(소스 renderOut 주입). 실패는 흡수(durable out/ 유지). */
 export type RenderCallback = (id: string) => Promise<void>;
 
+/**
+ * 주입 실패를 채널로 표면화하는 콜백(supervisor 가 Source.notify 로 배선).
+ * 보조 신호 — 알림 실패는 로그 후 흡수하고 .failed 사이드카·재처리 경로는 그대로 유지.
+ */
+export type FailNotifyCallback = (id: string, detail: string) => Promise<void>;
+
 export interface Injector {
   start(): Promise<void>;
   /** enqueue 등 외부 신호로 idle 레인을 깨워 다음 메시지를 처리한다(in-process, watch 불요). */
@@ -51,6 +57,13 @@ function isAgentMessageChunk(event: SessionEvent): boolean {
   return kind === "agent_message_chunk";
 }
 
+/** 질문 발췌(첫 줄 80자, 마스킹) — 채널 렌더 헤더의 맥락 표시용 보조 정보. */
+export function questionExcerpt(text: string): string {
+  const firstLine = text.split("\n", 1)[0] ?? "";
+  const masked = maskSecrets(firstLine.trim());
+  return masked.length > 80 ? `${masked.slice(0, 79)}…` : masked;
+}
+
 /** agent_message_chunk content 에서 텍스트 추출(string | {type,text}). */
 function chunkText(event: SessionEvent): string {
   const raw = event["content"];
@@ -67,6 +80,7 @@ export function createInjector(
   lane: string,
   backend: AcpBackend,
   render?: RenderCallback,
+  onFail?: FailNotifyCallback,
 ): Injector {
   let state: InjectorState = "idle";
   let responseText = "";
@@ -91,10 +105,12 @@ export function createInjector(
     try {
       await backend.inject(lane, envelope.text);
       // inject resolve = turn 종료 — 누적 응답을 마스킹 후 out 기록(DEC-003) + 렌더(DEC-002).
-      const sidecar: OutSidecar = { ts: new Date().toISOString() };
+      const sidecar: OutSidecar = { ts: new Date().toISOString(), origin_ts: envelope.ts };
       if (envelope.reply_ref?.channel_msg_id) {
         sidecar.reply_ref = { channel_msg_id: envelope.reply_ref.channel_msg_id };
       }
+      const question = questionExcerpt(envelope.text);
+      if (question.length > 0) sidecar.question = question;
       await writeOut(paths, id, maskSecrets(responseText), sidecar);
       await deliver(id);
     } catch (err) {
@@ -114,6 +130,18 @@ export function createInjector(
           }),
         ),
       );
+      // 실패를 채널에도 표면화(보조) — 노트/메시지 없이 조용히 사라진 것처럼 보이는 것을 방지.
+      if (onFail) {
+        await onFail(id, detail).catch((e: unknown) =>
+          console.error(
+            t("log.injector.failNotifyError", {
+              lane,
+              id,
+              error: e instanceof Error ? e.message : String(e),
+            }),
+          ),
+        );
+      }
     } finally {
       state = "idle";
       responseText = "";

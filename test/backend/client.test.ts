@@ -34,7 +34,10 @@ describe("AcpBackend subscribe — available_commands_update (SC-010)", () => {
     // handleSessionUpdate 는 AcpBackendImpl 내부 private 로직이므로 직접 export 없음.
     // 행동 검증은 subscribe → onSessionUpdate 경로(integration 위임).
     // 단위 검증: 이 이벤트 종류가 올바른 형태임을 확인.
-    const availableCommandsEvent: { sessionUpdate: "available_commands_update"; commands: string[] } = {
+    const availableCommandsEvent: {
+      sessionUpdate: "available_commands_update";
+      commands: string[];
+    } = {
       sessionUpdate: "available_commands_update",
       commands: ["Bash", "Read", "Write"],
     };
@@ -69,7 +72,6 @@ describe("AcpBackend fake — turn 완료 전 큐잉 quirk (SC-004 연계)", () 
 
 // DEC-001/002 (005-gate-auto-respond): autopass 판정 — denylist 외 자동 허용, denylist 는 채널 승인 폴백
 describe("shouldAutopass (005 autopass)", () => {
-
   it("perm_tier=autopass 이고 denylist 에 없는 도구는 true (자동 허용)", () => {
     expect(shouldAutopass({ perm_tier: "autopass", denylist: ["Bash"] }, "Read")).toBe(true);
   });
@@ -118,9 +120,7 @@ describe("도구명 채집·해석·자동 허용 판정 (DEC-006)", () => {
       _meta: { claudeCode: { toolName: "Bash" } },
     });
     const resolved = resolveToolName(map, { toolCallId: "t2", title: "`rm -rf build/`" });
-    expect(
-      decideAutoAllow({ perm_tier: "autopass", denylist: ["Bash"] }, resolved),
-    ).toBeNull(); // 채널 승인 폴백
+    expect(decideAutoAllow({ perm_tier: "autopass", denylist: ["Bash"] }, resolved)).toBeNull(); // 채널 승인 폴백
   });
 
   it("도구명 미해석(맵 미채집·_meta 부재) 시 자동 허용하지 않는다 (fail-closed)", () => {

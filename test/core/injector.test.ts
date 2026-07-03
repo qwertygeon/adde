@@ -8,6 +8,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { lanePaths } from "../../src/shared/paths.js";
 import { enqueue } from "../../src/core/queue.js";
+import type { Envelope } from "../../src/shared/envelope.js";
 
 // SC-003: 크래시 후 processing 잔존 파일 재처리
 // SC-004: active 동안 다음 envelope 미주입 (idle 게이트)
@@ -229,6 +230,118 @@ describe("SC-B2: writeOut 후 render(id) 호출", () => {
     await flush();
 
     expect(fs.existsSync(path.join(paths.outDir, "r2.out"))).toBe(true);
+  });
+});
+
+describe("세션 제어 envelope (control)", () => {
+  function controlEnvelope(id: string, control: NonNullable<Envelope["control"]>): Envelope {
+    return { ...makeEnvelope(id, `/${control.kind}`), control };
+  }
+
+  it("clear → backend.reset 호출, 완료 통지를 out 으로 기록", async () => {
+    const backend = {
+      ...makeBackend(),
+      reset: vi.fn().mockResolvedValue({ sessionId: "fresh-1" }),
+    };
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await enqueue(paths, controlEnvelope("c1", { kind: "clear" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "c1.out")));
+
+    expect(backend.reset).toHaveBeenCalledWith("test-lane");
+    expect(backend.inject).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(paths.outDir, "c1.out"), "utf8")).toContain("새 세션");
+    // 새 세션이 장부에 기록됨
+    const ledger = JSON.parse(fs.readFileSync(paths.sessionsFile, "utf8")) as Array<{ id: string }>;
+    expect(ledger.some((e) => e.id === "fresh-1")).toBe(true);
+  });
+
+  it("compact → 엔진에 /compact 슬래시 텍스트 주입 + 완료 통지", async () => {
+    const backend = makeBackend();
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await enqueue(paths, controlEnvelope("c2", { kind: "compact" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "c2.out")));
+
+    expect(backend.inject).toHaveBeenCalledWith("test-lane", "/compact");
+    expect(fs.readFileSync(path.join(paths.outDir, "c2.out"), "utf8")).toContain("압축");
+  });
+
+  it("resume(sessionId) → backend.resumeSession 호출, 성공 통지", async () => {
+    const backend = {
+      ...makeBackend(),
+      resumeSession: vi.fn().mockResolvedValue({ sessionId: "old-9", resumed: true }),
+    };
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await enqueue(paths, controlEnvelope("c3", { kind: "resume", sessionId: "old-9" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "c3.out")));
+
+    expect(backend.resumeSession).toHaveBeenCalledWith("test-lane", "old-9");
+    expect(fs.readFileSync(path.join(paths.outDir, "c3.out"), "utf8")).toContain("old-9");
+  });
+
+  it("resume 복귀 실패(resumed=false) → 새 세션 폴백 통지", async () => {
+    const backend = {
+      ...makeBackend(),
+      resumeSession: vi.fn().mockResolvedValue({ sessionId: "fresh-2", resumed: false }),
+    };
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await enqueue(paths, controlEnvelope("c4", { kind: "resume", sessionId: "gone-1" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "c4.out")));
+
+    expect(fs.readFileSync(path.join(paths.outDir, "c4.out"), "utf8")).toContain("실패");
+  });
+
+  it("resume sessionId 없음 → 재개 대상 없음 통지(백엔드 미호출)", async () => {
+    const backend = {
+      ...makeBackend(),
+      resumeSession: vi.fn(),
+    };
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await enqueue(paths, controlEnvelope("c5", { kind: "resume" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "c5.out")));
+
+    expect(backend.resumeSession).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(paths.outDir, "c5.out"), "utf8")).toContain("없습니다");
+  });
+
+  it("sessions → 장부 목록(마지막 대화 시각 포함) 통지", async () => {
+    fs.writeFileSync(
+      paths.sessionsFile,
+      JSON.stringify([
+        {
+          id: "s-a",
+          createdAt: "2026-07-01T00:00:00Z",
+          lastActivityAt: new Date(2026, 6, 3, 15, 30).toISOString(),
+          label: "빌드 오류 분석",
+        },
+      ]),
+    );
+    const backend = makeBackend();
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await enqueue(paths, controlEnvelope("c6", { kind: "sessions" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "c6.out")));
+
+    const out = fs.readFileSync(path.join(paths.outDir, "c6.out"), "utf8");
+    expect(out).toContain("빌드 오류 분석");
+    expect(out).toContain("07-03 15:30"); // 마지막 대화 시각 표기
+    expect(out).toContain("s-a");
+  });
+
+  it("reset 미지원 백엔드의 clear → 미지원 통지(크래시 없음)", async () => {
+    const backend = makeBackend(); // reset/resumeSession 없음
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await enqueue(paths, controlEnvelope("c7", { kind: "clear" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "c7.out")));
+
+    expect(fs.readFileSync(path.join(paths.outDir, "c7.out"), "utf8")).toContain(
+      "지원하지 않습니다",
+    );
   });
 });
 

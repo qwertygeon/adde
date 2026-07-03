@@ -20,6 +20,8 @@ export interface LanePaths {
   stateDir: string;
   envFile: string;
   sessionIdFile: string;
+  /** 세션 장부(sessions.json) — /resume 목록·마지막 대화 시각의 SSOT(ADDE 자체 관리). */
+  sessionsFile: string;
   transcriptLog: string;
   /** 엔진 서브프로세스 stderr 캡처 파일(append). ACP stdout 은 프로토콜 채널이라 대상 아님. */
   engineLog: string;
@@ -95,6 +97,7 @@ export function lanePaths(base: string, proj: string, lane: string): LanePaths {
     stateDir,
     envFile: join(stateDir, ".env"),
     sessionIdFile: join(stateDir, "session.id"),
+    sessionsFile: join(stateDir, "sessions.json"),
     transcriptLog: join(stateDir, "transcript.log"),
     engineLog: join(stateDir, "engine.log"),
     runtimeJson: join(stateDir, "runtime.json"),

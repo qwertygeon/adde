@@ -41,9 +41,9 @@ describe("laneAdd 사전 검증 경고 (007 SC4)", () => {
   });
 
   it("allowlist 도구명 문자셋 위반은 거부한다 (011-C)", async () => {
-    await expect(
-      laneAdd("proj", "tg", { base, allowlist: ["Read", "rm -rf /"] }),
-    ).rejects.toThrow(LaneConfigError);
+    await expect(laneAdd("proj", "tg", { base, allowlist: ["Read", "rm -rf /"] })).rejects.toThrow(
+      LaneConfigError,
+    );
   });
 
   it("telegram 토큰 형식이 이상하면 경고, 정상이면 없음", async () => {
@@ -109,9 +109,7 @@ describe("laneAdd", () => {
   });
 
   it("숫자가 아닌 chat_id 는 거부한다", async () => {
-    await expect(laneAdd("proj", "tg", { base, chat_id: "abc" })).rejects.toThrow(
-      LaneConfigError,
-    );
+    await expect(laneAdd("proj", "tg", { base, chat_id: "abc" })).rejects.toThrow(LaneConfigError);
   });
 
   it("음수 chat_id(그룹)는 허용한다", async () => {
@@ -141,9 +139,9 @@ describe("laneAdd", () => {
   });
 
   it("markdown 레인에 token 을 주면 거부한다", async () => {
-    await expect(
-      laneAdd("proj", "md", { base, source: "markdown", token: "x" }),
-    ).rejects.toThrow(LaneConfigError);
+    await expect(laneAdd("proj", "md", { base, source: "markdown", token: "x" })).rejects.toThrow(
+      LaneConfigError,
+    );
   });
 });
 
@@ -197,9 +195,9 @@ describe("laneAdd — denylist·perm_tier 검증 (005 autopass)", () => {
   });
 
   it("denylist 도구명 문자셋 위반은 거부한다", async () => {
-    await expect(
-      laneAdd("proj", "ap2", { base, denylist: ["Bash", "rm -rf /"] }),
-    ).rejects.toThrow(LaneConfigError);
+    await expect(laneAdd("proj", "ap2", { base, denylist: ["Bash", "rm -rf /"] })).rejects.toThrow(
+      LaneConfigError,
+    );
   });
 
   it("perm_tier=autopass 는 자동 허용 위험 경고를 낸다(비차단)", async () => {

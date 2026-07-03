@@ -151,9 +151,7 @@ describe("SIGTERM_source_stop_backend_close_순서_후_종료 (SC-011)", () => {
     await fakeBackend.close("test-lane");
 
     expect(callOrder).toEqual(["source.stop", "backend.close"]);
-    expect(callOrder.indexOf("source.stop")).toBeLessThan(
-      callOrder.indexOf("backend.close"),
-    );
+    expect(callOrder.indexOf("source.stop")).toBeLessThan(callOrder.indexOf("backend.close"));
   });
 
   it("SIGTERM 핸들러 설계: process.exit(0) 은 await 완료 후 호출 (TypeScript 규칙)", async () => {
@@ -162,8 +160,7 @@ describe("SIGTERM_source_stop_backend_close_순서_후_종료 (SC-011)", () => {
     // 여기서는 계약이 tasks.md C-002 에 명시되었음을 단언하는 정적 계약 테스트
     //
     // C-002 코드: SIGTERM/SIGINT → supervisorDown(proj) await → process.exit(0)
-    const srcPath =
-      process.cwd() + "/src/cli/run.ts";
+    const srcPath = process.cwd() + "/src/cli/run.ts";
     const fs_mod = await import("node:fs");
     if (!fs_mod.existsSync(srcPath)) {
       // TDD Red — 구현 전
@@ -173,8 +170,7 @@ describe("SIGTERM_source_stop_backend_close_순서_후_종료 (SC-011)", () => {
     const content = fs_mod.readFileSync(srcPath, "utf8");
     // process.exit(0) 이 await 뒤에 있는지 확인
     // "await ... process.exit" 패턴 — 순서 보장 정적 신호
-    const hasAwaitBeforeExit =
-      content.includes("await") && content.includes("process.exit");
+    const hasAwaitBeforeExit = content.includes("await") && content.includes("process.exit");
     expect(hasAwaitBeforeExit).toBe(true);
   });
 });

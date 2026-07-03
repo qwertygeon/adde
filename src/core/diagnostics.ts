@@ -301,7 +301,7 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
       try {
         hasToken = (await readFile(paths.envFile, "utf8")).includes("TELEGRAM_BOT_TOKEN=");
       } catch {
-        hasToken = false;
+        // env 파일 부재/읽기 실패 = 토큰 없음(초기값 유지)
       }
       checks.push(
         hasToken

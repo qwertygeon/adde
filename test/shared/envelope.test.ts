@@ -102,7 +102,9 @@ describe("parseEnvelope (SC-014 envelope 정규화)", () => {
   it("attachments 옵션 필드가 존재하면 파싱한다", () => {
     const withAttachments = {
       ...validEnvelope,
-      attachments: [{ kind: "image" as const, path: "/tmp/img.png", name: "img.png", mime: "image/png" }],
+      attachments: [
+        { kind: "image" as const, path: "/tmp/img.png", name: "img.png", mime: "image/png" },
+      ],
     };
     const result = parseEnvelope(JSON.stringify(withAttachments));
     expect(result.attachments).toHaveLength(1);

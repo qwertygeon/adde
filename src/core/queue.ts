@@ -201,7 +201,12 @@ export async function hasId(paths: LanePaths, id: string): Promise<boolean> {
 
 export interface OutSidecar {
   reply_ref?: { channel_msg_id: string; thread?: string };
+  /** turn 완료 시각(ISO). */
   ts?: string;
+  /** 원본 메시지 전송(enqueue) 시각(envelope.ts) — 채널 렌더의 스탬프 SoT. */
+  origin_ts?: string;
+  /** 원본 질문 발췌(첫 줄, 마스킹) — 채널 렌더 헤더의 맥락 표시용. */
+  question?: string;
 }
 
 /**

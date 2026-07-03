@@ -209,7 +209,7 @@ export async function daemonRegState(proj: string, deps?: LaunchdDeps): Promise<
     await stat(targetPlist);
     plistExists = true;
   } catch {
-    plistExists = false;
+    // stat 실패 = plist 부재(초기값 유지)
   }
 
   // launchctl list 에 Label 등록 여부 — 부분문자열 매칭.
@@ -218,7 +218,7 @@ export async function daemonRegState(proj: string, deps?: LaunchdDeps): Promise<
     const { stdout } = await exec(["list"]);
     launchctlRegistered = stdout.includes(label);
   } catch {
-    launchctlRegistered = false;
+    // launchctl 실행 실패 = 등록 확인 불가 → 미등록 취급(초기값 유지)
   }
 
   return { plistExists, launchctlRegistered };

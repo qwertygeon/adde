@@ -22,7 +22,10 @@ beforeEach(() => {
   fs.mkdirSync(paths.queueDir, { recursive: true });
   fs.mkdirSync(paths.processingDir, { recursive: true });
   fs.mkdirSync(paths.outDir, { recursive: true });
-  fs.writeFileSync(paths.envFile, "TELEGRAM_BOT_TOKEN=111111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n");
+  fs.writeFileSync(
+    paths.envFile,
+    "TELEGRAM_BOT_TOKEN=111111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n",
+  );
   vi.useFakeTimers();
 });
 
@@ -34,7 +37,11 @@ afterEach(() => {
 
 // fake sendPermPrompt — inline_keyboard 를 포함한 sendMessage 를 기록
 function makeFakeSendPermPrompt(fakeSendMessage: ReturnType<typeof vi.fn>) {
-  return async (_chatId: number, _reqId: string, req: PermRequest): Promise<{ messageId: number }> => {
+  return async (
+    _chatId: number,
+    _reqId: string,
+    req: PermRequest,
+  ): Promise<{ messageId: number }> => {
     await fakeSendMessage({
       chat_id: 0,
       text: `권한 요청: ${req.tool}`,

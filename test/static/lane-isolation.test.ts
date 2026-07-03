@@ -33,7 +33,8 @@ describe("정적 분석 — 레인 격리 (SC-025)", () => {
     }
 
     // 레인 이름 하드코딩 의심 패턴: queue/telegram-claude/ 등 고정 레인명 포함 경로 리터럴
-    const hardcodedLanePath = /["'`](queue|processing|out|state)\/(telegram|lane-[ab]|[a-z]+-[a-z]+)\//;
+    const hardcodedLanePath =
+      /["'`](queue|processing|out|state)\/(telegram|lane-[ab]|[a-z]+-[a-z]+)\//;
     const violations: string[] = [];
     for (const file of tsFiles) {
       const content = fs.readFileSync(file, "utf8");
@@ -71,8 +72,14 @@ describe("정적 분석 — 레인 격리 (SC-025)", () => {
   it("레인 A 경로 객체가 레인 B 경로에 접근하지 않음을 런타임으로 확인", () => {
     // 동적 검증: 두 레인의 경로 객체를 생성하고 교차 접근이 구조적으로 불가능한지 확인
     // lanePaths 는 파라미터만으로 경로를 결정하므로 레인 B 경로를 알 방법이 없음
-    const pathsA = lanePathsFn("/tmp/adde-test", "proj", "lane-a") as unknown as Record<string, string>;
-    const pathsB = lanePathsFn("/tmp/adde-test", "proj", "lane-b") as unknown as Record<string, string>;
+    const pathsA = lanePathsFn("/tmp/adde-test", "proj", "lane-a") as unknown as Record<
+      string,
+      string
+    >;
+    const pathsB = lanePathsFn("/tmp/adde-test", "proj", "lane-b") as unknown as Record<
+      string,
+      string
+    >;
 
     // A 경로가 B 의 lane-b 를 포함하지 않음
     for (const key of Object.keys(pathsA)) {

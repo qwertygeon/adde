@@ -50,7 +50,10 @@ function setupProject(projName: string, lanes: string[] = ["telegram-claude"]) {
     fs.mkdirSync(lp.processingDir, { recursive: true });
     fs.mkdirSync(lp.outDir, { recursive: true });
     fs.mkdirSync(lp.stateDir, { recursive: true });
-    fs.writeFileSync(lp.envFile, "TELEGRAM_BOT_TOKEN=111111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n");
+    fs.writeFileSync(
+      lp.envFile,
+      "TELEGRAM_BOT_TOKEN=111111111:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg\n",
+    );
   }
 }
 

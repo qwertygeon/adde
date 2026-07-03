@@ -81,9 +81,9 @@ describe("matchesDenylist — 글롭 의미론 (DEC-001/003)", () => {
   });
 
   it("도구별 대표 인자 — WebFetch=url, Write=file_path", () => {
-    expect(matchesDenylist(["WebFetch(https://evil.*)"], "WebFetch", { url: "https://evil.io" })).toBe(
-      true,
-    );
+    expect(
+      matchesDenylist(["WebFetch(https://evil.*)"], "WebFetch", { url: "https://evil.io" }),
+    ).toBe(true);
     expect(matchesDenylist(["Write(/etc/*)"], "Write", { file_path: "/etc/passwd" })).toBe(true);
     expect(matchesDenylist(["Write(/etc/*)"], "Write", { file_path: "/tmp/x" })).toBe(false);
   });

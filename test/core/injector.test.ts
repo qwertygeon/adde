@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Injector } from "../../src/core/injector.js";
-import { createInjector } from "../../src/core/injector.js";
+import { createInjector, questionExcerpt } from "../../src/core/injector.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -71,6 +71,16 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmpBase, { recursive: true, force: true });
   vi.restoreAllMocks();
+});
+
+describe("questionExcerpt", () => {
+  it("첫 줄만 취하고 80자 초과는 말줄임한다", () => {
+    expect(questionExcerpt("한 줄 질문\n둘째 줄")).toBe("한 줄 질문");
+    const long = "a".repeat(100);
+    const out = questionExcerpt(long);
+    expect(out.length).toBe(80);
+    expect(out.endsWith("…")).toBe(true);
+  });
 });
 
 describe("Injector 상태기계", () => {
@@ -203,6 +213,20 @@ describe("SC-B1: 응답 누적 → writeOut(out/<id>.out + sidecar)", () => {
     const sidecar = JSON.parse(fs.readFileSync(path.join(paths.outDir, "b1.out.json"), "utf8"));
     expect(sidecar.reply_ref.channel_msg_id).toBe("orig-42");
   });
+
+  it("sidecar 에 원본 전송 시각(origin_ts)·질문 발췌(question)를 기록한다", async () => {
+    const backend = makeBackend();
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+
+    const env = makeEnvelope("b2", "빌드 오류 원인 분석해줘\n두 번째 줄은 발췌 제외");
+    await enqueue(paths, env);
+    await injector.start();
+    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "b2.out.json")));
+
+    const sidecar = JSON.parse(fs.readFileSync(path.join(paths.outDir, "b2.out.json"), "utf8"));
+    expect(sidecar.origin_ts).toBe(env.ts);
+    expect(sidecar.question).toBe("빌드 오류 원인 분석해줘");
+  });
 });
 
 describe("SC-B2: writeOut 후 render(id) 호출", () => {
@@ -231,6 +255,41 @@ describe("SC-B2: writeOut 후 render(id) 호출", () => {
     await flush();
 
     expect(fs.existsSync(path.join(paths.outDir, "r2.out"))).toBe(true);
+  });
+});
+
+describe("주입 실패 채널 표면화 (onFail)", () => {
+  it("inject 실패 시 onFail(id, detail) 을 호출한다", async () => {
+    const inject = vi.fn().mockRejectedValue(new Error("engine boom"));
+    const backend = makeBackend(inject);
+    const failures: Array<{ id: string; detail: string }> = [];
+    const onFail = vi.fn().mockImplementation(async (id: string, detail: string) => {
+      failures.push({ id, detail });
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const injector: Injector = createInjector(paths, "test-lane", backend, undefined, onFail);
+
+    await enqueue(paths, makeEnvelope("f1"));
+    await injector.start();
+    await waitUntil(() => failures.length >= 1);
+
+    expect(failures[0]).toEqual({ id: "f1", detail: "engine boom" });
+    // .failed 사이드카 기록은 기존대로 유지
+    expect(fs.existsSync(path.join(paths.outDir, "f1.failed"))).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  it("onFail 자체가 실패해도 예외가 전파되지 않는다(보조 신호 흡수)", async () => {
+    const inject = vi.fn().mockRejectedValue(new Error("engine boom"));
+    const backend = makeBackend(inject);
+    const onFail = vi.fn().mockRejectedValue(new Error("notify boom"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const injector: Injector = createInjector(paths, "test-lane", backend, undefined, onFail);
+
+    await enqueue(paths, makeEnvelope("f2"));
+    await expect(injector.start()).resolves.toBeUndefined();
+    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "f2.failed")));
+    errSpy.mockRestore();
   });
 });
 

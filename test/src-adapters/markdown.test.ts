@@ -6,6 +6,10 @@ import {
   parseInbox,
   sentLine,
   sendingLine,
+  formatStamp,
+  stampFromIso,
+  isoFromStamp,
+  outNoteBase,
   renderApprovalBlock,
   parseApprovals,
   finalizeApprovalDeny,
@@ -16,6 +20,9 @@ import type { Source } from "../../src/src-adapters/source.js";
 import type { PermRequest } from "../../src/gate/gate.js";
 import { lanePaths } from "../../src/shared/paths.js";
 import type { LaneConf } from "../../src/shared/conf.js";
+
+/** 테스트 공용 전송 스탬프 — 형식만 유효하면 값은 임의. */
+const STAMP = "20260101-000000";
 
 /** 실시간 폴링 대기 — fs.watch 이벤트 지연 흡수. */
 async function waitFor(cond: () => boolean, timeoutMs = 8000): Promise<void> {
@@ -53,14 +60,18 @@ describe("parseInbox (actions)", () => {
   });
 
   it("종단(sent) 마커는 경계로 작동한다 — 다중 메시지", () => {
-    const content = ["보낸 메시지", sentLine("old"), "두 번째", "- [x] 📤 send"].join("\n");
+    const content = ["보낸 메시지", sentLine("old", STAMP), "두 번째", "- [x] 📤 send"].join("\n");
     const r = parseInbox(content);
     expect(r.actions).toHaveLength(1);
     expect(r.actions[0]).toMatchObject({ kind: "fresh", text: "두 번째" });
   });
 
   it("종단 마커는 다시 트리거로 인식되지 않는다(멱등)", () => {
-    expect(parseInbox("x\n" + sentLine("id-x") + "\n").actions).toHaveLength(0);
+    expect(parseInbox("x\n" + sentLine("id-x", STAMP) + "\n").actions).toHaveLength(0);
+  });
+
+  it("구버전 sent 마커(`sent <id>`)도 경계로 작동한다(하위호환)", () => {
+    expect(parseInbox("x\n- [x] ✅ sent legacy-id\n").actions).toHaveLength(0);
   });
 
   // A4: 전용 라벨 고정 — 'send' 정확 일치만 트리거
@@ -82,12 +93,39 @@ describe("parseInbox (actions)", () => {
   });
 
   // A3: sending 마커는 resume 액션
-  it("A3: sending 마커는 resume 액션으로 id 를 보존한다", () => {
-    const content = ["재개 메시지", sendingLine("crash-id")].join("\n");
+  it("A3: sending 마커는 resume 액션으로 id·스탬프를 보존한다", () => {
+    const content = ["재개 메시지", sendingLine("crash-id", STAMP)].join("\n");
     const r = parseInbox(content);
     expect(r.actions).toEqual([
-      { kind: "resume", id: "crash-id", text: "재개 메시지", lineIndex: 1 },
+      { kind: "resume", id: "crash-id", stamp: STAMP, text: "재개 메시지", lineIndex: 1 },
     ]);
+  });
+
+  it("A3: 구버전 sending 마커(스탬프 없음)는 stamp 없이 resume 액션", () => {
+    const r = parseInbox("재개\n- [x] ⏳ sending old-id\n");
+    expect(r.actions).toEqual([{ kind: "resume", id: "old-id", text: "재개", lineIndex: 1 }]);
+  });
+});
+
+describe("전송 스탬프", () => {
+  it("formatStamp 은 로컬 시각을 YYYYMMDD-HHmmss 로 표기한다", () => {
+    expect(formatStamp(new Date(2026, 6, 3, 16, 20, 45))).toBe("20260703-162045");
+  });
+
+  it("isoFromStamp 는 스탬프를 ISO 로 복원한다(roundtrip)", () => {
+    const iso = isoFromStamp("20260703-162045");
+    expect(iso).not.toBeNull();
+    expect(stampFromIso(iso!)).toBe("20260703-162045");
+  });
+
+  it("isoFromStamp 는 형식 불일치에 null", () => {
+    expect(isoFromStamp("not-a-stamp")).toBeNull();
+    expect(isoFromStamp("2026-07-03")).toBeNull();
+  });
+
+  it("sent 라인은 out 노트 basename 위키링크를 담는다", () => {
+    expect(sentLine("id-1", "20260703-162045")).toBe("- [x] ✅ sent [[20260703-162045 id-1]]");
+    expect(outNoteBase("20260703-162045", "id-1")).toBe("20260703-162045 id-1");
   });
 });
 
@@ -109,6 +147,13 @@ describe("approvals 파싱", () => {
     expect(block).toContain("id=req-1");
     expect(block).toContain("- [ ] allow");
     expect(block).toContain("- [ ] deny");
+  });
+
+  it("renderApprovalBlock 은 요청 시각·자동 거부 기한을 표기한다", () => {
+    const now = new Date(2026, 6, 3, 16, 20, 45);
+    const block = renderApprovalBlock(req, undefined, now);
+    expect(block).toContain("20260703-162045"); // 요청 시각 스탬프
+    expect(block).toContain("자동 거부"); // 기한 안내(테스트 로케일 ko)
   });
 
   it("allow 단일 체크 → allow 결정 + 마커 종단 재작성", () => {
@@ -317,8 +362,8 @@ describe("createMarkdownSource (통합)", () => {
   // A3: 크래시(enqueue 전 sending 마킹만 남음) → 재기동 시 정확히 1회 enqueue
   it("A3: sending 마커가 큐에 없으면 재기동 시 재enqueue 후 sent 종단", async () => {
     const inboxPath = path.join(rootDir, "inbox.md");
-    // 크래시 시뮬레이션: sending <id> 만 남고 enqueue 는 안 된 상태
-    fs.writeFileSync(inboxPath, `복구될 메시지\n${sendingLine("crash-1")}\n`);
+    // 크래시 시뮬레이션: sending <id> <stamp> 만 남고 enqueue 는 안 된 상태
+    fs.writeFileSync(inboxPath, `복구될 메시지\n${sendingLine("crash-1", STAMP)}\n`);
 
     source = makeSource();
     source.start();
@@ -332,8 +377,11 @@ describe("createMarkdownSource (통합)", () => {
     >;
     expect(env["id"]).toBe("crash-1");
     expect(env["text"]).toBe("복구될 메시지");
+    // 재개 envelope.ts 는 sending 라인의 스탬프를 재현한다(sent 링크·노트 파일명 일치).
+    expect(stampFromIso(env["ts"] as string)).toBe(STAMP);
 
-    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("sent crash-1"));
+    // sent 종단은 스탬프+id 위키링크
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(`sent [[${STAMP} crash-1]]`));
     // 중복 없음
     await new Promise((r) => setTimeout(r, 150));
     expect(msgCount()).toBe(1);
@@ -342,14 +390,14 @@ describe("createMarkdownSource (통합)", () => {
   // A3: 이미 처리된 sending(out 존재) → 재enqueue 없이 종단만
   it("A3: sending 마커의 id 가 이미 out 에 있으면 재enqueue 하지 않는다", async () => {
     const inboxPath = path.join(rootDir, "inbox.md");
-    fs.writeFileSync(inboxPath, `이미 처리됨\n${sendingLine("done-1")}\n`);
+    fs.writeFileSync(inboxPath, `이미 처리됨\n${sendingLine("done-1", STAMP)}\n`);
     // out/<id>.out 존재 = 이미 완료된 메시지
     fs.writeFileSync(path.join(paths.outDir, "done-1.out"), "응답");
 
     source = makeSource();
     source.start();
 
-    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("sent done-1"));
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(`sent [[${STAMP} done-1]]`));
     expect(msgCount()).toBe(0); // 큐에 재enqueue 되지 않음
   });
 
@@ -475,10 +523,70 @@ describe("createMarkdownSource (통합)", () => {
 
     await source.renderOut("msg-1");
 
+    // origin_ts 없는 구버전 sidecar → 종전 `<id>.md` 파일명 유지(하위호환)
     const notePath = path.join(rootDir, "out", "msg-1.md");
     expect(fs.existsSync(notePath)).toBe(true);
     const note = fs.readFileSync(notePath, "utf8");
     expect(note).toContain("에이전트 응답입니다");
     expect(note).toContain("orig-9");
+  });
+
+  it("E2E 계약: sent 위키링크 텍스트 == renderOut 노트 파일명 (전 경로 관통)", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "질문입니다\n- [x] 📤 send\n");
+
+    source = makeSource();
+    source.start();
+
+    // 인박스 처리 → sent 위키링크 확보
+    await waitFor(() => /sent \[\[.+\]\]/.test(fs.readFileSync(inboxPath, "utf8")));
+    const link = /sent \[\[(.+)\]\]/.exec(fs.readFileSync(inboxPath, "utf8"))![1]!;
+
+    // 큐 envelope 로 injector 의 writeOut 을 재현(origin_ts = envelope.ts)
+    const qFile = fs.readdirSync(paths.queueDir).find((f) => f.endsWith(".msg"))!;
+    const env = JSON.parse(fs.readFileSync(path.join(paths.queueDir, qFile), "utf8")) as {
+      id: string;
+      ts: string;
+    };
+    fs.writeFileSync(
+      path.join(paths.outDir, `${env.id}.out.json`),
+      JSON.stringify({ reply_ref: { channel_msg_id: env.id }, origin_ts: env.ts }),
+    );
+    fs.writeFileSync(path.join(paths.outDir, `${env.id}.out`), "응답");
+
+    await source.renderOut(env.id);
+
+    // 링크 텍스트 그대로가 노트 파일명이어야 링크가 해소된다
+    expect(fs.existsSync(path.join(rootDir, "out", `${link}.md`))).toBe(true);
+  });
+
+  it("renderOut: origin_ts sidecar → 스탬프 파일명 + 질문·시각 헤더", async () => {
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
+    source = makeSource();
+    source.start();
+
+    const originIso = isoFromStamp("20260703-162045")!;
+    const doneIso = isoFromStamp("20260703-162130")!;
+    fs.writeFileSync(
+      path.join(paths.outDir, "msg-2.out.json"),
+      JSON.stringify({
+        reply_ref: { channel_msg_id: "msg-2" },
+        origin_ts: originIso,
+        ts: doneIso,
+        question: "빌드 오류 원인 분석해줘",
+      }),
+    );
+    fs.writeFileSync(path.join(paths.outDir, "msg-2.out"), "분석 결과입니다");
+
+    await source.renderOut("msg-2");
+
+    // 파일명 = sent 위키링크 텍스트(outNoteBase)와 동일 — 링크 해소 계약
+    const notePath = path.join(rootDir, "out", `${outNoteBase("20260703-162045", "msg-2")}.md`);
+    expect(fs.existsSync(notePath)).toBe(true);
+    const note = fs.readFileSync(notePath, "utf8");
+    expect(note).toContain("분석 결과입니다");
+    expect(note).toContain("> ❓ 빌드 오류 원인 분석해줘");
+    expect(note).toContain("20260703-162045"); // 요청 스탬프
+    expect(note).toContain("20260703-162130"); // 완료 스탬프
   });
 });

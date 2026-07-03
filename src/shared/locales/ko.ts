@@ -255,6 +255,8 @@ lane add 옵션:
     inboxInsideDir:
       "[markdown] 입력 노트({{inbox}})가 {{name}} 디렉터리({{dir}}) 내부 — 입력/제어 경로가 겹칩니다. 경로를 분리하세요.",
     badApprovalId: '잘못된 승인 요청 id "{{reqId}}" — 경로 탈출 차단(fail-closed deny).',
+    outMeta: "🕒 요청 {{sent}} · 완료 {{done}}",
+    approvalMeta: "🕒 요청 {{requested}} · 무응답 시 {{deadline}} 자동 거부",
   },
   supervisor: {
     noLanesMsg: "{{proj}}: 레인 0개 — lanes.d 에 conf 없음",
@@ -293,6 +295,10 @@ lane add 옵션:
   },
   injector: {
     injectFailed: "inject 실패 @ {{ts}}: {{detail}}",
+    failNote: {
+      situation: "메시지 처리 실패 — id {{id}}: {{detail}}",
+      action: "메시지는 보존되어 재기동 시 재처리됩니다. 반복되면 트랜스크립트·로그를 확인하세요.",
+    },
   },
   transcript: {
     commandsUpdated: "[{{ts}}] commands_update: (갱신)",
@@ -338,6 +344,7 @@ lane add 옵션:
       failedWriteFail: "[injector] .failed 기록 실패 lane={{lane}} id={{id}}: {{error}}",
       renderError: "[injector] 렌더 오류 lane={{lane}} id={{id}} — 재전송 대기: {{error}}",
       advanceError: "[injector] 진행 오류 lane={{lane}}: {{error}}",
+      failNotifyError: "[injector] 실패 알림 전달 오류 lane={{lane}} id={{id}}: {{error}}",
     },
     telegram: {
       rateLimit: "[telegram] {{method}} 429 레이트리밋 — {{waitMs}}ms 후 재시도({{attempt}})",

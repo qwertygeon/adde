@@ -16,7 +16,7 @@ import { createInjector } from "./injector.js";
 import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
-import { formatWarnNote } from "../shared/notify.js";
+import { formatWarnNote, formatException } from "../shared/notify.js";
 import { t, tFor } from "../shared/i18n.js";
 import {
   writeRuntime,
@@ -234,7 +234,24 @@ export async function supervisorUp(
 
     // injector 를 source 보다 먼저 생성 — render 는 source 를 지연 참조(closure, turn 종료 시 호출).
     // in-process 배선(DEC-001): source.onInbound → injector.notify, injector.render → source.renderOut.
-    const injector = createInjector(paths, lane, backend, (id) => source.renderOut(id));
+    // 주입 실패도 채널로 표면화(onFail → source.notify) — 채널 언어(레인 로케일)로 렌더.
+    const laneT = tFor(conf.lang);
+    const injector = createInjector(
+      paths,
+      lane,
+      backend,
+      (id) => source.renderOut(id),
+      (id, detail) =>
+        source.notify(
+          formatException(
+            {
+              situation: laneT("injector.failNote.situation", { id, detail }),
+              action: laneT("injector.failNote.action"),
+            },
+            laneT,
+          ),
+        ),
+    );
     const onInbound = () => injector.notify();
 
     if (conf.source === "markdown") {

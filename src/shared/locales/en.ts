@@ -306,6 +306,8 @@ lane add options:
       resumeFallback: "⚠️ Could not resume session {{id}} — started a fresh session instead.",
       resumeMissing: "⚠️ No session id to resume — list sessions and pick one.",
       unsupported: "⚠️ This backend does not support session control.",
+      relaunchFailed:
+        "🛑 Session control failed — engine relaunch error: {{error}}. The lane may be down; recover with `adde restart <proj>`.",
       sessionsHeader: "📋 Recent sessions (current marked ◀):",
       sessionsItem: "{{n}}. {{label}} — last activity {{last}} ({{id}})",
       sessionsNoLabel: "(no prompt yet)",
@@ -372,6 +374,8 @@ lane add options:
       advanceError: "[injector] advance error lane={{lane}}: {{error}}",
       failNotifyError:
         "[injector] failure notice delivery error lane={{lane}} id={{id}}: {{error}}",
+      relaunchError:
+        "[injector] session-control engine relaunch failed lane={{lane}} — the lane may be down until restart: {{error}}",
     },
     telegram: {
       rateLimit: "[telegram] {{method}} 429 rate limited — retrying in {{waitMs}}ms ({{attempt}})",

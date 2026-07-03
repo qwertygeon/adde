@@ -127,6 +127,14 @@ describe("세션 제어 라벨 파싱", () => {
     });
   });
 
+  it("resume 세션 id 인자는 대소문자를 보존한다(라벨 소문자화에 삼켜지지 않음)", () => {
+    expect(parseInbox("- [x] resume ABC-Xyz_9\n").actions[0]).toMatchObject({
+      kind: "control",
+      controlKind: "resume",
+      controlArg: "ABC-Xyz_9",
+    });
+  });
+
   it("본문에 clear 가 포함된 라벨은 제어가 아니다(부분일치 금지)", () => {
     expect(parseInbox("- [x] clear the build dir\n").actions).toHaveLength(0);
   });

@@ -304,6 +304,8 @@ lane add 옵션:
       resumeFallback: "⚠️ 세션 {{id}} 복귀에 실패해 새 세션으로 시작했습니다.",
       resumeMissing: "⚠️ 재개할 세션 id 가 없습니다 — 목록에서 선택해 주세요.",
       unsupported: "⚠️ 이 백엔드는 세션 제어를 지원하지 않습니다.",
+      relaunchFailed:
+        "🛑 세션 제어 실패 — 엔진 재기동 오류: {{error}}. 레인이 중단됐을 수 있습니다 — `adde restart <proj>` 로 복구하세요.",
       sessionsHeader: "📋 최근 세션 목록 (현재 세션 ◀):",
       sessionsItem: "{{n}}. {{label}} — 마지막 대화 {{last}} ({{id}})",
       sessionsNoLabel: "(프롬프트 없음)",
@@ -361,6 +363,8 @@ lane add 옵션:
       renderError: "[injector] 렌더 오류 lane={{lane}} id={{id}} — 재전송 대기: {{error}}",
       advanceError: "[injector] 진행 오류 lane={{lane}}: {{error}}",
       failNotifyError: "[injector] 실패 알림 전달 오류 lane={{lane}} id={{id}}: {{error}}",
+      relaunchError:
+        "[injector] 세션 제어 엔진 재기동 실패 lane={{lane}} — 재시작 전까지 레인이 중단될 수 있음: {{error}}",
     },
     telegram: {
       rateLimit: "[telegram] {{method}} 429 레이트리밋 — {{waitMs}}ms 후 재시도({{attempt}})",

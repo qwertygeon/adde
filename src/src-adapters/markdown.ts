@@ -54,9 +54,14 @@ export function isConflictFile(filename: string): boolean {
 /** 체크박스 라인 파싱: `- [ ]`/`- [x]` + 라벨. */
 const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)$/;
 
+/** 라벨 앞쪽의 이모지·기호·공백을 제거한 본문(대소문자 보존 — resume 인자의 세션 id 는 대문자 포함 가능). */
+function labelBody(label: string): string {
+  return label.replace(/^[^\p{L}]+/u, "");
+}
+
 /** 라벨 앞쪽의 이모지·기호·공백을 제거하고 소문자화한 코어 토큰. */
 function labelCore(label: string): string {
-  return label.replace(/^[^\p{L}]+/u, "").toLowerCase();
+  return labelBody(label).toLowerCase();
 }
 
 /** send 트리거 라벨 판별 — 코어가 정확히 'send'(A4: 부분일치 금지). */
@@ -192,7 +197,8 @@ export function parseInbox(content: string): InboxParse {
       segmentStart = i + 1;
       continue;
     }
-    const rm = /^resume(?:\s+(\S+))?$/.exec(core);
+    // 인자는 소문자 core 가 아니라 본문에서 추출 — 세션 id 의 대문자를 보존해야 장부와 일치.
+    const rm = /^resume(?:\s+(\S+))?$/i.exec(labelBody(label));
     if (rm) {
       if (checked) {
         const action: InboxAction = {

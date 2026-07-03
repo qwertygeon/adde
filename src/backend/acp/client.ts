@@ -178,6 +178,12 @@ export class AcpBackendImpl implements AcpBackend {
   private readonly adapterBin: string;
   private readonly lanes = new Map<string, LaneState>();
   private readonly laneConfigs = new Map<string, LaneConfig>();
+  /** relaunch → launch 로 전달되는 승계분(구독자·권한 핸들러) — launch 가 상태 생성 시 1회 소비. */
+  private pendingInherit: {
+    subscribers: Array<(e: SessionEvent) => void>;
+    permHandler: ((req: PermRequest) => Promise<PermResponse>) | null;
+    onIdle: (() => void) | null;
+  } | null = null;
 
   constructor(adapterBin: string) {
     this.adapterBin = adapterBin;
@@ -487,15 +493,19 @@ export class AcpBackendImpl implements AcpBackend {
       await writeFile(paths.sessionIdFile, sessionId, "utf8");
     }
 
+    // relaunch 승계는 상태 생성 시점에 원자 적용 — 등록 후 재부착 방식은 그 사이(perm-diff 조회 등)
+    // 도착하는 이벤트(예: session/load 직후 엔진 초기 청크)를 유실한다.
+    const inherit = this.pendingInherit;
+    this.pendingInherit = null;
     const state: LaneState = {
       conn,
       sessionId,
       child,
-      subscribers: [],
-      permHandler: null,
+      subscribers: inherit ? [...inherit.subscribers] : [],
+      permHandler: inherit?.permHandler ?? null,
       paths: paths ?? ({} as LanePaths),
       addePolicy: addePolicy ?? { perm_tier: "acp", allowlist: [] },
-      onIdle: null,
+      onIdle: inherit?.onIdle ?? null,
     };
     laneRef.state = state;
     this.lanes.set(lane, state);
@@ -552,24 +562,27 @@ export class AcpBackendImpl implements AcpBackend {
   /**
    * 엔진 child 재기동 공통부 — 기존 구독자·권한 핸들러·onIdle 을 새 LaneState 로 승계한다
    * (supervisor 배선은 launch 후 1회만 이뤄지므로 승계 없이는 재기동 시 이벤트가 유실된다).
+   * 승계는 launch 의 상태 생성 시점에 원자 적용(pendingInherit) — 등록·재부착 사이 유실 창 제거.
+   * launch 실패 시 레인은 미등록 상태로 남는다(엔진 사망) — 호출자(runControl)가 사용자에게
+   * 복구 절차(adde restart)를 명시 통지한다. 자가 재기동 감시는 후속 과제(백로그).
    */
   private async relaunch(
     lane: string,
     resumeSessionId?: string,
   ): Promise<{ sessionId: string; resumed: boolean }> {
     const old = this.lanes.get(lane);
-    const subscribers = old ? [...old.subscribers] : [];
-    const permHandler = old?.permHandler ?? null;
-    const onIdle = old?.onIdle ?? null;
-    await this.close(lane);
-    const res = await this.launch(lane, resumeSessionId ? { resumeSessionId } : undefined);
-    const state = this.lanes.get(lane);
-    if (state) {
-      state.subscribers.push(...subscribers);
-      state.permHandler = permHandler;
-      state.onIdle = onIdle;
+    this.pendingInherit = {
+      subscribers: old ? [...old.subscribers] : [],
+      permHandler: old?.permHandler ?? null,
+      onIdle: old?.onIdle ?? null,
+    };
+    try {
+      await this.close(lane);
+      const res = await this.launch(lane, resumeSessionId ? { resumeSessionId } : undefined);
+      return { sessionId: res.sessionId, resumed: res.resumed ?? false };
+    } finally {
+      this.pendingInherit = null;
     }
-    return { sessionId: res.sessionId, resumed: res.resumed ?? false };
   }
 
   private async fetchEngineEffective(lane: string): Promise<EngineEffective | null> {

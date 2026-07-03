@@ -263,9 +263,10 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
    */
   async function parseControlCommand(text: string): Promise<ControlRequest | null> {
     const trimmed = text.trim();
-    if (trimmed === "/clear") return { kind: "clear" };
-    if (trimmed === "/compact") return { kind: "compact" };
-    const rm = /^\/resume(?:\s+(\S+))?$/.exec(trimmed);
+    // 그룹 채팅의 봇멘션 접미(@botname) 허용 — 그 외 변형(후행 인자 등)은 일반 프롬프트.
+    const simple = /^\/(clear|compact)(?:@\S+)?$/.exec(trimmed);
+    if (simple) return { kind: simple[1] as "clear" | "compact" };
+    const rm = /^\/resume(?:@\S+)?(?:\s+(\S+))?$/.exec(trimmed);
     if (!rm) return null;
     return resolveResumeControl(rm[1], await readLedger(cfg.paths));
   }

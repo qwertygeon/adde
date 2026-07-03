@@ -9,6 +9,7 @@
 - 세션 제어(채널 명령) — Claude Code 의 /clear·/compact·/resume 등가 기능. Telegram 은 정확 일치 명령(`/clear`·`/compact`·`/resume [번호|세션id]`), 마크다운은 send 형 전용 체크박스 라벨(`clear`·`compact`·`resume [n]`). 제어는 메시지 큐에 직렬 처리(진행 중 턴 존중)되고 결과가 채널 응답으로 통지됩니다.
   - clear: 엔진을 새 세션으로 재기동(이전 대화 맥락 소거). compact: 엔진 압축 명령 위임 실행.
   - resume: 세션 장부(`state/<lane>/sessions.json`, 레인당 최근 20개 — 첫 프롬프트 발췌·**마지막 대화 시각** 기록)에서 목록 조회·선택 복귀. 복귀 실패 시 새 세션 폴백 통지. 레인 재기동은 종전대로 새 세션(자동 재개 없음).
+  - clear/resume 의 엔진 재기동이 실패하면 일반 오류와 구분해 채널로 복구 절차(`adde restart <proj>`)를 명시 통지하고, 재기동 중 구독자(권한 핸들러 등) 승계를 원자화해 유실 창을 제거.
 - `adde sessions <proj> <lane>` — 세션 장부 목록 CLI(번호·발췌·마지막 대화 시각·현재 세션 표시).
 
 ### Fixed

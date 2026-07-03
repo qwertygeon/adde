@@ -10,7 +10,6 @@ import { t } from "../shared/i18n.js";
 import { readLedger, formatWhen } from "../core/session-ledger.js";
 import { lanePaths, defaultBase } from "../shared/paths.js";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 
 /** ms → 사람용 경과시간(예: 1h2m, 3m4s, 12s). */
 function formatUptime(ms: number | null): string {
@@ -178,7 +177,7 @@ export async function runSessions(rest: readonly string[]): Promise<number> {
   }
   let current: string | null = null;
   try {
-    current = (await readFile(join(paths.stateDir, "session.id"), "utf8")).trim() || null;
+    current = (await readFile(paths.sessionIdFile, "utf8")).trim() || null;
   } catch {
     // 세션 파일 부재 — 현재 표시 생략
   }

@@ -125,7 +125,7 @@ adde sessions <proj> <lane>
 | 세션 목록            | `/resume`                | `- [x] resume`                | 최근 세션 목록(번호·발췌·마지막 대화 시각) 응답   |
 | 세션 재개            | `/resume <번호\|세션id>` | `- [x] resume <번호\|세션id>` | 해당 세션으로 복귀(찾지 못하면 새 세션 폴백 통지) |
 
-- Telegram 은 메시지 전체가 명령과 **정확히 일치**할 때만 제어로 해석합니다 — 문장 속 `/clear` 는 일반 프롬프트로 전달됩니다.
+- Telegram 은 메시지 전체가 명령과 **정확히 일치**할 때만 제어로 해석합니다 — 문장 속 `/clear` 는 일반 프롬프트로 전달됩니다. 그룹 채팅의 봇멘션 접미(`/clear@봇이름`·`/compact@봇이름`·`/resume@봇이름 <번호>`)는 허용합니다.
 - 마크다운 라벨은 send 와 같은 계약입니다: 라벨 정확 일치(앞 이모지 허용), 체크 시 실행, 처리 후 해당 줄이 `✅ sent [[...]]` 로 종단되고 결과 노트가 링크됩니다.
 - 레인 재기동(`adde restart`)도 새 세션으로 시작합니다(자동 재개 없음 — 이어가려면 재기동 후 `/resume` 으로 선택 복귀).
 
@@ -197,7 +197,7 @@ CLI 출력·채널 메시지는 en/ko 두 언어를 지원합니다.
 - 설정 base: `~/.config/adde`(환경변수 `ADDE_HOME` 로 변경 가능).
 - 프로젝트: `<base>/<proj>/`.
 - 레인 conf: `<base>/<proj>/lanes.d/<lane>.conf`.
-- 레인 상태: `<base>/<proj>/state/<lane>/`(`.env`·`session.id`·`transcript.log`·`engine.log`·`runtime.json`).
+- 레인 상태: `<base>/<proj>/state/<lane>/`(`.env`·`session.id`·`sessions.json`(세션 장부)·`transcript.log`·`engine.log`·`runtime.json`).
 - launchd plist: `~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist` (macOS 전용, `adde up` 이 생성·관리).
 
 ## macOS 전용 기능

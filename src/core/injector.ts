@@ -8,7 +8,6 @@
 import { t } from "../shared/i18n.js";
 import type { NotifyT } from "../shared/notify.js";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { appendTranscript } from "./transcript.js";
 import { recordSession, touchSession, readLedger, formatWhen } from "./session-ledger.js";
 import { errMsg } from "../shared/errors.js";
@@ -109,7 +108,7 @@ export function createInjector(
   /** state/<lane>/session.id 읽기 — 장부 갱신용(부재 시 null, 보조 데이터). */
   async function currentSessionId(): Promise<string | null> {
     try {
-      return (await readFile(join(paths.stateDir, "session.id"), "utf8")).trim() || null;
+      return (await readFile(paths.sessionIdFile, "utf8")).trim() || null;
     } catch {
       return null;
     }
@@ -121,7 +120,14 @@ export function createInjector(
     switch (control.kind) {
       case "clear": {
         if (!backend.reset) return laneT("injector.control.unsupported");
-        const { sessionId } = await backend.reset(lane);
+        let sessionId: string;
+        try {
+          ({ sessionId } = await backend.reset(lane));
+        } catch (err) {
+          // 재기동 실패 = 레인 엔진 사망 가능 — 일반 실패와 구분해 복구 절차를 명시 통지.
+          console.error(t("log.injector.relaunchError", { lane, error: errMsg(err) }));
+          return laneT("injector.control.relaunchFailed", { error: maskSecrets(errMsg(err)) });
+        }
         await recordSession(paths, sessionId).catch(() => {});
         return laneT("injector.control.cleared");
       }
@@ -136,7 +142,13 @@ export function createInjector(
       case "resume": {
         if (!backend.resumeSession) return laneT("injector.control.unsupported");
         if (!control.sessionId) return laneT("injector.control.resumeMissing");
-        const r = await backend.resumeSession(lane, control.sessionId);
+        let r: { sessionId: string; resumed: boolean };
+        try {
+          r = await backend.resumeSession(lane, control.sessionId);
+        } catch (err) {
+          console.error(t("log.injector.relaunchError", { lane, error: errMsg(err) }));
+          return laneT("injector.control.relaunchFailed", { error: maskSecrets(errMsg(err)) });
+        }
         await recordSession(paths, r.sessionId).catch(() => {});
         return r.resumed
           ? laneT("injector.control.resumed", { id: r.sessionId })

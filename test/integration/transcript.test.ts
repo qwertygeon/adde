@@ -1,3 +1,4 @@
+import { FAKE_ACP_CAPS } from "../helpers/fake-acp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -35,12 +36,7 @@ afterEach(() => {
 function makeFakeAcpBackend(): AcpBackend & { emit(event: SessionEvent): Promise<void> } {
   const subscribers: Array<(e: SessionEvent) => Promise<void> | void> = [];
   return {
-    caps: () => ({
-      plane: "acp" as const,
-      perm_tier: "acp",
-      supports_attachments: false,
-      acp_version: "v1" as const,
-    }),
+    caps: () => FAKE_ACP_CAPS,
     launch: vi.fn().mockResolvedValue({ sessionId: "transcript-sess" }),
     inject: vi.fn().mockResolvedValue(undefined),
     subscribe: vi

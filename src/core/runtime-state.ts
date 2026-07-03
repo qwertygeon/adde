@@ -3,9 +3,9 @@
  * `adde up` 이 레인 기동 시 기록하고 graceful 종료(down·시그널)에서 제거한다.
  * `adde status` 는 별도 프로세스라 up 의 in-memory 상태를 못 본다 → 이 파일이 유일한 교차 프로세스 신호.
  */
-import { writeFile, rename, mkdir, unlink, readFile, utimes } from "node:fs/promises";
-import { dirname } from "node:path";
+import { unlink, readFile, utimes } from "node:fs/promises";
 import type { LanePaths } from "../shared/paths.js";
+import { atomicWrite } from "../shared/fs-atomic.js";
 
 /** 하트비트 touch 주기 — up 이 이 간격으로 runtime.json mtime 을 갱신(긴 인터벌, 보조 신호). */
 export const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -32,10 +32,7 @@ export type Liveness = "running" | "stale" | "dead" | "stopped";
 
 /** runtime.json 을 원자적으로(tmp→rename) 기록. stateDir 부재 시 생성. */
 export async function writeRuntime(paths: LanePaths, info: RuntimeInfo): Promise<void> {
-  await mkdir(dirname(paths.runtimeJson), { recursive: true });
-  const tmp = `${paths.runtimeJson}.tmp.${process.pid}`;
-  await writeFile(tmp, JSON.stringify(info, null, 2) + "\n", "utf8");
-  await rename(tmp, paths.runtimeJson);
+  await atomicWrite(paths.runtimeJson, JSON.stringify(info, null, 2) + "\n");
 }
 
 /**

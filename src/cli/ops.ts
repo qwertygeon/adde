@@ -3,6 +3,7 @@
  * core/diagnostics 의 읽기 전용 로직을 호출하고 표/JSON/텍스트로 표면화한다.
  */
 import { collectStatus, collectAllStatus, runDoctor, readLogs } from "../core/diagnostics.js";
+import { errMsg } from "../shared/errors.js";
 import type { LaneStatusRow, AggregatedLaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
 import { USAGE } from "../core/messages.js";
 import { t } from "../shared/i18n.js";
@@ -166,7 +167,7 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
     result = await readLogs(proj, lane, n, { engine });
   } catch (err) {
     // proj/lane 검증 실패(경로 탈출 차단 등) — 친절한 메시지 후 비정상 종료코드.
-    process.stderr.write((err instanceof Error ? err.message : String(err)) + "\n");
+    process.stderr.write(errMsg(err) + "\n");
     return 1;
   }
   if (!result.exists) {

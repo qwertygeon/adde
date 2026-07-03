@@ -8,6 +8,9 @@ import type { PermRequest } from "../gate/gate.js";
 export type Decision = "allow" | "deny";
 export type DecisionCallback = (reqId: string, decision: Decision) => void;
 
+/** enqueue 연속 실패가 이 횟수에 도달하면 운영자에게 1회 알림 — 어댑터 공통 임계(DEC-003·⑫). */
+export const ENQUEUE_FAIL_THRESHOLD = 3;
+
 export interface Source {
   /** 인바운드 수신 + 아웃바운드(out 감시) 기동. 대상(chat_id/root)은 conf 에서 self-resolve. */
   start(): void;

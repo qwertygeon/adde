@@ -4,12 +4,20 @@
  * 모든 검증을 통과한 뒤에만 디스크에 쓴다(validate-then-commit). 쓰기는 tmp→rename 원자적.
  */
 import { t, SUPPORTED_LOCALES } from "../shared/i18n.js";
-import { readdir, readFile, writeFile, rename, mkdir, unlink, stat } from "node:fs/promises";
-import { join, dirname, resolve, relative, isAbsolute } from "node:path";
+import { readdir, readFile, mkdir, unlink, stat } from "node:fs/promises";
+import { join, dirname, resolve } from "node:path";
 import { parseLaneConf, serializeLaneConf } from "../shared/conf.js";
 import type { LaneConf } from "../shared/conf.js";
-import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
+import {
+  lanePaths,
+  defaultBase,
+  expandTilde,
+  isPathInside,
+  normCasePath,
+  pathsOverlap,
+} from "../shared/paths.js";
 import { parseDenyEntry, DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
+import { atomicWrite } from "../shared/fs-atomic.js";
 
 /** proj/lane 식별자 — 디렉터리·파일명이 되므로 안전 문자만 허용. */
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
@@ -99,18 +107,14 @@ async function collectAddWarnings(conf: LaneConf, token?: string): Promise<strin
       );
       const outboxDir = resolve(conf.outbox ? join(root, conf.outbox) : join(inboxDir, "out"));
       const quarantineDir = resolve(join(inboxDir, ".conflicts"));
-      const normCase = (p: string): string => (process.platform === "darwin" ? p.toLowerCase() : p);
-      const inside = (child: string, parent: string): boolean => {
-        const rel = relative(normCase(parent), normCase(child));
-        return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-      };
-      const overlaps = (a: string, b: string): boolean => inside(a, b) || inside(b, a);
+      const insideNorm = (child: string, parent: string): boolean =>
+        isPathInside(normCasePath(child), normCasePath(parent));
       if (
-        overlaps(outboxDir, approvalsDir) ||
-        overlaps(approvalsDir, quarantineDir) ||
-        overlaps(outboxDir, quarantineDir) ||
-        inside(inboxPath, approvalsDir) ||
-        inside(inboxPath, outboxDir)
+        pathsOverlap(outboxDir, approvalsDir) ||
+        pathsOverlap(approvalsDir, quarantineDir) ||
+        pathsOverlap(outboxDir, quarantineDir) ||
+        insideNorm(inboxPath, approvalsDir) ||
+        insideNorm(inboxPath, outboxDir)
       ) {
         warnings.push(
           t("laneConfig.warn.mdPathOverlap", {
@@ -174,11 +178,9 @@ function assertName(kind: "proj" | "lane", value: string): void {
   }
 }
 
-/** tmp 파일에 쓴 뒤 rename 으로 원자적 교체. */
+/** tmp 파일에 쓴 뒤 rename 으로 원자적 교체(shared 위임 — mode 시그니처 유지). */
 async function writeAtomic(path: string, content: string, mode?: number): Promise<void> {
-  const tmp = `${path}.tmp.${process.pid}`;
-  await writeFile(tmp, content, mode === undefined ? "utf8" : { encoding: "utf8", mode });
-  await rename(tmp, path);
+  await atomicWrite(path, content, mode === undefined ? undefined : { mode });
 }
 
 async function exists(path: string): Promise<boolean> {

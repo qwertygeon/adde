@@ -1,3 +1,4 @@
+import { waitFor } from "../helpers/wait.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -22,13 +23,6 @@ import { lanePaths } from "../../src/shared/paths.js";
 /** 조건이 참이 될 때까지 setImmediate 로 대기 (최대 N회) */
 // 실제 시간 기반 폴링 — poll loop 의 fetch(비동기)가 병렬 실행 경합에서도 진행하도록.
 // 시한 초과 시 throw(setImmediate 만 돌리면 fs/네트워크 완료보다 틱이 먼저 소진돼 위양성).
-async function waitFor(condition: () => boolean, tries = 300): Promise<void> {
-  for (let i = 0; i < tries; i++) {
-    if (condition()) return;
-    await new Promise<void>((resolve) => setTimeout(resolve, 2));
-  }
-  if (!condition()) throw new Error("waitFor: 조건이 제한 시간 내 충족되지 않음");
-}
 
 /**
  * 단일 poll 사이클을 허용하는 fetch mock 빌더.

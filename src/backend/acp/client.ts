@@ -4,6 +4,7 @@
  * session/update 이벤트 구독 → transcript·injector·gate 라우팅.
  */
 import { t, tFor } from "../../shared/i18n.js";
+import { errMsg } from "../../shared/errors.js";
 import { Writable, Readable } from "node:stream";
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -249,20 +250,20 @@ export class AcpBackendImpl implements AcpBackend {
                 console.error(
                   t("log.acp.subscriberError", {
                     lane,
-                    error: err instanceof Error ? err.message : String(err),
+                    error: errMsg(err),
                   }),
                 );
                 if (paths) {
                   await appendTranscript(paths, {
                     sessionUpdate: "adde_warn",
                     message: t("acp.subscriberError", {
-                      error: err instanceof Error ? err.message : String(err),
+                      error: errMsg(err),
                     }),
                   }).catch((e: unknown) =>
                     console.error(
                       t("log.acp.transcriptWriteFail", {
                         lane,
-                        error: e instanceof Error ? e.message : String(e),
+                        error: errMsg(e),
                       }),
                     ),
                   );
@@ -275,7 +276,7 @@ export class AcpBackendImpl implements AcpBackend {
                 console.error(
                   t("log.acp.transcriptWriteFail", {
                     lane,
-                    error: e instanceof Error ? e.message : String(e),
+                    error: errMsg(e),
                   }),
                 ),
               );
@@ -485,7 +486,7 @@ export class AcpBackendImpl implements AcpBackend {
           console.error(
             t("log.acp.transcriptWriteFail", {
               lane,
-              error: e instanceof Error ? e.message : String(e),
+              error: errMsg(e),
             }),
           ),
         );

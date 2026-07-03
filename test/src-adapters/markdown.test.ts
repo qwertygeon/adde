@@ -1,3 +1,4 @@
+import { waitFor } from "../helpers/wait.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -25,13 +26,6 @@ import type { LaneConf } from "../../src/shared/conf.js";
 const STAMP = "20260101-000000";
 
 /** 실시간 폴링 대기 — fs.watch 이벤트 지연 흡수. */
-async function waitFor(cond: () => boolean, timeoutMs = 8000): Promise<void> {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > timeoutMs) throw new Error("waitFor timeout");
-    await new Promise((r) => setTimeout(r, 15));
-  }
-}
 
 describe("isConflictFile", () => {
   it("Syncthing/Obsidian 충돌 파일명을 판별한다", () => {
@@ -401,8 +395,8 @@ describe("createMarkdownSource (통합)", () => {
     expect(msgCount()).toBe(0); // 큐에 재enqueue 되지 않음
   });
 
-  // fs.watch 누락 시 2s 폴링 백스톱에 의존하는 경로 — 풀 스위트 병렬 부하에서 vitest 기본
-  // 타임아웃(5s)이 waitFor(8s)보다 먼저 끊겨 간헐 실패하므로 테스트 타임아웃을 상향.
+  // fs.watch 누락 시 2s 폴링 백스톱에 의존하는 경로 — 풀 스위트 병렬 부하에서 격리가
+  // 수 초 지연될 수 있어 테스트·대기 시한을 함께 상향(기본 8s 대기로는 간헐 초과).
   it("동기 충돌 파일은 격리되고 큐잉되지 않는다", { timeout: 15_000 }, async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "정상\n");
     source = makeSource();
@@ -412,8 +406,9 @@ describe("createMarkdownSource (통합)", () => {
     const conflict = path.join(rootDir, "inbox.sync-conflict-20260628-abc.md");
     fs.writeFileSync(conflict, "악성 트리거\n- [x] 📤 send\n");
 
-    await waitFor(() =>
-      fs.existsSync(path.join(rootDir, ".conflicts", "inbox.sync-conflict-20260628-abc.md")),
+    await waitFor(
+      () => fs.existsSync(path.join(rootDir, ".conflicts", "inbox.sync-conflict-20260628-abc.md")),
+      { timeoutMs: 12_000 },
     );
     expect(msgCount()).toBe(0);
   });

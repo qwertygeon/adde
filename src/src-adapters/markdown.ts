@@ -335,6 +335,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   let enqueueAlertSent = false;
   // approvals 파일 변경을 직렬화(append·결정 재작성·타임아웃 경합 방지).
   let approvalsLock: Promise<void> = Promise.resolve();
+  // watch 발 격리(fire-and-forget)도 체인으로 추적 — stop() 이 in-flight 격리를 대기
+  // (teardown 뒤 살아남은 mkdir 이 정리된 임시 경로를 재생성하는 것 방지).
+  let quarantineOp: Promise<void> = Promise.resolve();
   // in-flight inbox/approvals 처리 추적 — stop() 이 정리 완료를 대기(H4/DEC-004).
   let inboxOp: Promise<void> = Promise.resolve();
   let approvalsOp: Promise<void> = Promise.resolve();
@@ -753,7 +756,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
 
     const dispatch = (srcDir: string, filename: string): void => {
       if (isConflictFile(filename)) {
-        void quarantine(filename, srcDir);
+        quarantineOp = quarantineOp.then(() => quarantine(filename, srcDir));
         return;
       }
       const full = join(srcDir, filename);
@@ -797,12 +800,13 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     debounceTimers.clear();
     for (const t of permTimers.values()) clearTimeout(t);
     permTimers.clear();
-    // in-flight 처리(폴 + approvals 락 체인 + inbox/approvals op) settle 대기 —
+    // in-flight 처리(폴 + approvals 락 체인 + inbox/approvals/격리 op) settle 대기 —
     // 임시 디렉터리 정리 뒤 살아남은 쓰기가 ENOENT 를 내지 않도록(H4).
     await pollOp.catch(() => {});
     await approvalsLock.catch(() => {});
     await inboxOp.catch(() => {});
     await approvalsOp.catch(() => {});
+    await quarantineOp.catch(() => {});
   }
 
   /**

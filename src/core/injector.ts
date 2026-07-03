@@ -6,6 +6,7 @@
  *   turn 종료 신호는 inject() resolve 로 감지한다(conn.prompt 가 turn 종료에 resolve) — 별도 idleCallback 배선 불요.
  */
 import { t } from "../shared/i18n.js";
+import { errMsg } from "../shared/errors.js";
 import {
   claimNext,
   scanProcessing,
@@ -114,7 +115,7 @@ export function createInjector(
       await writeOut(paths, id, maskSecrets(responseText), sidecar);
       await deliver(id);
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = errMsg(err);
       console.error(t("log.injector.injectError", { lane, id, detail }));
       // 실패를 .failed 사이드카로 보존(E1) — processing/<id>.msg 는 남아 재기동 시 재처리(at-least-once).
       await writeFailed(
@@ -126,7 +127,7 @@ export function createInjector(
           t("log.injector.failedWriteFail", {
             lane,
             id,
-            error: e instanceof Error ? e.message : String(e),
+            error: errMsg(e),
           }),
         ),
       );
@@ -137,7 +138,7 @@ export function createInjector(
             t("log.injector.failNotifyError", {
               lane,
               id,
-              error: e instanceof Error ? e.message : String(e),
+              error: errMsg(e),
             }),
           ),
         );
@@ -171,7 +172,7 @@ export function createInjector(
         t("log.injector.renderError", {
           lane,
           id,
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
         }),
       );
     } finally {
@@ -192,7 +193,7 @@ export function createInjector(
         console.error(
           t("log.injector.advanceError", {
             lane,
-            error: err instanceof Error ? err.message : String(err),
+            error: errMsg(err),
           }),
         );
       });

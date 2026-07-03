@@ -1,3 +1,5 @@
+import { waitFor } from "../helpers/wait.js";
+import { makeEnvelope } from "../helpers/envelope.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Injector } from "../../src/core/injector.js";
 import { createInjector, questionExcerpt } from "../../src/core/injector.js";
@@ -6,7 +8,6 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { lanePaths } from "../../src/shared/paths.js";
 import { enqueue } from "../../src/core/queue.js";
-import type { Envelope } from "../../src/shared/envelope.js";
 
 // SC-003: 크래시 후 processing 잔존 파일 재처리
 // SC-004: active 동안 다음 envelope 미주입 (idle 게이트)
@@ -17,35 +18,8 @@ import type { Envelope } from "../../src/shared/envelope.js";
 let tmpBase: string;
 let paths: ReturnType<typeof lanePaths>;
 
-const makeEnvelope = (id: string, text = "test", replyMsgId?: string): Envelope => ({
-  v: 1,
-  id,
-  lane: "test-lane",
-  source: "telegram",
-  backend: "acp",
-  engine: "claude-code-acp",
-  project: "myproj",
-  ts: new Date().toISOString(),
-  text,
-  ...(replyMsgId ? { reply_ref: { channel_msg_id: replyMsgId } } : {}),
-});
-
 /** setImmediate 큐 flush — injectNext 의 비동기 진행 1틱. */
 const flush = () => new Promise<void>((r) => setImmediate(r));
-
-/**
- * 조건 충족까지 폴링 대기. injectNext/processOne 의 fs IO(mkdir·write·rename)는
- * libuv 스레드풀에서 처리되므로, setImmediate 같은 CPU 틱만 돌리면 전체 스위트 병렬
- * 실행 시 디스크 경합으로 fs 완료보다 틱이 먼저 소진돼 위양성(flaky)이 났다.
- * → 실제 시간을 흘려보내는 타이머로 폴링하고, 시한 초과 시 조용히 통과하지 않고 throw 한다.
- */
-async function waitUntil(cond: () => boolean, tries = 300): Promise<void> {
-  for (let i = 0; i < tries; i++) {
-    if (cond()) return;
-    await new Promise<void>((r) => setTimeout(r, 2));
-  }
-  if (!cond()) throw new Error("waitUntil: 조건이 제한 시간 내 충족되지 않음");
-}
 
 /** 즉시 resolve 하는 기본 backend 더블. */
 function makeBackend(inject = vi.fn().mockResolvedValue(undefined)) {
@@ -103,7 +77,7 @@ describe("Injector 상태기계", () => {
     await enqueue(paths, makeEnvelope("t1"));
     await injector.start();
     await flush();
-    expect(backend.inject).toHaveBeenCalledWith("test-lane", "test");
+    expect(backend.inject).toHaveBeenCalledWith("test-lane", "테스트");
     expect(injector.getState()).toBe("idle");
   });
 });
@@ -117,7 +91,7 @@ describe("SC-A1: notify() 로 idle 레인 깨우기", () => {
 
     await enqueue(paths, makeEnvelope("late", "지각 메시지"));
     injector.notify();
-    await waitUntil(() => backend.inject.mock.calls.length > 0);
+    await waitFor(() => backend.inject.mock.calls.length > 0);
 
     expect(backend.inject).toHaveBeenCalledWith("test-lane", "지각 메시지");
   });
@@ -138,7 +112,7 @@ describe("SC-004: active 동안 다음 envelope 미주입 (idle 게이트)", () 
     await enqueue(paths, makeEnvelope("second", "둘째"));
 
     const startP = injector.start(); // first inject 에서 pending
-    await waitUntil(() => inject.mock.calls.length >= 1);
+    await waitFor(() => inject.mock.calls.length >= 1);
 
     expect(inject).toHaveBeenCalledTimes(1);
     expect(inject).toHaveBeenLastCalledWith("test-lane", "첫째");
@@ -147,7 +121,7 @@ describe("SC-004: active 동안 다음 envelope 미주입 (idle 게이트)", () 
     // turn 종료 → 둘째 자동 진행(SC-A2)
     resolveFirst();
     await startP;
-    await waitUntil(() => inject.mock.calls.length >= 2 && injector.getState() === "idle");
+    await waitFor(() => inject.mock.calls.length >= 2 && injector.getState() === "idle");
 
     expect(inject).toHaveBeenCalledTimes(2);
     expect(inject).toHaveBeenLastCalledWith("test-lane", "둘째");
@@ -192,7 +166,7 @@ describe("SC-B1: 응답 누적 → writeOut(out/<id>.out + sidecar)", () => {
 
     await enqueue(paths, makeEnvelope("b1", "질문", "orig-42"));
     const startP = injector.start();
-    await waitUntil(() => typeof resolveInject === "function");
+    await waitFor(() => typeof resolveInject === "function");
 
     // inject 진행(active) 중 엔진 청크 수신 → 누적
     injector.onSessionEvent({
@@ -206,7 +180,7 @@ describe("SC-B1: 응답 누적 → writeOut(out/<id>.out + sidecar)", () => {
 
     resolveInject();
     await startP;
-    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "b1.out.json")));
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "b1.out.json")));
 
     const outText = fs.readFileSync(path.join(paths.outDir, "b1.out"), "utf8");
     expect(outText).toBe("안녕하세요");
@@ -221,7 +195,7 @@ describe("SC-B1: 응답 누적 → writeOut(out/<id>.out + sidecar)", () => {
     const env = makeEnvelope("b2", "빌드 오류 원인 분석해줘\n두 번째 줄은 발췌 제외");
     await enqueue(paths, env);
     await injector.start();
-    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "b2.out.json")));
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "b2.out.json")));
 
     const sidecar = JSON.parse(fs.readFileSync(path.join(paths.outDir, "b2.out.json"), "utf8"));
     expect(sidecar.origin_ts).toBe(env.ts);
@@ -271,7 +245,7 @@ describe("주입 실패 채널 표면화 (onFail)", () => {
 
     await enqueue(paths, makeEnvelope("f1"));
     await injector.start();
-    await waitUntil(() => failures.length >= 1);
+    await waitFor(() => failures.length >= 1);
 
     expect(failures[0]).toEqual({ id: "f1", detail: "engine boom" });
     // .failed 사이드카 기록은 기존대로 유지
@@ -288,7 +262,7 @@ describe("주입 실패 채널 표면화 (onFail)", () => {
 
     await enqueue(paths, makeEnvelope("f2"));
     await expect(injector.start()).resolves.toBeUndefined();
-    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "f2.failed")));
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "f2.failed")));
     errSpy.mockRestore();
   });
 });
@@ -301,7 +275,7 @@ describe("FR-1: render 실패 시 재전송 (.sent 마커)", () => {
 
     await enqueue(paths, makeEnvelope("s-ok"));
     await injector.start();
-    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "s-ok.sent")));
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "s-ok.sent")));
 
     expect(render).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(path.join(paths.outDir, "s-ok.sent"))).toBe(true);
@@ -327,7 +301,7 @@ describe("FR-1: render 실패 시 재전송 (.sent 마커)", () => {
 
     // 응답은 기록되고(.out), 재전송으로 결국 .sent 가 생긴다.
     expect(fs.existsSync(path.join(paths.outDir, "s-retry.out"))).toBe(true);
-    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "s-retry.sent")));
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "s-retry.sent")));
     expect(render.mock.calls.length).toBeGreaterThanOrEqual(2); // 최초 실패 + 재전송
   });
 
@@ -340,7 +314,7 @@ describe("FR-1: render 실패 시 재전송 (.sent 마커)", () => {
 
     const injector: Injector = createInjector(paths, "test-lane", backend, render);
     await injector.start();
-    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "orphan.sent")));
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "orphan.sent")));
 
     expect(render).toHaveBeenCalledWith("orphan");
     // 재주입(엔진 재실행)은 하지 않는다 — 전송만 복구.
@@ -364,7 +338,7 @@ describe("FR-1: render 실패 시 재전송 (.sent 마커)", () => {
     injector.notify();
     injector.notify();
     await startP;
-    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "dup.sent")));
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "dup.sent")));
     await flush();
     await flush();
 
@@ -400,7 +374,7 @@ describe("inject 실패 보존 (011-E1)", () => {
 
     await enqueue(paths, makeEnvelope("ef1", "실패 메시지"));
     injector.notify();
-    await waitUntil(() => fs.existsSync(path.join(paths.outDir, "ef1.failed")));
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "ef1.failed")));
 
     expect(fs.existsSync(path.join(paths.outDir, "ef1.failed"))).toBe(true);
     // processing 잔존 → 재기동 시 재처리(at-least-once). dedup 마커(.out)는 미생성.

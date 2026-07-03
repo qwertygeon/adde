@@ -1,3 +1,4 @@
+import { waitFor } from "../helpers/wait.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -16,13 +17,6 @@ import { lanePaths } from "../../src/shared/paths.js";
 
 // 실제 시간을 흘려보내는 폴링 — 폴 루프의 fetch/enqueue(비동기)가 전체 스위트 병렬 실행
 // 경합에서도 진행하도록. 시한 초과 시 조용히 통과하지 않고 throw(위양성 방지).
-async function waitFor(cond: () => boolean, tries = 300): Promise<void> {
-  for (let i = 0; i < tries; i++) {
-    if (cond()) return;
-    await new Promise<void>((r) => setTimeout(r, 2));
-  }
-  if (!cond()) throw new Error("waitFor: 조건이 제한 시간 내 충족되지 않음");
-}
 
 let tmpBase: string;
 let paths: ReturnType<typeof lanePaths>;

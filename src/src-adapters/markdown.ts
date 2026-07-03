@@ -8,23 +8,24 @@
  * 동기 내성: *.sync-conflict* 격리·상태 마커 멱등 자기쓰기 가드·tmp→rename.
  */
 import { t, tFor } from "../shared/i18n.js";
+import { errMsg } from "../shared/errors.js";
 import { watch, existsSync, mkdirSync, statSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import { readFile, writeFile, rename, mkdir, stat, readdir } from "node:fs/promises";
-import { join, dirname, basename, relative, isAbsolute, resolve } from "node:path";
+import { readFile, rename, mkdir, stat, readdir } from "node:fs/promises";
+import { join, dirname, isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
+import { isPathInside, normCasePath, pathsOverlap } from "../shared/paths.js";
+import { atomicWrite as atomicWriteFile } from "../shared/fs-atomic.js";
 import type { LaneConf } from "../shared/conf.js";
-import { enqueue, hasId } from "../core/queue.js";
+import { enqueue, hasId, readSidecar } from "../core/queue.js";
 import type { Envelope } from "../shared/envelope.js";
 import type { PermRequest } from "../gate/gate.js";
 import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
 import type { Source, DecisionCallback, Decision } from "./source.js";
+import { ENQUEUE_FAIL_THRESHOLD } from "./source.js";
 import { formatException } from "../shared/notify.js";
 import type { NotifyT } from "../shared/notify.js";
-
-/** enqueue 연속 실패 임계 — 도달 시 outbox 에 1회 알림(telegram 패턴과 일관, ⑫). */
-const ENQUEUE_FAIL_THRESHOLD = 3;
 
 const DEBOUNCE_MS = 150;
 /** fs.watch 가 놓친 편집을 보정하는 저빈도 폴링 주기(B2 백스톱). */
@@ -338,13 +339,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   let inboxOp: Promise<void> = Promise.resolve();
   let approvalsOp: Promise<void> = Promise.resolve();
 
-  /** 같은 디렉터리 tmp→rename 으로 원자 기록. */
+  /** 원자 기록(shared 위임) + 자기쓰기 echo 가드 등록. */
   async function atomicWrite(filePath: string, content: string): Promise<void> {
-    const dir = dirname(filePath);
-    const tmp = join(dir, `.${basename(filePath)}.tmp`);
-    await mkdir(dir, { recursive: true });
-    await writeFile(tmp, content, "utf8");
-    await rename(tmp, filePath);
+    await atomicWriteFile(filePath, content);
     lastSelfWrite.set(filePath, content);
   }
 
@@ -476,7 +473,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
               count: consecutiveEnqueueFailures,
               lane: cfg.lane,
               id: p.id,
-              error: err instanceof Error ? err.message : String(err),
+              error: errMsg(err),
             }),
           );
           // 임계 도달 시 1회 운영자 알림(⑫) — telegram 패턴과 일관.
@@ -539,7 +536,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       console.error(
         t("log.markdown.quarantineFail", {
           filename,
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
         }),
       );
     }
@@ -556,29 +553,14 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       tl,
     );
     await atomicWrite(join(outboxDir, "_enqueue-alert.md"), note).catch((e: unknown) =>
-      console.error(
-        t("log.markdown.alertWriteError", { error: e instanceof Error ? e.message : String(e) }),
-      ),
+      console.error(t("log.markdown.alertWriteError", { error: errMsg(e) })),
     );
   }
 
   async function renderOut(id: string): Promise<void> {
     const text = await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
-    interface RenderSidecar {
-      reply_ref?: { channel_msg_id?: string };
-      origin_ts?: string;
-      ts?: string;
-      question?: string;
-    }
-    let sidecar: RenderSidecar | null = null;
-    const sidecarRaw = await readMaybe(join(cfg.paths.outDir, `${id}.out.json`));
-    if (sidecarRaw) {
-      try {
-        sidecar = JSON.parse(sidecarRaw) as RenderSidecar;
-      } catch {
-        // sidecar 파손 → 메타 없이 진행(보조 정보).
-      }
-    }
+    // sidecar 읽기는 queue.readSidecar 로 일원화(부재·파손 → null = 메타 없이 진행).
+    const sidecar = await readSidecar(cfg.paths, id);
     // 파일명 스탬프는 전송 시각(origin_ts) 유래 — 재렌더에도 결정론적(DEC-003).
     // origin_ts 부재(구버전 sidecar)는 종전 `<id>.md` 유지.
     const stamp = sidecar?.origin_ts ? stampFromIso(sidecar.origin_ts) : null;
@@ -599,9 +581,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   /** handleInbox 를 추적 가능한 형태로 기동(fire-and-forget + .catch, stop 대기 대상). */
   function runInbox(): void {
     inboxOp = handleInbox().catch((err: unknown) =>
-      console.error(
-        t("log.markdown.inboxError", { error: err instanceof Error ? err.message : String(err) }),
-      ),
+      console.error(t("log.markdown.inboxError", { error: errMsg(err) })),
     );
   }
 
@@ -610,7 +590,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     approvalsOp = handleApprovals().catch((err: unknown) =>
       console.error(
         t("log.markdown.approvalsError", {
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
         }),
       ),
     );
@@ -694,6 +674,16 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
         lastFileSig.set(approvalsDir, apprSig);
         debounce(approvalsDir, runApprovals);
       }
+      // 충돌 파일 격리 백스톱: inbox 파일 시그니처·approvals 시그니처는 "충돌 파일 생성" 을
+      // 포착하지 못하므로(watch 가 생성 이벤트를 놓치면 영구 방치) 인박스 디렉터리를 직접 스캔.
+      try {
+        const entries = await readdir(dirname(inboxPath));
+        for (const fn of entries) {
+          if (isConflictFile(fn)) await quarantine(fn, dirname(inboxPath));
+        }
+      } catch {
+        // 디렉터리 부재 — 다음 폴에서 재시도
+      }
     } finally {
       pollBusy = false;
     }
@@ -720,27 +710,19 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     // A1: 제어 노트가 AI 작업폴더(cwd) 내부면 자기승인 위험 → fail-closed 기동 거부.
     const effectiveCwd =
       cfg.conf.cwd && cfg.conf.cwd.length > 0 ? resolve(cfg.conf.cwd) : process.cwd();
-    const isInside = (child: string, parent: string): boolean => {
-      const rel = relative(parent, child);
-      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-    };
     for (const [name, p] of [
       ["inbox", inboxPath],
       ["approvals", approvalsDir],
       ["outbox", outboxDir],
     ] as const) {
-      if (isInside(p, effectiveCwd)) {
+      if (isPathInside(p, effectiveCwd)) {
         throw new Error(t("markdown.controlNoteInCwd", { name, path: p, cwd: effectiveCwd }));
       }
     }
 
     // 상호 배타: 승인/출력/입력/격리 경로가 같거나 포함 관계면 자기쓰기 재발화·승인
     // 오파싱 위험(출력·알림 노트가 승인 감시에 잡힘) → fail-closed 기동 거부.
-    // macOS 기본 FS 는 대소문자 무시라 Shared/shared 가 같은 물리 디렉터리 — darwin 은
-    // 소문자 정규화 후 비교한다(대소문자 구분 볼륨에선 과차단이나 fail-closed 방향이라 수용).
-    const normCase = (p: string): string => (process.platform === "darwin" ? p.toLowerCase() : p);
-    const overlaps = (a: string, b: string): boolean =>
-      isInside(normCase(a), normCase(b)) || isInside(normCase(b), normCase(a));
+    // 판정 규칙은 lane-config 의 생성 시 사전 경고와 동일해야 한다 — shared/paths 가 SSOT.
     const rApprovals = resolve(approvalsDir);
     const rOutbox = resolve(outboxDir);
     const rInbox = resolve(inboxPath);
@@ -750,7 +732,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       ["approvals", rApprovals, "quarantine(.conflicts)", rQuarantine],
       ["outbox", rOutbox, "quarantine(.conflicts)", rQuarantine],
     ] as const) {
-      if (overlaps(a, b)) {
+      if (pathsOverlap(a, b)) {
         throw new Error(t("markdown.pathsOverlap", { nameA, a, nameB, b }));
       }
     }
@@ -758,7 +740,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       ["approvals", rApprovals],
       ["outbox", rOutbox],
     ] as const) {
-      if (isInside(normCase(rInbox), normCase(dir))) {
+      if (isPathInside(normCasePath(rInbox), normCasePath(dir))) {
         throw new Error(t("markdown.inboxInsideDir", { inbox: rInbox, name, dir }));
       }
     }
@@ -796,9 +778,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     seedSig(inboxPath);
     pollTimer = setInterval(() => {
       pollOp = pollOnce().catch((err: unknown) =>
-        console.error(
-          t("log.markdown.pollError", { error: err instanceof Error ? err.message : String(err) }),
-        ),
+        console.error(t("log.markdown.pollError", { error: errMsg(err) })),
       );
     }, POLL_INTERVAL_MS);
   }

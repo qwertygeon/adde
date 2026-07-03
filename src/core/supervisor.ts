@@ -5,6 +5,7 @@
  * adde down → 레인 프로세스 종료.
  */
 import { readdir, readFile, mkdir } from "node:fs/promises";
+import { errMsg } from "../shared/errors.js";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -43,19 +44,6 @@ export function resolveAdapterBin(): string {
   }
   const thisDir = fileURLToPath(new URL(".", import.meta.url));
   return resolve(thisDir, "../../../node_modules/.bin/claude-code-acp");
-}
-
-/** unknown 오류를 사람이 읽을 수 있는 문자열로 — ACP 오류는 Error 가 아닌 객체일 수 있다. */
-function errMsg(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === "object") {
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return String(err);
-    }
-  }
-  return String(err);
 }
 
 interface LaneHandle {
@@ -313,7 +301,7 @@ export async function supervisorUp(
         console.error(
           t("log.supervisor.injectorStartFail", {
             lane,
-            error: err instanceof Error ? err.message : String(err),
+            error: errMsg(err),
           }),
         );
       });

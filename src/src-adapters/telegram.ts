@@ -6,15 +6,17 @@
  * 토큰은 state/.env 에서만 읽기(SC-016).
  */
 import { t, tFor } from "../shared/i18n.js";
+import { errMsg } from "../shared/errors.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
-import { enqueue } from "../core/queue.js";
+import { enqueue, readSidecar } from "../core/queue.js";
 import type { Envelope } from "../shared/envelope.js";
 import type { PermRequest } from "../gate/gate.js";
 import { formatException } from "../shared/notify.js";
 import type { Source, DecisionCallback } from "./source.js";
+import { ENQUEUE_FAIL_THRESHOLD } from "./source.js";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const POLL_TIMEOUT_SECS = 30;
@@ -40,8 +42,6 @@ export function splitForTelegram(text: string, max = TELEGRAM_MSG_LIMIT): string
 }
 /** stop() 이 pollLoop 종료를 기다리는 상한 (H3/DEC-004). 초과 시 포기하고 진행. */
 const STOP_WAIT_MS = 3_000;
-/** enqueue 연속 실패가 이 횟수에 도달하면 운영자에게 1회 알림 + 백오프 (DEC-003). */
-const ENQUEUE_FAIL_THRESHOLD = 3;
 /** enqueue 실패 지속 동안 폴 사이에 적용하는 백오프. */
 const ENQUEUE_BACKOFF_MS = 5_000;
 /** 429 레이트리밋 최대 재시도 횟수(012-P). */
@@ -288,7 +288,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
               console.error(
                 t("log.telegram.enqueueError", {
                   count: consecutiveEnqueueFailures,
-                  error: err instanceof Error ? err.message : String(err),
+                  error: errMsg(err),
                 }),
               );
               // 임계 도달 시점에만 1회 알림 — 매 폴 알림 폭주 방지(DEC-003).
@@ -309,7 +309,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
               await answerCallbackQuery(cq.id).catch((err) => {
                 console.error(
                   t("log.telegram.answerCallbackError", {
-                    error: err instanceof Error ? err.message : String(err),
+                    error: errMsg(err),
                   }),
                 );
               });
@@ -340,7 +340,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
           t("log.telegram.pollError", {
             count: pollFailures,
             backoff,
-            error: err instanceof Error ? err.message : String(err),
+            error: errMsg(err),
           }),
         );
         await sleep(backoff, pollAbort?.signal);
@@ -359,9 +359,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
       tl,
     );
     await sendReply(cfg.chatId, note).catch((e: unknown) =>
-      console.error(
-        t("log.telegram.alertSendError", { error: e instanceof Error ? e.message : String(e) }),
-      ),
+      console.error(t("log.telegram.alertSendError", { error: errMsg(e) })),
     );
   }
 
@@ -371,20 +369,14 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     if (!defaultChatId) return; // 회신 대상 미지정 시 렌더 생략
 
     const outPath = join(cfg.paths.outDir, `${id}.out`);
-    const sidecarPath = join(cfg.paths.outDir, `${id}.out.json`);
 
+    // sidecar 읽기는 queue.readSidecar 로 일원화(부재·파손 → null = reply_to 없이 전송).
     let replyTo: number | undefined;
-    try {
-      const sidecar = JSON.parse(await readFile(sidecarPath, "utf8")) as {
-        reply_ref?: { channel_msg_id: string };
-      };
-      if (sidecar.reply_ref?.channel_msg_id) {
-        // 비숫자 channel_msg_id 가드(FR-6) — NaN 이면 reply_to_message_id 생략(전송 파라미터 오염 방지).
-        const parsed = parseInt(sidecar.reply_ref.channel_msg_id, 10);
-        if (!Number.isNaN(parsed)) replyTo = parsed;
-      }
-    } catch {
-      // sidecar 없으면 reply_to 없이 전송
+    const sidecar = await readSidecar(cfg.paths, id);
+    if (sidecar?.reply_ref?.channel_msg_id) {
+      // 비숫자 channel_msg_id 가드(FR-6) — NaN 이면 reply_to_message_id 생략(전송 파라미터 오염 방지).
+      const parsed = parseInt(sidecar.reply_ref.channel_msg_id, 10);
+      if (!Number.isNaN(parsed)) replyTo = parsed;
     }
 
     const text = await readFile(outPath, "utf8");
@@ -397,9 +389,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     // fire-and-forget 루프 — rejection 이 unhandled 가 되지 않도록 로깅(토큰 읽기 실패 등).
     // pollPromise 를 보관해 stop() 이 종료를 대기(H3).
     pollPromise = pollLoop().catch((err: unknown) => {
-      console.error(
-        t("log.telegram.pollLoopEnd", { error: err instanceof Error ? err.message : String(err) }),
-      );
+      console.error(t("log.telegram.pollLoopEnd", { error: errMsg(err) }));
     });
     // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거, DEC-001).
   }

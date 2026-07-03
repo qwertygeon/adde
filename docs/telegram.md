@@ -48,7 +48,7 @@ adde lane add myproj tg-claude --interactive
 
 기본값: `--source telegram`, `--backend acp`, `--engine claude-code-acp`. 전체 옵션은 [명령 레퍼런스](commands.md#lane-add-옵션) 또는 `adde lane help`.
 
-> `--allowlist` 에 넣은 도구는 채널 승인 없이 자동 허용됩니다(트랜스크립트에는 기록). `Bash`·파일 쓰기 같은 광범위 도구는 넣지 마세요.
+> `--allowlist` 에 넣은 도구는 채널 승인 없이 자동 허용됩니다(트랜스크립트에는 기록). `Bash`·파일 쓰기 같은 광범위 도구는 넣지 마세요(자기승인 위험).
 
 > ⚠️ 반대로 대부분을 자동 허용하고 지정한 도구만 물어보게 하려면 `--perm-tier autopass` 로 만듭니다(옵트인). denylist 도구·패턴(예: `"Bash(sudo *)"` — 생략 시 내장 기본 목록: 파괴적 명령·자격증명 읽기 차단)만 Allow/Deny 버튼이 오고 나머지는 자동 허용됩니다(전량 트랜스크립트 기록, 기동 시 채널 경고 배너). 상세: [명령 레퍼런스](commands.md#lane-add-옵션).
 

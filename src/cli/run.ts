@@ -1,4 +1,5 @@
 import { readVersion } from "../core/version.js";
+import { errMsg } from "../shared/errors.js";
 import { COMMANDS, buildUsage, USAGE, cmdError } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
@@ -58,7 +59,7 @@ async function runDaemonForeground(proj: string): Promise<number> {
         process.stderr.write(
           formatException({
             situation: t("run.shutdownError.situation", {
-              error: err instanceof Error ? err.message : String(err),
+              error: errMsg(err),
             }),
             action: t("run.shutdownError.action"),
           }) + "\n",
@@ -118,9 +119,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     try {
       return await runDaemonForeground(proj);
     } catch (err) {
-      process.stderr.write(
-        cmdError("__daemon", err instanceof Error ? err.message : String(err)) + "\n",
-      );
+      process.stderr.write(cmdError("__daemon", errMsg(err)) + "\n");
       return 1;
     }
   }
@@ -138,7 +137,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       process.stdout.write(t("run.statusHint", { proj }) + "\n");
       return 0;
     } catch (err) {
-      process.stderr.write(cmdError("up", err instanceof Error ? err.message : String(err)) + "\n");
+      process.stderr.write(cmdError("up", errMsg(err)) + "\n");
       return 1;
     }
   }
@@ -155,9 +154,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       process.stdout.write(t("run.downDone", { proj }) + "\n");
       return 0;
     } catch (err) {
-      process.stderr.write(
-        cmdError("down", err instanceof Error ? err.message : String(err)) + "\n",
-      );
+      process.stderr.write(cmdError("down", errMsg(err)) + "\n");
       return 1;
     }
   }
@@ -177,9 +174,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       process.stdout.write(t("run.statusHint", { proj }) + "\n");
       return 0;
     } catch (err) {
-      process.stderr.write(
-        cmdError("restart", err instanceof Error ? err.message : String(err)) + "\n",
-      );
+      process.stderr.write(cmdError("restart", errMsg(err)) + "\n");
       return 1;
     }
   }

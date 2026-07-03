@@ -74,7 +74,7 @@ adde lane rm myproj tg-claude      # conf 삭제
 adde lane add myproj tg-claude --interactive
 ```
 
-기본값: `--source telegram`, `--backend acp`, `--engine claude-code-acp`, `--channel`=source, `--perm-tier acp`, `--acp-version v1`. 기존 conf 는 `--force` 없이는 덮어쓰지 않습니다. 생성 시 `cwd`·markdown `root` 부재나 토큰 형식 이상은 경고로 안내합니다(생성은 진행). 전체 옵션은 `adde lane help` 또는 [명령 레퍼런스](commands.md#lane-add-옵션).
+플래그별 기본값·전체 옵션은 [명령 레퍼런스](commands.md#lane-add-옵션) 표가 기준입니다(`adde lane help` 로도 확인). 기존 conf 는 `--force` 없이는 덮어쓰지 않습니다. 생성 시 `cwd`·markdown `root` 부재나 토큰 형식 이상은 경고로 안내합니다(생성은 진행).
 
 ### conf 키 (직접 편집 시)
 
@@ -108,7 +108,7 @@ adde --version
 ## 상태·진단
 
 ```bash
-adde status <proj>            # 레인 상태: running / stale(응답없음) / dead(크래시) / stopped
+adde status <proj>            # 레인별 상태 표시 (상태 값 정의: 명령 레퍼런스 status 절)
 adde status                   # 인자 생략: 전 프로젝트에서 실행 중 레인 집계 (--all: 정지 포함)
 adde doctor <proj>            # 환경·설정 정적 점검(기동 전 자가 진단)
 adde logs <proj> <lane>       # 레인 최근 활동(transcript)

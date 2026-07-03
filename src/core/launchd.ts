@@ -3,6 +3,7 @@
  * plist 생성·경로·launchctl 호출을 단일 소스로 관리한다.
  * 비-macOS 환경에서는 assertMacOS() 가 actionable throw(SC-016: 침묵 실패 금지).
  */
+import { t } from "../shared/i18n.js";
 import { execFile as nodeExecFile } from "node:child_process";
 import { writeFile, unlink, mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -31,8 +32,8 @@ export function assertMacOS(): void {
   if (process.platform !== "darwin") {
     throw new Error(
       formatBlock({
-        situation: `launchd 기능은 macOS 에서만 동작합니다 (현재 플랫폼: ${process.platform})`,
-        action: "macOS 에서 실행하세요. Linux/WSL 지원은 추후 spec 범위.",
+        situation: t("launchd.macOnly.situation", { platform: process.platform }),
+        action: t("launchd.macOnly.action"),
       }),
     );
   }
@@ -150,8 +151,8 @@ export async function loadDaemon(proj: string, deps?: LaunchdDeps): Promise<void
   if (code !== 0) {
     throw new Error(
       formatBlock({
-        situation: `launchctl load 실패 (exit ${code}): ${stdout.trim()}`,
-        action: `adde doctor ${proj} 로 등록 상태를 점검하거나, 기존 등록을 먼저 해제하세요 (adde down ${proj}).`,
+        situation: t("launchd.loadFail.situation", { code, output: stdout.trim() }),
+        action: t("launchd.loadFail.action", { proj }),
       }),
     );
   }

@@ -4,6 +4,10 @@
  * GAP-001 안전망: 조회 실패 시 "확인불가=차이"로 보수적 WARN 발화.
  */
 import { maskSecrets } from "../../shared/mask.js";
+import { t } from "../../shared/i18n.js";
+
+/** 로케일 고정 t (레인별 채널 로케일). 미지정 시 전역 로케일. */
+type Tl = typeof t;
 
 export interface AddePolicy {
   perm_tier: string;
@@ -37,15 +41,12 @@ export interface PermDiffResult {
 export function comparePerm(
   addePolicy: AddePolicy,
   engineEffective: EngineEffective | null,
+  tl: Tl = t,
 ): PermDiffResult {
   if (engineEffective === null) {
     const warn = {
       level: "WARN" as const,
-      message: formatWarn(
-        addePolicy,
-        null,
-        "엔진 실효 설정 조회 실패 — 확인불가(보수적 차이 간주)",
-      ),
+      message: formatWarn(addePolicy, null, tl("permDiff.queryFailedMsg"), tl),
       adde: addePolicy,
       engine: null,
       reason: "조회실패",
@@ -60,7 +61,7 @@ export function comparePerm(
   if (addePolicy.perm_tier === "acp" && engineIsBypass) {
     const warn = {
       level: "WARN" as const,
-      message: formatWarn(addePolicy, engineEffective, "ADDE 정책(acp) 보다 느슨한 엔진 설정 감지"),
+      message: formatWarn(addePolicy, engineEffective, tl("permDiff.looseEngine"), tl),
       adde: addePolicy,
       engine: engineEffective,
       reason: "정책차이",
@@ -73,11 +74,7 @@ export function comparePerm(
     // 기록이 전부 무력화되므로 acp 와 별도 사유로 표기한다.
     const warn = {
       level: "WARN" as const,
-      message: formatWarn(
-        addePolicy,
-        engineEffective,
-        "엔진 bypass — 권한 요청 미발화로 autopass denylist·자동허용 기록이 무력화됨",
-      ),
+      message: formatWarn(addePolicy, engineEffective, tl("permDiff.bypassMsg"), tl),
       adde: addePolicy,
       engine: engineEffective,
       reason: "정책차이",
@@ -95,8 +92,8 @@ export function formatWarn(
   adde: AddePolicy,
   engine: EngineEffective | null,
   reason: string,
+  tl: Tl = t,
 ): string {
-  const engineStr = engine ? JSON.stringify(engine) : "(조회실패)";
-  const raw = `[ADDE WARN] 권한 설정 차이: ${reason} | adde.perm_tier=${adde.perm_tier} | engine=${engineStr}`;
-  return maskSecrets(raw);
+  const engineStr = engine ? JSON.stringify(engine) : tl("permDiff.engineUnknown");
+  return maskSecrets(tl("permDiff.warnLine", { reason, tier: adde.perm_tier, engine: engineStr }));
 }

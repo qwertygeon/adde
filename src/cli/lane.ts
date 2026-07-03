@@ -2,16 +2,11 @@
  * `adde lane <add|ls|show|rm>` 서브커맨드 그룹 — 레인 .conf 설정 CLI.
  * argv 파싱 후 core/lane-config 의 코어 함수에 위임하고, 결과/오류를 stdout/stderr 로 표면화.
  */
-import {
-  laneAdd,
-  laneList,
-  laneShow,
-  laneRemove,
-  LaneConfigError,
-} from "../core/lane-config.js";
+import { laneAdd, laneList, laneShow, laneRemove, LaneConfigError } from "../core/lane-config.js";
 import type { LaneAddOptions } from "../core/lane-config.js";
-import { USAGE, LANE_USAGE, laneError, unknownLaneSub } from "../core/messages.js";
+import { USAGE, buildLaneUsage, laneError, unknownLaneSub } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
+import { t } from "../shared/i18n.js";
 import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
 import * as readline from "node:readline/promises";
 
@@ -34,7 +29,7 @@ function parseArgs(argv: readonly string[], valueKeys: ReadonlySet<string>): Par
         flags[key.slice(0, eq)] = key.slice(eq + 1);
       } else if (valueKeys.has(key)) {
         const next = argv[i + 1];
-        if (next === undefined) throw new LaneConfigError(`--${key} 에 값이 필요합니다`);
+        if (next === undefined) throw new LaneConfigError(t("lane.valueRequired", { key }));
         flags[key] = next;
         i++;
       } else {
@@ -58,6 +53,7 @@ const ADD_VALUE_KEYS = new Set([
   "allowlist",
   "denylist",
   "chat-id",
+  "lang",
   "root",
   "inbox",
   "approvals",
@@ -90,7 +86,7 @@ export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
 
   let source = (await ask("source (telegram/markdown)", "telegram")).toLowerCase();
   while (source !== "telegram" && source !== "markdown") {
-    source = (await ask("  telegram 또는 markdown 중 하나를 입력하세요", "telegram")).toLowerCase();
+    source = (await ask(t("lane.sourceRetry"), "telegram")).toLowerCase();
   }
   opts.source = source;
   opts.engine = await ask("engine", "claude-code-acp");
@@ -105,29 +101,26 @@ export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
-  const allow = await ask("allowlist (콤마 구분, 없으면 비움)", "");
+  const allow = await ask(t("lane.prompt.allowlist"), "");
   if (allow) opts.allowlist = splitTools(allow);
   if (opts.perm_tier === "autopass") {
-    const deny = await ask(
-      "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
-      DEFAULT_AUTOPASS_DENYLIST.join(","),
-    );
+    const deny = await ask(t("lane.prompt.denylist"), DEFAULT_AUTOPASS_DENYLIST.join(","));
     if (deny) opts.denylist = splitTools(deny);
   }
-  const cwd = await ask("cwd (레인 작업 폴더 절대경로, 없으면 비움)", "");
+  const cwd = await ask(t("lane.prompt.cwd"), "");
   if (cwd) opts.cwd = cwd;
 
   if (source === "telegram") {
-    const chatId = await ask("chat_id (회신 대상, 없으면 비움)", "");
+    const chatId = await ask(t("lane.prompt.chatId"), "");
     if (chatId) opts.chat_id = chatId;
   } else {
-    const root = await ask("root (markdown 루트 절대경로)", "");
+    const root = await ask(t("lane.prompt.root"), "");
     if (root) opts.root = root;
-    const inbox = await ask("inbox (root 상대)", "inbox.md");
+    const inbox = await ask(t("lane.prompt.inbox"), "inbox.md");
     if (inbox) opts.inbox = inbox;
-    const approvals = await ask("approvals (root 상대, 없으면 기본)", "");
+    const approvals = await ask(t("lane.prompt.approvals"), "");
     if (approvals) opts.approvals = approvals;
-    const outbox = await ask("outbox (root 상대, 없으면 기본)", "");
+    const outbox = await ask(t("lane.prompt.outbox"), "");
     if (outbox) opts.outbox = outbox;
   }
 
@@ -147,9 +140,8 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     if (!process.stdin.isTTY) {
       process.stderr.write(
         formatException({
-          situation: "--interactive 는 대화형 터미널(TTY)에서만 동작합니다",
-          action:
-            "플래그로 지정하세요(예: adde lane add <proj> <lane> --source telegram). 옵션 목록은 adde lane help.",
+          situation: t("lane.ttyOnly.situation"),
+          action: t("lane.ttyOnly.action"),
         }) + "\n",
       );
       return 1;
@@ -179,6 +171,8 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     if (acpVersion !== undefined) opts.acp_version = acpVersion;
     const cwd = flagStr(flags, "cwd");
     if (cwd !== undefined) opts.cwd = cwd;
+    const lang = flagStr(flags, "lang");
+    if (lang !== undefined) opts.lang = lang;
     const chatId = flagStr(flags, "chat-id");
     if (chatId !== undefined) opts.chat_id = chatId;
     const root = flagStr(flags, "root");
@@ -204,14 +198,17 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
 
   const result = await laneAdd(proj, lane, opts);
   for (const w of result.warnings) process.stdout.write(w + "\n");
-  process.stdout.write(`레인 "${result.lane}" 생성: ${result.confPath}\n`);
-  if (result.envPath) process.stdout.write(`토큰 기록: ${result.envPath} (0600)\n`);
+  process.stdout.write(t("lane.created", { lane: result.lane, confPath: result.confPath }) + "\n");
+  if (result.envPath)
+    process.stdout.write(t("lane.tokenWritten", { envPath: result.envPath }) + "\n");
   else if (result.conf.source === "telegram") {
     process.stdout.write(
-      `다음: 봇 토큰을 ${result.confPath.replace(/lanes\.d\/.*$/, `state/${result.lane}/.env`)} 에 TELEGRAM_BOT_TOKEN=... 으로 두세요\n`,
+      t("lane.tokenNext", {
+        envPath: result.confPath.replace(/lanes\.d\/.*$/, `state/${result.lane}/.env`),
+      }) + "\n",
     );
   }
-  process.stdout.write(`기동: adde up ${proj}\n`);
+  process.stdout.write(t("lane.startHint", { proj }) + "\n");
   return 0;
 }
 
@@ -223,7 +220,7 @@ async function handleList(rest: readonly string[]): Promise<number> {
     return 1;
   }
   const { lanes } = await laneList(proj);
-  if (lanes.length === 0) process.stdout.write(`${proj}: 레인 없음\n`);
+  if (lanes.length === 0) process.stdout.write(t("lane.noLanes", { proj }) + "\n");
   else process.stdout.write(lanes.join("\n") + "\n");
   return 0;
 }
@@ -248,7 +245,7 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
     return 1;
   }
   const { confPath } = await laneRemove(proj, lane);
-  process.stdout.write(`레인 "${lane}" 삭제: ${confPath}\n`);
+  process.stdout.write(t("lane.removed", { lane, confPath }) + "\n");
   return 0;
 }
 
@@ -274,7 +271,7 @@ export async function runLane(argv: readonly string[]): Promise<number> {
       case "help":
       case "--help":
       case "-h":
-        process.stdout.write(`${LANE_USAGE}\n`);
+        process.stdout.write(`${buildLaneUsage()}\n`);
         return 0;
       default:
         process.stderr.write(unknownLaneSub(sub) + "\n");

@@ -3,6 +3,7 @@
  * 파일 1개 = 레인 1개 (~/.config/adde/<proj>/lanes.d/<lane>.conf).
  * 모든 검증을 통과한 뒤에만 디스크에 쓴다(validate-then-commit). 쓰기는 tmp→rename 원자적.
  */
+import { t, SUPPORTED_LOCALES } from "../shared/i18n.js";
 import { readdir, readFile, writeFile, rename, mkdir, unlink, stat } from "node:fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { parseLaneConf, serializeLaneConf } from "../shared/conf.js";
@@ -48,6 +49,8 @@ export interface LaneAddOptions extends LaneCommandBaseOptions {
   inbox?: string;
   approvals?: string;
   outbox?: string;
+  /** 레인별 채널 메시지 로케일(en|ko). 미지정 시 전역 로케일. */
+  lang?: string;
   /** 봇 토큰(telegram). 주어지면 state/<lane>/.env 에 0600 으로 기록. */
   token?: string;
   /** 기존 conf(및 token 지정 시 .env) 를 덮어쓴다. */
@@ -76,20 +79,14 @@ async function collectAddWarnings(conf: LaneConf, token?: string): Promise<strin
   if (conf.cwd) {
     const p = expandTilde(conf.cwd);
     if (!(await exists(p))) {
-      warnings.push(
-        `[경고] cwd 경로가 없습니다: ${p}\n  ↳ 조치: 기동 전 폴더를 만들거나 conf 의 cwd 를 수정하세요.`,
-      );
+      warnings.push(t("laneConfig.warn.cwdMissing", { path: p }));
     }
   }
   if (conf.source === "markdown") {
     if (!conf.root) {
-      warnings.push(
-        "[경고] markdown 레인에 root 가 없습니다.\n  ↳ 조치: --root <vault 절대경로> 를 지정하세요(없으면 인바운드 감시 불가).",
-      );
+      warnings.push(t("laneConfig.warn.mdRootMissingConf"));
     } else if (!(await exists(expandTilde(conf.root)))) {
-      warnings.push(
-        `[경고] markdown root 경로가 없습니다: ${expandTilde(conf.root)}\n  ↳ 조치: 경로를 확인하거나 생성하세요.`,
-      );
+      warnings.push(t("laneConfig.warn.mdRootNotFound", { path: expandTilde(conf.root) }));
     }
     // 경로 상호 배타 사전 경고 — 기동 시 fail-closed 거부되는 조합을 생성 시점에 미리 안내.
     // 해석 규칙은 markdown 어댑터 resolvePaths·기동 가드와 동일(미지정 시 inbox 형제, darwin 대소문자 정규화).
@@ -97,11 +94,12 @@ async function collectAddWarnings(conf: LaneConf, token?: string): Promise<strin
       const root = expandTilde(conf.root);
       const inboxPath = resolve(join(root, conf.inbox));
       const inboxDir = dirname(inboxPath);
-      const approvalsDir = resolve(conf.approvals ? join(root, conf.approvals) : join(inboxDir, "approvals"));
+      const approvalsDir = resolve(
+        conf.approvals ? join(root, conf.approvals) : join(inboxDir, "approvals"),
+      );
       const outboxDir = resolve(conf.outbox ? join(root, conf.outbox) : join(inboxDir, "out"));
       const quarantineDir = resolve(join(inboxDir, ".conflicts"));
-      const normCase = (p: string): string =>
-        process.platform === "darwin" ? p.toLowerCase() : p;
+      const normCase = (p: string): string => (process.platform === "darwin" ? p.toLowerCase() : p);
       const inside = (child: string, parent: string): boolean => {
         const rel = relative(normCase(parent), normCase(child));
         return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -115,35 +113,39 @@ async function collectAddWarnings(conf: LaneConf, token?: string): Promise<strin
         inside(inboxPath, outboxDir)
       ) {
         warnings.push(
-          `[경고] markdown 경로가 겹칩니다(inbox=${inboxPath} / approvals=${approvalsDir} / outbox=${outboxDir}) — 기동이 거부됩니다.\n  ↳ 조치: 승인·출력·입력 경로를 서로 분리하세요.`,
+          t("laneConfig.warn.mdPathOverlap", {
+            inbox: inboxPath,
+            approvals: approvalsDir,
+            outbox: outboxDir,
+          }),
         );
       }
     }
   }
   if (conf.source === "telegram" && token !== undefined && !TELEGRAM_TOKEN_RE.test(token)) {
+    warnings.push(t("laneConfig.warn.tokenFormat"));
+  }
+  if (conf.lang && !(SUPPORTED_LOCALES as readonly string[]).includes(conf.lang)) {
     warnings.push(
-      "[경고] 봇 토큰 형식이 예상과 다릅니다(<숫자>:<영숫자> 아님).\n  ↳ 조치: BotFather 발급 토큰을 다시 확인하세요.",
+      t("laneConfig.warn.badLang", { lang: conf.lang, supported: SUPPORTED_LOCALES.join("|") }),
     );
   }
   if (!(KNOWN_PERM_TIERS as readonly string[]).includes(conf.perm_tier)) {
     warnings.push(
-      `[경고] perm_tier "${conf.perm_tier}" 는 알려진 값(${KNOWN_PERM_TIERS.join("|")})이 아닙니다 — acp 처럼 동작합니다.\n  ↳ 조치: 오타라면 conf 의 perm_tier 를 수정하세요.`,
+      t("laneConfig.warn.permTierUnknown", {
+        tier: conf.perm_tier,
+        known: KNOWN_PERM_TIERS.join("|"),
+      }),
     );
   }
   if (conf.perm_tier === "autopass") {
-    warnings.push(
-      "[경고] perm_tier=autopass — denylist 외 모든 도구(파일 쓰기·Bash 실행 포함)가 채널 확인 없이 자동 허용됩니다.\n  ↳ 확인이 필요한 도구는 denylist 에 두세요(예: denylist=Bash). 자동 허용 내역은 transcript 에 기록됩니다.",
-    );
+    warnings.push(t("laneConfig.warn.autopassBanner"));
     if (conf.denylist.length === 0) {
-      warnings.push(
-        "[경고] autopass 레인에 denylist 가 비어 있습니다 — 모든 권한 요청이 무확인 통과됩니다.",
-      );
+      warnings.push(t("laneConfig.warn.autopassEmptyDeny"));
     }
     const overlap = conf.denylist.filter((t) => conf.allowlist.includes(t));
     if (overlap.length > 0) {
-      warnings.push(
-        `[경고] allowlist 와 denylist 에 같은 도구가 있습니다: ${overlap.join(", ")} — denylist 가 우선하여 채널 승인을 거칩니다.\n  ↳ 조치: 의도가 아니라면 한쪽에서 제거하세요.`,
-      );
+      warnings.push(t("laneConfig.warn.allowDenyOverlap", { tools: overlap.join(", ") }));
     }
   }
   return warnings;
@@ -166,11 +168,9 @@ export interface LaneRemoveResult {
 }
 
 function assertName(kind: "proj" | "lane", value: string): void {
-  if (!value) throw new LaneConfigError(`${kind} 가 비어있습니다`);
+  if (!value) throw new LaneConfigError(t("laneConfig.err.emptyIdent", { kind }));
   if (!NAME_RE.test(value)) {
-    throw new LaneConfigError(
-      `${kind} "${value}" 가 올바르지 않습니다 — 영문/숫자/_/- 만 허용`,
-    );
+    throw new LaneConfigError(t("laneConfig.err.badIdent", { kind, value }));
   }
 }
 
@@ -205,30 +205,26 @@ export async function laneAdd(
   const source = (opts.source ?? "telegram") as string;
   if (!(SUPPORTED_SOURCES as readonly string[]).includes(source)) {
     throw new LaneConfigError(
-      `source "${source}" 미지원 — ${SUPPORTED_SOURCES.join(" | ")} 중 하나`,
+      t("laneConfig.err.badSource", { source, supported: SUPPORTED_SOURCES.join(" | ") }),
     );
   }
   const src = source as SupportedSource;
 
   if (opts.chat_id !== undefined && opts.chat_id !== "" && !CHAT_ID_RE.test(opts.chat_id)) {
-    throw new LaneConfigError(`chat_id "${opts.chat_id}" 가 숫자가 아닙니다`);
+    throw new LaneConfigError(t("laneConfig.err.badChatId", { chatId: opts.chat_id }));
   }
   if (opts.token !== undefined && src !== "telegram") {
-    throw new LaneConfigError("token 은 source=telegram 레인에서만 사용합니다");
+    throw new LaneConfigError(t("laneConfig.err.tokenOnlyTelegram"));
   }
   for (const tool of opts.allowlist ?? []) {
     if (!ALLOWLIST_ITEM_RE.test(tool)) {
-      throw new LaneConfigError(
-        `allowlist 도구명 "${tool}" 가 올바르지 않습니다 — 영숫자/_/./- 만 허용`,
-      );
+      throw new LaneConfigError(t("laneConfig.err.badAllowTool", { tool }));
     }
   }
   // denylist 는 `Tool` 또는 `Tool(글롭)` 형식. 콤마는 목록 구분자라 항목 내 금지.
   for (const entry of opts.denylist ?? []) {
     if (entry.includes(",") || !parseDenyEntry(entry)) {
-      throw new LaneConfigError(
-        `denylist 항목 "${entry}" 가 올바르지 않습니다 — "Bash" 또는 "Bash(git push*)" 형식(콤마 불가)`,
-      );
+      throw new LaneConfigError(t("laneConfig.err.badDenyEntry", { entry }));
     }
   }
 
@@ -243,8 +239,7 @@ export async function laneAdd(
     allowlist: opts.allowlist ?? [],
     // autopass 인데 denylist 미지정 → 내장 기본 denylist. conf 에 구체 목록을
     // 명시 기록한다(암묵 기본값이 파일에 안 보이는 상태 회피). 명시 지정(빈 배열 포함)이 우선.
-    denylist:
-      opts.denylist ?? (permTier === "autopass" ? [...DEFAULT_AUTOPASS_DENYLIST] : []),
+    denylist: opts.denylist ?? (permTier === "autopass" ? [...DEFAULT_AUTOPASS_DENYLIST] : []),
   };
   // exactOptionalPropertyTypes: undefined 대입 금지 — 값이 있을 때만 설정.
   if (opts.cwd) conf.cwd = opts.cwd;
@@ -253,14 +248,13 @@ export async function laneAdd(
   if (opts.inbox) conf.inbox = opts.inbox;
   if (opts.approvals) conf.approvals = opts.approvals;
   if (opts.outbox) conf.outbox = opts.outbox;
+  if (opts.lang) conf.lang = opts.lang;
 
   const base = opts.base ?? defaultBase();
   const paths = lanePaths(base, proj, lane);
 
   if (!opts.force && (await exists(paths.confFile))) {
-    throw new LaneConfigError(
-      `레인 "${lane}" 이 이미 존재합니다 (${paths.confFile}) — 덮어쓰려면 --force`,
-    );
+    throw new LaneConfigError(t("laneConfig.err.laneExists", { lane, confFile: paths.confFile }));
   }
 
   await mkdir(paths.lanesDir, { recursive: true });
@@ -270,13 +264,11 @@ export async function laneAdd(
 
   if (opts.token !== undefined) {
     const token = opts.token.trim();
-    if (!token) throw new LaneConfigError("token 이 비어있습니다");
+    if (!token) throw new LaneConfigError(t("laneConfig.err.tokenEmpty"));
     if (!opts.force && (await exists(paths.envFile))) {
       const existing = (await readFile(paths.envFile, "utf8")).trim();
       if (existing) {
-        throw new LaneConfigError(
-          `${paths.envFile} 에 이미 토큰이 있습니다 — 덮어쓰려면 --force`,
-        );
+        throw new LaneConfigError(t("laneConfig.err.envHasToken", { envFile: paths.envFile }));
       }
     }
     await mkdir(paths.stateDir, { recursive: true });
@@ -324,7 +316,7 @@ export async function laneShow(
   try {
     text = await readFile(paths.confFile, "utf8");
   } catch {
-    throw new LaneConfigError(`레인 "${lane}" 을 찾을 수 없습니다 (${paths.confFile})`);
+    throw new LaneConfigError(t("laneConfig.err.laneNotFound", { lane, confFile: paths.confFile }));
   }
   return { lane, confPath: paths.confFile, conf: parseLaneConf(text), text };
 }
@@ -342,7 +334,7 @@ export async function laneRemove(
   try {
     await unlink(paths.confFile);
   } catch {
-    throw new LaneConfigError(`레인 "${lane}" 을 찾을 수 없습니다 (${paths.confFile})`);
+    throw new LaneConfigError(t("laneConfig.err.laneNotFound", { lane, confFile: paths.confFile }));
   }
   return { lane, confPath: paths.confFile };
 }

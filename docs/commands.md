@@ -18,10 +18,10 @@ ADDE CLI 의 전체 명령·옵션입니다. 주 진입점은 `adde`, 단축 별
 
 ## 전역 옵션
 
-| 옵션 | 설명 |
-|---|---|
-| `-v`, `--version` | 버전 출력 |
-| `-h`, `--help` | 도움말 출력 |
+| 옵션              | 설명        |
+| ----------------- | ----------- |
+| `-v`, `--version` | 버전 출력   |
+| `-h`, `--help`    | 도움말 출력 |
 
 인자 없이 `adde` 를 실행하면 사용법을 출력합니다.
 
@@ -66,12 +66,12 @@ adde status [<proj>] [--all] [--json]
 
 `lanes.d` 의 각 레인을 스캔해 상태를 판정합니다.
 
-| 상태 | 의미 |
-|---|---|
-| `running` | 상태 파일이 있고 기동 프로세스(pid)가 살아있으며 하트비트가 신선함 |
-| `stale` | pid 는 살아있으나 하트비트(상태 파일 mtime)가 끊김 — **행(hung) 의심** |
-| `dead` | 상태 파일이 있으나 프로세스가 없음 — **비정상 종료(크래시) 잔존** |
-| `stopped` | 상태 파일 없음 — 정상 종료 또는 미기동 |
+| 상태      | 의미                                                                   |
+| --------- | ---------------------------------------------------------------------- |
+| `running` | 상태 파일이 있고 기동 프로세스(pid)가 살아있으며 하트비트가 신선함     |
+| `stale`   | pid 는 살아있으나 하트비트(상태 파일 mtime)가 끊김 — **행(hung) 의심** |
+| `dead`    | 상태 파일이 있으나 프로세스가 없음 — **비정상 종료(크래시) 잔존**      |
+| `stopped` | 상태 파일 없음 — 정상 종료 또는 미기동                                 |
 
 - **`<proj>` 지정**: 해당 프로젝트의 모든 레인(정지 포함)을 `LANE · STATUS · PID · UPTIME · SEEN · SOURCE` 표로 출력.
 - **`<proj>` 생략**: 전 프로젝트(`~/.config/adde/*/`)를 집계해 **실행 중(정지 제외) 레인**을 `PROJECT · LANE · …` 표로 출력. 실행 중 레인이 없으면 안내 메시지.
@@ -118,23 +118,24 @@ adde lane help                       # 전체 옵션
 
 ### lane add 옵션
 
-| 옵션 | 기본값 | 설명 |
-|---|---|---|
-| `--source <telegram\|markdown>` | `telegram` | 채널 소스 |
-| `--engine <name>` | `claude-code-acp` | ACP 엔진 프로필 |
-| `--backend <name>` | `acp` | 백엔드 |
-| `--channel <name>` | source 값 | 게이트 분기 |
-| `--perm-tier <acp\|autopass>` | `acp` | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인) |
-| `--acp-version <v>` | `v1` | ACP 버전 |
-| `--cwd <abs-path>` | (supervisor cwd) | 이 레인 AI 의 작업 폴더(프로젝트 매핑) |
-| `--allowlist <a,b,c>` | (없음) | 자동 허용 도구(게이트는 유지, `perm_tier=acp` 용) |
-| `--denylist <항목,...>` | autopass 시 내장 기본 목록(아래 **기본 denylist**) | `autopass` 에서 채널 승인으로 폴백할 도구·패턴 — `Bash`(도구 전체) 또는 `"Bash(git push*)"`(대표 인자 글롭) |
-| `--chat-id <id>` | (없음) | telegram 회신 대상 |
-| `--token-stdin` | — | telegram 봇 토큰을 stdin 에서 읽어 `.env`(0600) 기록 |
-| `--root <abs-path>` | (없음) | markdown 루트(예: Obsidian vault) |
-| `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | — | markdown 노트 경로(root 상대) |
-| `--force` | — | 기존 conf 덮어쓰기 |
-| `--interactive` | — | 대화형으로 필드 입력(TTY 전용, **토큰은 묻지 않음**) |
+| 옵션                                                 | 기본값                                             | 설명                                                                                                        |
+| ---------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `--source <telegram\|markdown>`                      | `telegram`                                         | 채널 소스                                                                                                   |
+| `--engine <name>`                                    | `claude-code-acp`                                  | ACP 엔진 프로필                                                                                             |
+| `--backend <name>`                                   | `acp`                                              | 백엔드                                                                                                      |
+| `--channel <name>`                                   | source 값                                          | 게이트 분기                                                                                                 |
+| `--perm-tier <acp\|autopass>`                        | `acp`                                              | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인)                               |
+| `--acp-version <v>`                                  | `v1`                                               | ACP 버전                                                                                                    |
+| `--cwd <abs-path>`                                   | (supervisor cwd)                                   | 이 레인 AI 의 작업 폴더(프로젝트 매핑)                                                                      |
+| `--allowlist <a,b,c>`                                | (없음)                                             | 자동 허용 도구(게이트는 유지, `perm_tier=acp` 용)                                                           |
+| `--denylist <항목,...>`                              | autopass 시 내장 기본 목록(아래 **기본 denylist**) | `autopass` 에서 채널 승인으로 폴백할 도구·패턴 — `Bash`(도구 전체) 또는 `"Bash(git push*)"`(대표 인자 글롭) |
+| `--lang <en\|ko>`                                    | (전역 로케일)                                      | 이 레인의 **채널 메시지** 언어(권한 프롬프트·경고 배너·알림 노트)                                           |
+| `--chat-id <id>`                                     | (없음)                                             | telegram 회신 대상                                                                                          |
+| `--token-stdin`                                      | —                                                  | telegram 봇 토큰을 stdin 에서 읽어 `.env`(0600) 기록                                                        |
+| `--root <abs-path>`                                  | (없음)                                             | markdown 루트(예: Obsidian vault)                                                                           |
+| `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | —                                                  | markdown 노트 경로(root 상대)                                                                               |
+| `--force`                                            | —                                                  | 기존 conf 덮어쓰기                                                                                          |
+| `--interactive`                                      | —                                                  | 대화형으로 필드 입력(TTY 전용, **토큰은 묻지 않음**)                                                        |
 
 `--interactive` 는 대화형 터미널(TTY)에서만 동작합니다. 봇 토큰은 화면 노출을 피하기 위해 인터랙티브에서 받지 않으며, 생성 후 `--token-stdin` 또는 `.env` 직접 기록으로 설정합니다. 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
 
@@ -148,15 +149,23 @@ adde lane help                       # 전체 옵션
 
 ## 종료 코드
 
-| 명령 | 0 | 1 |
-|---|---|---|
-| `up` | 데몬 등록 성공 | launchd 등록 실패·인자 누락 |
-| `down` | 데몬 종료 성공(이미 없어도 0) | 오류 발생 |
-| `restart` | down+up 모두 성공 | down 또는 up 실패 |
-| `status` | 모두 정상 | `dead`(크래시)·`stale`(행) 레인 존재 |
-| `doctor` | FAIL 없음 | FAIL 항목 존재 |
-| `logs` | 항상(파일 없어도 안내 후 0) | — |
-| `lane *` | 성공 | 인자 누락·검증 오류 |
+| 명령      | 0                             | 1                                    |
+| --------- | ----------------------------- | ------------------------------------ |
+| `up`      | 데몬 등록 성공                | launchd 등록 실패·인자 누락          |
+| `down`    | 데몬 종료 성공(이미 없어도 0) | 오류 발생                            |
+| `restart` | down+up 모두 성공             | down 또는 up 실패                    |
+| `status`  | 모두 정상                     | `dead`(크래시)·`stale`(행) 레인 존재 |
+| `doctor`  | FAIL 없음                     | FAIL 항목 존재                       |
+| `logs`    | 항상(파일 없어도 안내 후 0)   | —                                    |
+| `lane *`  | 성공                          | 인자 누락·검증 오류                  |
+
+## 언어(로케일)
+
+CLI 출력·채널 메시지는 en/ko 두 언어를 지원합니다.
+
+- **결정 순서**: `ADDE_LANG`(명시) > `LC_ALL` > `LC_MESSAGES` > `LANG`(언어 코드 파싱, `ko*`→한국어) > 기본 **영어**. 한국어 macOS(`LANG=ko_KR.UTF-8`)에서는 별도 설정 없이 한국어로 출력됩니다.
+- **레인별 채널 언어**: `adde lane add --lang <en|ko>`(또는 conf `lang=`) 로 그 레인의 채널 메시지(권한 프롬프트·경고 배너·알림 노트) 언어를 고정할 수 있습니다. 미지정 시 데몬 프로세스의 전역 로케일을 따릅니다.
+- **주의(launchd 데몬)**: launchd 로 기동된 데몬은 셸의 `LANG` 을 상속하지 않을 수 있습니다 — 채널 메시지 언어를 확실히 하려면 레인 conf 에 `lang=` 을 지정하세요.
 
 ## 경로
 

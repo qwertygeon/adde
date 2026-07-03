@@ -6,6 +6,9 @@
 
 ### Added
 
+- i18n(en/ko) — 사용자 대면 문자열 전반(CLI 사용법·오류·doctor/status·채널 알림·경고 배너·운영 로그 — 내부 개발자용 throw 제외)을 i18next 기반 en/ko 카탈로그로 이전. 로케일 자동 감지(`ADDE_LANG` > `LC_ALL` > `LC_MESSAGES` > `LANG` > 기본 en — 한국어 환경은 기존과 동일하게 한국어 출력).
+- 레인별 채널 메시지 언어 `lang` conf 필드 + `adde lane add --lang <en|ko>` — 권한 프롬프트·경고 배너·알림 노트를 레인 단위로 언어 고정(미지정 시 전역 로케일, 옵트인·기본 동작 불변). 미지원 값은 생성 시 비차단 경고.
+- i18n 패리티 검사 `pnpm run i18n:check`(키·보간 플레이스홀더·빈 문자열) + CI 게이트. 키 패리티는 타입(`ko satisfies typeof en`)으로도 컴파일 타임 강제.
 - 권한 티어 `autopass`(레인별 옵트인) — `--perm-tier autopass --denylist Bash,Write` 로 생성. denylist 도구만 채널 승인(fail-closed 게이트 유지)을 거치고 그 외 전 도구는 자동 허용, 자동 허용 내역은 전량 transcript 기록. 기본 티어(`acp`) 동작 불변.
 - 레인 conf `denylist` 필드 + `adde lane add --denylist` 옵션(대화형 `--interactive` 는 autopass 선택 시에만 질문).
 - autopass 레인 기동 시 채널 경고 배너 — 자동 허용 모드임과 denylist 구성을 채널(telegram 메시지 / markdown `_adde-notice.md` 노트)로 고지.

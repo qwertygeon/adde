@@ -5,6 +5,7 @@
 import { collectStatus, collectAllStatus, runDoctor, readLogs } from "../core/diagnostics.js";
 import type { LaneStatusRow, AggregatedLaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
 import { USAGE } from "../core/messages.js";
+import { t } from "../shared/i18n.js";
 
 /** ms → 사람용 경과시간(예: 1h2m, 3m4s, 12s). */
 function formatUptime(ms: number | null): string {
@@ -25,8 +26,7 @@ function formatAge(iso: string | null): string {
 }
 
 function statusTable(rows: LaneStatusRow[]): string {
-  if (rows.length === 0)
-    return "레인 없음 — lanes.d 에 conf 가 없습니다 (adde lane add <proj> <lane>).";
+  if (rows.length === 0) return t("ops.status.noLanesConf");
   const header = ["LANE", "STATUS", "PID", "UPTIME", "SEEN", "SOURCE"];
   const body = rows.map((r) => [
     r.lane,
@@ -49,9 +49,7 @@ function statusTable(rows: LaneStatusRow[]): string {
  */
 function statusTableAggregate(rows: AggregatedLaneStatusRow[], all: boolean): string {
   if (rows.length === 0) {
-    return all
-      ? "레인 없음 — 등록된 레인이 없습니다 (adde lane add <proj> <lane>)."
-      : "실행 중인 레인 없음 — 정지 포함 전체는 `adde status --all`, 특정 프로젝트는 `adde status <proj>`.";
+    return all ? t("ops.status.noLanesRegistered") : t("ops.status.noRunning");
   }
   const header = ["PROJECT", "LANE", "STATUS", "PID", "UPTIME", "SEEN", "SOURCE"];
   const body = rows.map((r) => [
@@ -86,15 +84,21 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
       const dead = rows.filter((r) => r.status === "dead");
       if (dead.length > 0) {
         process.stdout.write(
-          `\n경고: ${dead.map((r) => `${r.proj}/${r.lane}`).join(", ")} 레인이 비정상 종료(dead)했습니다.\n` +
-            `  ↳ 조치: adde down <proj> 로 정리한 뒤 adde up <proj> 로 재기동하세요.\n`,
+          "\n" +
+            t("ops.status.deadWarnAggregate", {
+              lanes: dead.map((r) => `${r.proj}/${r.lane}`).join(", "),
+            }) +
+            "\n",
         );
       }
       const stale = rows.filter((r) => r.status === "stale");
       if (stale.length > 0) {
         process.stdout.write(
-          `\n경고: ${stale.map((r) => `${r.proj}/${r.lane}`).join(", ")} 레인이 응답 없음(stale — 하트비트 끊김).\n` +
-            `  ↳ 조치: adde logs <proj> <lane> --engine 으로 진단 후 adde down/up <proj> 로 재기동하세요.\n`,
+          "\n" +
+            t("ops.status.staleWarnAggregate", {
+              lanes: stale.map((r) => `${r.proj}/${r.lane}`).join(", "),
+            }) +
+            "\n",
         );
       }
     }
@@ -109,15 +113,17 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
     const dead = rows.filter((r) => r.status === "dead");
     if (dead.length > 0) {
       process.stdout.write(
-        `\n경고: ${dead.map((r) => r.lane).join(", ")} 레인이 비정상 종료(dead)했습니다.\n` +
-          `  ↳ 조치: adde down ${proj} 로 상태를 정리한 뒤 adde up ${proj} 로 재기동하세요.\n`,
+        "\n" +
+          t("ops.status.deadWarnSingle", { lanes: dead.map((r) => r.lane).join(", "), proj }) +
+          "\n",
       );
     }
     const stale = rows.filter((r) => r.status === "stale");
     if (stale.length > 0) {
       process.stdout.write(
-        `\n경고: ${stale.map((r) => r.lane).join(", ")} 레인이 응답 없음(stale — 프로세스는 살아있으나 하트비트 끊김).\n` +
-          `  ↳ 조치: 행(hang) 가능성. adde logs ${proj} <lane> --engine 으로 진단 후 adde down/up ${proj} 로 재기동하세요.\n`,
+        "\n" +
+          t("ops.status.staleWarnSingle", { lanes: stale.map((r) => r.lane).join(", "), proj }) +
+          "\n",
       );
     }
   }
@@ -134,12 +140,14 @@ export async function runDoctorCli(rest: readonly string[]): Promise<number> {
   const checks = await runDoctor(proj);
   for (const c of checks) {
     process.stdout.write(`${checkSymbol(c.level)} [${c.level}] ${c.name}: ${c.detail}\n`);
-    if (c.hint) process.stdout.write(`    ↳ 조치: ${c.hint}\n`);
+    if (c.hint) process.stdout.write(t("ops.doctor.hint", { hint: c.hint }) + "\n");
   }
   const fails = checks.filter((c) => c.level === "FAIL").length;
   const warns = checks.filter((c) => c.level === "WARN").length;
   process.stdout.write(
-    `\n요약: ${checks.length - fails - warns} PASS / ${warns} WARN / ${fails} FAIL\n`,
+    "\n" +
+      t("ops.doctor.summary", { pass: checks.length - fails - warns, warn: warns, fail: fails }) +
+      "\n",
   );
   return fails > 0 ? 1 : 0;
 }
@@ -162,15 +170,12 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
     return 1;
   }
   if (!result.exists) {
-    const what = engine ? "engine 로그" : "transcript";
-    process.stdout.write(
-      `${what} 없음: ${result.path}\n` +
-        `  ↳ 조치: 레인이 아직 활동하지 않았거나 기동되지 않았습니다. adde status ${proj} 로 상태를 확인하세요.\n`,
-    );
+    const what = engine ? t("ops.logs.whatEngine") : t("ops.logs.whatTranscript");
+    process.stdout.write(t("ops.logs.notFound", { what, path: result.path, proj }) + "\n");
     return 0;
   }
   if (result.lines.length === 0) {
-    process.stdout.write(`(${result.path} 비어있음)\n`);
+    process.stdout.write(t("ops.logs.empty", { path: result.path }) + "\n");
     return 0;
   }
   process.stdout.write(result.lines.join("\n") + "\n");

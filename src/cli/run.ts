@@ -1,6 +1,7 @@
 import { readVersion } from "../core/version.js";
 import { COMMANDS, buildUsage, USAGE, cmdError } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
+import { t } from "../shared/i18n.js";
 
 /**
  * 포그라운드 데몬 워커 로직 — `adde __daemon <proj>` 가 호출한다.
@@ -17,8 +18,11 @@ async function runDaemonForeground(proj: string): Promise<number> {
   for (const l of errorLanes) {
     process.stderr.write(
       formatException({
-        situation: `레인 "${l.lane}" 기동 실패: ${l.error ?? "원인 미상"}`,
-        action: `adde doctor ${proj} 로 환경·설정을 점검하고, adde logs ${proj} ${l.lane} --engine 으로 엔진 출력을 확인하세요.`,
+        situation: t("run.laneStartFailed.situation", {
+          lane: l.lane,
+          error: l.error ?? t("run.unknownCause"),
+        }),
+        action: t("run.laneStartFailed.action", { proj, lane: l.lane }),
       }) + "\n",
     );
   }
@@ -29,8 +33,8 @@ async function runDaemonForeground(proj: string): Promise<number> {
     if (result.lanes.length === 0) {
       process.stderr.write(
         formatException({
-          situation: `기동할 레인이 없습니다 — ${proj} 에 레인 설정(conf)이 없습니다`,
-          action: `adde lane add ${proj} <lane> --source telegram (또는 markdown) 으로 레인을 먼저 만드세요. 옵션은 adde lane help.`,
+          situation: t("run.noLanes.situation", { proj }),
+          action: t("run.noLanes.action", { proj }),
         }) + "\n",
       );
     }
@@ -44,7 +48,7 @@ async function runDaemonForeground(proj: string): Promise<number> {
   const shutdown = (sig: NodeJS.Signals): void => {
     if (shuttingDown) return;
     shuttingDown = true;
-    process.stderr.write(`\n[adde] ${sig} 수신 — 레인 종료 중...\n`);
+    process.stderr.write(`\n${t("run.signalShutdown", { sig })}\n`);
     void supervisorDown(proj)
       .then((r) => {
         process.stdout.write(`${r.message}\n`);
@@ -53,8 +57,10 @@ async function runDaemonForeground(proj: string): Promise<number> {
       .catch((err: unknown) => {
         process.stderr.write(
           formatException({
-            situation: `종료 처리 중 오류: ${err instanceof Error ? err.message : String(err)}`,
-            action: "잔존 엔진 프로세스를 수동 확인/종료하세요(ps | grep claude-code-acp).",
+            situation: t("run.shutdownError.situation", {
+              error: err instanceof Error ? err.message : String(err),
+            }),
+            action: t("run.shutdownError.action"),
           }) + "\n",
         );
         process.exit(1);
@@ -106,7 +112,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   if (first === "__daemon") {
     const proj = second;
     if (!proj) {
-      process.stderr.write("사용법: adde __daemon <proj> (내부 명령)\n");
+      process.stderr.write(t("usage.daemon") + "\n");
       return 1;
     }
     try {
@@ -128,8 +134,8 @@ export async function run(argv: readonly string[]): Promise<number> {
     try {
       const { loadDaemon } = await import("../core/launchd.js");
       await loadDaemon(proj);
-      process.stdout.write(`[adde] ${proj} 데몬 등록 완료. 백그라운드에서 레인이 기동됩니다.\n`);
-      process.stdout.write(`  상태 확인: adde status ${proj}\n`);
+      process.stdout.write(t("run.upDone", { proj }) + "\n");
+      process.stdout.write(t("run.statusHint", { proj }) + "\n");
       return 0;
     } catch (err) {
       process.stderr.write(cmdError("up", err instanceof Error ? err.message : String(err)) + "\n");
@@ -146,7 +152,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     try {
       const { unloadDaemon } = await import("../core/launchd.js");
       await unloadDaemon(proj);
-      process.stdout.write(`[adde] ${proj} 데몬 종료 완료.\n`);
+      process.stdout.write(t("run.downDone", { proj }) + "\n");
       return 0;
     } catch (err) {
       process.stderr.write(
@@ -167,8 +173,8 @@ export async function run(argv: readonly string[]): Promise<number> {
       // down 완료 await 후 up — 부분 실패 시 up 오류 표면화(FR-003).
       await unloadDaemon(proj);
       await loadDaemon(proj);
-      process.stdout.write(`[adde] ${proj} 재기동 완료. 백그라운드에서 레인이 기동됩니다.\n`);
-      process.stdout.write(`  상태 확인: adde status ${proj}\n`);
+      process.stdout.write(t("run.restartDone", { proj }) + "\n");
+      process.stdout.write(t("run.statusHint", { proj }) + "\n");
       return 0;
     } catch (err) {
       process.stderr.write(

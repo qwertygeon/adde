@@ -5,6 +5,7 @@
  * 응답 캡처(DEC-002): backend.inject() resolve(=turn 종료) 시 누적 응답을 writeOut + 렌더 트리거 → 다음 큐 진행.
  *   turn 종료 신호는 inject() resolve 로 감지한다(conn.prompt 가 turn 종료에 resolve) — 별도 idleCallback 배선 불요.
  */
+import { t } from "../shared/i18n.js";
 import {
   claimNext,
   scanProcessing,
@@ -98,13 +99,20 @@ export function createInjector(
       await deliver(id);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      console.error(`[injector] inject 오류 lane=${lane} id=${id}: ${detail}`);
+      console.error(t("log.injector.injectError", { lane, id, detail }));
       // 실패를 .failed 사이드카로 보존(E1) — processing/<id>.msg 는 남아 재기동 시 재처리(at-least-once).
-      await writeFailed(paths, id, `inject 실패 @ ${new Date().toISOString()}: ${detail}`).catch(
-        (e: unknown) =>
-          console.error(
-            `[injector] .failed 기록 실패 lane=${lane} id=${id}: ${e instanceof Error ? e.message : String(e)}`,
-          ),
+      await writeFailed(
+        paths,
+        id,
+        t("injector.injectFailed", { ts: new Date().toISOString(), detail }),
+      ).catch((e: unknown) =>
+        console.error(
+          t("log.injector.failedWriteFail", {
+            lane,
+            id,
+            error: e instanceof Error ? e.message : String(e),
+          }),
+        ),
       );
     } finally {
       state = "idle";
@@ -132,7 +140,11 @@ export function createInjector(
       await markSent(paths, id);
     } catch (err) {
       console.error(
-        `[injector] 렌더 오류 lane=${lane} id=${id} — 재전송 대기: ${err instanceof Error ? err.message : String(err)}`,
+        t("log.injector.renderError", {
+          lane,
+          id,
+          error: err instanceof Error ? err.message : String(err),
+        }),
       );
     } finally {
       delivering.delete(id);
@@ -150,7 +162,10 @@ export function createInjector(
     setImmediate(() => {
       void injectNext().catch((err: unknown) => {
         console.error(
-          `[injector] 진행 오류 lane=${lane}: ${err instanceof Error ? err.message : String(err)}`,
+          t("log.injector.advanceError", {
+            lane,
+            error: err instanceof Error ? err.message : String(err),
+          }),
         );
       });
     });

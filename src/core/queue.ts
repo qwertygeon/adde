@@ -3,6 +3,7 @@
  * FR-002/003/005/ADR-004: tmp→rename 으로 부분 쓰기 미노출.
  * queue→processing→out 상태 전이는 원자적 rename.
  */
+import { t } from "../shared/i18n.js";
 import { mkdir, writeFile, rename, readdir, access } from "node:fs/promises";
 import { join, basename } from "node:path";
 import type { LanePaths } from "../shared/paths.js";
@@ -97,9 +98,8 @@ export async function claimNext(
       if (errCode(err) === "ENOENT") continue;
       console.error(
         formatException({
-          situation: `큐 메시지 claim 실패(${errCode(err) ?? "unknown"}): ${src}`,
-          action:
-            "디스크 용량·파일 권한·마운트(NFS/EBUSY)를 확인하세요. 메시지는 큐에 남아 다음 신호에 재시도됩니다.",
+          situation: t("queue.claimFail.situation", { code: errCode(err) ?? "unknown", path: src }),
+          action: t("queue.claimFail.action"),
         }),
       );
       throw err;
@@ -138,14 +138,17 @@ export async function quarantineCorrupt(
   } catch (err) {
     // 이미 격리됐거나(ENOENT) 다른 워커가 처리 — 격리 자체 실패는 로그만(가시성 .failed 는 계속 기록).
     if (errCode(err) !== "ENOENT") {
-      console.error(`[queue] 손상 메시지 격리 실패 id=${id}: ${errCode(err) ?? "unknown"}`);
+      console.error(t("log.queue.quarantineFail", { id, code: errCode(err) ?? "unknown" }));
     }
   }
-  await writeFailed(paths, id, `손상 메시지 격리 @ ${new Date().toISOString()}: ${detail}`).catch(
-    (e: unknown) =>
-      console.error(
-        `[queue] .failed 기록 실패 id=${id}: ${e instanceof Error ? e.message : String(e)}`,
-      ),
+  await writeFailed(
+    paths,
+    id,
+    t("queue.quarantined", { ts: new Date().toISOString(), detail }),
+  ).catch((e: unknown) =>
+    console.error(
+      t("log.queue.failedWriteFail", { id, error: e instanceof Error ? e.message : String(e) }),
+    ),
   );
 }
 

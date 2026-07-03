@@ -3,6 +3,7 @@
  * FR-008/009/010/011/019/ADR-002: initialize→session/new→prompt 루프.
  * session/update 이벤트 구독 → transcript·injector·gate 라우팅.
  */
+import { t, tFor } from "../../shared/i18n.js";
 import { Writable, Readable } from "node:stream";
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -143,6 +144,8 @@ interface LaneConfig {
   cwd?: string | undefined;
   /** 권한 정규화 시 채널 표기. 미지정 시 telegram. */
   channel?: "telegram" | "markdown" | undefined;
+  /** 채널 메시지 로케일(LaneConf.lang). 미지정 시 전역 로케일. */
+  lang?: string | undefined;
 }
 
 interface LaneState {
@@ -193,6 +196,7 @@ export class AcpBackendImpl implements AcpBackend {
     const paths = config?.paths;
     const addePolicy = config?.addePolicy;
     const channelWarn = config?.channelWarn;
+    const tl = tFor(config?.lang);
     const laneCwd = config?.cwd && config.cwd.length > 0 ? config.cwd : process.cwd();
     const channel = config?.channel ?? "telegram";
 
@@ -202,15 +206,21 @@ export class AcpBackendImpl implements AcpBackend {
     // child 'error'(예: 바이너리 ENOENT) 는 미처리 시 프로세스를 크래시시킨다.
     // 핸드셰이크 완료 전에는 launch 실패로 전환하고, 이후에는 로깅한다(상시 리스너 유지).
     let onSpawnError: (err: Error) => void = (err) =>
-      console.error(`[acp] lane=${lane} 엔진 프로세스 오류: ${err.message}`);
+      console.error(t("log.acp.engineProcessError", { lane, error: err.message }));
     const spawnFailed = new Promise<never>((_, reject) => {
       onSpawnError = (err) =>
         reject(
           new Error(
-            formatException({
-              situation: `엔진 프로세스 spawn 실패 (${this.adapterBin}): ${err.message}`,
-              action: "어댑터 바이너리 설치를 확인하세요(pnpm install) 후 adde up 재시도.",
-            }),
+            formatException(
+              {
+                situation: t("acp.spawnFail.situation", {
+                  bin: this.adapterBin,
+                  error: err.message,
+                }),
+                action: t("acp.spawnFail.action"),
+              },
+              tl,
+            ),
           ),
         );
     });
@@ -237,15 +247,23 @@ export class AcpBackendImpl implements AcpBackend {
               } catch (err) {
                 // 무음 흡수 금지(H1/DEC-005) — 다른 구독자는 계속하되 실패 신호는 큰소리로 기록.
                 console.error(
-                  `[acp] lane=${lane} 구독자 오류: ${err instanceof Error ? err.message : String(err)}`,
+                  t("log.acp.subscriberError", {
+                    lane,
+                    error: err instanceof Error ? err.message : String(err),
+                  }),
                 );
                 if (paths) {
                   await appendTranscript(paths, {
                     sessionUpdate: "adde_warn",
-                    message: `구독자 처리 오류: ${err instanceof Error ? err.message : String(err)}`,
+                    message: t("acp.subscriberError", {
+                      error: err instanceof Error ? err.message : String(err),
+                    }),
                   }).catch((e: unknown) =>
                     console.error(
-                      `[acp] lane=${lane} transcript 기록 실패: ${e instanceof Error ? e.message : String(e)}`,
+                      t("log.acp.transcriptWriteFail", {
+                        lane,
+                        error: e instanceof Error ? e.message : String(e),
+                      }),
                     ),
                   );
                 }
@@ -255,7 +273,10 @@ export class AcpBackendImpl implements AcpBackend {
             if (paths) {
               await appendTranscript(paths, update).catch((e: unknown) =>
                 console.error(
-                  `[acp] lane=${lane} transcript 기록 실패: ${e instanceof Error ? e.message : String(e)}`,
+                  t("log.acp.transcriptWriteFail", {
+                    lane,
+                    error: e instanceof Error ? e.message : String(e),
+                  }),
                 ),
               );
             }
@@ -272,7 +293,7 @@ export class AcpBackendImpl implements AcpBackend {
 
             if (updateKind === "current_mode_update" && laneRef.state && addePolicy) {
               const engineEffective = extractEngineMode(update);
-              const result = comparePerm(addePolicy, engineEffective);
+              const result = comparePerm(addePolicy, engineEffective, tl);
               if (result.diff && result.warn) {
                 const msg = result.warn.message;
                 console.warn(`[acp] ${msg}`);
@@ -367,10 +388,16 @@ export class AcpBackendImpl implements AcpBackend {
     // 엔진이 응답 없이 멈춰도 영구 hang 하지 않게 한다 — 실패 시 child 를 정리하고 actionable 로 던진다.
     const handshakeTimeoutErr = (phase: string): Error =>
       new Error(
-        formatException({
-          situation: `엔진 핸드셰이크(${phase}) ${HANDSHAKE_TIMEOUT_MS / 1000}초 내 무응답`,
-          action: "엔진 바이너리·헬스를 확인하세요 후 adde up 재시도.",
-        }),
+        formatException(
+          {
+            situation: t("acp.handshakeTimeout.situation", {
+              phase,
+              seconds: HANDSHAKE_TIMEOUT_MS / 1000,
+            }),
+            action: t("acp.handshakeTimeout.action"),
+          },
+          tl,
+        ),
       );
     try {
       await withTimeout(
@@ -410,7 +437,8 @@ export class AcpBackendImpl implements AcpBackend {
     }
 
     // 핸드셰이크 성공 — 이후 child 'error' 는 크래시 대신 로깅(spawnFailed 는 더 이상 소비 안 됨).
-    onSpawnError = (err) => console.error(`[acp] lane=${lane} 엔진 프로세스 오류: ${err.message}`);
+    onSpawnError = (err) =>
+      console.error(t("log.acp.engineProcessError", { lane, error: err.message }));
 
     const sessionId = sessionResp.sessionId;
 
@@ -434,26 +462,31 @@ export class AcpBackendImpl implements AcpBackend {
 
     if (paths && addePolicy) {
       const engineEffective = await this.fetchEngineEffective(lane);
-      const result = comparePerm(addePolicy, engineEffective);
+      const result = comparePerm(addePolicy, engineEffective, tl);
       if (result.diff && result.warn) {
         // 차이 확인(정책차이)·확인불가(조회실패) 모두 경고 후 기동 계속 — 이전의 launch 거부를
         // 사용자 요청으로 완화. A-P006 의 요구는 "차이 표기"이며 여기서 충족한다.
         const note =
           result.warn.reason === "정책차이"
-            ? formatWarnNote({
-                situation: result.warn.message,
-                action:
-                  "게이트가 무력화될 수 있습니다 — 엔진 권한 설정에서 bypassPermissions 를 해제하거나 ADDE 정책(perm_tier)에 맞게 정렬하세요. 기동은 계속합니다.",
-              })
+            ? formatWarnNote(
+                {
+                  situation: result.warn.message,
+                  action: tl("acp.bypassAction"),
+                },
+                tl,
+              )
             : result.warn.message;
-        console.warn(`[acp] launch perm-diff: ${note}`);
+        console.warn(t("log.acp.permDiff", { note }));
         if (channelWarn) channelWarn(note);
         await appendTranscript(paths, {
           sessionUpdate: "adde_warn",
           message: note,
         }).catch((e: unknown) =>
           console.error(
-            `[acp] lane=${lane} transcript 기록 실패: ${e instanceof Error ? e.message : String(e)}`,
+            t("log.acp.transcriptWriteFail", {
+              lane,
+              error: e instanceof Error ? e.message : String(e),
+            }),
           ),
         );
       }

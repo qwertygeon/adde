@@ -7,6 +7,7 @@
  * 출력: out/<id>.out 감시 → 마크다운 출력 노트(one-file-per-message, atomic).
  * 동기 내성: *.sync-conflict* 격리·상태 마커 멱등 자기쓰기 가드·tmp→rename.
  */
+import { t, tFor } from "../shared/i18n.js";
 import { watch, existsSync, mkdirSync, statSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { readFile, writeFile, rename, mkdir, stat, readdir } from "node:fs/promises";
@@ -248,8 +249,8 @@ function resolvePaths(conf: LaneConf): {
   outboxDir: string;
   quarantineDir: string;
 } {
-  if (!conf.root) throw new Error("[markdown] conf.root 누락 — 마크다운 루트 절대경로 필수");
-  if (!conf.inbox) throw new Error("[markdown] conf.inbox 누락 — 입력 노트(root 상대) 필수");
+  if (!conf.root) throw new Error(t("markdown.confRootMissing"));
+  if (!conf.inbox) throw new Error(t("markdown.confInboxMissing"));
   const rootDir = conf.root;
   const inboxPath = join(rootDir, conf.inbox);
   const inboxDir = dirname(inboxPath);
@@ -261,6 +262,7 @@ function resolvePaths(conf: LaneConf): {
 }
 
 export function createMarkdownSource(cfg: MarkdownConfig): Source {
+  const tl = tFor(cfg.conf.lang);
   const { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir } = resolvePaths(cfg.conf);
 
   const decisionHandlers: DecisionCallback[] = [];
@@ -390,7 +392,12 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
           // 필수 동작 실패 — 흡수 금지: 로그 후 sending 유지(재기동/다음 이벤트 재개).
           consecutiveEnqueueFailures++;
           console.error(
-            `[markdown] enqueue 오류(${consecutiveEnqueueFailures}회 연속) lane=${cfg.lane} id=${p.id}: ${err instanceof Error ? err.message : String(err)}`,
+            t("log.markdown.enqueueError", {
+              count: consecutiveEnqueueFailures,
+              lane: cfg.lane,
+              id: p.id,
+              error: err instanceof Error ? err.message : String(err),
+            }),
           );
           // 임계 도달 시 1회 운영자 알림(⑫) — telegram 패턴과 일관.
           if (consecutiveEnqueueFailures >= ENQUEUE_FAIL_THRESHOLD && !enqueueAlertSent) {
@@ -450,7 +457,10 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       await rename(join(srcDir, filename), join(quarantineDir, filename));
     } catch (err) {
       console.error(
-        `[markdown] 충돌파일 격리 실패 ${filename}: ${err instanceof Error ? err.message : String(err)}`,
+        t("log.markdown.quarantineFail", {
+          filename,
+          error: err instanceof Error ? err.message : String(err),
+        }),
       );
     }
   }
@@ -458,14 +468,16 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOut 직후 in-process 호출(DEC-001). */
   /** enqueue 연속 실패 임계 도달 시 outbox 에 1회 액션형 알림 노트(⑫). 채널이 파일이라 outbox 로 표면화. */
   async function alertEnqueueFailure(count: number): Promise<void> {
-    const note = formatException({
-      situation: `수신 메시지 큐 적재(enqueue)가 연속 ${count}회 실패했습니다`,
-      action:
-        "서버 디스크 용량과 state 디렉터리 권한을 확인하세요. 해소 전까지 인박스 지시가 처리되지 않을 수 있습니다.",
-    });
+    const note = formatException(
+      {
+        situation: tl("markdown.enqueueFail.situation", { count }),
+        action: tl("markdown.enqueueFail.action"),
+      },
+      tl,
+    );
     await atomicWrite(join(outboxDir, "_enqueue-alert.md"), note).catch((e: unknown) =>
       console.error(
-        `[markdown] enqueue 실패 알림 기록 오류: ${e instanceof Error ? e.message : String(e)}`,
+        t("log.markdown.alertWriteError", { error: e instanceof Error ? e.message : String(e) }),
       ),
     );
   }
@@ -490,7 +502,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   function runInbox(): void {
     inboxOp = handleInbox().catch((err: unknown) =>
       console.error(
-        `[markdown] inbox 처리 오류: ${err instanceof Error ? err.message : String(err)}`,
+        t("log.markdown.inboxError", { error: err instanceof Error ? err.message : String(err) }),
       ),
     );
   }
@@ -499,7 +511,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   function runApprovals(): void {
     approvalsOp = handleApprovals().catch((err: unknown) =>
       console.error(
-        `[markdown] approvals 처리 오류: ${err instanceof Error ? err.message : String(err)}`,
+        t("log.markdown.approvalsError", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
       ),
     );
   }
@@ -589,7 +603,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
 
   function start(): void {
     if (!existsSync(rootDir)) {
-      throw new Error(`[markdown] root 경로 없음: ${rootDir}`);
+      throw new Error(t("markdown.rootNotFound", { path: rootDir }));
     }
 
     // 입력 검증(C): 상대 경로(inbox/approvals/outbox)는 root 안에 머물러야 한다 — '..'·절대경로로
@@ -601,7 +615,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     ] as const) {
       if (rel === undefined) continue;
       if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) {
-        throw new Error(`[markdown] ${name} 경로는 root 상대여야 하며 '..'·절대경로 금지: ${rel}`);
+        throw new Error(t("markdown.pathNotRelative", { name, rel }));
       }
     }
 
@@ -618,9 +632,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       ["outbox", outboxDir],
     ] as const) {
       if (isInside(p, effectiveCwd)) {
-        throw new Error(
-          `[markdown] 제어 노트(${name})가 AI 작업폴더 내부에 있음: ${p} (cwd=${effectiveCwd}) — 자기승인 위험, cwd 밖으로 분리 필요`,
-        );
+        throw new Error(t("markdown.controlNoteInCwd", { name, path: p, cwd: effectiveCwd }));
       }
     }
 
@@ -641,9 +653,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       ["outbox", rOutbox, "quarantine(.conflicts)", rQuarantine],
     ] as const) {
       if (overlaps(a, b)) {
-        throw new Error(
-          `[markdown] ${nameA}(${a})와 ${nameB}(${b})가 같거나 포함 관계 — 출력·알림·격리 노트가 승인/입력 감시에 잡힙니다. 경로를 분리하세요.`,
-        );
+        throw new Error(t("markdown.pathsOverlap", { nameA, a, nameB, b }));
       }
     }
     for (const [name, dir] of [
@@ -651,9 +661,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       ["outbox", rOutbox],
     ] as const) {
       if (isInside(normCase(rInbox), normCase(dir))) {
-        throw new Error(
-          `[markdown] 입력 노트(${rInbox})가 ${name} 디렉터리(${dir}) 내부 — 입력/제어 경로가 겹칩니다. 경로를 분리하세요.`,
-        );
+        throw new Error(t("markdown.inboxInsideDir", { inbox: rInbox, name, dir }));
       }
     }
 
@@ -690,7 +698,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     seedSig(inboxPath);
     pollTimer = setInterval(() => {
       pollOp = pollOnce().catch((err: unknown) =>
-        console.error(`[markdown] 폴링 오류: ${err instanceof Error ? err.message : String(err)}`),
+        console.error(
+          t("log.markdown.pollError", { error: err instanceof Error ? err.message : String(err) }),
+        ),
       );
     }, POLL_INTERVAL_MS);
   }
@@ -723,7 +733,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   function approvalFile(reqId: string): string {
     const file = resolve(approvalsDir, `${reqId}.md`);
     if (dirname(file) !== resolve(approvalsDir)) {
-      throw new Error(`잘못된 승인 요청 id "${reqId}" — 경로 탈출 차단(fail-closed deny).`);
+      throw new Error(t("markdown.badApprovalId", { reqId }));
     }
     return file;
   }

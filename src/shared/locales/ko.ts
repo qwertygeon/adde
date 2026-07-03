@@ -1,0 +1,376 @@
+/**
+ * 한국어 메시지 카탈로그. `satisfies typeof en` 으로 en 과의 키 패리티를 컴파일 타임 강제.
+ */
+import type { en } from "./en.js";
+
+export const ko = {
+  usage: {
+    main: `{{primary}} — AI Driven Development Engine
+
+사용법:
+  {{primary}} [command]      주 진입점
+  {{short}} [command]       단축 별칭
+
+명령:
+  up <proj>                프로젝트의 모든 레인 백그라운드 데몬으로 기동
+  down <proj>              데몬 종료 (어느 터미널에서든 동작)
+  restart <proj>           데몬 재기동 (down + up)
+  status [<proj>] [--all]  레인 상태 조회 (<proj> 생략 시 실행 중 전체, --all 정지 포함)
+  doctor [<proj>]          환경·설정 정적 점검(상태 비의존)
+  logs <proj> <lane> [N]   레인 transcript 최근 N줄(기본 50, --engine 시 엔진 stderr)
+  lane add <proj> <lane>   레인 conf 생성
+  lane ls <proj>           레인 목록
+  lane show <proj> <lane>  레인 conf 출력
+  lane rm <proj> <lane>    레인 conf 삭제
+
+옵션:
+  -v, --version            버전 출력
+  -h, --help               도움말 출력
+
+레인 옵션은 \`adde lane help\` 참조.`,
+    up: "사용법: adde up <proj>",
+    down: "사용법: adde down <proj>",
+    restart: "사용법: adde restart <proj>",
+    status: "사용법: adde status [<proj>] [--all] [--json]",
+    logs: "사용법: adde logs <proj> <lane> [N] [--engine]",
+    laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
+    laneLs: "사용법: adde lane ls <proj>",
+    laneShow: "사용법: adde lane show <proj> <lane>",
+    laneRm: "사용법: adde lane rm <proj> <lane>",
+    daemon: "사용법: adde __daemon <proj> (내부 명령)",
+    lane: `사용법:
+  adde lane add <proj> <lane> [옵션]   레인 conf 생성
+  adde lane ls <proj>                  레인 목록
+  adde lane show <proj> <lane>         레인 conf 출력
+  adde lane rm <proj> <lane>           레인 conf 삭제
+
+lane add 옵션:
+  --source <telegram|markdown>  (기본 telegram)
+  --engine <name>               (기본 claude-code-acp)
+  --backend <name>              (기본 acp)
+  --channel <name>              (기본 source 값)
+  --perm-tier <acp|autopass>    (기본 acp — 전 도구 채널 승인 / autopass — denylist 외 자동 허용)
+  --acp-version <v>             (기본 v1)
+  --cwd <abs-path>              레인 작업 폴더(프로젝트 매핑)
+  --allowlist <a,b,c>           자동 허용 도구(게이트 유지, perm_tier=acp 용)
+  --denylist <항목,...>         autopass 에서 채널 승인으로 폴백할 도구·패턴
+                                (예: "Bash,Write(/etc/*)" · 미지정 시 내장 기본 목록: sudo·rm -rf·git 강제 변경·자격증명 읽기 차단)
+  --lang <en|ko>                이 레인의 채널 메시지 로케일 (기본: 전역 로케일)
+  --chat-id <id>                telegram 회신 대상
+  --token-stdin                 telegram 봇 토큰을 stdin 에서 읽어 .env(0600) 기록
+  --root <abs-path>             markdown 루트(예: Obsidian vault)
+  --inbox <rel> --approvals <rel> --outbox <rel>   markdown 노트 경로
+  --force                       기존 conf 덮어쓰기
+  --interactive                 대화형으로 필드 입력(TTY 전용, 토큰 제외)`,
+  },
+  cli: {
+    cmdError: "[adde {{cmd}}] 오류: {{detail}}",
+    laneError: "[adde lane] {{detail}}",
+    unknownSub: "알 수 없는 lane 서브커맨드: {{sub}}",
+  },
+  run: {
+    laneStartFailed: {
+      situation: '레인 "{{lane}}" 기동 실패: {{error}}',
+      action:
+        "adde doctor {{proj}} 로 환경·설정을 점검하고, adde logs {{proj}} {{lane}} --engine 으로 엔진 출력을 확인하세요.",
+    },
+    unknownCause: "원인 미상",
+    noLanes: {
+      situation: "기동할 레인이 없습니다 — {{proj}} 에 레인 설정(conf)이 없습니다",
+      action:
+        "adde lane add {{proj}} <lane> --source telegram (또는 markdown) 으로 레인을 먼저 만드세요. 옵션은 adde lane help.",
+    },
+    signalShutdown: "[adde] {{sig}} 수신 — 레인 종료 중...",
+    shutdownError: {
+      situation: "종료 처리 중 오류: {{error}}",
+      action: "잔존 엔진 프로세스를 수동 확인/종료하세요(ps | grep claude-code-acp).",
+    },
+    upDone: "[adde] {{proj}} 데몬 등록 완료. 백그라운드에서 레인이 기동됩니다.",
+    statusHint: "  상태 확인: adde status {{proj}}",
+    downDone: "[adde] {{proj}} 데몬 종료 완료.",
+    restartDone: "[adde] {{proj}} 재기동 완료. 백그라운드에서 레인이 기동됩니다.",
+  },
+  ops: {
+    status: {
+      noLanesConf: "레인 없음 — lanes.d 에 conf 가 없습니다 (adde lane add <proj> <lane>).",
+      noLanesRegistered: "레인 없음 — 등록된 레인이 없습니다 (adde lane add <proj> <lane>).",
+      noRunning:
+        "실행 중인 레인 없음 — 정지 포함 전체는 `adde status --all`, 특정 프로젝트는 `adde status <proj>`.",
+      deadWarnAggregate:
+        "경고: {{lanes}} 레인이 비정상 종료(dead)했습니다.\n  ↳ 조치: adde down <proj> 로 정리한 뒤 adde up <proj> 로 재기동하세요.",
+      staleWarnAggregate:
+        "경고: {{lanes}} 레인이 응답 없음(stale — 하트비트 끊김).\n  ↳ 조치: adde logs <proj> <lane> --engine 으로 진단 후 adde down/up <proj> 로 재기동하세요.",
+      deadWarnSingle:
+        "경고: {{lanes}} 레인이 비정상 종료(dead)했습니다.\n  ↳ 조치: adde down {{proj}} 로 상태를 정리한 뒤 adde up {{proj}} 로 재기동하세요.",
+      staleWarnSingle:
+        "경고: {{lanes}} 레인이 응답 없음(stale — 프로세스는 살아있으나 하트비트 끊김).\n  ↳ 조치: 행(hang) 가능성. adde logs {{proj}} <lane> --engine 으로 진단 후 adde down/up {{proj}} 로 재기동하세요.",
+    },
+    doctor: {
+      hint: "    ↳ 조치: {{hint}}",
+      summary: "요약: {{pass}} PASS / {{warn}} WARN / {{fail}} FAIL",
+    },
+    logs: {
+      whatEngine: "engine 로그",
+      whatTranscript: "transcript",
+      notFound:
+        "{{what}} 없음: {{path}}\n  ↳ 조치: 레인이 아직 활동하지 않았거나 기동되지 않았습니다. adde status {{proj}} 로 상태를 확인하세요.",
+      empty: "({{path}} 비어있음)",
+    },
+  },
+  lane: {
+    valueRequired: "--{{key}} 에 값이 필요합니다",
+    sourceRetry: "  telegram 또는 markdown 중 하나를 입력하세요",
+    prompt: {
+      allowlist: "allowlist (콤마 구분, 없으면 비움)",
+      denylist: "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
+      cwd: "cwd (레인 작업 폴더 절대경로, 없으면 비움)",
+      chatId: "chat_id (회신 대상, 없으면 비움)",
+      root: "root (markdown 루트 절대경로)",
+      inbox: "inbox (root 상대)",
+      approvals: "approvals (root 상대, 없으면 기본)",
+      outbox: "outbox (root 상대, 없으면 기본)",
+    },
+    ttyOnly: {
+      situation: "--interactive 는 대화형 터미널(TTY)에서만 동작합니다",
+      action:
+        "플래그로 지정하세요(예: adde lane add <proj> <lane> --source telegram). 옵션 목록은 adde lane help.",
+    },
+    created: '레인 "{{lane}}" 생성: {{confPath}}',
+    noLanes: "{{proj}}: 레인 없음",
+    removed: '레인 "{{lane}}" 삭제: {{confPath}}',
+    tokenWritten: "토큰 기록: {{envPath}} (0600)",
+    tokenNext: "다음: 봇 토큰을 {{envPath}} 에 TELEGRAM_BOT_TOKEN=... 으로 두세요",
+    startHint: "기동: adde up {{proj}}",
+  },
+  doctor: {
+    node: {
+      name: "Node 버전",
+      hint: "Node 22 이상으로 업그레이드하세요(nvm install 22 등).",
+    },
+    adapter: {
+      name: "ACP 어댑터 바이너리",
+      missing: "해석된 경로에 파일 없음: {{path}}",
+      hint: "의존성을 설치하세요(pnpm install) — @zed-industries/claude-code-acp 누락.",
+    },
+    base: {
+      name: "설정 base 디렉터리",
+      hint: "레인을 추가하면 생성됩니다(adde lane add <proj> <lane>).",
+    },
+    missingPath: "없음: {{path}}",
+    daemon: {
+      name: "daemon 등록 ({{proj}})",
+      registered: "plist 존재 + launchctl 등록 완료",
+      notRunning: "데몬 미기동 상태 (adde up {{proj}} 으로 기동 가능)",
+      plistOnly: "plist 존재하나 launchctl 미등록",
+      launchctlOnly: "launchctl 등록되어 있으나 plist 없음",
+      mismatchHint:
+        "등록 불일치 상태입니다. adde down {{proj}} 후 adde up {{proj}} 으로 재등록하세요.",
+      queryFailed: "등록 상태 조회 실패",
+      queryFailedHint:
+        "adde down {{proj}} 후 adde up {{proj}} 으로 재등록하거나, launchctl list | grep com.qwertygeon.adde.{{proj}} 로 수동 확인하세요.",
+    },
+    lanes: {
+      name: "레인 ({{proj}})",
+      none: "lanes.d 에 conf 없음",
+      addHint: "레인을 추가하세요: adde lane add {{proj}} <lane>",
+    },
+    conf: {
+      readFailed: "읽기 실패: {{path}}",
+      readFailedHint: "conf 파일 권한/존재를 확인하세요.",
+    },
+    source: {
+      unsupported: '미지원 source: "{{source}}"',
+      hint: "conf 의 source 를 telegram 또는 markdown 으로 설정하세요.",
+    },
+    cwd: {
+      hint: "conf 의 cwd 를 존재하는 작업 폴더로 수정하세요.",
+    },
+    token: {
+      name: "{{lane}}: 토큰",
+      present: ".env 에 TELEGRAM_BOT_TOKEN 존재",
+      missing: "토큰 없음: {{path}}",
+      hint: "봇 토큰을 기록하세요: {{path}} 에 TELEGRAM_BOT_TOKEN=... (또는 lane add --token-stdin).",
+    },
+  },
+  laneConfig: {
+    warn: {
+      cwdMissing:
+        "[경고] cwd 경로가 없습니다: {{path}}\n  ↳ 조치: 기동 전 폴더를 만들거나 conf 의 cwd 를 수정하세요.",
+      mdRootMissingConf:
+        "[경고] markdown 레인에 root 가 없습니다.\n  ↳ 조치: --root <vault 절대경로> 를 지정하세요(없으면 인바운드 감시 불가).",
+      mdRootNotFound:
+        "[경고] markdown root 경로가 없습니다: {{path}}\n  ↳ 조치: 경로를 확인하거나 생성하세요.",
+      mdPathOverlap:
+        "[경고] markdown 경로가 겹칩니다(inbox={{inbox}} / approvals={{approvals}} / outbox={{outbox}}) — 기동이 거부됩니다.\n  ↳ 조치: 승인·출력·입력 경로를 서로 분리하세요.",
+      tokenFormat:
+        "[경고] 봇 토큰 형식이 예상과 다릅니다(<숫자>:<영숫자> 아님).\n  ↳ 조치: BotFather 발급 토큰을 다시 확인하세요.",
+      permTierUnknown:
+        '[경고] perm_tier "{{tier}}" 는 알려진 값({{known}})이 아닙니다 — acp 처럼 동작합니다.\n  ↳ 조치: 오타라면 conf 의 perm_tier 를 수정하세요.',
+      autopassBanner:
+        "[경고] perm_tier=autopass — denylist 외 모든 도구(파일 쓰기·Bash 실행 포함)가 채널 확인 없이 자동 허용됩니다.\n  ↳ 확인이 필요한 도구는 denylist 에 두세요(예: denylist=Bash). 자동 허용 내역은 transcript 에 기록됩니다.",
+      autopassEmptyDeny:
+        "[경고] autopass 레인에 denylist 가 비어 있습니다 — 모든 권한 요청이 무확인 통과됩니다.",
+      allowDenyOverlap:
+        "[경고] allowlist 와 denylist 에 같은 도구가 있습니다: {{tools}} — denylist 가 우선하여 채널 승인을 거칩니다.\n  ↳ 조치: 의도가 아니라면 한쪽에서 제거하세요.",
+      badLang:
+        '[경고] lang "{{lang}}" 은 지원 로케일({{supported}})이 아닙니다 — 전역 로케일이 적용됩니다.\n  ↳ 조치: 오타라면 conf 의 lang 을 수정하세요.',
+    },
+    err: {
+      emptyIdent: "{{kind}} 가 비어있습니다",
+      badIdent: '{{kind}} "{{value}}" 가 올바르지 않습니다 — 영문/숫자/_/- 만 허용',
+      badSource: 'source "{{source}}" 미지원 — {{supported}} 중 하나',
+      badChatId: 'chat_id "{{chatId}}" 가 숫자가 아닙니다',
+      tokenOnlyTelegram: "token 은 source=telegram 레인에서만 사용합니다",
+      badAllowTool: 'allowlist 도구명 "{{tool}}" 가 올바르지 않습니다 — 영숫자/_/./- 만 허용',
+      badDenyEntry:
+        'denylist 항목 "{{entry}}" 가 올바르지 않습니다 — "Bash" 또는 "Bash(git push*)" 형식(콤마 불가)',
+      laneExists: '레인 "{{lane}}" 이 이미 존재합니다 ({{confFile}}) — 덮어쓰려면 --force',
+      tokenEmpty: "token 이 비어있습니다",
+      envHasToken: "{{envFile}} 에 이미 토큰이 있습니다 — 덮어쓰려면 --force",
+      laneNotFound: '레인 "{{lane}}" 을 찾을 수 없습니다 ({{confFile}})',
+    },
+  },
+  telegram: {
+    permPrompt: "권한 요청: {{tool}}\n{{detail}}",
+    enqueueFail: {
+      situation: "수신 메시지 큐 적재(enqueue)가 연속 {{count}}회 실패했습니다",
+      action:
+        "서버 디스크 용량과 state 디렉터리 권한을 확인하세요. 해소되기 전까지 수신 메시지가 처리되지 않을 수 있습니다.",
+    },
+  },
+  markdown: {
+    enqueueFail: {
+      situation: "수신 메시지 큐 적재(enqueue)가 연속 {{count}}회 실패했습니다",
+      action:
+        "서버 디스크 용량과 state 디렉터리 권한을 확인하세요. 해소 전까지 인박스 지시가 처리되지 않을 수 있습니다.",
+    },
+    confRootMissing: "[markdown] conf.root 누락 — 마크다운 루트 절대경로 필수",
+    confInboxMissing: "[markdown] conf.inbox 누락 — 입력 노트(root 상대) 필수",
+    rootNotFound: "[markdown] root 경로 없음: {{path}}",
+    pathNotRelative: "[markdown] {{name}} 경로는 root 상대여야 하며 '..'·절대경로 금지: {{rel}}",
+    controlNoteInCwd:
+      "[markdown] 제어 노트({{name}})가 AI 작업폴더 내부에 있음: {{path}} (cwd={{cwd}}) — 자기승인 위험, cwd 밖으로 분리 필요",
+    pathsOverlap:
+      "[markdown] {{nameA}}({{a}})와 {{nameB}}({{b}})가 같거나 포함 관계 — 출력·알림·격리 노트가 승인/입력 감시에 잡힙니다. 경로를 분리하세요.",
+    inboxInsideDir:
+      "[markdown] 입력 노트({{inbox}})가 {{name}} 디렉터리({{dir}}) 내부 — 입력/제어 경로가 겹칩니다. 경로를 분리하세요.",
+    badApprovalId: '잘못된 승인 요청 id "{{reqId}}" — 경로 탈출 차단(fail-closed deny).',
+  },
+  supervisor: {
+    noLanesMsg: "{{proj}}: 레인 0개 — lanes.d 에 conf 없음",
+    alreadyRunning:
+      '[adde] 레인 "{{lane}}" 이미 실행 중 (pid {{pid}})\n  ↳ 조치: adde down {{proj}} 후 재기동 또는 adde status {{proj}} 확인',
+    autopassDenySome: "denylist({{tools}}) 도구만 채널 승인을 거칩니다",
+    autopassDenyEmpty: "denylist 가 비어 있어 모든 권한 요청이 확인 없이 통과됩니다",
+    autopassBanner: {
+      situation:
+        "이 레인은 자동 허용 모드(perm_tier=autopass)로 기동했습니다 — {{denyDesc}}. 그 외 도구(파일 쓰기·Bash 실행 포함)는 자동 허용됩니다",
+      action:
+        "확인이 필요한 도구는 lanes.d/{{lane}}.conf 의 denylist 에 추가하세요. 자동 허용 내역은 adde logs {{proj}} {{lane}} 으로 확인할 수 있습니다.",
+    },
+    upStarted: "{{proj}}: {{count}}개 레인 기동",
+    upSkipped: "{{count}}개 이미 실행 중(스킵)",
+    downStopped: "{{proj}}: {{count}}개 레인 종료",
+  },
+  launchd: {
+    macOnly: {
+      situation: "launchd 기능은 macOS 에서만 동작합니다 (현재 플랫폼: {{platform}})",
+      action: "macOS 에서 실행하세요. Linux/WSL 지원은 추후 spec 범위.",
+    },
+    loadFail: {
+      situation: "launchctl load 실패 (exit {{code}}): {{output}}",
+      action:
+        "adde doctor {{proj}} 로 등록 상태를 점검하거나, 기존 등록을 먼저 해제하세요 (adde down {{proj}}).",
+    },
+  },
+  queue: {
+    claimFail: {
+      situation: "큐 메시지 claim 실패({{code}}): {{path}}",
+      action:
+        "디스크 용량·파일 권한·마운트(NFS/EBUSY)를 확인하세요. 메시지는 큐에 남아 다음 신호에 재시도됩니다.",
+    },
+    quarantined: "손상 메시지 격리 @ {{ts}}: {{detail}}",
+  },
+  injector: {
+    injectFailed: "inject 실패 @ {{ts}}: {{detail}}",
+  },
+  transcript: {
+    commandsUpdated: "[{{ts}}] commands_update: (갱신)",
+  },
+  acp: {
+    spawnFail: {
+      situation: "엔진 프로세스 spawn 실패 ({{bin}}): {{error}}",
+      action: "어댑터 바이너리 설치를 확인하세요(pnpm install) 후 adde up 재시도.",
+    },
+    handshakeTimeout: {
+      situation: "엔진 핸드셰이크({{phase}}) {{seconds}}초 내 무응답",
+      action: "엔진 바이너리·헬스를 확인하세요 후 adde up 재시도.",
+    },
+    subscriberError: "구독자 처리 오류: {{error}}",
+    bypassAction:
+      "게이트가 무력화될 수 있습니다 — 엔진 권한 설정에서 bypassPermissions 를 해제하거나 ADDE 정책(perm_tier)에 맞게 정렬하세요. 기동은 계속합니다.",
+  },
+  permDiff: {
+    queryFailedMsg: "엔진 실효 설정 조회 실패 — 확인불가(보수적 차이 간주)",
+    warnLine:
+      "[ADDE WARN] 권한 설정 차이: {{reason}} | adde.perm_tier={{tier}} | engine={{engine}}",
+    looseEngine: "ADDE 정책(acp) 보다 느슨한 엔진 설정 감지",
+    bypassMsg: "엔진 bypass — 권한 요청 미발화로 autopass denylist·자동허용 기록이 무력화됨",
+    engineUnknown: "(조회실패)",
+  },
+  log: {
+    supervisor: {
+      noConf: "[supervisor] {{proj}}: lanes.d 에 conf 없음",
+      heartbeatFail: "[supervisor] lane={{lane}} 하트비트 touch 실패(보조): {{error}}",
+      deadCleanupFail: "[supervisor] lane={{lane}} dead runtime.json 정리 실패(보조): {{error}}",
+      channelWarnFail: "[supervisor] lane={{lane}} 채널 경고 전송 실패(보조): {{error}}",
+      injectorStartFail: "[supervisor] lane={{lane}} injector 기동 오류: {{error}}",
+      runtimeWriteFail: "[supervisor] lane={{lane}} runtime.json 기록 실패(보조): {{error}}",
+      runtimeRemoveFail: "[supervisor] lane={{lane}} runtime.json 제거 실패(보조): {{error}}",
+      laneStartFail: "[supervisor] lane={{lane}} 기동 실패: {{reason}}",
+    },
+    queue: {
+      quarantineFail: "[queue] 손상 메시지 격리 실패 id={{id}}: {{code}}",
+      failedWriteFail: "[queue] .failed 기록 실패 id={{id}}: {{error}}",
+    },
+    injector: {
+      injectError: "[injector] inject 오류 lane={{lane}} id={{id}}: {{detail}}",
+      failedWriteFail: "[injector] .failed 기록 실패 lane={{lane}} id={{id}}: {{error}}",
+      renderError: "[injector] 렌더 오류 lane={{lane}} id={{id}} — 재전송 대기: {{error}}",
+      advanceError: "[injector] 진행 오류 lane={{lane}}: {{error}}",
+    },
+    telegram: {
+      rateLimit: "[telegram] {{method}} 429 레이트리밋 — {{waitMs}}ms 후 재시도({{attempt}})",
+      enqueueError: "[telegram] enqueue 오류({{count}}회 연속): {{error}}",
+      answerCallbackError: "[telegram] answerCallbackQuery 오류: {{error}}",
+      unknownCallback: "[telegram] 알 수 없는 callback decision 무시: {{decision}}",
+      pollError: "[telegram] poll 오류({{count}}회 연속, {{backoff}}ms 후 재시도): {{error}}",
+      alertSendError: "[telegram] enqueue 실패 알림 전송 오류: {{error}}",
+      pollLoopEnd: "[telegram] poll 루프 종료: {{error}}",
+    },
+    markdown: {
+      quarantineFail: "[markdown] 충돌파일 격리 실패 {{filename}}: {{error}}",
+      enqueueError: "[markdown] enqueue 오류({{count}}회 연속) lane={{lane}} id={{id}}: {{error}}",
+      alertWriteError: "[markdown] enqueue 실패 알림 기록 오류: {{error}}",
+      inboxError: "[markdown] inbox 처리 오류: {{error}}",
+      approvalsError: "[markdown] approvals 처리 오류: {{error}}",
+      pollError: "[markdown] 폴링 오류: {{error}}",
+    },
+    transcript: {
+      auditAppendFail:
+        "[transcript] 감사 이벤트({{kind}}) append 실패 — 감사 추적 불완전: {{detail}}",
+      appendFail: "[transcript] append 실패(보조 — 흡수): {{detail}}",
+    },
+    acp: {
+      engineProcessError: "[acp] lane={{lane}} 엔진 프로세스 오류: {{error}}",
+      subscriberError: "[acp] lane={{lane}} 구독자 오류: {{error}}",
+      transcriptWriteFail: "[acp] lane={{lane}} transcript 기록 실패: {{error}}",
+      permDiff: "[acp] launch perm-diff: {{note}}",
+    },
+  },
+  notify: {
+    block: "[ADDE 차단] {{situation}}\n  ↳ 조치: {{action}}",
+    exception: "[ADDE 오류] {{situation}}\n  ↳ 조치: {{action}}",
+    warn: "[ADDE 경고] {{situation}}\n  ↳ 조치: {{action}}",
+  },
+} satisfies typeof en;

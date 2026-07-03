@@ -28,6 +28,8 @@ export interface LaneConf {
   approvals?: string;
   /** markdown 출력 디렉터리(root 상대). 미지정 시 inbox 형제 out/. */
   outbox?: string;
+  /** 레인별 채널 메시지 로케일(en|ko). 미지정 시 전역 로케일. */
+  lang?: string;
 }
 
 export function parseLaneConf(text: string): LaneConf {
@@ -74,7 +76,7 @@ export function parseLaneConf(text: string): LaneConf {
 }
 
 /** parse/serialize 가 공유하는 optional 키 목록(순서 = 직렬화 순서). */
-const OPTIONAL_KEYS = ["cwd", "chat_id", "root", "inbox", "approvals", "outbox"] as const;
+const OPTIONAL_KEYS = ["cwd", "chat_id", "root", "inbox", "approvals", "outbox", "lang"] as const;
 
 /**
  * LaneConf → .conf INI 텍스트 직렬화. parseLaneConf 의 역연산.

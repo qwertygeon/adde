@@ -27,4 +27,6 @@ jobs:
 
       - run: pnpm run lint
 
+      - run: pnpm run i18n:check
+
       - run: pnpm test

@@ -99,7 +99,10 @@ describe("claimNext (SC-003 queue→processing 상태 전이)", () => {
 describe("scanProcessing (SC-003 크래시 재처리)", () => {
   it("processing 디렉토리의 id 목록을 반환한다", async () => {
     // 크래시 상황 시뮬레이션: processing 에 파일 직접 배치
-    fs.writeFileSync(path.join(paths.processingDir, "crash-id.msg"), JSON.stringify(makeEnvelope("crash-id")));
+    fs.writeFileSync(
+      path.join(paths.processingDir, "crash-id.msg"),
+      JSON.stringify(makeEnvelope("crash-id")),
+    );
     const ids = await scanProcessing(paths);
     expect(ids).toContain("crash-id");
   });

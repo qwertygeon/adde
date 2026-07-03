@@ -6,29 +6,20 @@ import { comparePerm } from "../../src/backend/acp/perm-diff.js";
 
 describe("comparePerm (SC-012/013)", () => {
   it("perm_tier=acp vs permissionMode=bypassPermissions → diff=true (SC-012)", () => {
-    const result = comparePerm(
-      { perm_tier: "acp" },
-      { permissionMode: "bypassPermissions" }
-    );
+    const result = comparePerm({ perm_tier: "acp" }, { permissionMode: "bypassPermissions" });
     expect(result.diff).toBe(true);
     expect(result.warn).toBeDefined();
   });
 
   it("perm_tier=acp vs permissionMode=default → diff=false", () => {
-    const result = comparePerm(
-      { perm_tier: "acp" },
-      { permissionMode: "default" }
-    );
+    const result = comparePerm({ perm_tier: "acp" }, { permissionMode: "default" });
     expect(result.diff).toBe(false);
   });
 
   it("perm_tier=acp vs permissionMode=acceptEdits → diff=false (acceptEdits 는 bypass 아님)", () => {
     // comparePerm 은 bypassPermissions 만 bypass 로 판정한다.
     // acceptEdits 는 느슨하지만 bypass 가 아니므로 diff=false (WARN 미발화).
-    const result = comparePerm(
-      { perm_tier: "acp" },
-      { permissionMode: "acceptEdits" }
-    );
+    const result = comparePerm({ perm_tier: "acp" }, { permissionMode: "acceptEdits" });
     expect(result.diff).toBe(false);
   });
 
@@ -36,7 +27,7 @@ describe("comparePerm (SC-012/013)", () => {
     // GAP-001: permissionMode 필드 위치 미확정 → 조회 실패 = 차이로 간주(보수적)
     const result = comparePerm(
       { perm_tier: "acp" },
-      null  // 조회 실패
+      null, // 조회 실패
     );
     expect(result.diff).toBe(true);
     expect(result.warn).toBeDefined();
@@ -51,10 +42,7 @@ describe("comparePerm (SC-012/013)", () => {
     // formatWarn 은 maskSecrets 를 경유하므로 warn.message 가 마스킹 대상.
     // warn.adde/engine 필드는 내부 구조체이며 채널로 직접 전송되지 않는다.
     const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg";
-    const result = comparePerm(
-      { perm_tier: "acp" },
-      { permissionMode: "bypassPermissions" },
-    );
+    const result = comparePerm({ perm_tier: "acp" }, { permissionMode: "bypassPermissions" });
     if (result.warn) {
       // 채널에 전송되는 것은 warn.message — 여기에 토큰이 없어야 한다
       expect(result.warn.message).not.toContain(token);

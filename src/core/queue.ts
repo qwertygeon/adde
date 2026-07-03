@@ -4,12 +4,12 @@
  * queue→processing→out 상태 전이는 원자적 rename.
  */
 import { t } from "../shared/i18n.js";
-import { mkdir, rename, readdir, access } from "node:fs/promises";
+import { mkdir, rename, readdir, access, readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { atomicWrite } from "../shared/fs-atomic.js";
 import { errMsg, errCode } from "../shared/errors.js";
 import type { LanePaths } from "../shared/paths.js";
-import { serializeEnvelope } from "../shared/envelope.js";
+import { serializeEnvelope, parseEnvelope } from "../shared/envelope.js";
 import type { Envelope } from "../shared/envelope.js";
 import { formatException } from "../shared/notify.js";
 
@@ -64,9 +64,6 @@ export async function claimNext(
   }
 
   const msgFiles = files.filter((f) => f.endsWith(".msg")).sort();
-
-  const { readFile } = await import("node:fs/promises");
-  const { parseEnvelope } = await import("../shared/envelope.js");
 
   // 정렬 순서대로 claim 시도 — 경합(ENOENT)·손상(parse 실패)은 건너뛰고 다음 메시지로.
   for (const next of msgFiles) {
@@ -262,7 +259,6 @@ export function processingFilePath(paths: LanePaths, id: string): string {
 export async function readSidecar(paths: LanePaths, id: string): Promise<OutSidecar | null> {
   const sidecarPath = join(paths.outDir, `${id}.out.json`);
   try {
-    const { readFile } = await import("node:fs/promises");
     const json = await readFile(sidecarPath, "utf8");
     return JSON.parse(json) as OutSidecar;
   } catch {

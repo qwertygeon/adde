@@ -8,7 +8,7 @@
  * 동기 내성: *.sync-conflict* 격리·상태 마커 멱등 자기쓰기 가드·tmp→rename.
  */
 import { t, tFor } from "../shared/i18n.js";
-import { errMsg } from "../shared/errors.js";
+import { errMsg, errCode } from "../shared/errors.js";
 import { watch, existsSync, mkdirSync, statSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { readFile, rename, mkdir, stat, readdir } from "node:fs/promises";
@@ -533,6 +533,8 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       await mkdir(quarantineDir, { recursive: true });
       await rename(join(srcDir, filename), join(quarantineDir, filename));
     } catch (err) {
+      // ENOENT = watch 경로와 폴링 백스톱이 같은 파일을 겹쳐 시도(한쪽이 이미 격리) — 정상 경합, 무음.
+      if (errCode(err) === "ENOENT") return;
       console.error(
         t("log.markdown.quarantineFail", {
           filename,

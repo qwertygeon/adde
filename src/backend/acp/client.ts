@@ -178,7 +178,12 @@ export class AcpBackendImpl implements AcpBackend {
   private readonly adapterBin: string;
   private readonly lanes = new Map<string, LaneState>();
   private readonly laneConfigs = new Map<string, LaneConfig>();
-  /** relaunch → launch 로 전달되는 승계분(구독자·권한 핸들러) — launch 가 상태 생성 시 1회 소비. */
+  /**
+   * relaunch → launch 로 전달되는 승계분(구독자·권한 핸들러) — launch 가 상태 생성 시 1회 소비.
+   * 인스턴스당 단일 슬롯이라 **한 impl = 한 레인** 불변식에 의존한다(supervisor 가 레인마다
+   * 별도 AcpBackendImpl 생성). 한 인스턴스가 다중 레인을 동시 relaunch 하면 승계가 레인 간
+   * 오염될 수 있으므로, 그 경우 Map<lane> 으로 키잉해야 한다.
+   */
   private pendingInherit: {
     subscribers: Array<(e: SessionEvent) => void>;
     permHandler: ((req: PermRequest) => Promise<PermResponse>) | null;

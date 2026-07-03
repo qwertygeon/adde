@@ -29,7 +29,7 @@ afterEach(() => {
 
 describe("DEFAULT_GATE_TIMEOUT_MS (DEC-001)", () => {
   it("기본 타임아웃 값이 600000ms(600초, 10분) 이다", () => {
-    // DEC-001: 사용자 명시 선택 600초(10분) — cctg 훅 기본값과 동일, 가역적(conf 재정의 가능)
+    // 사용자 명시 선택 600초(10분) — 가역적(conf 재정의 가능)
     expect(DEFAULT_GATE_TIMEOUT_MS).toBe(600_000);
   });
 });

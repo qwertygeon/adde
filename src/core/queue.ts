@@ -3,6 +3,7 @@
  * FR-002/003/005/ADR-004: tmp→rename 으로 부분 쓰기 미노출.
  * queue→processing→out 상태 전이는 원자적 rename.
  */
+import { t } from "../shared/i18n.js";
 import { mkdir, writeFile, rename, readdir, access } from "node:fs/promises";
 import { join, basename } from "node:path";
 import type { LanePaths } from "../shared/paths.js";
@@ -79,36 +80,76 @@ export async function claimNext(
 
   const msgFiles = files.filter((f) => f.endsWith(".msg")).sort();
 
-  const next = msgFiles[0];
-  if (!next) return null;
+  const { readFile } = await import("node:fs/promises");
+  const { parseEnvelope } = await import("../shared/envelope.js");
 
-  const id = idFromQueueFile(next);
-  const src = join(paths.queueDir, next);
-  const dst = join(paths.processingDir, processingFileName(id));
+  // 정렬 순서대로 claim 시도 — 경합(ENOENT)·손상(parse 실패)은 건너뛰고 다음 메시지로.
+  for (const next of msgFiles) {
+    const id = idFromQueueFile(next);
+    const src = join(paths.queueDir, next);
+    const dst = join(paths.processingDir, processingFileName(id));
 
-  try {
-    await rename(src, dst);
-  } catch (err) {
-    // ENOENT = 경합(다른 워커가 먼저 claim) 또는 파일 소멸 → 정상, null.
-    // 그 외(EBUSY/EACCES/EXDEV/ENOSPC/NFS 등)는 일시·구조적 FS 오류 → 액션형 로그 후 전파.
-    // 흡수해 null 을 돌리면 큐가 안 비었는데 idle 로 빠져 메시지가 무음 방치된다.
-    if (errCode(err) === "ENOENT") return null;
-    console.error(
-      formatException({
-        situation: `큐 메시지 claim 실패(${errCode(err) ?? "unknown"}): ${src}`,
-        action:
-          "디스크 용량·파일 권한·마운트(NFS/EBUSY)를 확인하세요. 메시지는 큐에 남아 다음 신호에 재시도됩니다.",
-      }),
-    );
-    throw err;
+    try {
+      await rename(src, dst);
+    } catch (err) {
+      // ENOENT = 경합(다른 워커가 먼저 claim) 또는 파일 소멸 → 다음 후보로.
+      // 그 외(EBUSY/EACCES/EXDEV/ENOSPC/NFS 등)는 일시·구조적 FS 오류 → 액션형 로그 후 전파.
+      // 흡수해 null 을 돌리면 큐가 안 비었는데 idle 로 빠져 메시지가 무음 방치된다.
+      if (errCode(err) === "ENOENT") continue;
+      console.error(
+        formatException({
+          situation: t("queue.claimFail.situation", { code: errCode(err) ?? "unknown", path: src }),
+          action: t("queue.claimFail.action"),
+        }),
+      );
+      throw err;
+    }
+
+    let envelope: Envelope;
+    try {
+      envelope = parseEnvelope(await readFile(dst, "utf8"));
+    } catch (parseErr) {
+      // 손상 메시지(스키마/JSON 깨짐) — 격리 후 다음 후보로. 매 기동 동일 파싱오류 반복 차단.
+      await quarantineCorrupt(paths, id, parseErr);
+      continue;
+    }
+
+    return { id, envelope };
   }
 
-  const { readFile } = await import("node:fs/promises");
-  const json = await readFile(dst, "utf8");
-  const { parseEnvelope } = await import("../shared/envelope.js");
-  const envelope = parseEnvelope(json);
+  return null;
+}
 
-  return { id, envelope };
+/**
+ * 손상된 processing 메시지를 격리한다(poison message 차단).
+ * processing/<id>.msg → processing/<id>.msg.corrupt (scanProcessing 의 `.msg` 필터에서 제외돼
+ * 재기동 시 재처리되지 않는다) + out/<id>.failed 가시성 기록.
+ */
+export async function quarantineCorrupt(
+  paths: LanePaths,
+  id: string,
+  reason: unknown,
+): Promise<void> {
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  const src = join(paths.processingDir, processingFileName(id));
+  const corrupt = `${src}.corrupt`;
+  try {
+    await rename(src, corrupt);
+  } catch (err) {
+    // 이미 격리됐거나(ENOENT) 다른 워커가 처리 — 격리 자체 실패는 로그만(가시성 .failed 는 계속 기록).
+    if (errCode(err) !== "ENOENT") {
+      console.error(t("log.queue.quarantineFail", { id, code: errCode(err) ?? "unknown" }));
+    }
+  }
+  await writeFailed(
+    paths,
+    id,
+    t("queue.quarantined", { ts: new Date().toISOString(), detail }),
+  ).catch((e: unknown) =>
+    console.error(
+      t("log.queue.failedWriteFail", { id, error: e instanceof Error ? e.message : String(e) }),
+    ),
+  );
 }
 
 /**
@@ -190,6 +231,49 @@ export async function writeOut(
   const finalOut = join(paths.outDir, outName);
   await writeFile(tmpOut, text, "utf8");
   await rename(tmpOut, finalOut);
+}
+
+/**
+ * 채널 전송 성공 마커 out/<id>.sent 기록(atomic). `.out`(응답 영속·dedup)과 분리해
+ * "응답은 기록됐으나 채널 미전송" 상태를 표현 — render 실패 시 재전송 대상 판별에 쓰인다.
+ */
+export async function markSent(paths: LanePaths, id: string): Promise<void> {
+  await mkdir(paths.outDir, { recursive: true });
+  const name = `${id}.sent`;
+  const tmp = join(paths.outDir, tmpName(name));
+  const final = join(paths.outDir, name);
+  await writeFile(tmp, new Date().toISOString(), "utf8");
+  await rename(tmp, final);
+}
+
+/** out/<id>.sent 존재 여부 — 채널 전송 완료 판정. */
+export async function isSent(paths: LanePaths, id: string): Promise<boolean> {
+  try {
+    await access(join(paths.outDir, `${id}.sent`));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 응답은 기록됐으나(out/<id>.out) 채널 전송이 안 된(out/<id>.sent 부재) id 목록.
+ * render 실패·크래시로 미전달된 응답의 재전송 대상.
+ */
+export async function findUnsent(paths: LanePaths): Promise<string[]> {
+  let files: string[];
+  try {
+    files = await readdir(paths.outDir);
+  } catch {
+    return [];
+  }
+  const sent = new Set(
+    files.filter((f) => f.endsWith(".sent")).map((f) => f.replace(/\.sent$/, "")),
+  );
+  return files
+    .filter((f) => f.endsWith(".out"))
+    .map((f) => f.replace(/\.out$/, ""))
+    .filter((id) => !sent.has(id));
 }
 
 /**

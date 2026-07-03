@@ -1,6 +1,6 @@
 {
   "name": "adde",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI Driven Development Engine — ACP 기반으로 AI CLI 엔진을 채널에서 원격 구동하는 게이트웨이",
   "type": "module",
   "packageManager": "pnpm@11.9.0",
@@ -23,6 +23,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "i18n:check": "tsx scripts/check-i18n.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -41,6 +42,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
-    "@zed-industries/claude-code-acp": "0.16.2"
+    "@zed-industries/claude-code-acp": "0.16.2",
+    "i18next": "^26.3.4"
   }
 }

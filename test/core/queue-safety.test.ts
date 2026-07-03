@@ -30,8 +30,22 @@ vi.mock("node:fs/promises", async (orig) => {
   };
 });
 
-const { writeOut, isDone, readSidecar, claimNext } = await import("../../src/core/queue.js");
+const { writeOut, isDone, readSidecar, claimNext, enqueue, markSent, isSent, findUnsent } =
+  await import("../../src/core/queue.js");
 import { lanePaths } from "../../src/shared/paths.js";
+import type { Envelope } from "../../src/shared/envelope.js";
+
+const makeEnvelope = (id: string, text = "t"): Envelope => ({
+  v: 1,
+  id,
+  lane: "lane",
+  source: "telegram",
+  backend: "acp",
+  engine: "claude-code-acp",
+  project: "p",
+  ts: "2026-06-30T00:00:00.000Z",
+  text,
+});
 
 let tmpBase: string;
 let paths: ReturnType<typeof lanePaths>;
@@ -92,5 +106,31 @@ describe("claimNext 오류 구분 (SC2)", () => {
 
   it("빈 큐는 null", async () => {
     expect(await claimNext(paths)).toBeNull();
+  });
+
+  it("손상 메시지는 격리(.corrupt + .failed)하고 다음 유효 메시지를 claim 한다 (FR-2)", async () => {
+    // 더 이른 ts → 먼저 시도됨. 손상.
+    fs.writeFileSync(path.join(paths.queueDir, `1700000000000-bad.msg`), "{ not json");
+    await enqueue(paths, makeEnvelope("good", "정상")); // 큰 ts → 뒤에 정렬
+
+    const claimed = await claimNext(paths);
+    expect(claimed?.id).toBe("good");
+    expect(claimed?.envelope.text).toBe("정상");
+    // 손상 메시지는 격리되어 재시도 대상에서 제외.
+    expect(fs.existsSync(path.join(paths.processingDir, "bad.msg.corrupt"))).toBe(true);
+    expect(fs.existsSync(path.join(paths.outDir, "bad.failed"))).toBe(true);
+    expect(fs.existsSync(path.join(paths.processingDir, "bad.msg"))).toBe(false);
+  });
+});
+
+describe("전송 마커 markSent/isSent/findUnsent (FR-1)", () => {
+  it("out 있고 .sent 없으면 findUnsent 대상, markSent 후 제외", async () => {
+    await writeOut(paths, "u1", "응답", {});
+    expect(await isSent(paths, "u1")).toBe(false);
+    expect(await findUnsent(paths)).toContain("u1");
+
+    await markSent(paths, "u1");
+    expect(await isSent(paths, "u1")).toBe(true);
+    expect(await findUnsent(paths)).not.toContain("u1");
   });
 });

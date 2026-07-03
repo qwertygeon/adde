@@ -25,4 +25,9 @@ export interface Source {
    * in-process 호출(injector 가 writeOut 직후) — out/ fs.watch 를 대체(DEC-001).
    */
   renderOut(id: string): Promise<void>;
+  /**
+   * 운영 알림(권한 설정 차이 경고·autopass 기동 배너 등)을 채널에 표면화한다
+   * (telegram=메시지, markdown=알림 노트). 보조 신호 — 실패는 throw, 호출자가 로그 후 흡수.
+   */
+  notify(text: string): Promise<void>;
 }

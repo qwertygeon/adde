@@ -16,10 +16,14 @@ import { createInjector } from "./injector.js";
 import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
+import { formatWarnNote } from "../shared/notify.js";
+import { t, tFor } from "../shared/i18n.js";
 import {
   writeRuntime,
   removeRuntime,
   touchRuntime,
+  readRuntime,
+  isPidAlive,
   HEARTBEAT_INTERVAL_MS,
 } from "./runtime-state.js";
 import type { LanePaths } from "../shared/paths.js";
@@ -64,6 +68,8 @@ interface LaneHandle {
 export interface LaneStatus {
   lane: string;
   status: "running" | "error" | "stopped";
+  /** status==="error" 일 때 실패 사유(사용자 안내·doctor 유도용). */
+  error?: string;
 }
 
 /** supervisorUp 반환값. */
@@ -114,7 +120,7 @@ function armHeartbeat(proj: string, handles: LaneHandle[]): void {
     for (const h of handles) {
       // 하트비트는 보조 신호 — touch 실패는 warn 후 흡수(레인 동작에 영향 없음).
       void touchRuntime(h.paths).catch((err: unknown) =>
-        console.warn(`[supervisor] lane=${h.lane} 하트비트 touch 실패(보조): ${errMsg(err)}`),
+        console.warn(t("log.supervisor.heartbeatFail", { lane: h.lane, error: errMsg(err) })),
       );
     }
   }, HEARTBEAT_INTERVAL_MS);
@@ -150,8 +156,8 @@ export async function supervisorUp(
   }
 
   if (confFiles.length === 0) {
-    console.log(`[supervisor] ${proj}: lanes.d 에 conf 없음`);
-    return { lanes: [], message: `${proj}: 레인 0개 — lanes.d 에 conf 없음` };
+    console.log(t("log.supervisor.noConf", { proj }));
+    return { lanes: [], message: t("supervisor.noLanesMsg", { proj }) };
   }
 
   const adapterBin = resolveAdapterBin();
@@ -170,7 +176,36 @@ export async function supervisorUp(
 
     const paths = lanePaths(baseDir, proj, lane);
 
+    // 중복 기동 가드 — backend 생성 전 runtime.json + pid 생존 확인.
+    const existingRuntime = await readRuntime(paths);
+    if (existingRuntime !== null) {
+      if (isPidAlive(existingRuntime.pid)) {
+        // 이미 running — 경고+스킵(FR-004/SC-005).
+        process.stderr.write(
+          t("supervisor.alreadyRunning", { lane, pid: existingRuntime.pid, proj }) + "\n",
+        );
+        results.push({ lane, status: "running" });
+        continue;
+      } else {
+        // dead 레인 — 크래시 잔존 runtime.json 정리 후 정상 기동(SC-012/FR-007).
+        // 자식 pid 는 runtime.json 에 미기록(스키마 한계 GAP-004) — removeRuntime 으로 파일만 정리.
+        await removeRuntime(paths).catch((err: unknown) =>
+          console.warn(t("log.supervisor.deadCleanupFail", { lane, error: errMsg(err) })),
+        );
+      }
+    }
+
     const channel: "telegram" | "markdown" = conf.source === "markdown" ? "markdown" : "telegram";
+
+    // 권한 경고(perm-diff 등)를 채널로도 표면화 — source 는 아래에서 생성되므로 지연 참조.
+    // 알림은 보조 신호: 전송 실패는 warn 후 흡수(레인 동작에 영향 없음).
+    const channelWarn = (msg: string): void => {
+      void source
+        .notify(msg)
+        .catch((err: unknown) =>
+          console.warn(t("log.supervisor.channelWarnFail", { lane, error: errMsg(err) })),
+        );
+    };
 
     let backend: AcpBackend;
     if (opts?.acpFactory) {
@@ -179,9 +214,15 @@ export async function supervisorUp(
       const impl = new AcpBackendImpl(adapterBin);
       impl.configureLane(lane, {
         paths,
-        addePolicy: { perm_tier: conf.perm_tier, allowlist: conf.allowlist },
+        addePolicy: {
+          perm_tier: conf.perm_tier,
+          allowlist: conf.allowlist,
+          denylist: conf.denylist,
+        },
         cwd: conf.cwd,
         channel,
+        channelWarn,
+        lang: conf.lang,
       });
       backend = impl;
     }
@@ -201,7 +242,15 @@ export async function supervisorUp(
     } else {
       const chatId =
         conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
-      source = createTelegramSource({ lane, proj, engine, paths, chatId, onInbound });
+      source = createTelegramSource({
+        lane,
+        proj,
+        engine,
+        paths,
+        chatId,
+        onInbound,
+        lang: conf.lang,
+      });
     }
 
     source.onDecision((reqId, decision) => {
@@ -229,17 +278,44 @@ export async function supervisorUp(
           await source.requestPermission(req);
         };
 
-        return gateRequestDecision(req, { sendPermPrompt, waitForDecision });
+        try {
+          return await gateRequestDecision(req, { sendPermPrompt, waitForDecision });
+        } finally {
+          // 모든 종결 경로(timeout·전송오류·정상결정)에서 대기자 정리 — timeout 시 영구 잔존 누수 제거(FR-3).
+          // 늦게 도착한 콜백은 빈 맵에서 no-op(무해).
+          pendingDecisions.delete(req.id);
+        }
       });
 
       // 인젝터 기동은 비차단(첫 inject 가 turn 종료까지 블록될 수 있어 await 하지 않음).
       // fire-and-forget 이므로 rejection 은 unhandled 가 되지 않도록 로깅한다.
       void injector.start().catch((err: unknown) => {
         console.error(
-          `[supervisor] lane=${lane} injector 기동 오류: ${err instanceof Error ? err.message : String(err)}`,
+          t("log.supervisor.injectorStartFail", {
+            lane,
+            error: err instanceof Error ? err.message : String(err),
+          }),
         );
       });
       source.start();
+
+      // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(A-P006 no-silent).
+      if (conf.perm_tier === "autopass") {
+        const tl = tFor(conf.lang);
+        const denyDesc =
+          conf.denylist.length > 0
+            ? tl("supervisor.autopassDenySome", { tools: conf.denylist.join(", ") })
+            : tl("supervisor.autopassDenyEmpty");
+        const banner = formatWarnNote(
+          {
+            situation: tl("supervisor.autopassBanner.situation", { denyDesc }),
+            action: tl("supervisor.autopassBanner.action", { lane, proj }),
+          },
+          tl,
+        );
+        console.warn(`[supervisor] lane=${lane} ${banner}`);
+        channelWarn(banner);
+      }
 
       // 라이브니스 상태 파일 — status 가 교차 프로세스로 읽는다. 기동 성공 후 기록.
       // 기록 실패는 보조(가시성 저하일 뿐 기동 자체는 성공) → warn 후 흡수.
@@ -253,7 +329,7 @@ export async function supervisorUp(
         backend: conf.backend || "acp",
         engine,
       }).catch((err: unknown) =>
-        console.warn(`[supervisor] lane=${lane} runtime.json 기록 실패(보조): ${errMsg(err)}`),
+        console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(err) })),
       );
 
       console.log(`[supervisor] lane=${lane} running`);
@@ -266,15 +342,16 @@ export async function supervisorUp(
           await source.stop();
           await backend.close(lane);
           await removeRuntime(paths).catch((err: unknown) =>
-            console.warn(`[supervisor] lane=${lane} runtime.json 제거 실패(보조): ${errMsg(err)}`),
+            console.warn(t("log.supervisor.runtimeRemoveFail", { lane, error: errMsg(err) })),
           );
         },
       });
 
       results.push({ lane, status: "running" });
     } catch (err) {
-      console.error(`[supervisor] lane=${lane} 기동 실패: ${errMsg(err)}`);
-      results.push({ lane, status: "error" });
+      const reason = errMsg(err);
+      console.error(t("log.supervisor.laneStartFail", { lane, reason }));
+      results.push({ lane, status: "error", error: reason });
     }
   }
 
@@ -285,9 +362,13 @@ export async function supervisorUp(
   armHeartbeat(proj, merged);
 
   const runningCount = results.filter((r) => r.status === "running").length;
+  const newlyStarted = handles.length;
+  const skipped = runningCount - newlyStarted;
+  const messageParts: string[] = [t("supervisor.upStarted", { proj, count: newlyStarted })];
+  if (skipped > 0) messageParts.push(t("supervisor.upSkipped", { count: skipped }));
   return {
     lanes: results,
-    message: `${proj}: ${runningCount}개 레인 기동`,
+    message: messageParts.join(", "),
   };
 }
 
@@ -313,6 +394,6 @@ export async function supervisorDown(
 
   return {
     lanes: results,
-    message: `${proj}: ${results.length}개 레인 종료`,
+    message: t("supervisor.downStopped", { proj, count: results.length }),
   };
 }

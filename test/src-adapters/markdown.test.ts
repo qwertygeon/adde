@@ -401,7 +401,9 @@ describe("createMarkdownSource (통합)", () => {
     expect(msgCount()).toBe(0); // 큐에 재enqueue 되지 않음
   });
 
-  it("동기 충돌 파일은 격리되고 큐잉되지 않는다", async () => {
+  // fs.watch 누락 시 2s 폴링 백스톱에 의존하는 경로 — 풀 스위트 병렬 부하에서 vitest 기본
+  // 타임아웃(5s)이 waitFor(8s)보다 먼저 끊겨 간헐 실패하므로 테스트 타임아웃을 상향.
+  it("동기 충돌 파일은 격리되고 큐잉되지 않는다", { timeout: 15_000 }, async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "정상\n");
     source = makeSource();
     source.start();

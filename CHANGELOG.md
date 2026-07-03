@@ -12,6 +12,10 @@
 - 승인 노트에 요청 시각·자동 거부 기한 표기(`> 🕒 요청 ... · 무응답 시 ... 자동 거부`) — 언제 요청됐고 언제 자동 deny 되는지 노트에서 바로 확인.
 - 메시지 처리(주입) 실패의 채널 표면화 — 실패 시 `.failed` 내부 기록에 더해 채널 알림(markdown `_adde-notice.md` 노트 / telegram 메시지)으로 실패 사실·조치 안내 전달(레인 언어 적용, 메시지는 보존되어 재기동 시 재처리).
 
+### Changed
+
+- 개발 툴체인 승급(런타임 영향 없음) — typescript 6.0, eslint 10(+@eslint/js 10, 신규 no-useless-assignment 룰 대응), prettier 3.9, typescript-eslint 8.62.1, GitHub Actions(checkout v7·setup-node v6·pnpm/action-setup v6). @vitest/coverage-v8 4.x(vitest 4 전용)·ACP SDK 1.x(엔진 어댑터가 아직 0.14.1)는 보류.
+
 ## [0.1.1] - 2026-07-03
 
 ### Added

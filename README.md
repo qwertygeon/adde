@@ -28,6 +28,7 @@ adde restart <proj>          # 데몬 재기동 (down + up)
 adde status [<proj>] [--all] [--json]  # 레인 상태 (<proj> 생략 시 전 프로젝트 실행 중 집계, --all 정지 포함)
 adde doctor [<proj>]         # 환경·설정 정적 점검 (데몬 등록 상태 포함)
 adde logs <proj> <lane> [N] [--engine]  # 레인 transcript(또는 --engine 시 엔진 stderr) 최근 N줄
+adde sessions <proj> <lane>  # 엔진 세션 장부 목록 (재개/초기화는 채널 명령 — commands.md)
 adde lane add <proj> <lane>  # 레인 conf 생성 (옵션: --source/--cwd/--chat-id/--root/--interactive …)
 adde lane ls <proj>          # 레인 목록
 adde lane show <proj> <lane> # 레인 conf 출력

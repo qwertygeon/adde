@@ -36,6 +36,9 @@ export const USAGE = {
   get logs(): string {
     return t("usage.logs");
   },
+  get sessions(): string {
+    return t("usage.sessions");
+  },
   get laneAdd(): string {
     return t("usage.laneAdd");
   },

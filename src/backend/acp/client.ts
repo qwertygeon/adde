@@ -121,6 +121,11 @@ export function decideAutoAllow(
   return null;
 }
 
+/** launch 옵션 — resumeSessionId 지정 시 새 세션 대신 해당 세션 복귀(session/load)를 시도한다. */
+export interface LaunchOpts {
+  resumeSessionId?: string;
+}
+
 /** backend 가 코어에 노출하는 동사 인터페이스 (plan §인터페이스계약). */
 export interface AcpBackend {
   caps(): {
@@ -129,12 +134,20 @@ export interface AcpBackend {
     supports_attachments: boolean;
     acp_version: "v1";
   };
-  launch(lane: string): Promise<{ sessionId: string }>;
+  /** resumed: resumeSessionId 요청이 실제로 복귀에 성공했는지(실패 시 새 세션 폴백 + false). */
+  launch(lane: string, opts?: LaunchOpts): Promise<{ sessionId: string; resumed?: boolean }>;
   inject(lane: string, text: string): Promise<void>;
   subscribe(lane: string, on: (e: SessionEvent) => void): void;
   onPermissionRequest(lane: string, handler: (req: PermRequest) => Promise<PermResponse>): void;
   /** 레인 종료 — 엔진 child 프로세스 정리(SIGTERM→유예→SIGKILL). down/셧다운에서 호출. */
   close(lane: string): Promise<void>;
+  /**
+   * 세션 리셋(/clear 등가) — 엔진 child 재기동 + 새 세션. 구독자·권한 핸들러는 보존 승계.
+   * 어댑터가 구 세션을 정리하지 않으므로 in-place 교체 대신 재기동을 쓴다(자원 청결).
+   */
+  reset?(lane: string): Promise<{ sessionId: string }>;
+  /** 지정 세션으로 복귀(/resume 등가) — 재기동 + session/load. 실패 시 새 세션 폴백(resumed=false). */
+  resumeSession?(lane: string, sessionId: string): Promise<{ sessionId: string; resumed: boolean }>;
 }
 
 interface LaneConfig {
@@ -165,6 +178,17 @@ export class AcpBackendImpl implements AcpBackend {
   private readonly adapterBin: string;
   private readonly lanes = new Map<string, LaneState>();
   private readonly laneConfigs = new Map<string, LaneConfig>();
+  /**
+   * relaunch → launch 로 전달되는 승계분(구독자·권한 핸들러) — launch 가 상태 생성 시 1회 소비.
+   * 인스턴스당 단일 슬롯이라 **한 impl = 한 레인** 불변식에 의존한다(supervisor 가 레인마다
+   * 별도 AcpBackendImpl 생성). 한 인스턴스가 다중 레인을 동시 relaunch 하면 승계가 레인 간
+   * 오염될 수 있으므로, 그 경우 Map<lane> 으로 키잉해야 한다.
+   */
+  private pendingInherit: {
+    subscribers: Array<(e: SessionEvent) => void>;
+    permHandler: ((req: PermRequest) => Promise<PermResponse>) | null;
+    onIdle: (() => void) | null;
+  } | null = null;
 
   constructor(adapterBin: string) {
     this.adapterBin = adapterBin;
@@ -192,7 +216,7 @@ export class AcpBackendImpl implements AcpBackend {
     };
   }
 
-  async launch(lane: string): Promise<{ sessionId: string }> {
+  async launch(lane: string, opts?: LaunchOpts): Promise<{ sessionId: string; resumed?: boolean }> {
     const config = this.laneConfigs.get(lane);
     const paths = config?.paths;
     const addePolicy = config?.addePolicy;
@@ -419,22 +443,48 @@ export class AcpBackendImpl implements AcpBackend {
       throw err;
     }
 
+    // resumeSessionId 지정 시 session/load 우선 시도 — 이 시점엔 laneRef.state 가 아직 null 이라
+    // 어댑터의 과거 대화 replay(update 재방출)는 구독자·transcript 에 닿지 않고 무해하게 흘려진다.
     let sessionResp: { sessionId: string };
-    try {
-      sessionResp = await withTimeout(
-        Promise.race([
-          conn.newSession({
-            cwd: laneCwd,
-            mcpServers: [],
-          }),
-          spawnFailed,
-        ]),
-        HANDSHAKE_TIMEOUT_MS,
-        () => handshakeTimeoutErr("newSession"),
-      );
-    } catch (err) {
-      killChild(child);
-      throw err;
+    let resumed = false;
+    if (opts?.resumeSessionId) {
+      const resumeId = opts.resumeSessionId;
+      try {
+        await withTimeout(
+          Promise.race([
+            conn.loadSession({ sessionId: resumeId, cwd: laneCwd, mcpServers: [] }),
+            spawnFailed,
+          ]),
+          HANDSHAKE_TIMEOUT_MS,
+          () => handshakeTimeoutErr("loadSession"),
+        );
+        sessionResp = { sessionId: resumeId };
+        resumed = true;
+      } catch (err) {
+        // 세션 부재("Session not found") 등 — 새 세션 폴백. 호출자가 resumed=false 로 통지.
+        console.warn(t("log.acp.loadSessionFail", { lane, error: errMsg(err) }));
+        sessionResp = { sessionId: "" };
+      }
+    } else {
+      sessionResp = { sessionId: "" };
+    }
+    if (!resumed) {
+      try {
+        sessionResp = await withTimeout(
+          Promise.race([
+            conn.newSession({
+              cwd: laneCwd,
+              mcpServers: [],
+            }),
+            spawnFailed,
+          ]),
+          HANDSHAKE_TIMEOUT_MS,
+          () => handshakeTimeoutErr("newSession"),
+        );
+      } catch (err) {
+        killChild(child);
+        throw err;
+      }
     }
 
     // 핸드셰이크 성공 — 이후 child 'error' 는 크래시 대신 로깅(spawnFailed 는 더 이상 소비 안 됨).
@@ -448,15 +498,19 @@ export class AcpBackendImpl implements AcpBackend {
       await writeFile(paths.sessionIdFile, sessionId, "utf8");
     }
 
+    // relaunch 승계는 상태 생성 시점에 원자 적용 — 등록 후 재부착 방식은 그 사이(perm-diff 조회 등)
+    // 도착하는 이벤트(예: session/load 직후 엔진 초기 청크)를 유실한다.
+    const inherit = this.pendingInherit;
+    this.pendingInherit = null;
     const state: LaneState = {
       conn,
       sessionId,
       child,
-      subscribers: [],
-      permHandler: null,
+      subscribers: inherit ? [...inherit.subscribers] : [],
+      permHandler: inherit?.permHandler ?? null,
       paths: paths ?? ({} as LanePaths),
       addePolicy: addePolicy ?? { perm_tier: "acp", allowlist: [] },
-      onIdle: null,
+      onIdle: inherit?.onIdle ?? null,
     };
     laneRef.state = state;
     this.lanes.set(lane, state);
@@ -493,7 +547,47 @@ export class AcpBackendImpl implements AcpBackend {
       }
     }
 
+    return { sessionId, resumed };
+  }
+
+  /** 세션 리셋(/clear) — 재기동 + 새 세션. 구독자·핸들러 승계는 relaunch 공통부. */
+  async reset(lane: string): Promise<{ sessionId: string }> {
+    const { sessionId } = await this.relaunch(lane);
     return { sessionId };
+  }
+
+  /** 지정 세션 복귀(/resume) — 재기동 + session/load. 실패 시 새 세션 폴백(resumed=false). */
+  async resumeSession(
+    lane: string,
+    sessionId: string,
+  ): Promise<{ sessionId: string; resumed: boolean }> {
+    return this.relaunch(lane, sessionId);
+  }
+
+  /**
+   * 엔진 child 재기동 공통부 — 기존 구독자·권한 핸들러·onIdle 을 새 LaneState 로 승계한다
+   * (supervisor 배선은 launch 후 1회만 이뤄지므로 승계 없이는 재기동 시 이벤트가 유실된다).
+   * 승계는 launch 의 상태 생성 시점에 원자 적용(pendingInherit) — 등록·재부착 사이 유실 창 제거.
+   * launch 실패 시 레인은 미등록 상태로 남는다(엔진 사망) — 호출자(runControl)가 사용자에게
+   * 복구 절차(adde restart)를 명시 통지한다. 자가 재기동 감시는 후속 과제(백로그).
+   */
+  private async relaunch(
+    lane: string,
+    resumeSessionId?: string,
+  ): Promise<{ sessionId: string; resumed: boolean }> {
+    const old = this.lanes.get(lane);
+    this.pendingInherit = {
+      subscribers: old ? [...old.subscribers] : [],
+      permHandler: old?.permHandler ?? null,
+      onIdle: old?.onIdle ?? null,
+    };
+    try {
+      await this.close(lane);
+      const res = await this.launch(lane, resumeSessionId ? { resumeSessionId } : undefined);
+      return { sessionId: res.sessionId, resumed: res.resumed ?? false };
+    } finally {
+      this.pendingInherit = null;
+    }
   }
 
   private async fetchEngineEffective(lane: string): Promise<EngineEffective | null> {

@@ -18,6 +18,7 @@ export const ko = {
   status [<proj>] [--all]  레인 상태 조회 (<proj> 생략 시 실행 중 전체, --all 정지 포함)
   doctor [<proj>]          환경·설정 정적 점검(상태 비의존)
   logs <proj> <lane> [N]   레인 transcript 최근 N줄(기본 50, --engine 시 엔진 stderr)
+  sessions <proj> <lane>   기록된 엔진 세션 목록(재개는 채널에서: /resume 또는 resume 체크박스)
   lane add <proj> <lane>   레인 conf 생성
   lane ls <proj>           레인 목록
   lane show <proj> <lane>  레인 conf 출력
@@ -33,6 +34,7 @@ export const ko = {
     restart: "사용법: adde restart <proj>",
     status: "사용법: adde status [<proj>] [--all] [--json]",
     logs: "사용법: adde logs <proj> <lane> [N] [--engine]",
+    sessions: "사용법: adde sessions <proj> <lane>",
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
     laneLs: "사용법: adde lane ls <proj>",
     laneShow: "사용법: adde lane show <proj> <lane>",
@@ -295,6 +297,21 @@ lane add 옵션:
   },
   injector: {
     injectFailed: "inject 실패 @ {{ts}}: {{detail}}",
+    control: {
+      cleared: "🧹 새 세션을 시작했습니다 — 이전 대화 맥락은 비워졌습니다.",
+      compacted: "✂️ 대화 컨텍스트를 압축했습니다(/compact).",
+      resumed: "⏪ 세션 {{id}} 를 재개했습니다.",
+      resumeFallback: "⚠️ 세션 {{id}} 복귀에 실패해 새 세션으로 시작했습니다.",
+      resumeMissing: "⚠️ 재개할 세션 id 가 없습니다 — 목록에서 선택해 주세요.",
+      unsupported: "⚠️ 이 백엔드는 세션 제어를 지원하지 않습니다.",
+      relaunchFailed:
+        "🛑 세션 제어 실패 — 엔진 재기동 오류: {{error}}. 레인이 중단됐을 수 있습니다 — `adde restart <proj>` 로 복구하세요.",
+      sessionsHeader: "📋 최근 세션 목록 (현재 세션 ◀):",
+      sessionsItem: "{{n}}. {{label}} — 마지막 대화 {{last}} ({{id}})",
+      sessionsNoLabel: "(프롬프트 없음)",
+      sessionsEmpty: "📋 기록된 세션이 아직 없습니다.",
+      sessionsHint: "재개: 체크박스 라벨 `resume <번호>` 또는 `/resume <번호>`.",
+    },
     failNote: {
       situation: "메시지 처리 실패 — id {{id}}: {{detail}}",
       action: "메시지는 보존되어 재기동 시 재처리됩니다. 반복되면 트랜스크립트·로그를 확인하세요.",
@@ -328,6 +345,7 @@ lane add 옵션:
     supervisor: {
       noConf: "[supervisor] {{proj}}: lanes.d 에 conf 없음",
       heartbeatFail: "[supervisor] lane={{lane}} 하트비트 touch 실패(보조): {{error}}",
+      ledgerFail: "[supervisor] lane={{lane}} 세션 장부 갱신 실패(보조): {{error}}",
       deadCleanupFail: "[supervisor] lane={{lane}} dead runtime.json 정리 실패(보조): {{error}}",
       channelWarnFail: "[supervisor] lane={{lane}} 채널 경고 전송 실패(보조): {{error}}",
       injectorStartFail: "[supervisor] lane={{lane}} injector 기동 오류: {{error}}",
@@ -345,6 +363,8 @@ lane add 옵션:
       renderError: "[injector] 렌더 오류 lane={{lane}} id={{id}} — 재전송 대기: {{error}}",
       advanceError: "[injector] 진행 오류 lane={{lane}}: {{error}}",
       failNotifyError: "[injector] 실패 알림 전달 오류 lane={{lane}} id={{id}}: {{error}}",
+      relaunchError:
+        "[injector] 세션 제어 엔진 재기동 실패 lane={{lane}} — 재시작 전까지 레인이 중단될 수 있음: {{error}}",
     },
     telegram: {
       rateLimit: "[telegram] {{method}} 429 레이트리밋 — {{waitMs}}ms 후 재시도({{attempt}})",
@@ -370,6 +390,8 @@ lane add 옵션:
     },
     acp: {
       engineProcessError: "[acp] lane={{lane}} 엔진 프로세스 오류: {{error}}",
+      loadSessionFail:
+        "[acp] lane={{lane}} 세션 복귀(session/load) 실패 — 새 세션으로 폴백: {{error}}",
       subscriberError: "[acp] lane={{lane}} 구독자 오류: {{error}}",
       transcriptWriteFail: "[acp] lane={{lane}} transcript 기록 실패: {{error}}",
       permDiff: "[acp] launch perm-diff: {{note}}",

@@ -14,6 +14,7 @@ import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 import { AcpBackendImpl } from "../backend/acp/client.js";
 import type { AcpBackend } from "../backend/acp/client.js";
 import { createInjector } from "./injector.js";
+import { recordSession } from "./session-ledger.js";
 import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
@@ -242,6 +243,7 @@ export async function supervisorUp(
             laneT,
           ),
         ),
+      laneT,
     );
     const onInbound = () => injector.notify();
 
@@ -272,6 +274,11 @@ export async function supervisorUp(
     try {
       // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
       const { sessionId } = await backend.launch(lane);
+
+      // 세션 장부 기록(보조 — /resume 목록·마지막 대화 시각). 실패는 로그 후 흡수.
+      await recordSession(paths, sessionId).catch((err: unknown) =>
+        console.warn(t("log.supervisor.ledgerFail", { lane, error: errMsg(err) })),
+      );
 
       // 엔진 세션 이벤트 → injector(응답 누적). injector 가 turn 종료에 writeOut + renderOut(B).
       backend.subscribe(lane, (e) => injector.onSessionEvent(e));

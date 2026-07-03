@@ -101,6 +101,51 @@ describe("parseInbox (actions)", () => {
   });
 });
 
+describe("세션 제어 라벨 파싱", () => {
+  it("체크된 clear/compact 는 control 액션(정확 일치·이모지 허용)", () => {
+    expect(parseInbox("- [x] 🧹 clear\n").actions).toEqual([
+      { kind: "control", controlKind: "clear", text: "", lineIndex: 0 },
+    ]);
+    expect(parseInbox("- [x] compact\n").actions).toEqual([
+      { kind: "control", controlKind: "compact", text: "", lineIndex: 0 },
+    ]);
+  });
+
+  it("미체크 제어 라벨은 액션 없음(경계만)", () => {
+    expect(parseInbox("- [ ] clear\n").actions).toHaveLength(0);
+  });
+
+  it("resume 무인자 = 목록(sessions), 인자 = resume", () => {
+    expect(parseInbox("- [x] resume\n").actions[0]).toMatchObject({
+      kind: "control",
+      controlKind: "sessions",
+    });
+    expect(parseInbox("- [x] ⏪ resume 2\n").actions[0]).toMatchObject({
+      kind: "control",
+      controlKind: "resume",
+      controlArg: "2",
+    });
+  });
+
+  it("resume 세션 id 인자는 대소문자를 보존한다(라벨 소문자화에 삼켜지지 않음)", () => {
+    expect(parseInbox("- [x] resume ABC-Xyz_9\n").actions[0]).toMatchObject({
+      kind: "control",
+      controlKind: "resume",
+      controlArg: "ABC-Xyz_9",
+    });
+  });
+
+  it("본문에 clear 가 포함된 라벨은 제어가 아니다(부분일치 금지)", () => {
+    expect(parseInbox("- [x] clear the build dir\n").actions).toHaveLength(0);
+  });
+
+  it("제어 라벨은 경계 — 위 텍스트는 다음 send 세그먼트에 포함되지 않는다", () => {
+    const r = parseInbox("작성 중 초안\n- [x] clear\n다음 메시지\n- [x] send\n");
+    const fresh = r.actions.find((a) => a.kind === "fresh");
+    expect(fresh?.text).toBe("다음 메시지");
+  });
+});
+
 describe("전송 스탬프", () => {
   it("formatStamp 은 로컬 시각을 YYYYMMDD-HHmmss 로 표기한다", () => {
     expect(formatStamp(new Date(2026, 6, 3, 16, 20, 45))).toBe("20260703-162045");
@@ -526,6 +571,57 @@ describe("createMarkdownSource (통합)", () => {
     const note = fs.readFileSync(notePath, "utf8");
     expect(note).toContain("에이전트 응답입니다");
     expect(note).toContain("orig-9");
+  });
+
+  it("제어 라벨 체크 → control envelope 큐잉 + sent 위키링크 종단", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "- [x] 🧹 clear\n");
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => msgCount() >= 1);
+    const qFile = fs.readdirSync(paths.queueDir).find((f) => f.endsWith(".msg"))!;
+    const env = JSON.parse(fs.readFileSync(path.join(paths.queueDir, qFile), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(env["control"]).toEqual({ kind: "clear" });
+    expect(env["text"]).toBe("/clear");
+
+    // 라벨 라인이 sent 위키링크로 종단(재트리거 방지 + 결과 노트 링크)
+    await waitFor(() => /sent \[\[.+\]\]/.test(fs.readFileSync(inboxPath, "utf8")));
+  });
+
+  it("resume 번호 라벨은 세션 장부 최신순으로 해석된다", async () => {
+    fs.mkdirSync(paths.stateDir, { recursive: true });
+    fs.writeFileSync(
+      paths.sessionsFile,
+      JSON.stringify([
+        {
+          id: "sess-new",
+          createdAt: "2026-07-03T00:00:00Z",
+          lastActivityAt: "2026-07-03T12:00:00Z",
+        },
+        {
+          id: "sess-old",
+          createdAt: "2026-07-01T00:00:00Z",
+          lastActivityAt: "2026-07-01T12:00:00Z",
+        },
+      ]),
+    );
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "- [x] resume 2\n");
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => msgCount() >= 1);
+    const qFile = fs.readdirSync(paths.queueDir).find((f) => f.endsWith(".msg"))!;
+    const env = JSON.parse(fs.readFileSync(path.join(paths.queueDir, qFile), "utf8")) as {
+      control?: { kind: string; sessionId?: string };
+    };
+    expect(env.control).toEqual({ kind: "resume", sessionId: "sess-old" });
   });
 
   it("E2E 계약: sent 위키링크 텍스트 == renderOut 노트 파일명 (전 경로 관통)", async () => {

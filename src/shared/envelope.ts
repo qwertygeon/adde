@@ -15,6 +15,13 @@ export interface ReplyRef {
   thread?: string;
 }
 
+/** 세션 제어 요청 — 일반 프롬프트 대신 세션 조작(clear/compact/resume/sessions 목록)을 수행하는 envelope. */
+export interface ControlRequest {
+  kind: "clear" | "compact" | "resume" | "sessions";
+  /** resume 대상 세션 id (kind=resume 전용). */
+  sessionId?: string;
+}
+
 export interface Envelope {
   v: 1;
   id: string;
@@ -27,6 +34,8 @@ export interface Envelope {
   text: string;
   attachments?: Attachment[];
   reply_ref?: ReplyRef;
+  /** 존재 시 제어 envelope — injector 가 프롬프트 주입 대신 세션 제어를 수행(큐 직렬 순서 보존). */
+  control?: ControlRequest;
 }
 
 /** text 길이 상한(UTF-16 코드유닛) — 초과 시 거부(과대 입력 OOM 방어). */
@@ -74,6 +83,27 @@ export function parseEnvelope(json: string): Envelope {
     const cmid = (replyRef as Record<string, unknown>)["channel_msg_id"];
     if (typeof cmid !== "string" || !CHANNEL_MSG_ID_RE.test(cmid)) {
       throw new Error("envelope: reply_ref.channel_msg_id 형식 위반");
+    }
+  }
+
+  const control = obj["control"];
+  if (control !== undefined) {
+    if (typeof control !== "object" || control === null) {
+      throw new Error("envelope: control must be an object");
+    }
+    const c = control as Record<string, unknown>;
+    if (
+      c["kind"] !== "clear" &&
+      c["kind"] !== "compact" &&
+      c["kind"] !== "resume" &&
+      c["kind"] !== "sessions"
+    ) {
+      throw new Error(`envelope: control.kind 위반 (${String(c["kind"])})`);
+    }
+    const sid = c["sessionId"];
+    if (sid !== undefined && (typeof sid !== "string" || !CHANNEL_MSG_ID_RE.test(sid))) {
+      // 세션 id 는 loadSession·세션 파일 탐색에 쓰인다 — 경로/제어문자 주입 방어(fail-closed).
+      throw new Error("envelope: control.sessionId 형식 위반");
     }
   }
 

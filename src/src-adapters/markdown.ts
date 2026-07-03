@@ -19,7 +19,8 @@ import { isPathInside, normCasePath, pathsOverlap } from "../shared/paths.js";
 import { atomicWrite as atomicWriteFile } from "../shared/fs-atomic.js";
 import type { LaneConf } from "../shared/conf.js";
 import { enqueue, hasId, readSidecar } from "../core/queue.js";
-import type { Envelope } from "../shared/envelope.js";
+import type { Envelope, ControlRequest } from "../shared/envelope.js";
+import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
 import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
 import type { Source, DecisionCallback, Decision } from "./source.js";
@@ -53,9 +54,14 @@ export function isConflictFile(filename: string): boolean {
 /** 체크박스 라인 파싱: `- [ ]`/`- [x]` + 라벨. */
 const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)$/;
 
+/** 라벨 앞쪽의 이모지·기호·공백을 제거한 본문(대소문자 보존 — resume 인자의 세션 id 는 대문자 포함 가능). */
+function labelBody(label: string): string {
+  return label.replace(/^[^\p{L}]+/u, "");
+}
+
 /** 라벨 앞쪽의 이모지·기호·공백을 제거하고 소문자화한 코어 토큰. */
 function labelCore(label: string): string {
-  return label.replace(/^[^\p{L}]+/u, "").toLowerCase();
+  return labelBody(label).toLowerCase();
 }
 
 /** send 트리거 라벨 판별 — 코어가 정확히 'send'(A4: 부분일치 금지). */
@@ -101,14 +107,17 @@ export function isoFromStamp(stamp: string): string | null {
 
 /** 인박스 액션 — main 이 id 부여·enqueue·종단 마킹을 수행. */
 export interface InboxAction {
-  /** fresh=신규 트리거(새 id 필요) · resume=`sending <id>` 재개 · empty=빈 트리거. */
-  kind: "fresh" | "resume" | "empty";
+  /** fresh=신규 트리거 · resume=`sending <id>` 재개 · empty=빈 트리거 · control=세션 제어 라벨. */
+  kind: "fresh" | "resume" | "empty" | "control";
   lineIndex: number;
   text: string;
   /** resume 시 기존 id. */
   id?: string;
   /** resume 시 sending 라인에 기록된 전송 스탬프(구버전 라인엔 없음). */
   stamp?: string;
+  /** control 시 제어 종류·인자(resume 의 번호/세션 id). */
+  controlKind?: "clear" | "compact" | "resume" | "sessions";
+  controlArg?: string;
 }
 
 export interface InboxParse {
@@ -179,7 +188,32 @@ export function parseInbox(content: string): InboxParse {
       segmentStart = i + 1; // 체크/미체크 무관 경계
       continue;
     }
-    // send/sent/sending/empty 가 아닌 체크박스 → 본문(경계 아님, segmentStart 유지)
+    // 세션 제어 라벨(send 와 동일 계약: 정확 일치·앞 이모지 허용·체크 시 트리거·항상 경계).
+    // resume 은 인자 허용: `resume 2`(목록 번호)·`resume <세션id>`. 무인자 resume = 목록 조회.
+    if (core === "clear" || core === "compact") {
+      if (checked) {
+        actions.push({ kind: "control", controlKind: core, text: "", lineIndex: i });
+      }
+      segmentStart = i + 1;
+      continue;
+    }
+    // 인자는 소문자 core 가 아니라 본문에서 추출 — 세션 id 의 대문자를 보존해야 장부와 일치.
+    const rm = /^resume(?:\s+(\S+))?$/i.exec(labelBody(label));
+    if (rm) {
+      if (checked) {
+        const action: InboxAction = {
+          kind: "control",
+          controlKind: rm[1] ? "resume" : "sessions",
+          text: "",
+          lineIndex: i,
+        };
+        if (rm[1]) action.controlArg = rm[1];
+        actions.push(action);
+      }
+      segmentStart = i + 1;
+      continue;
+    }
+    // send/sent/sending/empty/제어 가 아닌 체크박스 → 본문(경계 아님, segmentStart 유지)
   }
 
   return { actions, lines, trailingNewline };
@@ -358,7 +392,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   }
 
   // ts 는 전송 스탬프의 원본(SoT) — 호출자가 스탬프와 같은 순간의 값을 넘긴다(DEC-003).
-  function normalize(id: string, text: string, ts: string): Envelope {
+  function normalize(id: string, text: string, ts: string, control?: ControlRequest): Envelope {
     return {
       v: 1,
       id,
@@ -370,7 +404,15 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       ts,
       text,
       reply_ref: { channel_msg_id: id },
+      ...(control ? { control } : {}),
     };
+  }
+
+  /** 제어 라벨 → ControlRequest 해석. resume 인자 해석은 채널 공통(resolveResumeControl). */
+  async function resolveControl(action: InboxAction): Promise<ControlRequest> {
+    const kind = action.controlKind!;
+    if (kind !== "resume") return { kind };
+    return resolveResumeControl(action.controlArg, await readLedger(cfg.paths));
   }
 
   async function readMaybe(filePath: string): Promise<string | null> {
@@ -411,6 +453,8 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       if (actions.length === 0) return;
 
       // Phase A: fresh→id 부여+sending 마킹, empty→마킹 (내구 기록 후 enqueue).
+      // control 은 단일 단계(마킹 없이 enqueue→sent 종단) — 재구성 불가한 제어 정보라 sending
+      // 재개 대상에서 제외하고, 크래시 시 라벨이 남아 재트리거되는 쪽을 택한다(멱등에 가까움).
       const pending: Array<{
         id: string;
         text: string;
@@ -418,12 +462,25 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
         resume: boolean;
         stamp: string;
         ts: string;
+        control?: ControlRequest;
       }> = [];
       let dirtyA = false;
       for (const a of actions) {
         if (a.kind === "empty") {
           lines[a.lineIndex] = emptyLine();
           dirtyA = true;
+        } else if (a.kind === "control") {
+          const id = randomUUID();
+          const d = new Date();
+          pending.push({
+            id,
+            text: `/${a.controlKind!}`,
+            lineIndex: a.lineIndex,
+            resume: false,
+            stamp: formatStamp(d),
+            ts: d.toISOString(),
+            control: await resolveControl(a),
+          });
         } else if (a.kind === "fresh") {
           const id = randomUUID();
           const d = new Date();
@@ -464,7 +521,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
             finalize.push(p); // 이미 enqueue 됨 — 종단만
             continue;
           }
-          await enqueue(cfg.paths, normalize(p.id, p.text, p.ts));
+          await enqueue(cfg.paths, normalize(p.id, p.text, p.ts, p.control));
           finalize.push(p);
           consecutiveEnqueueFailures = 0; // 성공 → 연속 실패 리셋
           enqueueAlertSent = false;

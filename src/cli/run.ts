@@ -108,6 +108,11 @@ export async function run(argv: readonly string[]): Promise<number> {
     return runLogs(argv.slice(1));
   }
 
+  if (first === "sessions") {
+    const { runSessions } = await import("./ops.js");
+    return runSessions(argv.slice(1));
+  }
+
   // 내부 서브커맨드 — launchd 가 데몬 워커로 기동하는 포그라운드 상주 진입점.
   // 도움말 미노출(A-P005 최소 표면). 사용자가 직접 부르지 않는 내부 명령.
   if (first === "__daemon") {

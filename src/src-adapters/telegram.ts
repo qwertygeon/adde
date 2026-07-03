@@ -12,7 +12,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
 import { enqueue, readSidecar } from "../core/queue.js";
-import type { Envelope } from "../shared/envelope.js";
+import type { Envelope, ControlRequest } from "../shared/envelope.js";
+import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
 import { formatException } from "../shared/notify.js";
 import type { Source, DecisionCallback } from "./source.js";
@@ -237,6 +238,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     laneId: string,
     projId: string,
     engine: string,
+    control?: ControlRequest,
   ): Envelope {
     return {
       v: 1,
@@ -251,7 +253,22 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
       reply_ref: {
         channel_msg_id: String(msg.message_id),
       },
+      ...(control ? { control } : {}),
     };
+  }
+
+  /**
+   * 세션 제어 명령 파싱 — 정확 일치만 제어로 해석(`/clear`·`/compact`·`/resume [n|세션id]`),
+   * 그 외 슬래시 포함 텍스트는 일반 프롬프트(오발동 방지). 비제어면 null.
+   */
+  async function parseControlCommand(text: string): Promise<ControlRequest | null> {
+    const trimmed = text.trim();
+    // 그룹 채팅의 봇멘션 접미(@botname) 허용 — 그 외 변형(후행 인자 등)은 일반 프롬프트.
+    const simple = /^\/(clear|compact)(?:@\S+)?$/.exec(trimmed);
+    if (simple) return { kind: simple[1] as "clear" | "compact" };
+    const rm = /^\/resume(?:@\S+)?(?:\s+(\S+))?$/.exec(trimmed);
+    if (!rm) return null;
+    return resolveResumeControl(rm[1], await readLedger(cfg.paths));
   }
 
   /** long-poll 루프 */
@@ -278,7 +295,14 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
           offset = update.update_id + 1;
 
           if (update.message?.text) {
-            const envelope = normalizeMessage(update.message, cfg.lane, cfg.proj, cfg.engine);
+            const control = await parseControlCommand(update.message.text);
+            const envelope = normalizeMessage(
+              update.message,
+              cfg.lane,
+              cfg.proj,
+              cfg.engine,
+              control ?? undefined,
+            );
             try {
               await enqueue(cfg.paths, envelope);
               consecutiveEnqueueFailures = 0; // 성공 → 연속 실패 리셋

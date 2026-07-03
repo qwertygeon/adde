@@ -17,6 +17,7 @@ Commands:
   status [<proj>] [--all]  lane status (all running projects if <proj> omitted, --all includes stopped)
   doctor [<proj>]          static environment/config checks (state-independent)
   logs <proj> <lane> [N]   last N lines of the lane transcript (default 50, engine stderr with --engine)
+  sessions <proj> <lane>   list recorded engine sessions (resume via channel: /resume or resume checkbox)
   lane add <proj> <lane>   create a lane conf
   lane ls <proj>           list lanes
   lane show <proj> <lane>  print a lane conf
@@ -32,6 +33,7 @@ See \`adde lane help\` for lane options.`,
     restart: "Usage: adde restart <proj>",
     status: "Usage: adde status [<proj>] [--all] [--json]",
     logs: "Usage: adde logs <proj> <lane> [N] [--engine]",
+    sessions: "Usage: adde sessions <proj> <lane>",
     laneAdd: "Usage: adde lane add <proj> <lane> [options]",
     laneLs: "Usage: adde lane ls <proj>",
     laneShow: "Usage: adde lane show <proj> <lane>",
@@ -297,6 +299,21 @@ lane add options:
   },
   injector: {
     injectFailed: "inject failed @ {{ts}}: {{detail}}",
+    control: {
+      cleared: "🧹 Started a fresh session — previous conversation context was cleared.",
+      compacted: "✂️ Conversation context compacted (/compact).",
+      resumed: "⏪ Resumed session {{id}}.",
+      resumeFallback: "⚠️ Could not resume session {{id}} — started a fresh session instead.",
+      resumeMissing: "⚠️ No session id to resume — list sessions and pick one.",
+      unsupported: "⚠️ This backend does not support session control.",
+      relaunchFailed:
+        "🛑 Session control failed — engine relaunch error: {{error}}. The lane may be down; recover with `adde restart <proj>`.",
+      sessionsHeader: "📋 Recent sessions (current marked ◀):",
+      sessionsItem: "{{n}}. {{label}} — last activity {{last}} ({{id}})",
+      sessionsNoLabel: "(no prompt yet)",
+      sessionsEmpty: "📋 No recorded sessions yet.",
+      sessionsHint: "Resume with: resume <n> (checkbox label) or /resume <n>.",
+    },
     failNote: {
       situation: "message processing failed — id {{id}}: {{detail}}",
       action:
@@ -333,6 +350,7 @@ lane add options:
     supervisor: {
       noConf: "[supervisor] {{proj}}: no conf in lanes.d",
       heartbeatFail: "[supervisor] lane={{lane}} heartbeat touch failed (auxiliary): {{error}}",
+      ledgerFail: "[supervisor] lane={{lane}} session ledger update failed (auxiliary): {{error}}",
       deadCleanupFail:
         "[supervisor] lane={{lane}} dead runtime.json cleanup failed (auxiliary): {{error}}",
       channelWarnFail:
@@ -356,6 +374,8 @@ lane add options:
       advanceError: "[injector] advance error lane={{lane}}: {{error}}",
       failNotifyError:
         "[injector] failure notice delivery error lane={{lane}} id={{id}}: {{error}}",
+      relaunchError:
+        "[injector] session-control engine relaunch failed lane={{lane}} — the lane may be down until restart: {{error}}",
     },
     telegram: {
       rateLimit: "[telegram] {{method}} 429 rate limited — retrying in {{waitMs}}ms ({{attempt}})",
@@ -382,6 +402,8 @@ lane add options:
     },
     acp: {
       engineProcessError: "[acp] lane={{lane}} engine process error: {{error}}",
+      loadSessionFail:
+        "[acp] lane={{lane}} session resume (session/load) failed — falling back to a new session: {{error}}",
       subscriberError: "[acp] lane={{lane}} subscriber error: {{error}}",
       transcriptWriteFail: "[acp] lane={{lane}} transcript write failed: {{error}}",
       permDiff: "[acp] launch perm-diff: {{note}}",

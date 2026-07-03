@@ -124,7 +124,7 @@ AI 가 파일 쓰기·Bash 실행 등 권한이 필요한 도구를 호출하면
 ```markdown
 ### ⏳ req 7f3a · Bash
 
-> rm -rf build/ (cwd: /Users/me/work/my-project)
+> rm -rf build/  (cwd: /Users/me/work/my-project)
 > 🕒 요청 20260703-162045 · 무응답 시 20260703-163045 자동 거부
 
 - [ ] allow

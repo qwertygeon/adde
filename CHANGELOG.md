@@ -32,7 +32,9 @@
 - 사용자 문서 보완 — 권한 가이드(`docs/permissions.md`) 신설(게이트 개념·acp/autopass 티어·allowlist/denylist·매칭 한계·드리프트·권장 베이스라인 SSOT, 흩어진 권한 서술은 포인터화). 트러블슈팅에 `stale`(행)·launchd 등록 불일치·재부팅 복구·orphan 정리 항목 추가. Telegram 가이드에 전체 흐름 조감도·봇 토큰 공유(폴링 409) 경고·승인 시 프롬프트 인젝션 주의 추가, 마크다운 가이드에 승인 인젝션 주의 추가. README 에 사용 시나리오·데이터 흐름/프라이버시 고지·ACP 어댑터 요구 명시. getting-started 성공 판정 기준 추가.
 - 버전 SoT 를 루트 `VERSION` 파일에서 `package.json.version` 단일로 전환 — `VERSION` 파일 제거, `adde --version`·릴리스 트리거·발행이 모두 `package.json.version` 을 참조(SoT 이원화 제거). 릴리스 트리거는 `main` 의 `package.json` push 로 변경되며, 버전이 안 바뀐 변경은 태그·발행 멱등 가드가 no-op 처리.
 - 설치 문서 발행 전환 — `npm i -g adde` 정식 설치 안내, 업데이트(`npm i -g adde@latest` + 실행 중 데몬 `adde restart`)·권한 오류(EACCES) 안내 추가.
-- 미지원 최상위 명령 종료 코드 — 오타 등 알 수 없는 명령은 stderr 에 `Unknown command` 를 내고 종료 코드 1 을 반환(종전엔 사용법 출력 후 0 이라 스크립트에서 오타가 조용히 성공 처리되던 문제). 인자 없음·`-h`/`--help`/`help` 는 종전대로 사용법 출력 후 0.
+- 미지원 최상위 명령 종료 코드 — 오타 등 알 수 없는 명령은 stderr 에 `Unknown command` + 근접 명령 추정(`Did you mean: …?`)을 내고 종료 코드 1 을 반환(종전엔 사용법 출력 후 0 이라 스크립트에서 오타가 조용히 성공 처리되던 문제). 인자 없음·`-h`/`--help`/`help` 는 종전대로 사용법 출력 후 0.
+- 셸 자동완성 `adde completion <bash|zsh>` — 명령·플래그 자동완성 스크립트 생성(zsh·bash). 명령/플래그 SSOT(`cli/spec.ts`)에서 파생돼 명령 추가 시 자동완성·도움말·오타 힌트가 함께 갱신됨(확장성).
+- 서브커맨드별 도움말 `adde <command> --help`(`-h`) — 각 명령의 사용법을 출력. `adde lane <sub> --help` 는 lane 전체 옵션 출력. 최상위 usage 에 `completion` 및 명령별 `--help` 안내 추가.
 - 발행 전 사용자 문서 보완 — `claude`(Anthropic) 인증 전제·`node` PATH 요구를 요구사항에 명시, 제거(uninstall) 절차(`adde down` → `npm uninstall -g`) 추가, 트러블슈팅에 npm 설치 직후 문제(command not found·EACCES·claude 미인증) 절 추가, Telegram 가이드에 인바운드 인증 절 추가.
 
 ## [0.1.2] - 2026-07-03

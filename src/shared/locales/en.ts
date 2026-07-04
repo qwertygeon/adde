@@ -22,18 +22,21 @@ Commands:
   lane ls <proj>           list lanes
   lane show <proj> <lane>  print a lane conf
   lane rm <proj> <lane>    delete a lane conf
+  completion <bash|zsh>    print a shell completion script
 
 Options:
   -v, --version            print version
   -h, --help               print help
 
-See \`adde lane help\` for lane options.`,
+Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help\` for lane options.`,
     up: "Usage: adde up <proj>",
     down: "Usage: adde down <proj>",
     restart: "Usage: adde restart <proj>",
     status: "Usage: adde status [<proj>] [--all] [--json]",
+    doctor: "Usage: adde doctor [<proj>]",
     logs: "Usage: adde logs <proj> <lane> [N] [--engine]",
     sessions: "Usage: adde sessions <proj> <lane>",
+    completion: "Usage: adde completion <bash|zsh>  (print a shell completion script)",
     laneAdd: "Usage: adde lane add <proj> <lane> [options]",
     laneLs: "Usage: adde lane ls <proj>",
     laneShow: "Usage: adde lane show <proj> <lane>",
@@ -71,6 +74,10 @@ lane add options:
     laneError: "[adde lane] {{detail}}",
     unknownSub: "Unknown lane subcommand: {{sub}}",
     unknownCmd: "Unknown command: {{cmd}}",
+    didYouMean: "Did you mean: {{cmds}}?",
+  },
+  completion: {
+    unknownShell: 'unsupported shell "{{shell}}" — one of {{supported}}',
   },
   run: {
     laneStartFailed: {

@@ -51,6 +51,9 @@ export const USAGE = {
   get laneRm(): string {
     return t("usage.laneRm");
   },
+  get completion(): string {
+    return t("usage.completion");
+  },
 };
 
 /** `adde lane` 그룹 도움말. */

@@ -23,18 +23,21 @@ export const ko = {
   lane ls <proj>           레인 목록
   lane show <proj> <lane>  레인 conf 출력
   lane rm <proj> <lane>    레인 conf 삭제
+  completion <bash|zsh>    셸 자동완성 스크립트 출력
 
 옵션:
   -v, --version            버전 출력
   -h, --help               도움말 출력
 
-레인 옵션은 \`adde lane help\` 참조.`,
+명령별 도움말은 \`{{primary}} <command> --help\`, 레인 옵션은 \`adde lane help\` 참조.`,
     up: "사용법: adde up <proj>",
     down: "사용법: adde down <proj>",
     restart: "사용법: adde restart <proj>",
     status: "사용법: adde status [<proj>] [--all] [--json]",
+    doctor: "사용법: adde doctor [<proj>]",
     logs: "사용법: adde logs <proj> <lane> [N] [--engine]",
     sessions: "사용법: adde sessions <proj> <lane>",
+    completion: "사용법: adde completion <bash|zsh>  (셸 자동완성 스크립트 출력)",
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
     laneLs: "사용법: adde lane ls <proj>",
     laneShow: "사용법: adde lane show <proj> <lane>",
@@ -72,6 +75,10 @@ lane add 옵션:
     laneError: "[adde lane] {{detail}}",
     unknownSub: "알 수 없는 lane 서브커맨드: {{sub}}",
     unknownCmd: "알 수 없는 명령: {{cmd}}",
+    didYouMean: "이것을 찾으셨나요: {{cmds}}?",
+  },
+  completion: {
+    unknownShell: '미지원 셸 "{{shell}}" — {{supported}} 중 하나',
   },
   run: {
     laneStartFailed: {

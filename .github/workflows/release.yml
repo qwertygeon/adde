@@ -24,8 +24,9 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24 # OIDC Trusted Publishing 하한(npm ≥ 11.5.1 · Node ≥ 22.14) 충족
           cache: pnpm
+          registry-url: https://registry.npmjs.org # ~/.npmrc 에 NODE_AUTH_TOKEN 참조 기록(npm publish 인증)
 
       - run: pnpm install --frozen-lockfile
 
@@ -57,3 +58,17 @@ jobs:
           git tag "$TAG"
           git push origin "$TAG"
           gh release create "$TAG" --title "$TAG" --notes "${NOTES:-Release $TAG}"
+
+      # npm 발행 — prepack(pnpm run build)이 dist/ 를 생성한 뒤 발행한다.
+      # 인증: GitHub Secret NPM_TOKEN(Granular Access Token, 2FA bypass). 최초 발행 부트스트랩용.
+      # (장기적으로는 OIDC Trusted Publishing 로 전환 — 토큰 없이 provenance 자동. 최초 발행 후 npmjs 에 신뢰발행자 등록.)
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          if npm view "adde@${VERSION}" version >/dev/null 2>&1; then
+            echo "adde@${VERSION} already published; skipping."
+            exit 0
+          fi
+          npm publish

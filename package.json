@@ -3,6 +3,21 @@
   "version": "0.1.2",
   "description": "AI Driven Development Engine — ACP 기반으로 AI CLI 엔진을 채널에서 원격 구동하는 게이트웨이",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qwertygeon/adde.git"
+  },
+  "homepage": "https://github.com/qwertygeon/adde#readme",
+  "bugs": "https://github.com/qwertygeon/adde/issues",
+  "keywords": [
+    "acp",
+    "agent-client-protocol",
+    "claude-code",
+    "telegram",
+    "cli",
+    "ai",
+    "gateway"
+  ],
   "packageManager": "pnpm@11.9.0",
   "engines": {
     "node": ">=22"
@@ -17,6 +32,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build",
     "dev": "tsx src/cli/adde.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",

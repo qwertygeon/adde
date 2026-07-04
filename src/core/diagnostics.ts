@@ -195,17 +195,20 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
   );
 
   // 데몬 진입 파일 — launchd 워커가 실행할 실재 .js. tsx dev(빌드 전)면 부재라 데몬 기동 불가.
-  const daemonEntry = daemonEntryPath();
-  checks.push(
-    (await pathExists(daemonEntry))
-      ? { name: t("doctor.daemonEntry.name"), level: "PASS", detail: daemonEntry }
-      : {
-          name: t("doctor.daemonEntry.name"),
-          level: "WARN",
-          detail: t("doctor.daemonEntry.missing", { path: daemonEntry }),
-          hint: t("doctor.daemonEntry.hint"),
-        },
-  );
+  // 데몬은 macOS 전용(비-darwin 은 loadDaemon 이 assertMacOS 로 거부)이므로 darwin 에서만 점검.
+  if (process.platform === "darwin") {
+    const daemonEntry = daemonEntryPath();
+    checks.push(
+      (await pathExists(daemonEntry))
+        ? { name: t("doctor.daemonEntry.name"), level: "PASS", detail: daemonEntry }
+        : {
+            name: t("doctor.daemonEntry.name"),
+            level: "WARN",
+            detail: t("doctor.daemonEntry.missing", { path: daemonEntry }),
+            hint: t("doctor.daemonEntry.hint"),
+          },
+    );
+  }
 
   if (proj === undefined) return checks;
 

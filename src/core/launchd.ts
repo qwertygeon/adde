@@ -8,6 +8,7 @@ import { execFile as nodeExecFile } from "node:child_process";
 import { writeFile, unlink, mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { formatBlock } from "../shared/notify.js";
 import { assertSafeSegment } from "../shared/paths.js";
 
@@ -26,7 +27,7 @@ export interface LaunchdDeps {
   nodeBin?: string;
   /** 데몬 실행 파일 경로 override(테스트 전용 — 미지정 시 import.meta.url 기준 dist/cli/adde.js). */
   addeBin?: string;
-  /** 데몬 PATH override(테스트 전용 — 미지정 시 process.env.PATH + node 디렉터리). */
+  /** 데몬 PATH override(테스트 전용 — 미지정 시 node 디렉터리를 앞에 붙인 process.env.PATH). */
   pathEnv?: string;
 }
 
@@ -156,7 +157,9 @@ function defaultExec(args: string[]): Promise<{ stdout: string; code: number }> 
  * loadDaemon 가드·doctor 사전점검의 SSOT. launchd 워커는 분리 프로세스라 이 파일이 실재해야 한다.
  */
 export function daemonEntryPath(): string {
-  return new URL("../cli/adde.js", import.meta.url).pathname;
+  // fileURLToPath — .pathname 은 공백·특수문자를 퍼센트 인코딩해(예: "John%20Doe") 실경로와
+  // 어긋난다. 가드 stat·plist ProgramArguments 양쪽이 실경로를 써야 하므로 디코딩 변환.
+  return fileURLToPath(new URL("../cli/adde.js", import.meta.url));
 }
 
 /**

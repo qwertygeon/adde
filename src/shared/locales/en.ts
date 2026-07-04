@@ -146,6 +146,8 @@ lane add options:
       allowFrom: "  allow_from — enter comma-separated numeric ids (or leave empty)",
     },
     prompt: {
+      source: "source (telegram or markdown)",
+      permTier: "perm_tier (acp or autopass)",
       allowlist: "allowlist (comma-separated, empty for none)",
       denylist: "denylist (tools/patterns that fall back to channel approval, comma-separated)",
       safeDefaults:

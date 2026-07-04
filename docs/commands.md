@@ -58,6 +58,7 @@ adde setup — environment check, short aliases, and your first lane.
   ✔ Node version: v22.14.0
   ✔ ACP adapter binary: @zed-industries/claude-code-acp resolved
   ✔ config base directory: ~/.config/adde
+  ✔ daemon entry: /opt/homebrew/lib/node_modules/adde/dist/cli/adde.js
 
 install short aliases (ad, add) next to the adde command? (Y/n) [y]: y
   ✔ alias created: ad → /usr/local/bin
@@ -65,11 +66,11 @@ install short aliases (ad, add) next to the adde command? (Y/n) [y]: y
 
 project name [default]: myproj
 lane name [main]: tg-claude
-source (telegram/markdown) [telegram]: telegram
+source (telegram or markdown) [telegram]: telegram
 engine [claude-code-acp]:
 backend [acp]:
 channel [telegram]:
-perm_tier (acp/autopass) [acp]:
+perm_tier (acp or autopass) [acp]:
 acp_version [v1]:
 allowlist (comma-separated, empty for none): Read,Grep
 enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (y/N) [y]: y
@@ -171,9 +172,9 @@ adde status myproj --json   # machine-readable array (monitoring/scripts)
 adde doctor [<proj>]
 ```
 
-Performs a static check independent of status and reports each item as `PASS` / `WARN` / `FAIL`. Failures/warnings carry a remedy hint (`↳ remedy:`).
+Performs a static check independent of status and reports each item as `PASS` / `WARN` / `FAIL`. Failures/warnings carry a remedy hint (`↳ action:`).
 
-- Global: Node version (≥22) · ACP adapter binary resolution · config base directory.
+- Global: Node version (≥22) · ACP adapter binary resolution · config base directory · (macOS) daemon entry file resolution.
 - With `<proj>`, per lane: source validity · `cwd` existence · (telegram) `.env` token presence.
 - **File-permission audit** (with `<proj>`, per lane): `WARN` if `state/<lane>/.env` is group/other-accessible (expects 0600 — bot-token exposure risk), and `WARN` if `file_mode=private` but the `state/<lane>` directory is group/other-accessible (expects 0700), with a `chmod`/`adde restart` hint. `file_mode=shared` is treated as an intentional choice and not warned.
 - With `<proj>`, on macOS it also checks the launchd daemon registration state — it cross-checks plist existence against launchctl registration and surfaces a mismatch (plist present but not registered with launchd, or vice versa) as `WARN`.
@@ -266,11 +267,11 @@ In the wizard, the telegram bot token is prompted **last, with hidden input** (k
 
 ```text
 $ adde lane add myproj tg-claude
-source (telegram/markdown) [telegram]: telegram
+source (telegram or markdown) [telegram]: telegram
 engine [claude-code-acp]:
 backend [acp]:
 channel [telegram]:
-perm_tier (acp/autopass) [acp]: autopass
+perm_tier (acp or autopass) [acp]: autopass
 acp_version [v1]:
 allowlist (comma-separated, empty for none): Read,Grep
 denylist (tools/patterns that fall back to channel approval, comma-separated) [Bash(sudo *),Bash(rm -rf /*),Bash(rm -rf ~*),Bash(rm -rf .*),Bash(git push --force*),Bash(git push -f*),Bash(git reset --hard*),Bash(git clean -fd*),Read(~/.ssh/**),Read(~/.aws/**)]:
@@ -357,18 +358,18 @@ An unsupported shell gives an error + exit code 1.
 
 ## Exit codes
 
-| Command      | 0                                               | 1                                                      |
-| ------------ | ----------------------------------------------- | ------------------------------------------------------ |
-| `up`         | Daemon registration succeeded                   | launchd registration failure · missing argument        |
-| `down`       | Daemon stop succeeded (0 even if already gone)  | Error occurred                                         |
-| `restart`    | Both down+up succeeded                          | down or up failed                                      |
-| `status`     | All healthy                                     | A `dead` (crash) / `stale` (hung) lane exists          |
-| `doctor`     | No FAIL                                         | A FAIL item exists                                     |
-| `logs`       | Always (0 with an info message even if no file) | —                                                      |
-| `init`       | Wizard completed                                | Non-TTY · missing argument · validation/creation error |
-| `alias`      | Aliases installed · already-set confirmed       | `adde` not found in PATH · install failed              |
-| `lane *`     | Success                                         | Missing argument · validation error                    |
-| `completion` | Script output                                   | Missing shell argument · unsupported shell             |
+| Command      | 0                                                       | 1                                                      |
+| ------------ | ------------------------------------------------------- | ------------------------------------------------------ |
+| `up`         | Daemon registration succeeded                           | launchd registration failure · missing argument        |
+| `down`       | Daemon stop succeeded (0 even if already gone)          | Error occurred                                         |
+| `restart`    | Both down+up succeeded                                  | down or up failed                                      |
+| `status`     | All healthy                                             | A `dead` (crash) / `stale` (hung) lane exists          |
+| `doctor`     | No FAIL                                                 | A FAIL item exists                                     |
+| `logs`       | Read succeeded (0 with an info message even if no file) | Missing project/lane argument · path-validation error  |
+| `init`       | Wizard completed                                        | Non-TTY · missing argument · validation/creation error |
+| `alias`      | Aliases installed · already-set confirmed               | `adde` not found in PATH · install failed              |
+| `lane *`     | Success                                                 | Missing argument · validation error                    |
+| `completion` | Script output                                           | Missing shell argument · unsupported shell             |
 
 Running with no arguments, or `-h`/`--help`/`help`, prints usage and returns `0`. An **unsupported command** (typo, etc.) prints `Unknown command` to stderr and returns `1` (prevents a typo from silently succeeding in a script).
 

@@ -208,6 +208,7 @@ ${zshFlagValueCases()}
       case "\${words[3]}" in
         add)
           if (( CURRENT == 4 )); then _adde_projects; return; fi
+          if (( CURRENT == 5 )) && [[ "\${words[5]}" != -* ]]; then return; fi
           _values 'option' ${laneAddFlags} ;;
         ls)
           if (( CURRENT == 4 )); then _adde_projects; return; fi ;;

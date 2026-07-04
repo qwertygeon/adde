@@ -58,6 +58,7 @@ adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
   ✔ Node 버전: v22.14.0
   ✔ ACP 어댑터 바이너리: @zed-industries/claude-code-acp 해석됨
   ✔ 설정 base 디렉터리: ~/.config/adde
+  ✔ 데몬 진입 파일: /opt/homebrew/lib/node_modules/adde/dist/cli/adde.js
 
 짧은 별칭(ad, add)을 adde 명령 옆에 설치할까요? (Y/n) [y]: y
   ✔ 별칭 생성: ad → /usr/local/bin
@@ -65,11 +66,11 @@ adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
 
 프로젝트 이름 [default]: myproj
 레인 이름 [main]: tg-claude
-source (telegram/markdown) [telegram]: telegram
+source (telegram 또는 markdown) [telegram]: telegram
 engine [claude-code-acp]:
 backend [acp]:
 channel [telegram]:
-perm_tier (acp/autopass) [acp]:
+perm_tier (acp 또는 autopass) [acp]:
 acp_version [v1]:
 allowlist (콤마 구분, 없으면 비움): Read,Grep
 방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N) [y]: y
@@ -87,7 +88,7 @@ telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입
 기동: adde up myproj
 ```
 
-빈 응답은 표시된 기본값(`[…]`)을 채택합니다. `source`·`engine`·`backend`·`channel`·`perm_tier`·`acp_version` 프롬프트는 로케일과 무관하게 영문으로 표시됩니다. 토큰을 비워 두면 마지막 두 줄이 `토큰 기록` 대신 `다음: 봇 토큰을 …/.env 에 TELEGRAM_BOT_TOKEN=... 으로 두세요` 안내가 됩니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`/`approvals`/`outbox` 로 바뀝니다.
+빈 응답은 표시된 기본값(`[…]`)을 채택합니다. `engine`·`backend`·`channel`·`acp_version` 프롬프트는 로케일과 무관하게 영문으로 표시됩니다. 토큰을 비워 두면 마지막 두 줄이 `토큰 기록` 대신 `다음: 봇 토큰을 …/.env 에 TELEGRAM_BOT_TOKEN=... 으로 두세요` 안내가 됩니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`/`approvals`/`outbox` 로 바뀝니다.
 
 ## alias — 단축 별칭 설치
 
@@ -173,7 +174,7 @@ adde doctor [<proj>]
 
 상태와 무관한 정적 점검을 수행하고 각 항목을 `PASS` / `WARN` / `FAIL` 로 보고합니다. 실패·경고에는 조치 힌트(`↳ 조치:`)가 붙습니다.
 
-- 전역: Node 버전(≥22) · ACP 어댑터 바이너리 해석 · 설정 base 디렉터리.
+- 전역: Node 버전(≥22) · ACP 어댑터 바이너리 해석 · 설정 base 디렉터리 · (macOS) 데몬 진입 파일 해석.
 - `<proj>` 지정 시 레인별: source 유효성 · `cwd` 존재 · (telegram) `.env` 토큰 존재.
 - **파일 권한 점검**(`<proj>` 지정 시 레인별): `state/<lane>/.env` 가 그룹/기타 사용자에게 열려 있으면(기대 0600 — 봇 토큰 노출 위험) `WARN`, `file_mode=private` 인데 `state/<lane>` 디렉터리가 그룹/기타 사용자에게 열려 있으면(기대 0700) `WARN` 하고 `chmod`/`adde restart` 힌트를 붙입니다. `file_mode=shared` 는 의도된 선택으로 보고 경고하지 않습니다.
 - `<proj>` 지정 시 macOS에서는 launchd 데몬 등록 상태도 점검합니다 — plist 존재 여부와 launchctl 등록 여부를 교차 확인하고, 불일치(plist는 있으나 launchd 미등록, 또는 그 역)를 `WARN`으로 표면화합니다.
@@ -266,11 +267,11 @@ adde lane help                       # 전체 옵션
 
 ```text
 $ adde lane add myproj tg-claude
-source (telegram/markdown) [telegram]: telegram
+source (telegram 또는 markdown) [telegram]: telegram
 engine [claude-code-acp]:
 backend [acp]:
 channel [telegram]:
-perm_tier (acp/autopass) [acp]: autopass
+perm_tier (acp 또는 autopass) [acp]: autopass
 acp_version [v1]:
 allowlist (콤마 구분, 없으면 비움): Read,Grep
 denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분) [Bash(sudo *),Bash(rm -rf /*),Bash(rm -rf ~*),Bash(rm -rf .*),Bash(git push --force*),Bash(git push -f*),Bash(git reset --hard*),Bash(git clean -fd*),Read(~/.ssh/**),Read(~/.aws/**)]:
@@ -357,18 +358,18 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 
 ## 종료 코드
 
-| 명령         | 0                             | 1                                    |
-| ------------ | ----------------------------- | ------------------------------------ |
-| `up`         | 데몬 등록 성공                | launchd 등록 실패·인자 누락          |
-| `down`       | 데몬 종료 성공(이미 없어도 0) | 오류 발생                            |
-| `restart`    | down+up 모두 성공             | down 또는 up 실패                    |
-| `status`     | 모두 정상                     | `dead`(크래시)·`stale`(행) 레인 존재 |
-| `doctor`     | FAIL 없음                     | FAIL 항목 존재                       |
-| `logs`       | 항상(파일 없어도 안내 후 0)   | —                                    |
-| `init`       | 마법사 완료                   | 비TTY·인자 누락·검증/생성 오류       |
-| `alias`      | 별칭 설치·이미 설정 확인      | `adde` PATH 미발견·설치 실패         |
-| `lane *`     | 성공                          | 인자 누락·검증 오류                  |
-| `completion` | 스크립트 출력                 | 셸 인자 누락·미지원 셸               |
+| 명령         | 0                                | 1                                    |
+| ------------ | -------------------------------- | ------------------------------------ |
+| `up`         | 데몬 등록 성공                   | launchd 등록 실패·인자 누락          |
+| `down`       | 데몬 종료 성공(이미 없어도 0)    | 오류 발생                            |
+| `restart`    | down+up 모두 성공                | down 또는 up 실패                    |
+| `status`     | 모두 정상                        | `dead`(크래시)·`stale`(행) 레인 존재 |
+| `doctor`     | FAIL 없음                        | FAIL 항목 존재                       |
+| `logs`       | 읽기 성공(파일 없어도 안내 후 0) | proj/lane 인자 누락·경로 검증 오류   |
+| `init`       | 마법사 완료                      | 비TTY·인자 누락·검증/생성 오류       |
+| `alias`      | 별칭 설치·이미 설정 확인         | `adde` PATH 미발견·설치 실패         |
+| `lane *`     | 성공                             | 인자 누락·검증 오류                  |
+| `completion` | 스크립트 출력                    | 셸 인자 누락·미지원 셸               |
 
 인자 없이 실행하거나 `-h`/`--help`/`help` 는 사용법을 출력하고 `0` 을 반환합니다. **미지원 명령**(오타 등)은 stderr 에 `Unknown command` 를 출력하고 `1` 을 반환합니다(스크립트에서 오타가 조용히 성공으로 처리되는 것을 막음).
 

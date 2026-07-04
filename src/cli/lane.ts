@@ -116,7 +116,7 @@ export async function collectInteractive(
     return ids.length > 0 && ids.every(isNumericId);
   };
 
-  let source = (await ask("source (telegram/markdown)", "telegram")).toLowerCase();
+  let source = (await ask(t("lane.prompt.source"), "telegram")).toLowerCase();
   while (source !== "telegram" && source !== "markdown") {
     source = (await ask(t("lane.sourceRetry"), "telegram")).toLowerCase();
   }
@@ -126,7 +126,7 @@ export async function collectInteractive(
   opts.channel = await ask("channel", source);
   opts.perm_tier = await askUntil(
     ask,
-    "perm_tier (acp/autopass)",
+    t("lane.prompt.permTier"),
     "acp",
     (v) => v === "acp" || v === "autopass",
     t("lane.retry.permTier"),

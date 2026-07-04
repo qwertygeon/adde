@@ -146,6 +146,8 @@ lane add 옵션:
       allowFrom: "  allow_from — 콤마 구분 숫자 id 를 입력하세요(없으면 비움)",
     },
     prompt: {
+      source: "source (telegram 또는 markdown)",
+      permTier: "perm_tier (acp 또는 autopass)",
       allowlist: "allowlist (콤마 구분, 없으면 비움)",
       denylist: "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
       safeDefaults:

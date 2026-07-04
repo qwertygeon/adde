@@ -40,7 +40,7 @@ describe("collectInteractive (007 SC1)", () => {
 
   it("markdown: root/inbox 등 markdown 필드를 묻고 chat_id 는 안 묻는다", async () => {
     const { ask, questions } = scriptedAsk({
-      "source (telegram/markdown)": "markdown",
+      "source (telegram": "markdown",
       "root (markdown": "/vault",
     });
     const opts = await collectInteractive(ask);

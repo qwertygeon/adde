@@ -274,7 +274,7 @@ channel [telegram]:
 perm_tier (acp 또는 autopass) [acp]: autopass
 acp_version [v1]:
 allowlist (콤마 구분, 없으면 비움): Read,Grep
-denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분) [Bash(sudo *),Bash(rm -rf /*),Bash(rm -rf ~*),Bash(rm -rf .*),Bash(git push --force*),Bash(git push -f*),Bash(git reset --hard*),Bash(git clean -fd*),Read(~/.ssh/**),Read(~/.aws/**)]:
+denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분) [Bash(sudo *),Bash(rm -rf /*),Bash(rm -rf ~*),Bash(rm -rf .*),Bash(git push --force*),Bash(git push -f*),Bash(git reset --hard*),Bash(git clean -fd*),Read(~/.ssh/**),Read(~/.aws/**),Read(~/.npmrc),Read(~/.config/gh/hosts.yml),Read(~/.kube/config),Read(~/.docker/config.json),Read(~/.config/gcloud/**)]:
 방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N) [y]: y
 lang (채널 메시지 로케일: en/ko, 전역은 비움): ko
 cwd (레인 작업 폴더 절대경로, 없으면 비움): /Users/me/work/my-project
@@ -315,9 +315,9 @@ printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude \
 >
 > allowlist/denylist 매칭은 엔진이 알려주는 원시 도구명(예: `Bash`, `Write`) 기준이며, 도구명을 확인할 수 없는 요청은 자동 허용하지 않고 채널 승인으로 보냅니다(fail-closed). 현재 도구명 제공은 `claude-code-acp` 엔진에서 확인되었습니다 — 도구명을 제공하지 않는 엔진에서는 autopass 여도 모든 요청이 채널 승인을 거칩니다(안전 방향).
 >
-> **denylist 패턴**: `Tool(글롭)` 형식으로 대표 인자를 매칭합니다 — Bash 는 명령 문자열, Read/Write/Edit 는 파일 경로, WebFetch 는 URL. `*` 는 임의 문자열(경로 구분자 포함)이고 전체 일치 기준이라 접두 차단은 `Bash(git push*)`, 포함 차단은 `Bash(*sudo *)` 처럼 씁니다. 인자를 확인할 수 없는 요청·패턴을 지원하지 않는 도구는 도구명만 맞아도 채널 승인으로 갑니다(과매칭=안전 방향). 도구명 비교는 대소문자를 무시합니다. **한계**: 매칭은 명령 문자열 전체 기준이라 셸 체이닝(`echo x && sudo y`)은 접두 패턴(`sudo *`)에 걸리지 않습니다 — 포함 패턴(`*sudo *`)을 추가하거나, 확실한 차단이 필요하면 도구 전체(`Bash`)를 지정하세요.
+> **denylist 패턴**: `Tool(글롭)` 형식으로 대표 인자를 매칭합니다 — Bash 는 명령 문자열, Read/Write/Edit 는 파일 경로, WebFetch 는 URL. `*` 는 임의 문자열(경로 구분자 포함)이고 전체 일치 기준이라 접두 차단은 `Bash(git push*)`, 포함 차단은 `Bash(*sudo *)` 처럼 씁니다. 인자를 확인할 수 없는 요청·패턴을 지원하지 않는 도구는 도구명만 맞아도 채널 승인으로 갑니다(과매칭=안전 방향). 도구명 비교는 대소문자를 무시합니다. **셸 체이닝**: Bash 는 체이닝된 하위 명령을 개별 매칭합니다(`;` `&&` `||` `|` `&`·개행으로 분리, 선행 `VAR=` 대입 제거) — 접두 패턴(`sudo *`)이 `echo x && sudo y` 를 잡습니다. 완전한 셸 파서가 아닌 best-effort 입니다(alias·`eval`·변수 확장 미해석) — 확실한 차단이 필요하면 도구 전체(`Bash`)를 지정하세요.
 >
-> **기본 denylist**: `--perm-tier autopass` 에서 `--denylist` 를 생략하면 파괴적 셸 명령과 자격증명 읽기를 승인으로 돌리는 내장 기본 목록을 conf 에 기록합니다 — `Bash(sudo *)` · `Bash(rm -rf /*)` · `Bash(rm -rf ~*)` · `Bash(rm -rf .*)` · `Bash(git push --force*)` · `Bash(git push -f*)` · `Bash(git reset --hard*)` · `Bash(git clean -fd*)` · `Read(~/.ssh/**)` · `Read(~/.aws/**)`. 항목은 목록일 뿐 완전한 방어가 아닙니다(위 셸 체이닝 한계 참고) — 프로젝트에 맞게 조정하세요.
+> **기본 denylist**: `--perm-tier autopass` 에서 `--denylist` 를 생략하면 파괴적 셸 명령과 자격증명 저장소 읽기를 승인으로 돌리는 내장 기본 목록을 conf 에 기록합니다 — `Bash(sudo *)` · `Bash(rm -rf /*)` · `Bash(rm -rf ~*)` · `Bash(rm -rf .*)` · `Bash(git push --force*)` · `Bash(git push -f*)` · `Bash(git reset --hard*)` · `Bash(git clean -fd*)` · `Read(~/.ssh/**)` · `Read(~/.aws/**)` · `Read(~/.npmrc)` · `Read(~/.config/gh/hosts.yml)` · `Read(~/.kube/config)` · `Read(~/.docker/config.json)` · `Read(~/.config/gcloud/**)`. 항목은 목록일 뿐 완전한 방어가 아닙니다(위 셸 체이닝 참고) — 프로젝트에 맞게 조정하세요.
 >
 > **hard-deny(`--hard-deny`·`--safe-defaults`)**: `--denylist` 와 같은 `Tool(글롭)` 형식이지만 강도가 다릅니다 — denylist 는 `autopass` 에서 자동 허용을 빼고 **채널 승인으로 폴백**하는 반면, hard-deny 는 매칭 요청을 **`perm_tier` 와 무관하게(기본 `acp` 포함) 채널 프롬프트조차 없이 즉시 거부(취소)** 합니다. 파국적 명령이 실수로 승인되는 것을 원천 차단하는 최종 방어선입니다. `--safe-defaults` 는 위 **기본 denylist** 와 동일한 위험 목록을 hard-deny 로 채웁니다(명시한 `--hard-deny` 와 합집합). hard-deny 적중은 transcript 기록 + 채널 통지. 개념·권장 사용은 [권한 가이드](permissions.ko.md#hard-deny-즉시-거부).
 

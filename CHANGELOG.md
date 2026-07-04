@@ -10,7 +10,8 @@
 - 레인 상태·출력·큐 디렉터리 권한 옵션 `file_mode`(`--file-mode`) — 기본 `private` 는 `state`/`out`/`queue`/`processing`/`lanes.d` 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답·설정 메타 열람을 차단. `shared` 는 잠그지 않는 옵트인(기존 umask 기본 권한 유지, 통상 0755). (봇 토큰 `.env` 는 종전대로 항상 0600.)
 - 엔진 stderr 로그(`engine.log`) 마스킹 — transcript 만 마스킹하던 것을 엔진 stderr 캡처 경로에도 라인 단위 시크릿 마스킹을 적용해 토큰·민감 경로가 side channel 로 평문 기록되지 않도록 보강.
 - 방어심화 하드-거부 `hard_deny`(`--hard-deny`/`--safe-defaults`) — 매칭 도구를 **티어 무관하게 즉시 거부**(채널 승인 프롬프트도 없음)하는 레이어. autopass 의 denylist("물어봄")보다 강하며 기본 `acp` 티어에도 적용돼, 파괴적 명령(sudo·rm -rf·git 강제·자격증명 읽기)이 실수로 승인되는 것을 원천 차단. `--safe-defaults` 로 내장 위험 목록을 채우며 대화형 생성 시 기본 켬을 질의. 하드-거부 히트는 transcript 기록 + 채널 통지.
-- `adde doctor` 파일 권한 감사 — 레인별로 `.env`(봇 토큰)가 그룹/기타에서 읽히면(0600 기대) WARN, `file_mode=private` 인데 state 디렉터리가 0700 이 아니면 WARN(+chmod/재시작 조치). `shared` 모드는 의도된 선택이라 경고하지 않음.
+- `adde doctor` 파일 권한 감사 — 레인별로 `.env`(봇 토큰)가 그룹/기타에서 읽히면(0600 기대) WARN, `file_mode=private` 인데 state 디렉터리가 0700 이 아니면 WARN(+chmod/재시작 조치). `shared` 모드는 의도된 선택이라 경고하지 않음. (env·state 는 독립 점검이라 둘 다 느슨하면 둘 다 경고.)
+- denylist·hard_deny 매칭 강화 — 셸 명령 체이닝(`cd /tmp && sudo …`)·파이프·선행 환경변수 대입(`FOO=1 sudo …`)을 세그먼트 분해로 잡아, 전체-문자열 접두 앵커 글롭을 우회하던 위험 하위 명령을 차단(best-effort, 완전한 셸 파서는 아님). 기본 자격증명 저장소 목록 확대(ssh·aws 에 더해 npm·gh·kube·docker·gcloud 토큰/키). 권한 결정 순서(hard-deny→자동허용→채널 승인)를 단일 출처로 고정해 순서 회귀를 테스트로 방지.
 
 ### Added
 
@@ -30,6 +31,8 @@
 - launchd 데몬 PATH 주입 — launchd 는 최소 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)만 주는데 ACP 엔진 어댑터가 `claude` CLI 를 `#!/usr/bin/env node` 로 스폰하므로, node·`claude` 가 그 PATH 에 없어 엔진 핸드셰이크가 30초 타임아웃하고 레인이 기동되지 않던 문제 수정. `adde up` 이 실행 시점의 PATH(node 디렉터리를 앞에 붙여 승계)를 plist `EnvironmentVariables.PATH` 에 구워 넣어 재부팅 후에도 유지(PATH 만, 시크릿 미포함).
 - 데몬 실행 파일 부재 방어 — `pnpm run dev up`(tsx)은 데몬 실행 파일이 존재하지 않는 `src/cli/adde.js` 로 해석돼 데몬이 `MODULE_NOT_FOUND` 로 크래시루프하던 문제를, `adde up` 이 실행 파일 존재를 먼저 확인하고 부재 시 빌드/전역 설치 안내와 함께 명시 거부하도록 보강(launchd 워커는 분리 프로세스라 tsx 트랜스파일 불가). `adde doctor` 도 데몬 진입 파일 존재를 사전 점검(부재 시 WARN + 빌드 안내).
 - 마크다운 동기 충돌 파일(`*.sync-conflict*` 등) 격리 백스톱 — 기존엔 fs.watch 생성 이벤트에만 의존해 이벤트를 놓치면 충돌 파일이 방치될 수 있었음. 2초 폴링 백스톱이 인박스 디렉터리를 직접 스캔해 격리하도록 보강.
+- `adde alias`·`adde init` 별칭 설치 크래시 방어 — 심링크 생성 실패(루트 소유 bin 의 EACCES·동명 비심링크 파일의 EEXIST)가 스택트레이스로 프로세스를 죽이고 `init` 위저드를 레인 생성 전에 중단시키던 문제 수정. 실패한 별칭만 사유와 함께 건너뛰고 흐름을 계속하며, CLI 엔트리포인트에 예기치 못한 예외의 최종 방어선을 추가.
+- 업데이트 알림 semver 비교 — 프리릴리스(예: `x.y.z-rc.1`) 사용자가 동일 core 의 정식 릴리스(`x.y.z`)를 통지받도록 프리릴리스가 정식보다 낮게 정렬되게 수정(종전엔 프리릴리스를 제거·동일 취급해 통지 누락).
 
 ### Changed
 

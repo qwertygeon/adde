@@ -47,15 +47,15 @@ Choose per lane with `perm_tier` (`adde lane add --perm-tier <acp|autopass>` or 
 
 Enabling `--safe-defaults` (reflected in the conf key; the interactive `lane add`/`adde init` asks whether to enable it, default yes) fills hard-deny with the built-in danger list (union with any explicit `--hard-deny`):
 
-`Bash(sudo *)` · `Bash(rm -rf /*)` · `Bash(rm -rf ~*)` · `Bash(rm -rf .*)` · `Bash(git push --force*)` · `Bash(git push -f*)` · `Bash(git reset --hard*)` · `Bash(git clean -fd*)` · `Read(~/.ssh/**)` · `Read(~/.aws/**)`.
+`Bash(sudo *)` · `Bash(rm -rf /*)` · `Bash(rm -rf ~*)` · `Bash(rm -rf .*)` · `Bash(git push --force*)` · `Bash(git push -f*)` · `Bash(git reset --hard*)` · `Bash(git clean -fd*)` · `Read(~/.ssh/**)` · `Read(~/.aws/**)` · `Read(~/.npmrc)` · `Read(~/.config/gh/hosts.yml)` · `Read(~/.kube/config)` · `Read(~/.docker/config.json)` · `Read(~/.config/gcloud/**)`.
 
-A list is just a list, not complete defense (see the shell-chaining limit below) — tune it to your project.
+A list is just a list, not complete defense (see shell chaining below) — tune it to your project.
 
 ## Matching rules and limits
 
 - The match key is the **raw tool name** the engine reports (e.g. `Bash`, `Write`), case-insensitive. A request whose tool name cannot be determined is not auto-allowed and is sent to channel approval (fail-closed).
 - **Patterns** `Tool(glob)` match the representative argument — Bash = command string, Read/Write/Edit = file path, WebFetch = URL. `*` is any string (including path separators), matched against the whole (prefix block `Bash(git push*)`, contains block `Bash(*sudo *)`).
-- **Shell-chaining limit**: matching is against the whole command string, so `echo x && sudo y` won't be caught by a prefix pattern (`sudo *`) — use a contains pattern (`*sudo *`), or for a certain block specify the whole tool (`Bash`).
+- **Shell chaining**: for Bash commands, each chained sub-command (split on `;` `&&` `||` `|` `&` and newline, with leading `VAR=` assignments stripped) is matched too, so a prefix pattern (`sudo *`) catches `echo x && sudo y` and `FOO=1 sudo y`. Matching is best-effort, not a full shell parser (it does not resolve aliases, `eval`, or variable expansion) — for a certain block, specify the whole tool (`Bash`).
 
 ## Permission-drift warning
 

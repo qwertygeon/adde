@@ -359,6 +359,7 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
       stateMode !== null &&
       resolveFileMode(conf.file_mode) === "private" &&
       (stateMode & 0o077) !== 0;
+    // env·state 는 독립 관심사 — 둘 다 느슨하면 둘 다 경고한다(하나가 다른 하나를 가리지 않도록).
     if (looseEnv) {
       checks.push({
         name: t("doctor.perms.name", { lane }),
@@ -366,14 +367,16 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
         detail: t("doctor.perms.envLoose", { mode: octal(envMode) }),
         hint: t("doctor.perms.envHint", { path: paths.envFile }),
       });
-    } else if (looseState) {
+    }
+    if (looseState) {
       checks.push({
         name: t("doctor.perms.name", { lane }),
         level: "WARN",
         detail: t("doctor.perms.stateLoose", { mode: octal(stateMode) }),
         hint: t("doctor.perms.stateHint", { path: paths.stateDir, proj }),
       });
-    } else if (envMode !== null || stateMode !== null) {
+    }
+    if (!looseEnv && !looseState && (envMode !== null || stateMode !== null)) {
       checks.push({
         name: t("doctor.perms.name", { lane }),
         level: "PASS",

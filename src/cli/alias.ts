@@ -20,15 +20,18 @@ export interface AliasDeps {
   commandExists: (name: string) => Promise<boolean>;
 }
 
-export type AliasSkipReason = "exists" | "occupied";
+export type AliasSkipReason = "exists" | "occupied" | "error";
 
 export interface AliasSetupResult {
   /** 새로 만든 별칭. */
   created: string[];
   /** 이미 adde 를 가리키고 있어 그대로 둔 별칭. */
   alreadyLinked: string[];
-  /** 건너뛴 별칭 — exists(PATH 에 동명 명령 존재) / occupied(자리 점유). */
-  skipped: { name: string; reason: AliasSkipReason }[];
+  /**
+   * 건너뛴 별칭 — exists(PATH 에 동명 명령 존재) / occupied(자리 점유) /
+   * error(심링크 생성 실패: EACCES 루트소유 bin·EEXIST 비심링크 파일 등). detail 은 실패 사유.
+   */
+  skipped: { name: string; reason: AliasSkipReason; detail?: string }[];
 }
 
 /** 심링크면 대상 경로, 아니면(부재·일반 파일) null. */
@@ -89,8 +92,18 @@ export async function setupAliases(
       result.skipped.push({ name, reason: "occupied" });
       continue;
     }
-    await symlink(target, linkPath);
-    result.created.push(name);
+    try {
+      await symlink(target, linkPath);
+      result.created.push(name);
+    } catch (err) {
+      // 심링크 실패(EACCES 루트소유 bin·EEXIST 비심링크 파일 등)는 이 별칭만 건너뛴다 —
+      // 옵트인 편의 단계가 alias/init 전체 흐름을 중단시키지 않도록 흡수해 사유로 보고한다.
+      result.skipped.push({
+        name,
+        reason: "error",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
   return result;
 }

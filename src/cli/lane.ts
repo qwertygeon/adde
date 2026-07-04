@@ -73,6 +73,24 @@ const ADD_VALUE_KEYS = new Set([
   "outbox",
 ]);
 
+/**
+ * 대화형 여부 결정 — 명시 `--interactive`, 또는 (`--no-interactive` 아님 && 필드 플래그 없음 && TTY).
+ * 필드 플래그(값 키·`--safe-defaults`·`--token-stdin`)가 하나라도 있으면 스크립트 의도로 보고 비대화형.
+ */
+export function shouldRunInteractive(
+  flags: Record<string, string | true>,
+  isTTY: boolean,
+): boolean {
+  const fieldFlagsGiven =
+    [...ADD_VALUE_KEYS].some((k) => flags[k] !== undefined) ||
+    flags["safe-defaults"] === true ||
+    flags["token-stdin"] === true;
+  return (
+    flags["interactive"] === true ||
+    (flags["no-interactive"] !== true && !fieldFlagsGiven && isTTY === true)
+  );
+}
+
 function flagStr(flags: Record<string, string | true>, key: string): string | undefined {
   const v = flags[key];
   return typeof v === "string" ? v : undefined;
@@ -209,15 +227,7 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     return 1;
   }
 
-  // 대화형 default — TTY 이고 필드 플래그·비대화형 지정이 없으면 대화형으로 동작한다.
-  // 필드 플래그(값 키·--safe-defaults·--token-stdin)나 --no-interactive 는 비대화형(스크립트 호환).
-  const fieldFlagsGiven =
-    [...ADD_VALUE_KEYS].some((k) => flags[k] !== undefined) ||
-    flags["safe-defaults"] === true ||
-    flags["token-stdin"] === true;
-  const wantInteractive =
-    flags["interactive"] === true ||
-    (flags["no-interactive"] !== true && !fieldFlagsGiven && process.stdin.isTTY === true);
+  const wantInteractive = shouldRunInteractive(flags, process.stdin.isTTY === true);
 
   let opts: LaneAddOptions;
   if (wantInteractive) {

@@ -42,6 +42,31 @@ describe("matchesDenylist — 글롭 의미론 (DEC-001/003)", () => {
     );
   });
 
+  it("체이닝된 하위 명령을 세그먼트별로 잡는다 — 접두앵커 우회 차단", () => {
+    // 앵커 글롭 Bash(sudo *)=^sudo .*$ 가 전체 문자열만 보면 놓치던 케이스들.
+    expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "cd /tmp && sudo rm -rf /" })).toBe(
+      true,
+    );
+    expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "x; sudo reboot" })).toBe(true);
+    expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "cat f | sudo tee /etc/x" })).toBe(
+      true,
+    );
+    // 선행 환경변수 대입 제거 후 매칭.
+    expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "FOO=1 sudo make" })).toBe(true);
+    // 명령치환 안의 위험 명령도 세그먼트로 노출.
+    expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "echo $(sudo id)" })).toBe(true);
+  });
+
+  it("세그먼트 매칭이 무해한 문자열을 과오매칭하지 않는다", () => {
+    // sudo 가 실행 토큰이 아니라 인용/인자로 등장하면 매칭 안 함(안전 방향 유지하되 상식적).
+    expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: 'echo "run sudo later"' })).toBe(
+      false,
+    );
+    expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "grep sudo /var/log/x" })).toBe(
+      false,
+    );
+  });
+
   it("* 는 경로 구분자를 포함해 매칭한다 (** 와 동일 — 과매칭=안전 방향)", () => {
     expect(matchesDenylist(["Read(/etc/*)"], "Read", { file_path: "/etc/nginx/conf" })).toBe(true);
   });
@@ -103,6 +128,11 @@ describe("DEFAULT_AUTOPASS_DENYLIST — 내장 기본 denylist", () => {
     expect(matchesDenylist(list, "Bash", { command: "git push --force origin main" })).toBe(true);
     expect(matchesDenylist(list, "Bash", { command: "git reset --hard HEAD~1" })).toBe(true);
     expect(matchesDenylist(list, "Bash", { command: "git clean -fdx" })).toBe(true);
+    // 체이닝된 위험 명령도 기본 목록이 잡는다.
+    expect(matchesDenylist(list, "Bash", { command: "cd /repo && git reset --hard HEAD" })).toBe(
+      true,
+    );
+    expect(matchesDenylist(list, "Bash", { command: "make && sudo rm -rf /" })).toBe(true);
     expect(matchesDenylist(list, "Read", { file_path: `${homedir()}/.ssh/id_rsa` })).toBe(true);
     // 일반 작업은 통과(자동 허용 대상)
     expect(matchesDenylist(list, "Bash", { command: "git push origin feature/x" })).toBe(false);

@@ -84,4 +84,32 @@ describe("setupAliases", () => {
     );
     expect(res.skipped).toEqual([{ name: "ad", reason: "occupied" }]);
   });
+
+  it("심링크 생성 실패(EEXIST 비심링크 파일)는 크래시하지 않고 error 로 건너뛴다", async () => {
+    // 비심링크·비실행 일반 파일이 자리에 있으면 readlinkSafe→null, commandExists→false 라
+    // 두 가드를 통과해 symlink 가 EEXIST 로 throw 한다 — 흡수해 error 사유로 보고해야 한다.
+    fs.writeFileSync(path.join(tmp, "ad"), "plain");
+    fs.chmodSync(path.join(tmp, "ad"), 0o644);
+    const res = await setupAliases(
+      ["ad"],
+      deps(async () => false),
+    );
+    expect(res.created).toEqual([]);
+    expect(res.skipped).toHaveLength(1);
+    expect(res.skipped[0]?.name).toBe("ad");
+    expect(res.skipped[0]?.reason).toBe("error");
+    expect(res.skipped[0]?.detail).toBeTruthy();
+  });
+
+  it("한 별칭이 실패해도 다른 별칭 생성은 계속된다(부분 성공 보존)", async () => {
+    fs.writeFileSync(path.join(tmp, "ad"), "plain"); // ad 는 EEXIST 로 실패
+    fs.chmodSync(path.join(tmp, "ad"), 0o644);
+    const res = await setupAliases(
+      ["ad", "add"],
+      deps(async () => false),
+    );
+    expect(res.created).toEqual(["add"]); // add 는 정상 생성
+    expect(res.skipped.map((s) => s.reason)).toEqual(["error"]);
+    expect(fs.lstatSync(path.join(tmp, "add")).isSymbolicLink()).toBe(true);
+  });
 });

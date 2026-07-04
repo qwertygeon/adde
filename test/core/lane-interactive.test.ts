@@ -1,6 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { collectInteractive } from "../../src/cli/lane.js";
+import { collectInteractive, shouldRunInteractive } from "../../src/cli/lane.js";
 import type { Ask } from "../../src/cli/lane.js";
+
+describe("shouldRunInteractive (대화형 default 디스패치)", () => {
+  it("맨 인자 + TTY 면 대화형", () => {
+    expect(shouldRunInteractive({}, true)).toBe(true);
+  });
+  it("비-TTY 면 대화형 아님(스크립트가 행 걸리지 않음)", () => {
+    expect(shouldRunInteractive({}, false)).toBe(false);
+  });
+  it("--interactive 는 비-TTY 여도 대화형(호출부가 TTY 없으면 오류 처리)", () => {
+    expect(shouldRunInteractive({ interactive: true }, false)).toBe(true);
+  });
+  it("--no-interactive 는 TTY 여도 비대화형", () => {
+    expect(shouldRunInteractive({ "no-interactive": true }, true)).toBe(false);
+  });
+  it("필드 값 플래그가 있으면 TTY 여도 비대화형(스크립트 의도)", () => {
+    expect(shouldRunInteractive({ source: "telegram" }, true)).toBe(false);
+    expect(shouldRunInteractive({ "perm-tier": "acp" }, true)).toBe(false);
+  });
+  it("--safe-defaults·--token-stdin 도 필드 플래그로 취급(비대화형)", () => {
+    expect(shouldRunInteractive({ "safe-defaults": true }, true)).toBe(false);
+    expect(shouldRunInteractive({ "token-stdin": true }, true)).toBe(false);
+  });
+  it("--force 만 있고 TTY 면 여전히 대화형(force 는 필드 플래그 아님)", () => {
+    expect(shouldRunInteractive({ force: true }, true)).toBe(true);
+  });
+  it("--interactive 는 필드 플래그가 있어도 대화형(명시 우선)", () => {
+    expect(shouldRunInteractive({ interactive: true, source: "telegram" }, true)).toBe(true);
+  });
+});
 
 // SC1/SC2: --interactive 가 소스별 필드를 모으고, 토큰은 묻지 않는다(시크릿 비노출).
 
@@ -93,6 +122,49 @@ describe("collectInteractive (007 SC1)", () => {
     };
     const opts = await collectInteractive(ask);
     expect(opts.chat_id).toBe("12345");
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("enum 필드(file_mode)는 유효값이 올 때까지 재질의한다 (B1)", async () => {
+    let calls = 0;
+    const ask: Ask = async (q, def) => {
+      if (q.includes("file_mode")) {
+        calls++;
+        return calls < 2 ? "bogus" : "shared";
+      }
+      return def ?? "";
+    };
+    const opts = await collectInteractive(ask);
+    expect(opts.file_mode).toBe("shared");
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("enum 필드(lang)는 유효값이 올 때까지 재질의한다 (B1)", async () => {
+    let calls = 0;
+    const ask: Ask = async (q, def) => {
+      if (q.includes("lang")) {
+        calls++;
+        return calls < 2 ? "fr" : "ko";
+      }
+      return def ?? "";
+    };
+    const opts = await collectInteractive(ask);
+    expect(opts.lang).toBe("ko");
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("id-csv 필드(allow_from)는 유효값이 올 때까지 재질의한다 (B1)", async () => {
+    let calls = 0;
+    const ask: Ask = async (q, def) => {
+      if (q.includes("source")) return "telegram";
+      if (q.includes("allow_from")) {
+        calls++;
+        return calls < 2 ? "not,numbers" : "111,222";
+      }
+      return def ?? "";
+    };
+    const opts = await collectInteractive(ask);
+    expect(opts.allow_from).toBe("111,222"); // CSV 원문(파싱은 lane-config 가 담당)
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 

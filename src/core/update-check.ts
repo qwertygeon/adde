@@ -35,24 +35,59 @@ interface CacheShape {
 }
 
 /** "1.2.3" → [1,2,3]. 숫자 파트만 비교(프리릴리스 무시 — latest dist-tag 는 안정판). */
-function parseSemver(v: string): number[] | null {
-  const core = (v.trim().replace(/^v/, "").split("-")[0] ?? "").split("+")[0] ?? "";
-  const parts = core.split(".").map((n) => Number(n));
-  if (parts.length === 0 || parts.some((n) => !Number.isInteger(n) || n < 0)) return null;
-  return parts;
+interface Semver {
+  core: number[];
+  /** 프리릴리스 식별자(예: rc.1 → ["rc","1"]). 없으면 빈 배열(= 정식 릴리스, 프리릴리스보다 높음). */
+  pre: string[];
 }
 
-/** a<b → -1, a>b → 1, 같음/비교불가 → 0. */
+function parseSemver(v: string): Semver | null {
+  const noBuild = v.trim().replace(/^v/, "").split("+")[0] ?? "";
+  const dash = noBuild.indexOf("-");
+  const coreStr = dash === -1 ? noBuild : noBuild.slice(0, dash);
+  const preStr = dash === -1 ? "" : noBuild.slice(dash + 1);
+  const core = coreStr.split(".").map((n) => Number(n));
+  if (core.length === 0 || core.some((n) => !Number.isInteger(n) || n < 0)) return null;
+  return { core, pre: preStr === "" ? [] : preStr.split(".") };
+}
+
+/** 프리릴리스 식별자 비교(semver): 숫자<영숫자, 숫자끼리 수치비교, 그 외 사전순, 더 짧은 쪽이 낮음. */
+function comparePre(a: string[], b: string[]): number {
+  // 프리릴리스 없음(정식) > 프리릴리스 있음. 둘 다 없으면 동등.
+  if (a.length === 0 && b.length === 0) return 0;
+  if (a.length === 0) return 1;
+  if (b.length === 0) return -1;
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x === undefined) return -1; // 더 짧은 쪽이 낮음
+    if (y === undefined) return 1;
+    const nx = /^\d+$/.test(x);
+    const ny = /^\d+$/.test(y);
+    if (nx && ny) {
+      const d = Number(x) - Number(y);
+      if (d !== 0) return d < 0 ? -1 : 1;
+    } else if (nx !== ny) {
+      return nx ? -1 : 1; // 순수 숫자 식별자는 영숫자보다 낮은 우선순위
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+/** a<b → -1, a>b → 1, 같음/비교불가 → 0. 프리릴리스는 동일 core 의 정식 릴리스보다 낮다. */
 export function compareSemver(a: string, b: string): number {
   const pa = parseSemver(a);
   const pb = parseSemver(b);
   if (!pa || !pb) return 0;
-  const len = Math.max(pa.length, pb.length);
+  const len = Math.max(pa.core.length, pb.core.length);
   for (let i = 0; i < len; i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    const d = (pa.core[i] ?? 0) - (pb.core[i] ?? 0);
     if (d !== 0) return d < 0 ? -1 : 1;
   }
-  return 0;
+  return comparePre(pa.pre, pb.pre);
 }
 
 async function readCache(path: string): Promise<CacheShape | null> {

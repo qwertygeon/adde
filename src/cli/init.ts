@@ -25,7 +25,11 @@ function printAliasResult(result: AliasSetupResult, binDir: string): void {
   for (const n of result.alreadyLinked)
     process.stdout.write(t("init.aliasAlready", { name: n }) + "\n");
   for (const s of result.skipped)
-    process.stdout.write(t("init.aliasSkipped", { name: s.name }) + "\n");
+    process.stdout.write(
+      (s.reason === "error"
+        ? t("init.aliasFailed", { name: s.name, detail: s.detail ?? "" })
+        : t("init.aliasSkipped", { name: s.name })) + "\n",
+    );
 }
 
 export async function runInit(argv: readonly string[]): Promise<number> {

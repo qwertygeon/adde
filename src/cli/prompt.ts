@@ -16,17 +16,25 @@ export interface Prompter {
   close: () => void;
 }
 
+/** 주입 가능한 입출력(테스트용). 미지정 시 process.stdin/stdout. */
+export interface PrompterDeps {
+  input?: NodeJS.ReadableStream;
+  output?: NodeJS.WritableStream;
+}
+
 /** process.stdin/stdout 에 붙는 대화형 프롬프터를 만든다(TTY 에서 사용). */
-export function createPrompter(): Prompter {
+export function createPrompter(deps: PrompterDeps = {}): Prompter {
+  const input = deps.input ?? process.stdin;
+  const sink = deps.output ?? process.stdout;
   let muted = false;
   // 뮤트 가능 출력 — askSecret 동안 readline 의 키 에코를 삼킨다.
   const out = new Writable({
     write(chunk: Buffer, _enc, cb) {
-      if (!muted) process.stdout.write(chunk);
+      if (!muted) sink.write(chunk);
       cb();
     },
   });
-  const rl = readline.createInterface({ input: process.stdin, output: out, terminal: true });
+  const rl = readline.createInterface({ input, output: out, terminal: true });
 
   const ask: Ask = async (question, def) => {
     const a = (await rl.question(`${question}${def ? ` [${def}]` : ""}: `)).trim();
@@ -34,15 +42,15 @@ export function createPrompter(): Prompter {
   };
 
   const askSecret = async (question: string): Promise<string> => {
-    // 프롬프트는 뮤트 전에 직접 출력하고, 입력 구간만 뮤트해 에코를 억제.
-    process.stdout.write(`${question}: `);
+    // 프롬프트는 뮤트 전에 출력하고, 입력 구간만 뮤트해 에코를 억제.
+    sink.write(`${question}: `);
     muted = true;
     try {
       const a = await rl.question("");
       return a.trim();
     } finally {
       muted = false;
-      process.stdout.write("\n");
+      sink.write("\n");
     }
   };
 

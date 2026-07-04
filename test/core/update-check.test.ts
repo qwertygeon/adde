@@ -35,9 +35,21 @@ describe("compareSemver", () => {
     expect(compareSemver("v0.1.3", "0.1.3")).toBe(0);
   });
 
-  it("프리릴리스·빌드 메타를 무시한다", () => {
-    expect(compareSemver("0.1.3-rc1", "0.1.3")).toBe(0);
+  it("빌드 메타는 무시한다", () => {
     expect(compareSemver("0.1.3+build", "0.1.3")).toBe(0);
+    expect(compareSemver("0.1.3+build.1", "0.1.3+build.2")).toBe(0);
+  });
+
+  it("프리릴리스는 동일 core 의 정식 릴리스보다 낮다(rc 사용자에게 stable 통지)", () => {
+    expect(compareSemver("0.1.3-rc1", "0.1.3")).toBe(-1);
+    expect(compareSemver("0.1.3", "0.1.3-rc1")).toBe(1);
+    // 프리릴리스끼리: 수치·사전순, 더 짧은 쪽이 낮음.
+    expect(compareSemver("0.1.3-rc.1", "0.1.3-rc.2")).toBe(-1);
+    expect(compareSemver("0.1.3-rc.2", "0.1.3-rc.10")).toBe(-1);
+    expect(compareSemver("0.1.3-alpha", "0.1.3-beta")).toBe(-1);
+    expect(compareSemver("0.1.3-rc", "0.1.3-rc.1")).toBe(-1);
+    // core 가 다르면 프리릴리스와 무관하게 core 우선.
+    expect(compareSemver("0.1.4-rc1", "0.1.3")).toBe(1);
   });
 
   it("파싱 불가 시 0(비교 불가)", () => {
@@ -119,6 +131,23 @@ describe("checkForUpdate", () => {
       optOut: undefined,
     });
     expect(notice).toBeNull();
+  });
+
+  it("네트워크 비허용이라도 오래된 캐시값으로 안내는 낸다(네트워크는 안 침)", async () => {
+    fs.writeFileSync(
+      path.join(tmpBase, ".update-check.json"),
+      JSON.stringify({ checkedAt: 1000, latest: "0.2.0" }),
+    );
+    const notice = await checkForUpdate({
+      base: tmpBase,
+      currentVersion: "0.1.3",
+      allowNetwork: false,
+      fetchImpl: failFetch, // 호출되면 throw — 캐시 stale 이어도 네트워크 안 침을 방증
+      now: 999999,
+      ttlMs: 100, // 캐시 만료(stale)
+      optOut: undefined,
+    });
+    expect(notice).toEqual({ current: "0.1.3", latest: "0.2.0" });
   });
 
   it("조회 실패(오프라인)는 흡수하고 null", async () => {

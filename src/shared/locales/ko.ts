@@ -264,6 +264,7 @@ lane add 옵션:
     aliasCreated: "  ✔ 별칭 생성: {{name}} → {{dir}}",
     aliasAlready: "  = 별칭이 이미 adde 를 가리킴: {{name}}",
     aliasSkipped: "  ✘ {{name}} 건너뜀 — 동명 명령이 PATH 에 이미 존재합니다",
+    aliasFailed: "  ✘ 별칭 {{name}} 생성 실패 — {{detail}}",
     projPrompt: "프로젝트 이름",
     projRetry: "프로젝트 이름 (영숫자/_/- 만)",
     lanePrompt: "레인 이름",

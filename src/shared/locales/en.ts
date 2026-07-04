@@ -264,6 +264,7 @@ lane add options:
     aliasCreated: "  ✔ alias created: {{name}} → {{dir}}",
     aliasAlready: "  = alias already points to adde: {{name}}",
     aliasSkipped: "  ✘ skipped {{name}} — a command with that name already exists in PATH",
+    aliasFailed: "  ✘ could not create alias {{name}} — {{detail}}",
     projPrompt: "project name",
     projRetry: "project name (letters/digits/_/- only)",
     lanePrompt: "lane name",

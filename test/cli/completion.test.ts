@@ -46,6 +46,15 @@ describe("completionScript", () => {
     for (const f of LANE_ADD_FLAGS) expect(s).toContain(f);
   });
 
+  it("lane add 레인이름 슬롯에서 옵션 플래그를 제안하지 않는다 (bash·zsh 정합)", () => {
+    // bash: cword 4(레인이름) 는 -로 시작할 때만 플래그, 그 전엔 자유 입력.
+    const bash = completionScript("bash") as string;
+    expect(bash).toContain('[ "$cword" -ge 5 ] || [ "${cur:0:1}" = "-" ]');
+    // zsh: CURRENT 5(레인이름)에서 -로 시작하지 않으면 제안 억제(bash 와 동일 동작).
+    const zsh = completionScript("zsh") as string;
+    expect(zsh).toContain('if (( CURRENT == 5 )) && [[ "${words[5]}" != -* ]]; then return; fi');
+  });
+
   it("두 지원 셸 모두 스크립트를 생성한다", () => {
     for (const shell of SUPPORTED_SHELLS) {
       expect(completionScript(shell)).toBeTruthy();

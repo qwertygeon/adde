@@ -20,14 +20,15 @@
 
 먼저 `adde doctor <proj>` 를 실행해 `FAIL`/`WARN` 을 확인하세요.
 
-| 증상                                 | 원인                  | 조치                                                                                    |
-| ------------------------------------ | --------------------- | --------------------------------------------------------------------------------------- |
-| `doctor` 가 ACP 어댑터 바이너리 FAIL | 엔진 어댑터 미설치    | `pnpm install`(예: `@zed-industries/claude-code-acp` 설치) 후 재시도                    |
-| Node 버전 FAIL                       | Node < 22             | Node 22 이상으로 업그레이드                                                             |
-| `lanes.d 에 conf 없음`               | 레인 미생성           | `adde lane add <proj> <lane> ...`(또는 `--interactive`)로 생성                          |
-| 토큰 FAIL (telegram)                 | `.env` 에 토큰 없음   | [Telegram 가이드 4단계](telegram.md#4-봇-토큰-저장)로 토큰 저장                         |
-| cwd FAIL/경고                        | 작업 폴더 없음        | 폴더를 만들거나 conf 의 `cwd` 수정                                                      |
-| 핸드셰이크 무응답으로 기동 실패      | 엔진이 응답 없이 멈춤 | 엔진 바이너리·헬스 확인 후 `adde up` 재시도(ADDE 는 30초 후 타임아웃하고 child 를 정리) |
+| 증상                                 | 원인                                     | 조치                                                                                                                                                                                                                                  |
+| ------------------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `doctor` 가 ACP 어댑터 바이너리 FAIL | 엔진 어댑터 미설치                       | `pnpm install`(예: `@zed-industries/claude-code-acp` 설치) 후 재시도                                                                                                                                                                  |
+| Node 버전 FAIL                       | Node < 22                                | Node 22 이상으로 업그레이드                                                                                                                                                                                                           |
+| `lanes.d 에 conf 없음`               | 레인 미생성                              | `adde lane add <proj> <lane> ...`(또는 `--interactive`)로 생성                                                                                                                                                                        |
+| 토큰 FAIL (telegram)                 | `.env` 에 토큰 없음                      | [Telegram 가이드 4단계](telegram.md#4-봇-토큰-저장)로 토큰 저장                                                                                                                                                                       |
+| cwd FAIL/경고                        | 작업 폴더 없음                           | 폴더를 만들거나 conf 의 `cwd` 수정                                                                                                                                                                                                    |
+| 핸드셰이크 무응답으로 기동 실패      | 엔진이 응답 없이 멈춤                    | 엔진 바이너리·헬스 확인 후 `adde up` 재시도(ADDE 는 30초 후 타임아웃하고 child 를 정리). `adde logs <proj> <lane> --engine` 에 `env: node: No such file or directory` 가 보이면 PATH 문제 — 아래 "데몬으로 레인이 안 뜸" 참조         |
+| 데몬은 등록됐는데 레인이 안 뜸       | 빌드 없이 `pnpm run dev up` 로 데몬 기동 | 데몬 워커는 launchd 가 띄우는 분리 프로세스라 tsx(dev)로는 안 됩니다. `pnpm build` 후 `node dist/cli/adde.js up <proj>` 또는 전역 설치(`npm i -g .`) 후 `adde up <proj>` 로 기동하세요(빌드본이 없으면 `adde up` 이 안내와 함께 거부) |
 
 ## 레인이 dead 로 표시됨
 

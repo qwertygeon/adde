@@ -136,19 +136,41 @@ describe("renderPlist (SC-007 / SC-013)", () => {
     expect(xml).toContain("com.qwertygeon.adde.myproj");
   });
 
-  it("EnvironmentVariables 키 미포함 (시크릿 주입 0)", () => {
+  it("pathEnv 미지정 시 EnvironmentVariables 키 미포함(구 동작)", () => {
     const xml = renderPlist("myproj", opts);
     expect(xml).not.toContain("EnvironmentVariables");
+  });
+
+  it("pathEnv 지정 시 EnvironmentVariables.PATH 만 주입(토큰 등 시크릿 없음)", () => {
+    const xml = renderPlist("myproj", { ...opts, pathEnv: "/opt/homebrew/bin:/usr/bin" });
+    expect(xml).toContain("<key>EnvironmentVariables</key>");
+    expect(xml).toContain("<key>PATH</key>");
+    expect(xml).toContain("<string>/opt/homebrew/bin:/usr/bin</string>");
     expect(xml).not.toContain("TELEGRAM_BOT_TOKEN");
+    // 시크릿(봇 토큰) 패턴은 여전히 미검출
+    expect(xml).not.toMatch(/[0-9]+:[A-Za-z0-9_-]{35,}/);
+  });
+
+  it("pathEnv 의 XML 특수문자를 이스케이프한다", () => {
+    const xml = renderPlist("myproj", { ...opts, pathEnv: "/a&b/bin:/c<d" });
+    expect(xml).toContain("/a&amp;b/bin:/c&lt;d");
+    expect(xml).not.toContain("/a&b/bin");
   });
 });
 
 // ── loadDaemon ────────────────────────────────────────────────────────────
 
 describe("loadDaemon", () => {
+  // 존재하는 데몬 실행 파일(가드 통과용) — tmpHome 에 더미 생성.
+  function makeAddeBin(): string {
+    const bin = path.join(tmpHome, "adde.js");
+    fs.writeFileSync(bin, "// dummy");
+    return bin;
+  }
+
   it("loadDaemon_fake_exec_load_argv_검증", async () => {
     const { exec, calls } = makeFakeExec("ok");
-    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin", addeBin: makeAddeBin() };
 
     await loadDaemon("myproj", deps);
 
@@ -161,7 +183,7 @@ describe("loadDaemon", () => {
 
   it("loadDaemon_exit_nonzero_throw_actionable", async () => {
     const { exec } = makeFakeExec("fail");
-    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin", addeBin: makeAddeBin() };
 
     // exit code 비정상 시 actionable 메시지와 함께 throw — NFR-003
     await expect(loadDaemon("myproj", deps)).rejects.toThrow();
@@ -169,7 +191,7 @@ describe("loadDaemon", () => {
 
   it("loadDaemon 성공 시 plist 파일이 LaunchAgents 에 생성된다", async () => {
     const { exec } = makeFakeExec("ok");
-    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin" };
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin", addeBin: makeAddeBin() };
 
     await loadDaemon("myproj", deps);
 
@@ -180,6 +202,60 @@ describe("loadDaemon", () => {
       "com.qwertygeon.adde.myproj.plist",
     );
     expect(fs.existsSync(expectedPlist)).toBe(true);
+  });
+
+  it("데몬 실행 파일이 없으면 actionable throw(dev/tsx 데몬 방어)", async () => {
+    const { exec, calls } = makeFakeExec("ok");
+    const missingBin = path.join(tmpHome, "does-not-exist", "adde.js");
+    const deps: LaunchdDeps = { exec, home: tmpHome, platform: "darwin", addeBin: missingBin };
+
+    // 실행 파일 부재 → load 시도 전에 throw, plist·launchctl 미접촉
+    await expect(loadDaemon("myproj", deps)).rejects.toThrow();
+    expect(calls.find((c) => c[0] === "load")).toBeUndefined();
+    const plist = path.join(tmpHome, "Library", "LaunchAgents", "com.qwertygeon.adde.myproj.plist");
+    expect(fs.existsSync(plist)).toBe(false);
+  });
+
+  it("생성된 plist 에 데몬 PATH(EnvironmentVariables) 가 주입된다", async () => {
+    const { exec } = makeFakeExec("ok");
+    const deps: LaunchdDeps = {
+      exec,
+      home: tmpHome,
+      platform: "darwin",
+      addeBin: makeAddeBin(),
+      pathEnv: "/opt/homebrew/bin:/usr/bin",
+    };
+
+    await loadDaemon("myproj", deps);
+
+    const plist = fs.readFileSync(
+      path.join(tmpHome, "Library", "LaunchAgents", "com.qwertygeon.adde.myproj.plist"),
+      "utf8",
+    );
+    expect(plist).toContain("<key>EnvironmentVariables</key>");
+    expect(plist).toContain("<string>/opt/homebrew/bin:/usr/bin</string>");
+  });
+
+  it("pathEnv 미주입 시 node 디렉터리가 PATH 앞에 온다", async () => {
+    const { exec } = makeFakeExec("ok");
+    const deps: LaunchdDeps = {
+      exec,
+      home: tmpHome,
+      platform: "darwin",
+      addeBin: makeAddeBin(),
+      nodeBin: "/custom/node/bin/node",
+      // pathEnv 미지정 → process.env.PATH + dirname(nodeBin)
+    };
+
+    await loadDaemon("myproj", deps);
+
+    const plist = fs.readFileSync(
+      path.join(tmpHome, "Library", "LaunchAgents", "com.qwertygeon.adde.myproj.plist"),
+      "utf8",
+    );
+    const m = plist.match(/<key>PATH<\/key>\s*<string>([^<]*)<\/string>/);
+    expect(m).not.toBeNull();
+    expect(m![1]!.split(":")[0]).toBe("/custom/node/bin");
   });
 });
 

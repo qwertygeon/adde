@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- launchd 데몬 PATH 주입 — launchd 는 최소 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)만 주는데 ACP 엔진 어댑터가 `claude` CLI 를 `#!/usr/bin/env node` 로 스폰하므로, node·`claude` 가 그 PATH 에 없어 엔진 핸드셰이크가 30초 타임아웃하고 레인이 기동되지 않던 문제 수정. `adde up` 이 실행 시점의 PATH(node 디렉터리를 앞에 붙여 승계)를 plist `EnvironmentVariables.PATH` 에 구워 넣어 재부팅 후에도 유지(PATH 만, 시크릿 미포함).
+- 데몬 실행 파일 부재 방어 — `pnpm run dev up`(tsx)은 데몬 실행 파일이 존재하지 않는 `src/cli/adde.js` 로 해석돼 데몬이 `MODULE_NOT_FOUND` 로 크래시루프하던 문제를, `adde up` 이 실행 파일 존재를 먼저 확인하고 부재 시 빌드/전역 설치 안내와 함께 명시 거부하도록 보강(launchd 워커는 분리 프로세스라 tsx 트랜스파일 불가).
 - 마크다운 동기 충돌 파일(`*.sync-conflict*` 등) 격리 백스톱 — 기존엔 fs.watch 생성 이벤트에만 의존해 이벤트를 놓치면 충돌 파일이 방치될 수 있었음. 2초 폴링 백스톱이 인박스 디렉터리를 직접 스캔해 격리하도록 보강.
 
 ### Changed

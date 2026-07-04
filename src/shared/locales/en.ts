@@ -288,6 +288,11 @@ lane add options:
       action:
         "Check registration state with adde doctor {{proj}}, or unload the existing registration first (adde down {{proj}}).",
     },
+    binMissing: {
+      situation: "daemon entry not found: {{path}}",
+      action:
+        "Daemon mode needs a build — run `pnpm build` and start from dist (`node dist/cli/adde.js up <proj>`), or install globally (`npm i -g .`) and run `adde up <proj>`. `pnpm run dev up` cannot start the daemon (launchd spawns a detached process that tsx cannot transpile).",
+    },
   },
   queue: {
     claimFail: {

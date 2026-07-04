@@ -286,6 +286,11 @@ lane add 옵션:
       action:
         "adde doctor {{proj}} 로 등록 상태를 점검하거나, 기존 등록을 먼저 해제하세요 (adde down {{proj}}).",
     },
+    binMissing: {
+      situation: "데몬 실행 파일을 찾을 수 없습니다: {{path}}",
+      action:
+        "데몬 모드는 빌드가 필요합니다 — `pnpm build` 후 dist 로 실행(`node dist/cli/adde.js up <proj>`)하거나 전역 설치(`npm i -g .`) 후 `adde up <proj>` 하세요. `pnpm run dev up` 으로는 데몬을 띄울 수 없습니다(launchd 가 분리 프로세스를 스폰하므로 tsx 트랜스파일이 적용되지 않습니다).",
+    },
   },
   queue: {
     claimFail: {

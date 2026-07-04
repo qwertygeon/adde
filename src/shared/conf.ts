@@ -30,6 +30,16 @@ export interface LaneConf {
   outbox?: string;
   /** 레인별 채널 메시지 로케일(en|ko). 미지정 시 전역 로케일. */
   lang?: string;
+  /**
+   * telegram 인바운드 발신자 허용 목록(CSV, 숫자 user/chat id). chat_id 와 합쳐 authorizedIds 구성.
+   * 그룹/멀티 발신자 확장용. 미지정+chat_id 부재 시 인바운드 fail-closed(전부 무시).
+   */
+  allow_from?: string;
+  /**
+   * 상태·출력·큐 디렉터리 권한 모드. private=0700(기본, 소유자 전용) / shared=0755(다중 사용자 열람 허용).
+   * 미지정 시 private(secure-by-default).
+   */
+  file_mode?: string;
 }
 
 export function parseLaneConf(text: string): LaneConf {
@@ -76,7 +86,17 @@ export function parseLaneConf(text: string): LaneConf {
 }
 
 /** parse/serialize 가 공유하는 optional 키 목록(순서 = 직렬화 순서). */
-const OPTIONAL_KEYS = ["cwd", "chat_id", "root", "inbox", "approvals", "outbox", "lang"] as const;
+const OPTIONAL_KEYS = [
+  "cwd",
+  "chat_id",
+  "root",
+  "inbox",
+  "approvals",
+  "outbox",
+  "lang",
+  "allow_from",
+  "file_mode",
+] as const;
 
 /**
  * LaneConf → .conf INI 텍스트 직렬화. parseLaneConf 의 역연산.

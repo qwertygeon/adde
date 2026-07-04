@@ -53,6 +53,8 @@ const ADD_VALUE_KEYS = new Set([
   "allowlist",
   "denylist",
   "chat-id",
+  "allow-from",
+  "file-mode",
   "lang",
   "root",
   "inbox",
@@ -113,6 +115,8 @@ export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
   if (source === "telegram") {
     const chatId = await ask(t("lane.prompt.chatId"), "");
     if (chatId) opts.chat_id = chatId;
+    const allowFrom = await ask(t("lane.prompt.allowFrom"), "");
+    if (allowFrom) opts.allow_from = allowFrom;
   } else {
     const root = await ask(t("lane.prompt.root"), "");
     if (root) opts.root = root;
@@ -123,6 +127,9 @@ export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
     const outbox = await ask(t("lane.prompt.outbox"), "");
     if (outbox) opts.outbox = outbox;
   }
+
+  const fileMode = (await ask(t("lane.prompt.fileMode"), "private")).toLowerCase();
+  if (fileMode && fileMode !== "private") opts.file_mode = fileMode;
 
   return opts;
 }
@@ -175,6 +182,10 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     if (lang !== undefined) opts.lang = lang;
     const chatId = flagStr(flags, "chat-id");
     if (chatId !== undefined) opts.chat_id = chatId;
+    const allowFrom = flagStr(flags, "allow-from");
+    if (allowFrom !== undefined) opts.allow_from = allowFrom;
+    const fileMode = flagStr(flags, "file-mode");
+    if (fileMode !== undefined) opts.file_mode = fileMode;
     const root = flagStr(flags, "root");
     if (root !== undefined) opts.root = root;
     const inbox = flagStr(flags, "inbox");

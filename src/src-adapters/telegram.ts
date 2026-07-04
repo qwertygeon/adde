@@ -80,6 +80,11 @@ export interface TelegramConfig {
   paths: LanePaths;
   /** 회신·권한 프롬프트 대상 chat id (conf chat_id). 미지정 시 렌더 비활성. */
   chatId?: number | undefined;
+  /**
+   * 인바운드·권한 콜백을 허용할 발신자 id 집합(chat_id ∪ allow_from). 비면 fail-closed(전부 무시).
+   * message 는 chat.id 또는 from.id 가, callback 은 from.id 또는 chat.id 가 이 집합에 있어야 처리한다.
+   */
+  authorizedIds?: readonly number[] | undefined;
   /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요. */
   onInbound?: (() => void) | undefined;
   /** 채널 메시지 로케일(LaneConf.lang). 미지정 시 전역 로케일. */
@@ -167,6 +172,28 @@ async function callBotApi(
   }
 }
 
+/**
+ * 발신자 인증 판정(순수) — 후보 id 중 하나라도 허용 집합에 있으면 true.
+ * 허용 집합이 비면 항상 false(fail-closed — 미설정 시 전 인바운드 거부).
+ * message 후보=[chat.id, from.id], callback 후보=[from.id, chat.id].
+ */
+export function isAuthorizedSender(
+  authorized: ReadonlySet<number>,
+  candidates: readonly (number | undefined)[],
+): boolean {
+  if (authorized.size === 0) return false;
+  return candidates.some((id) => id !== undefined && authorized.has(id));
+}
+
+/**
+ * chatId 를 자기 인증 앵커로 병합할지 결정 — 개인 chat(양수 id = 그 사용자)만 반환, 그룹/채널(음수)은
+ * undefined(회신 대상일 뿐 멤버 인증 아님). Telegram 규약: 개인 chat id 는 양수, 그룹은 음수.
+ * 그룹 chat.id 를 인증 집합에 넣으면 멤버 누구나 통과해 allow_from 멤버 제한이 무력화되므로 제외한다.
+ */
+export function selfAuthorizedChatId(chatId: number | undefined): number | undefined {
+  return chatId !== undefined && chatId > 0 ? chatId : undefined;
+}
+
 export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   const tl = tFor(cfg.lang);
   let token: string | null = null;
@@ -178,6 +205,27 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   // enqueue 연속 실패 카운터 — 성공 시 0 리셋, 임계 도달 시 1회 알림.
   let consecutiveEnqueueFailures = 0;
   const callbackHandlers: GateDecisionCallback[] = [];
+
+  // 인바운드/콜백 인증 — 허용 발신자 집합(chat_id ∪ allow_from). 비면 fail-closed.
+  // chatId 는 양수(개인 chat = 그 사용자 id)일 때만 자기 인증에 포함(방어적 병합).
+  // 음수 chatId(그룹/채널)는 회신 대상일 뿐 인증 앵커가 아니다 — 그룹 멤버는 allow_from 으로만
+  // 인증한다(그룹 chat.id 로 blanket 허용하면 멤버 제한이 무력화됨. Telegram 규약: 개인 chat id 는 양수·그룹은 음수).
+  const selfAuth = selfAuthorizedChatId(cfg.chatId);
+  const authorized = new Set<number>([
+    ...(cfg.authorizedIds ?? []),
+    ...(selfAuth !== undefined ? [selfAuth] : []),
+  ]);
+  // 로그 폭주 방지: 미허가 발신자당 1회, 미설정 경고 1회만 남긴다.
+  const warnedSenders = new Set<number>();
+  let warnedNoAuth = false;
+
+  /** 미허가 발신자 로그를 발신자별 1회로 스로틀. */
+  function warnUnauthorized(from: number | undefined, chat: number | undefined): void {
+    const key = from ?? chat ?? -1;
+    if (warnedSenders.has(key)) return;
+    warnedSenders.add(key);
+    console.warn(t("log.telegram.unauthorizedMessage", { from: from ?? "?", chat: chat ?? "?" }));
+  }
 
   async function getToken(): Promise<string> {
     if (!token) {
@@ -295,6 +343,18 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
           offset = update.update_id + 1;
 
           if (update.message?.text) {
+            // 인바운드 인증 — 허용 발신자(chat_id ∪ allow_from)만 큐에 넣는다.
+            // 미허가/미설정은 무시(호스트 실행 세션 프롬프트 주입 차단). fail-closed.
+            const msg = update.message;
+            if (!isAuthorizedSender(authorized, [msg.chat.id, msg.from?.id])) {
+              if (authorized.size === 0 && !warnedNoAuth) {
+                warnedNoAuth = true;
+                console.warn(t("log.telegram.noAuthConfigured"));
+              } else if (authorized.size > 0) {
+                warnUnauthorized(msg.from?.id, msg.chat.id);
+              }
+              continue;
+            }
             const control = await parseControlCommand(update.message.text);
             const envelope = normalizeMessage(
               update.message,
@@ -338,9 +398,11 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
                 );
               });
 
-              // callback_data 검증 — allow/deny 외 값은 무시·로그(타입 어설션 우회 차단).
-              // 미디스패치 시 게이트는 타임아웃으로 deny(fail-closed).
-              if (rawDecision !== "allow" && rawDecision !== "deny") {
+              // 권한 콜백 인증 — 허용 발신자만 승인/거부 반영(미허가는 무시, 게이트는 타임아웃 deny).
+              if (!isAuthorizedSender(authorized, [cq.from?.id, cq.message?.chat?.id])) {
+                console.warn(t("log.telegram.unauthorizedCallback", { from: cq.from?.id ?? "?" }));
+              } else if (rawDecision !== "allow" && rawDecision !== "deny") {
+                // callback_data 검증 — allow/deny 외 값은 무시·로그(타입 어설션 우회 차단).
                 console.warn(t("log.telegram.unknownCallback", { decision: rawDecision }));
               } else {
                 for (const handler of callbackHandlers) {

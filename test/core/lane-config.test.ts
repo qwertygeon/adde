@@ -303,3 +303,82 @@ describe("laneAdd — denylist 패턴·기본값 (006)", () => {
     expect(res.warnings.some((w) => w.includes("경로가 겹칩니다"))).toBe(false);
   });
 });
+
+describe("인바운드 인증(allow_from) + 파일 권한(file_mode)", () => {
+  it("allow_from 를 conf 에 기록하고 round-trip 한다", async () => {
+    const res = await laneAdd("proj", "af", { base, chat_id: "111", allow_from: "222,333" });
+    expect(res.conf.allow_from).toBe("222,333");
+    const reparsed = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(reparsed.allow_from).toBe("222,333");
+  });
+
+  it("allow_from 항목이 숫자가 아니면 거부한다", async () => {
+    await expect(
+      laneAdd("proj", "afbad", { base, chat_id: "1", allow_from: "222,abc" }),
+    ).rejects.toThrow(LaneConfigError);
+  });
+
+  it("allow_from 는 telegram 전용 — markdown 이면 거부한다", async () => {
+    await expect(
+      laneAdd("proj", "afmd", { base, source: "markdown", root: base, allow_from: "222" }),
+    ).rejects.toThrow(LaneConfigError);
+  });
+
+  it("chat_id·allow_from 둘 다 없는 telegram 레인은 fail-closed 경고를 낸다", async () => {
+    const res = await laneAdd("proj", "noauth", { base });
+    expect(res.warnings.some((w) => w.includes("fail-closed"))).toBe(true);
+  });
+
+  it("개인 chat_id(양수)가 있으면 인증 경고가 없다 (자기 chat 자동 인증)", async () => {
+    const res = await laneAdd("proj", "hasauth", { base, chat_id: "555" });
+    expect(res.warnings.some((w) => w.includes("fail-closed"))).toBe(false);
+  });
+
+  it("그룹 chat_id(음수)만 있고 allow_from 없으면 여전히 인증 경고 (멤버 미인증)", async () => {
+    const res = await laneAdd("proj", "grpnoauth", { base, chat_id: "-1001234567890" });
+    expect(res.warnings.some((w) => w.includes("fail-closed"))).toBe(true);
+  });
+
+  it("그룹 chat_id + allow_from 이면 경고 없음 (멤버 명시 인증)", async () => {
+    const res = await laneAdd("proj", "grpauth", {
+      base,
+      chat_id: "-1001234567890",
+      allow_from: "111,222",
+    });
+    expect(res.warnings.some((w) => w.includes("fail-closed"))).toBe(false);
+  });
+
+  it("file_mode 를 conf 에 기록한다 (shared 명시)", async () => {
+    const res = await laneAdd("proj", "fm", { base, chat_id: "1", file_mode: "shared" });
+    expect(res.conf.file_mode).toBe("shared");
+  });
+
+  it("file_mode 미지정 시 conf 에 쓰지 않는다 (기본 private 은 부재로 표현)", async () => {
+    const res = await laneAdd("proj", "fmdef", { base, chat_id: "1" });
+    expect(res.conf.file_mode).toBeUndefined();
+  });
+
+  it("file_mode 가 허용값(private|shared) 밖이면 거부한다", async () => {
+    await expect(
+      laneAdd("proj", "fmbad", { base, chat_id: "1", file_mode: "world" }),
+    ).rejects.toThrow(LaneConfigError);
+  });
+
+  it("private(기본)로 토큰 기록 시 state 디렉터리를 0700 으로 잠근다", async () => {
+    const res = await laneAdd("proj", "tokpriv", { base, chat_id: "1", token: "1:abc" });
+    const stateDir = path.dirname(res.envPath as string);
+    expect(fs.statSync(stateDir).mode & 0o777).toBe(0o700);
+  });
+
+  it("shared 로 토큰 기록 시 state 디렉터리 권한을 조이지 않는다", async () => {
+    const res = await laneAdd("proj", "tokshared", {
+      base,
+      chat_id: "1",
+      file_mode: "shared",
+      token: "1:abc",
+    });
+    const stateDir = path.dirname(res.envPath as string);
+    // shared 는 no-op — 0700 이 아니어야 한다(기본 umask 권한 유지).
+    expect(fs.statSync(stateDir).mode & 0o777).not.toBe(0o700);
+  });
+});

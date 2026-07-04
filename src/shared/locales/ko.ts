@@ -58,7 +58,9 @@ lane add 옵션:
   --denylist <항목,...>         autopass 에서 채널 승인으로 폴백할 도구·패턴
                                 (예: "Bash,Write(/etc/*)" · 미지정 시 내장 기본 목록: sudo·rm -rf·git 강제 변경·자격증명 읽기 차단)
   --lang <en|ko>                이 레인의 채널 메시지 로케일 (기본: 전역 로케일)
-  --chat-id <id>                telegram 회신 대상
+  --chat-id <id>                telegram 회신 대상(해당 chat 인바운드도 허용)
+  --allow-from <ids>            추가 허용 인바운드 발신자 id(콤마 구분 user/chat id)
+  --file-mode <private|shared>  state/out/queue 디렉터리 권한(기본 private=0700 소유자 전용; shared=umask 기본 유지, 통상 타 사용자 열람 가능)
   --token-stdin                 telegram 봇 토큰을 stdin 에서 읽어 .env(0600) 기록
   --root <abs-path>             markdown 루트(예: Obsidian vault)
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown 노트 경로
@@ -69,6 +71,7 @@ lane add 옵션:
     cmdError: "[adde {{cmd}}] 오류: {{detail}}",
     laneError: "[adde lane] {{detail}}",
     unknownSub: "알 수 없는 lane 서브커맨드: {{sub}}",
+    unknownCmd: "알 수 없는 명령: {{cmd}}",
   },
   run: {
     laneStartFailed: {
@@ -126,7 +129,10 @@ lane add 옵션:
       allowlist: "allowlist (콤마 구분, 없으면 비움)",
       denylist: "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
       cwd: "cwd (레인 작업 폴더 절대경로, 없으면 비움)",
-      chatId: "chat_id (회신 대상, 없으면 비움)",
+      chatId: "chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움)",
+      allowFrom: "allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움)",
+      fileMode:
+        "file_mode (private=소유자 전용 0700 / shared=umask 기본 유지, 통상 타 사용자 열람)",
       root: "root (markdown 루트 절대경로)",
       inbox: "inbox (root 상대)",
       approvals: "approvals (root 상대, 없으면 기본)",
@@ -221,6 +227,8 @@ lane add 옵션:
         "[경고] allowlist 와 denylist 에 같은 도구가 있습니다: {{tools}} — denylist 가 우선하여 채널 승인을 거칩니다.\n  ↳ 조치: 의도가 아니라면 한쪽에서 제거하세요.",
       badLang:
         '[경고] lang "{{lang}}" 은 지원 로케일({{supported}})이 아닙니다 — 전역 로케일이 적용됩니다.\n  ↳ 조치: 오타라면 conf 의 lang 을 수정하세요.',
+      telegramNoAuth:
+        "[경고] telegram 레인에 허용 인바운드 발신자가 없습니다 — 모든 인바운드가 거부됩니다(fail-closed). 개인 chat_id 는 자기 인증되지만, 그룹 chat_id(음수)는 회신 대상일 뿐 멤버를 인증하지 않습니다.\n  ↳ 조치: --chat-id <본인 개인 chat id> 설정, 및/또는 --allow-from <id들> 로 멤버 id 를 지정하세요.",
     },
     err: {
       emptyIdent: "{{kind}} 가 비어있습니다",
@@ -228,6 +236,9 @@ lane add 옵션:
       badSource: 'source "{{source}}" 미지원 — {{supported}} 중 하나',
       badChatId: 'chat_id "{{chatId}}" 가 숫자가 아닙니다',
       tokenOnlyTelegram: "token 은 source=telegram 레인에서만 사용합니다",
+      allowFromOnlyTelegram: "allow_from 은 source=telegram 레인에서만 사용합니다",
+      badAllowFrom: 'allow_from 항목 "{{id}}" 가 숫자가 아닙니다(telegram user/chat id)',
+      badFileMode: 'file_mode "{{mode}}" 가 올바르지 않습니다 — {{known}} 중 하나',
       badAllowTool: 'allowlist 도구명 "{{tool}}" 가 올바르지 않습니다 — 영숫자/_/./- 만 허용',
       badDenyEntry:
         'denylist 항목 "{{entry}}" 가 올바르지 않습니다 — "Bash" 또는 "Bash(git push*)" 형식(콤마 불가)',
@@ -361,6 +372,8 @@ lane add 옵션:
       injectorStartFail: "[supervisor] lane={{lane}} injector 기동 오류: {{error}}",
       runtimeWriteFail: "[supervisor] lane={{lane}} runtime.json 기록 실패(보조): {{error}}",
       runtimeRemoveFail: "[supervisor] lane={{lane}} runtime.json 제거 실패(보조): {{error}}",
+      securePermsFail:
+        "[supervisor] lane={{lane}} 상태 디렉터리 권한 잠금 실패(보조 — 파일이 타 사용자에 노출될 수 있음): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} 기동 실패: {{reason}}",
     },
     queue: {
@@ -381,6 +394,11 @@ lane add 옵션:
       enqueueError: "[telegram] enqueue 오류({{count}}회 연속): {{error}}",
       answerCallbackError: "[telegram] answerCallbackQuery 오류: {{error}}",
       unknownCallback: "[telegram] 알 수 없는 callback decision 무시: {{decision}}",
+      unauthorizedMessage:
+        "[telegram] 미허가 발신자의 인바운드 무시(from={{from}} chat={{chat}}) — chat_id/allow_from 에 추가해 허용",
+      unauthorizedCallback: "[telegram] 미허가 발신자의 권한 콜백 무시(from={{from}})",
+      noAuthConfigured:
+        "[telegram] 허용 발신자 미설정(chat_id/allow_from 비어있음) — 모든 인바운드 거부(fail-closed)",
       pollError: "[telegram] poll 오류({{count}}회 연속, {{backoff}}ms 후 재시도): {{error}}",
       alertSendError: "[telegram] enqueue 실패 알림 전송 오류: {{error}}",
       pollLoopEnd: "[telegram] poll 루프 종료: {{error}}",

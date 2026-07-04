@@ -11,7 +11,7 @@ describe("cli usage", () => {
 });
 
 describe("version", () => {
-  it("루트 VERSION(SemVer)을 SoT 로 읽는다", () => {
+  it("package.json.version(SemVer)을 SoT 로 읽는다", () => {
     expect(readVersion()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });

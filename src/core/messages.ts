@@ -6,7 +6,7 @@
  */
 import { t } from "../shared/i18n.js";
 
-/** CLI 명령 표면. 최소 표면 원칙(A-P005). */
+/** CLI 명령 표면. 최소 표면 원칙. */
 export const COMMANDS = {
   /** 주 진입점. */
   primary: "adde",

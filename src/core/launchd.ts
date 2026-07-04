@@ -1,7 +1,7 @@
 /**
  * macOS launchd LaunchAgent 상호작용 전담 모듈.
  * plist 생성·경로·launchctl 호출을 단일 소스로 관리한다.
- * 비-macOS 환경에서는 assertMacOS() 가 actionable throw(SC-016: 침묵 실패 금지).
+ * 비-macOS 환경에서는 assertMacOS() 가 actionable throw(침묵 실패 금지).
  */
 import { t } from "../shared/i18n.js";
 import { execFile as nodeExecFile } from "node:child_process";
@@ -35,7 +35,7 @@ export interface LaunchdDeps {
 
 /**
  * macOS(darwin) 이 아닌 환경에서 actionable throw.
- * launchd 코드 경로의 SSOT 가드 — 개별 함수에서 직접 process.platform 체크 금지(ADR-007).
+ * launchd 코드 경로의 SSOT 가드 — 개별 함수에서 직접 process.platform 체크 금지.
  */
 export function assertMacOS(platform: NodeJS.Platform = process.platform): void {
   if (platform !== "darwin") {
@@ -90,8 +90,8 @@ function xmlEscape(s: string): string {
 
 /**
  * launchd plist XML 생성.
- * - KeepAlive=true, RunAtLoad=true (FR-005/SC-007).
- * - ProgramArguments=[nodeBin, addeBin, "__daemon", proj] — 시크릿 미포함(FR-008/ADR-008).
+ * - KeepAlive=true, RunAtLoad=true.
+ * - ProgramArguments=[nodeBin, addeBin, "__daemon", proj] — 시크릿 미포함.
  * - EnvironmentVariables: PATH 만 주입(pathEnv 지정 시). 토큰 등 시크릿은 넣지 않는다
  *   (데몬이 .env 파일에서 로드). PATH 는 시크릿이 아니다.
  */
@@ -164,7 +164,7 @@ export function daemonEntryPath(): string {
 
 /**
  * plist 생성 후 launchctl load 로 데몬 등록.
- * exit code ≠ 0 이면 actionable throw(NFR-003).
+ * exit code ≠ 0 이면 actionable throw.
  */
 export async function loadDaemon(proj: string, deps?: LaunchdDeps): Promise<void> {
   assertMacOS(deps?.platform);

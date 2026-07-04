@@ -1,13 +1,13 @@
 name: Release
 
-# main 에 VERSION 변경이 push 되면 게이트 재실행 후 v{VERSION} 태그·GitHub Release 발행.
-# 서버측 자동화(github.token). 로컬 git/gh 변경은 사용자 확인(A-P004)과 별개 경로.
-# 근거: docs/_internal/RELEASING.md, design/08 §5, 루트 CLAUDE.md "릴리스·CI 자동화 경계".
+# main 에 package.json 변경이 push 되면 게이트 재실행 후 v{version} 태그·GitHub Release·npm 발행.
+# 버전 SoT 는 package.json.version 단일. 버전이 안 바뀐 package.json 변경은 태그·발행 멱등 가드가 no-op 처리.
+# 서버측 자동화(github.token / NPM_TOKEN). 로컬 git/gh 변경은 사용자 확인과 별개 경로.
 on:
   push:
     branches: [main]
     paths:
-      - VERSION
+      - package.json
 
 permissions:
   contents: write
@@ -38,18 +38,7 @@ jobs:
 
       - name: Read version
         id: ver
-        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
-
-      # 발행은 package.json.version 을 쓰고 태그·멱등 가드는 VERSION 을 쓴다.
-      # 둘이 어긋나면 엉뚱한 버전 발행·가드 오작동이 나므로 태그/발행 전에 fail-fast.
-      - name: Assert VERSION == package.json.version
-        run: |
-          FILE_VER="${{ steps.ver.outputs.version }}"
-          PKG_VER=$(node -p "require('./package.json').version")
-          if [ "$FILE_VER" != "$PKG_VER" ]; then
-            echo "::error::VERSION ($FILE_VER) != package.json.version ($PKG_VER) — 두 값을 일치시키세요."
-            exit 1
-          fi
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Tag and release
         env:

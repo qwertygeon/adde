@@ -1,7 +1,7 @@
 /**
  * 설정 차이 비교·WARN.
- * FR-012/013/ADR-007: ADDE 정책 ↔ 엔진 실효 설정 비교.
- * GAP-001 안전망: 조회 실패 시 "확인불가=차이"로 보수적 WARN 발화.
+ * ADDE 정책 ↔ 엔진 실효 설정 비교.
+ * 안전망: 조회 실패 시 "확인불가=차이"로 보수적 WARN 발화.
  */
 import { maskSecrets } from "../../shared/mask.js";
 import { t } from "../../shared/i18n.js";

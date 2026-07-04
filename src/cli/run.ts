@@ -114,7 +114,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   }
 
   // 내부 서브커맨드 — launchd 가 데몬 워커로 기동하는 포그라운드 상주 진입점.
-  // 도움말 미노출(A-P005 최소 표면). 사용자가 직접 부르지 않는 내부 명령.
+  // 도움말 미노출(최소 표면). 사용자가 직접 부르지 않는 내부 명령.
   if (first === "__daemon") {
     const proj = second;
     if (!proj) {
@@ -172,7 +172,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     }
     try {
       const { unloadDaemon, loadDaemon } = await import("../core/launchd.js");
-      // down 완료 await 후 up — 부분 실패 시 up 오류 표면화(FR-003).
+      // down 완료 await 후 up — 부분 실패 시 up 오류 표면화.
       await unloadDaemon(proj);
       await loadDaemon(proj);
       process.stdout.write(t("run.restartDone", { proj }) + "\n");

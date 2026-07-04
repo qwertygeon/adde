@@ -1,6 +1,6 @@
 /**
  * 엔진 child 프로세스 수명 헬퍼 — 타임아웃·종료(SIGTERM→유예→SIGKILL).
- * client.ts 에서 분리(테스트 가능성·관심사 분리). DEC-002/DEC-003.
+ * client.ts 에서 분리(테스트 가능성·관심사 분리).
  */
 import type { ChildProcess } from "node:child_process";
 

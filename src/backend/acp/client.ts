@@ -1,6 +1,6 @@
 /**
  * ACP 세션 라이프사이클·구독.
- * FR-008/009/010/011/019/ADR-002: initialize→session/new→prompt 루프.
+ * initialize→session/new→prompt 루프.
  * session/update 이벤트 구독 → transcript·injector·gate 라우팅.
  */
 import { t, tFor } from "../../shared/i18n.js";
@@ -31,12 +31,12 @@ import { formatException, formatWarnNote } from "../../shared/notify.js";
 import { matchesDenylist } from "../../shared/deny-match.js";
 import { withTimeout, killChild, closeChild } from "./lifecycle.js";
 
-/** 핸드셰이크(initialize·newSession) 최대 대기 (DEC-002). 초과 시 launch 실패 + child kill. */
+/** 핸드셰이크(initialize·newSession) 최대 대기. 초과 시 launch 실패 + child kill. */
 const HANDSHAKE_TIMEOUT_MS = 30_000;
-/** close() 시 SIGTERM 후 종료 유예 (DEC-003). 초과 시 SIGKILL. */
+/** close() 시 SIGTERM 후 종료 유예. 초과 시 SIGKILL. */
 const CHILD_GRACE_MS = 5_000;
 
-/** allowlist 자동 허용 판정 — 도구명이 레인 allowlist 에 있으면 true (A2/DEC-002). */
+/** allowlist 자동 허용 판정 — 도구명이 레인 allowlist 에 있으면 true. */
 export function shouldAutoAllow(allowlist: string[] | undefined, toolName: string): boolean {
   return allowlist?.includes(toolName) ?? false;
 }
@@ -165,7 +165,7 @@ interface LaneConfig {
 interface LaneState {
   conn: acp.ClientSideConnection;
   sessionId: string;
-  /** 엔진 서브프로세스 — close() 정리를 위해 보관(C1/C2). */
+  /** 엔진 서브프로세스 — close() 정리를 위해 보관. */
   child: ChildProcess;
   subscribers: Array<(e: SessionEvent) => void>;
   permHandler: ((req: PermRequest) => Promise<PermResponse>) | null;
@@ -270,7 +270,7 @@ export class AcpBackendImpl implements AcpBackend {
               try {
                 sub(update);
               } catch (err) {
-                // 무음 흡수 금지(H1/DEC-005) — 다른 구독자는 계속하되 실패 신호는 큰소리로 기록.
+                // 무음 흡수 금지 — 다른 구독자는 계속하되 실패 신호는 큰소리로 기록.
                 console.error(
                   t("log.acp.subscriberError", {
                     lane,
@@ -345,9 +345,9 @@ export class AcpBackendImpl implements AcpBackend {
             params.toolCall as unknown as Record<string, unknown>,
           );
 
-          // A2: allowlist / autopass 자동 허용 — 채널 프롬프트 없이 allow 로 결정(게이트는 끄지 않고 결정).
+          // allowlist / autopass 자동 허용 — 채널 프롬프트 없이 allow 로 결정(게이트는 끄지 않고 결정).
           // autopass: denylist 외 전 도구 자동 허용, denylist 도구는 아래 채널 승인 폴백.
-          // 투명성(A-P006 no-silent): 트랜스크립트에 auto-allow 기록.
+          // 투명성(no-silent): 트랜스크립트에 auto-allow 기록.
           const rawInput = (params.toolCall as unknown as Record<string, unknown>)["rawInput"];
           const autoAllowVia = decideAutoAllow(addePolicy, rawToolName, rawInput);
           if (autoAllowVia) {
@@ -409,7 +409,7 @@ export class AcpBackendImpl implements AcpBackend {
       return clientImpl;
     }, stream);
 
-    // 핸드셰이크 단계에서 spawn 실패가 나면 즉시 reject (행 방지). 추가로 시한(DEC-002)을 둬
+    // 핸드셰이크 단계에서 spawn 실패가 나면 즉시 reject (행 방지). 추가로 시한을 둬
     // 엔진이 응답 없이 멈춰도 영구 hang 하지 않게 한다 — 실패 시 child 를 정리하고 actionable 로 던진다.
     const handshakeTimeoutErr = (phase: string): Error =>
       new Error(
@@ -520,7 +520,7 @@ export class AcpBackendImpl implements AcpBackend {
       const result = comparePerm(addePolicy, engineEffective, tl);
       if (result.diff && result.warn) {
         // 차이 확인(정책차이)·확인불가(조회실패) 모두 경고 후 기동 계속 — 이전의 launch 거부를
-        // 사용자 요청으로 완화. A-P006 의 요구는 "차이 표기"이며 여기서 충족한다.
+        // 사용자 요청으로 완화. 요구는 "차이 표기"이며 여기서 충족한다.
         const note =
           result.warn.reason === "정책차이"
             ? formatWarnNote(
@@ -609,7 +609,7 @@ export class AcpBackendImpl implements AcpBackend {
         return effective;
       }
     } catch {
-      // GAP-001: 조회 실패 → null (ADR-007 안전망으로 보수 WARN)
+      // 조회 실패 → null (안전망으로 보수 WARN)
     }
     return null;
   }
@@ -640,7 +640,7 @@ export class AcpBackendImpl implements AcpBackend {
     state.permHandler = handler;
   }
 
-  /** 레인 종료 — 엔진 child 정리(SIGTERM→유예→SIGKILL) + 상태 제거(C1/C2/DEC-003). */
+  /** 레인 종료 — 엔진 child 정리(SIGTERM→유예→SIGKILL) + 상태 제거. */
   async close(lane: string): Promise<void> {
     const state = this.lanes.get(lane);
     this.lanes.delete(lane);

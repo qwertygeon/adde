@@ -1,6 +1,6 @@
 /**
  * atomic 저장·상태 전이·dedup.
- * FR-002/003/005/ADR-004: tmp→rename 으로 부분 쓰기 미노출.
+ * tmp→rename 으로 부분 쓰기 미노출.
  * queue→processing→out 상태 전이는 원자적 rename.
  */
 import { t } from "../shared/i18n.js";
@@ -199,7 +199,7 @@ export async function writeOut(
 ): Promise<void> {
   // sidecar 를 먼저 확정한다 — `.out` 이 dedup/done 마커(isDone)이므로 본문을 마지막에 rename 하면
   // "`.out` 존재 ⇒ sidecar 존재" 가 성립한다. 두 rename 사이 크래시에도 done 메시지가 reply_ref 를
-  // 잃지 않고, reader 가 `.out` 만 보고 sidecar 부재 창을 만나지 않는다(DEC-001).
+  // 잃지 않고, reader 가 `.out` 만 보고 sidecar 부재 창을 만나지 않는다.
   await atomicWrite(join(paths.outDir, `${id}.out.json`), JSON.stringify(sidecar));
   await atomicWrite(join(paths.outDir, `${id}.out`), text);
 }

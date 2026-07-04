@@ -1,9 +1,9 @@
 /**
  * Telegram 소스 어댑터 — 수신·출력·inline 버튼.
- * FR-014/015/016/017/018: long-poll → envelope → queue.
+ * long-poll → envelope → queue.
  * renderOut(id) → sendMessage(quote-reply) (injector in-process 호출).
  * 권한 요청 → inline keyboard [[allow, deny]].
- * 토큰은 state/.env 에서만 읽기(SC-016).
+ * 토큰은 state/.env 에서만 읽기.
  */
 import { t, tFor } from "../shared/i18n.js";
 import { errMsg } from "../shared/errors.js";
@@ -41,19 +41,19 @@ export function splitForTelegram(text: string, max = TELEGRAM_MSG_LIMIT): string
   if (rest.length > 0) chunks.push(rest);
   return chunks;
 }
-/** stop() 이 pollLoop 종료를 기다리는 상한 (H3/DEC-004). 초과 시 포기하고 진행. */
+/** stop() 이 pollLoop 종료를 기다리는 상한. 초과 시 포기하고 진행. */
 const STOP_WAIT_MS = 3_000;
 /** enqueue 실패 지속 동안 폴 사이에 적용하는 백오프. */
 const ENQUEUE_BACKOFF_MS = 5_000;
-/** 429 레이트리밋 최대 재시도 횟수(012-P). */
+/** 429 레이트리밋 최대 재시도 횟수. */
 const MAX_RATE_LIMIT_RETRIES = 3;
-/** retry_after 대기 상한(012-P) — 비정상적으로 큰 값으로 영구 hang 방지. */
+/** retry_after 대기 상한 — 비정상적으로 큰 값으로 영구 hang 방지. */
 const RETRY_AFTER_CAP_MS = 60_000;
-/** 폴 오류 지수 백오프 base·상한(012-Q). */
+/** 폴 오류 지수 백오프 base·상한. */
 const POLL_BACKOFF_BASE_MS = 1_000;
 const POLL_BACKOFF_MAX_MS = 30_000;
 
-/** 폴 오류 지수 백오프 간격(012-Q): min(base·2^(n-1), max). n=연속 실패 횟수(1부터). */
+/** 폴 오류 지수 백오프 간격: min(base·2^(n-1), max). n=연속 실패 횟수(1부터). */
 export function pollBackoffMs(failures: number): number {
   return Math.min(POLL_BACKOFF_BASE_MS * 2 ** Math.max(0, failures - 1), POLL_BACKOFF_MAX_MS);
 }
@@ -80,7 +80,7 @@ export interface TelegramConfig {
   paths: LanePaths;
   /** 회신·권한 프롬프트 대상 chat id (conf chat_id). 미지정 시 렌더 비활성. */
   chatId?: number | undefined;
-  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요(DEC-001). */
+  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요. */
   onInbound?: (() => void) | undefined;
   /** 채널 메시지 로케일(LaneConf.lang). 미지정 시 전역 로케일. */
   lang?: string | undefined;
@@ -110,7 +110,7 @@ export interface TelegramSource extends Source {
   onCallbackQuery(cb: GateDecisionCallback): void;
 }
 
-/** 봇 토큰을 state/.env 에서 읽는다. argv 미전달(SC-016). */
+/** 봇 토큰을 state/.env 에서 읽는다. argv 미전달. */
 async function readBotToken(paths: LanePaths): Promise<string> {
   const content = await readFile(paths.envFile, "utf8");
   for (const rawLine of content.split(/\r?\n/)) {
@@ -142,7 +142,7 @@ async function callBotApi(
       ...(signal ? { signal } : {}),
     });
 
-    // 레이트 리밋(429): retry_after 만큼 대기 후 재시도(012-P). 유계 재시도·대기 상한.
+    // 레이트 리밋(429): retry_after 만큼 대기 후 재시도. 유계 재시도·대기 상한.
     if (resp.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
       const body = (await resp.json().catch(() => ({}))) as {
         parameters?: { retry_after?: number };
@@ -172,10 +172,10 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   let token: string | null = null;
   let offset = 0;
   let running = false;
-  // in-flight long-poll fetch 를 stop 에서 중단(H3/DEC-004). pollLoop 종료를 stop 이 대기.
+  // in-flight long-poll fetch 를 stop 에서 중단. pollLoop 종료를 stop 이 대기.
   let pollAbort: AbortController | null = null;
   let pollPromise: Promise<void> | null = null;
-  // enqueue 연속 실패 카운터 — 성공 시 0 리셋, 임계 도달 시 1회 알림(DEC-003).
+  // enqueue 연속 실패 카운터 — 성공 시 0 리셋, 임계 도달 시 1회 알림.
   let consecutiveEnqueueFailures = 0;
   const callbackHandlers: GateDecisionCallback[] = [];
 
@@ -274,7 +274,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   /** long-poll 루프 */
   async function pollLoop(): Promise<void> {
     const tok = await getToken();
-    let pollFailures = 0; // 폴 오류 지수 백오프 카운터(012-Q) — getUpdates 성공 시 리셋.
+    let pollFailures = 0; // 폴 오류 지수 백오프 카운터 — getUpdates 성공 시 리셋.
     while (running) {
       try {
         const result = await callBotApi(
@@ -315,7 +315,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
                   error: errMsg(err),
                 }),
               );
-              // 임계 도달 시점에만 1회 알림 — 매 폴 알림 폭주 방지(DEC-003).
+              // 임계 도달 시점에만 1회 알림 — 매 폴 알림 폭주 방지.
               if (consecutiveEnqueueFailures === ENQUEUE_FAIL_THRESHOLD) {
                 await alertEnqueueFailure(consecutiveEnqueueFailures);
               }
@@ -338,7 +338,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
                 );
               });
 
-              // callback_data 검증(FR-5) — allow/deny 외 값은 무시·로그(타입 어설션 우회 차단).
+              // callback_data 검증 — allow/deny 외 값은 무시·로그(타입 어설션 우회 차단).
               // 미디스패치 시 게이트는 타임아웃으로 deny(fail-closed).
               if (rawDecision !== "allow" && rawDecision !== "deny") {
                 console.warn(t("log.telegram.unknownCallback", { decision: rawDecision }));
@@ -358,7 +358,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
       } catch (err) {
         if (!running) break;
         pollFailures++;
-        // 지수 백오프(012-Q): 연속 실패가 누적될수록 재시도 간격 증가(상한 고정). 성공 시 리셋.
+        // 지수 백오프: 연속 실패가 누적될수록 재시도 간격 증가(상한 고정). 성공 시 리셋.
         const backoff = pollBackoffMs(pollFailures);
         console.error(
           t("log.telegram.pollError", {
@@ -372,7 +372,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     }
   }
 
-  /** enqueue 연속 실패 임계 도달 시 운영자 채널로 1회 액션형 알림(DEC-003). */
+  /** enqueue 연속 실패 임계 도달 시 운영자 채널로 1회 액션형 알림. */
   async function alertEnqueueFailure(count: number): Promise<void> {
     if (cfg.chatId === undefined) return; // 알림 대상 미지정 — 로그로만 남음
     const note = formatException(
@@ -387,7 +387,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     );
   }
 
-  /** out/<id>.out (+ sidecar) → quote-reply 전송. injector 가 writeOut 직후 in-process 호출(DEC-001). */
+  /** out/<id>.out (+ sidecar) → quote-reply 전송. injector 가 writeOut 직후 in-process 호출. */
   async function renderOut(id: string): Promise<void> {
     const defaultChatId = cfg.chatId ?? 0;
     if (!defaultChatId) return; // 회신 대상 미지정 시 렌더 생략
@@ -398,7 +398,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     let replyTo: number | undefined;
     const sidecar = await readSidecar(cfg.paths, id);
     if (sidecar?.reply_ref?.channel_msg_id) {
-      // 비숫자 channel_msg_id 가드(FR-6) — NaN 이면 reply_to_message_id 생략(전송 파라미터 오염 방지).
+      // 비숫자 channel_msg_id 가드 — NaN 이면 reply_to_message_id 생략(전송 파라미터 오염 방지).
       const parsed = parseInt(sidecar.reply_ref.channel_msg_id, 10);
       if (!Number.isNaN(parsed)) replyTo = parsed;
     }
@@ -411,11 +411,11 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     running = true;
     pollAbort = new AbortController();
     // fire-and-forget 루프 — rejection 이 unhandled 가 되지 않도록 로깅(토큰 읽기 실패 등).
-    // pollPromise 를 보관해 stop() 이 종료를 대기(H3).
+    // pollPromise 를 보관해 stop() 이 종료를 대기.
     pollPromise = pollLoop().catch((err: unknown) => {
       console.error(t("log.telegram.pollLoopEnd", { error: errMsg(err) }));
     });
-    // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거, DEC-001).
+    // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거).
   }
 
   /** Source 계약: 권한 요청을 inline 버튼으로 표면화(chat_id 는 conf self-resolve). */

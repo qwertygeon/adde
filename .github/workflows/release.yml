@@ -40,6 +40,17 @@ jobs:
         id: ver
         run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
+      # 발행은 package.json.version 을 쓰고 태그·멱등 가드는 VERSION 을 쓴다.
+      # 둘이 어긋나면 엉뚱한 버전 발행·가드 오작동이 나므로 태그/발행 전에 fail-fast.
+      - name: Assert VERSION == package.json.version
+        run: |
+          FILE_VER="${{ steps.ver.outputs.version }}"
+          PKG_VER=$(node -p "require('./package.json').version")
+          if [ "$FILE_VER" != "$PKG_VER" ]; then
+            echo "::error::VERSION ($FILE_VER) != package.json.version ($PKG_VER) — 두 값을 일치시키세요."
+            exit 1
+          fi
+
       - name: Tag and release
         env:
           GH_TOKEN: ${{ github.token }}

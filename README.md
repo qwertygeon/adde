@@ -4,11 +4,20 @@
 
 ADDE 는 **AI CLI**(Claude Code / Codex 등)를 **채널**(Telegram / 마크다운 노트(예: Obsidian); Discord 보류)에서 원격 구동하는 게이트웨이입니다. AI 가 개발 작업을 수행하고, 사람은 채팅으로 지시·승인·관찰합니다.
 
+## 이럴 때 씁니다
+
+- 자리를 비운 사이 폰(Telegram)이나 노트(Obsidian)에서 프로젝트별 AI 에게 **지시·권한 승인·결과 확인**을 하고 싶을 때.
+- 여러 프로젝트를 각각의 작업 폴더에 묶어(레인) **동시에** 원격 운용하고 싶을 때.
+- 모든 도구 실행에 **사람의 승인 게이트**(기본 fail-closed)를 두고 싶을 때.
+
+> ⚠️ **데이터 흐름 주의**: 보낸 지시·코드·AI 응답은 AI 엔진 제공자(ACP→Claude/Codex 등)와 채널 인프라(Telegram)를 거칩니다. 마크다운 소스를 쓰면 승인·출력 노트가 **동기 vault(Obsidian Sync·iCloud 등)로 복제**됩니다 — 민감 프로젝트의 노트 배치 주의는 [마크다운 가이드 — 민감 정보 노출](docs/markdown.md#동기화-vault-와-민감-정보-노출)을 먼저 읽으세요.
+
 ## 사용자 문서
 
 - [시작하기](docs/getting-started.md) — 설치·레인 설정·기동·상태/진단·프로젝트 폴더 매핑
 - [Telegram 가이드](docs/telegram.md) — 봇 생성·토큰·기동 단계별
 - [마크다운 가이드](docs/markdown.md) — 노트(예: Obsidian)로 AI 구동하기(지시·응답·권한 승인 단계별)
+- [권한 가이드](docs/permissions.md) — 게이트·티어(acp/autopass)·allowlist/denylist·권장 설정
 - [명령 레퍼런스](docs/commands.md) · [트러블슈팅](docs/troubleshooting.md)
 
 ## 핵심 설계
@@ -42,6 +51,7 @@ add  …                       # adde 단축 별칭
 
 - 설치: **npm 전역 설치**(`npm i -g adde`) — 최초 릴리스 발행 후 제공. 발행 전에는 소스 빌드(`pnpm install && pnpm build`). 상세: [시작하기](docs/getting-started.md#설치).
 - TypeScript + Node.js LTS (>=22)
+- **AI 엔진 ACP 어댑터 필수**(예: `@zed-industries/claude-code-acp`) — `adde doctor` 가 사전 점검합니다.
 - macOS 1차 타깃 — `adde up`/`down`/`restart` 는 macOS launchd LaunchAgent 기반. 재부팅·로그아웃 후 자동 복구. Linux/WSL은 현재 지원 범위 밖.
 
 ## 상태 / 로드맵

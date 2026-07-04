@@ -150,6 +150,19 @@ describe("runDoctor (SC3)", () => {
     expect(node?.level).toBe("PASS");
   });
 
+  it("데몬 진입 파일 점검 — darwin 은 WARN(tsx 부재)·비-darwin(CI 등)은 스킵", async () => {
+    const checks = await runDoctor(undefined, { base: tmpBase });
+    const entry = checks.find((c) => c.name === "데몬 진입 파일");
+    if (process.platform === "darwin") {
+      // vitest 는 src(tsx)로 실행 → src/cli/adde.js 부재 → WARN + 빌드 안내 hint
+      expect(entry?.level).toBe("WARN");
+      expect(entry?.hint).toBeTruthy();
+    } else {
+      // 비-darwin(예: ubuntu CI)에서는 데몬 점검을 스킵하므로 항목 없음
+      expect(entry).toBeUndefined();
+    }
+  });
+
   it("telegram 레인의 토큰 부재는 FAIL + 조치 힌트", async () => {
     writeConf("p", "telegram-claude", conf());
     const checks = await runDoctor("p", { base: tmpBase });

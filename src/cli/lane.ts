@@ -266,6 +266,11 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
  */
 export async function runLane(argv: readonly string[]): Promise<number> {
   const [sub, ...rest] = argv;
+  // `adde lane <sub> --help` — 전체 lane 옵션 도움말(하위 명령 인자 검증보다 우선).
+  if (sub !== undefined && sub !== "help" && (rest.includes("--help") || rest.includes("-h"))) {
+    process.stdout.write(`${buildLaneUsage()}\n`);
+    return 0;
+  }
   try {
     switch (sub) {
       case "add":

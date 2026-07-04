@@ -3,6 +3,13 @@ import { errMsg } from "../shared/errors.js";
 import { COMMANDS, buildUsage, USAGE, cmdError } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
+import { findCommand, suggestCommands } from "./spec.js";
+import { completionScript, SUPPORTED_SHELLS } from "./completion.js";
+
+/** -h/--help 플래그가 인자에 있는지. */
+function wantsHelp(argv: readonly string[]): boolean {
+  return argv.includes("--help") || argv.includes("-h");
+}
 
 /**
  * 포그라운드 데몬 워커 로직 — `adde __daemon <proj>` 가 호출한다.
@@ -85,6 +92,35 @@ export async function run(argv: readonly string[]): Promise<number> {
 
   if (first === "--version" || first === "-v") {
     process.stdout.write(`${COMMANDS.primary} ${readVersion()}\n`);
+    return 0;
+  }
+
+  // 서브커맨드별 도움말 — `adde <cmd> --help`. lane 은 runLane 가 자체 처리(하위 명령 도움말).
+  if (first !== undefined && first !== "lane" && wantsHelp(argv.slice(1))) {
+    const spec = findCommand(first);
+    if (spec?.usageKey && !spec.hidden) {
+      process.stdout.write(t(spec.usageKey as never) + "\n");
+      return 0;
+    }
+  }
+
+  if (first === "completion") {
+    const shell = second;
+    if (!shell) {
+      process.stderr.write(USAGE.completion + "\n");
+      return 1;
+    }
+    const script = completionScript(shell);
+    if (script === null) {
+      process.stderr.write(
+        cmdError(
+          "completion",
+          t("completion.unknownShell", { shell, supported: SUPPORTED_SHELLS.join("|") }),
+        ) + "\n",
+      );
+      return 1;
+    }
+    process.stdout.write(script);
     return 0;
   }
 
@@ -190,7 +226,10 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  // 미지원 명령 → stderr 로 오류 + 사용법, 비정상 종료(스크립트 오류 은폐 방지).
-  process.stderr.write(`${t("cli.unknownCmd", { cmd: first })}\n\n${buildUsage()}\n`);
+  // 미지원 명령 → stderr 로 오류(+오타 추정 힌트) + 사용법, 비정상 종료(스크립트 오류 은폐 방지).
+  const suggestions = suggestCommands(first);
+  const hint =
+    suggestions.length > 0 ? " " + t("cli.didYouMean", { cmds: suggestions.join(", ") }) : "";
+  process.stderr.write(`${t("cli.unknownCmd", { cmd: first })}${hint}\n\n${buildUsage()}\n`);
   return 1;
 }

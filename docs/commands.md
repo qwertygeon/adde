@@ -14,6 +14,8 @@ ADDE CLI 의 전체 명령·옵션입니다. 주 진입점은 `adde`, 단축 별
 - [sessions — 세션 목록](#sessions--세션-목록)
 - [세션 제어 (채널 명령)](#세션-제어-채널-명령)
 - [lane — 레인 설정](#lane--레인-설정)
+- [completion — 셸 자동완성](#completion--셸-자동완성)
+- [도움말·오타 힌트](#도움말오타-힌트)
 - [종료 코드](#종료-코드)
 - [경로](#경로)
 - [macOS 전용 기능](#macos-전용-기능)
@@ -25,7 +27,7 @@ ADDE CLI 의 전체 명령·옵션입니다. 주 진입점은 `adde`, 단축 별
 | `-v`, `--version` | 버전 출력   |
 | `-h`, `--help`    | 도움말 출력 |
 
-인자 없이 `adde` 를 실행하면 사용법을 출력합니다.
+인자 없이 `adde` 를 실행하거나 `-h`/`--help`/`help` 는 전체 사용법을 출력합니다. 특정 명령의 도움말은 `adde <command> --help` (예: `adde status --help`, `adde lane add --help`).
 
 ## up — 레인 기동 (데몬)
 
@@ -180,17 +182,41 @@ adde lane help                       # 전체 옵션
 
 > **파일 권한(`--file-mode`)**: 기본 `private` 는 레인의 state/out/queue/lanes.d 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답·설정 메타 열람을 차단합니다. `shared` 는 이 잠금을 하지 않는 옵트인(기존 umask 기본 권한 유지 — 통상 0755)으로, 열람 공유가 필요한 경우에만 사용하세요. (봇 토큰 `.env` 는 모드와 무관하게 항상 0600.)
 
+## completion — 셸 자동완성
+
+```bash
+adde completion <bash|zsh>
+```
+
+명령·플래그 자동완성 스크립트를 stdout 으로 출력합니다(맥 기본 zsh + bash 지원). 명령/플래그 스펙에서 생성되므로 명령이 늘면 자동완성도 함께 갱신됩니다.
+
+```bash
+# zsh: compinit 후 fpath 에 두거나 .zshrc 에서 source
+adde completion zsh > "${fpath[1]}/_adde"   # 또는: adde completion zsh >> ~/.zshrc 후 재로그인
+
+# bash: bash-completion 디렉터리에 두거나 .bashrc 에서 source
+adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
+```
+
+완성 대상: 최상위 명령(up/down/…/lane/completion), `lane` 하위 명령(add/ls/show/rm), `lane add` 옵션 플래그, `status --all/--json`·`logs --engine`·`completion bash|zsh`. 미지원 셸은 오류 + 종료 코드 1.
+
+## 도움말·오타 힌트
+
+- `adde <command> --help`(또는 `-h`) — 해당 명령의 사용법을 출력하고 종료 코드 0. `adde lane <sub> --help` 는 lane 전체 옵션을 출력합니다.
+- 오타 등 **미지원 명령**은 stderr 에 `Unknown command` + 근접 명령 추정(`Did you mean: …?`)을 출력하고 종료 코드 1(스크립트에서 오타가 조용히 성공 처리되는 것 방지).
+
 ## 종료 코드
 
-| 명령      | 0                             | 1                                    |
-| --------- | ----------------------------- | ------------------------------------ |
-| `up`      | 데몬 등록 성공                | launchd 등록 실패·인자 누락          |
-| `down`    | 데몬 종료 성공(이미 없어도 0) | 오류 발생                            |
-| `restart` | down+up 모두 성공             | down 또는 up 실패                    |
-| `status`  | 모두 정상                     | `dead`(크래시)·`stale`(행) 레인 존재 |
-| `doctor`  | FAIL 없음                     | FAIL 항목 존재                       |
-| `logs`    | 항상(파일 없어도 안내 후 0)   | —                                    |
-| `lane *`  | 성공                          | 인자 누락·검증 오류                  |
+| 명령         | 0                             | 1                                    |
+| ------------ | ----------------------------- | ------------------------------------ |
+| `up`         | 데몬 등록 성공                | launchd 등록 실패·인자 누락          |
+| `down`       | 데몬 종료 성공(이미 없어도 0) | 오류 발생                            |
+| `restart`    | down+up 모두 성공             | down 또는 up 실패                    |
+| `status`     | 모두 정상                     | `dead`(크래시)·`stale`(행) 레인 존재 |
+| `doctor`     | FAIL 없음                     | FAIL 항목 존재                       |
+| `logs`       | 항상(파일 없어도 안내 후 0)   | —                                    |
+| `lane *`     | 성공                          | 인자 누락·검증 오류                  |
+| `completion` | 스크립트 출력                 | 셸 인자 누락·미지원 셸               |
 
 인자 없이 실행하거나 `-h`/`--help`/`help` 는 사용법을 출력하고 `0` 을 반환합니다. **미지원 명령**(오타 등)은 stderr 에 `Unknown command` 를 출력하고 `1` 을 반환합니다(스크립트에서 오타가 조용히 성공으로 처리되는 것을 막음).
 

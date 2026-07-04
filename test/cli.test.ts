@@ -35,6 +35,38 @@ describe("run 최상위 디스패치", () => {
     expect(err).toHaveBeenCalled();
     const errText = err.mock.calls.map((c) => String(c[0])).join("");
     expect(errText).toContain("statsu");
+    expect(errText).toContain("status"); // did-you-mean 힌트
+  });
+
+  it("서브커맨드 --help 는 그 명령 usage 를 출력하고 0", async () => {
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const code = await run(["status", "--help"]);
+    expect(code).toBe(0);
+    const text = out.mock.calls.map((c) => String(c[0])).join("");
+    expect(text).toContain("adde status");
+  });
+
+  it("completion <shell> 은 스크립트를 stdout 에 출력하고 0", async () => {
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const code = await run(["completion", "bash"]);
+    expect(code).toBe(0);
+    const text = out.mock.calls.map((c) => String(c[0])).join("");
+    expect(text).toContain("complete -F _adde adde add");
+  });
+
+  it("completion 미지원 셸은 stderr + 1", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const code = await run(["completion", "fish"]);
+    expect(code).toBe(1);
+    expect(err.mock.calls.map((c) => String(c[0])).join("")).toContain("fish");
+  });
+
+  it("completion 셸 인자 누락은 usage + 1", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    expect(await run(["completion"])).toBe(1);
+    expect(err.mock.calls.map((c) => String(c[0])).join("")).toContain("completion");
   });
 });
 

@@ -150,6 +150,15 @@ describe("runDoctor (SC3)", () => {
     expect(node?.level).toBe("PASS");
   });
 
+  it("데몬 진입 파일 점검 항목이 hint 와 함께 존재한다(tsx 실행 시 부재 → WARN)", async () => {
+    const checks = await runDoctor(undefined, { base: tmpBase });
+    const entry = checks.find((c) => c.name === "데몬 진입 파일");
+    expect(entry).toBeDefined();
+    // vitest 는 src(tsx)로 실행 → src/cli/adde.js 부재 → WARN + 빌드 안내 hint
+    expect(entry?.level).toBe("WARN");
+    expect(entry?.hint).toBeTruthy();
+  });
+
   it("telegram 레인의 토큰 부재는 FAIL + 조치 힌트", async () => {
     writeConf("p", "telegram-claude", conf());
     const checks = await runDoctor("p", { base: tmpBase });

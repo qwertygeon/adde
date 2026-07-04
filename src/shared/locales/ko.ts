@@ -154,6 +154,11 @@ lane add 옵션:
       missing: "해석된 경로에 파일 없음: {{path}}",
       hint: "의존성을 설치하세요(pnpm install) — @zed-industries/claude-code-acp 누락.",
     },
+    daemonEntry: {
+      name: "데몬 진입 파일",
+      missing: "데몬 진입 파일을 찾을 수 없음: {{path}}",
+      hint: "데몬 모드는 빌드가 필요합니다. `pnpm build` 후 dist 로 실행(`node dist/cli/adde.js up <proj>`)하거나 전역 설치(`npm i -g .`)하세요. `pnpm run dev up` 으로는 데몬을 띄울 수 없습니다.",
+    },
     base: {
       name: "설정 base 디렉터리",
       hint: "레인을 추가하면 생성됩니다(adde lane add <proj> <lane>).",

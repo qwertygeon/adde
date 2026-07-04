@@ -151,6 +151,15 @@ function defaultExec(args: string[]): Promise<{ stdout: string; code: number }> 
 // ── loadDaemon / unloadDaemon ────────────────────────────────────────────────
 
 /**
+ * 데몬 워커가 실행할 adde 진입 파일(절대 경로) — import.meta.url 기준 `dist/cli/adde.js`.
+ * 빌드본에선 dist/cli/adde.js(존재), tsx dev 에선 src/cli/adde.js(부재)로 해석된다 —
+ * loadDaemon 가드·doctor 사전점검의 SSOT. launchd 워커는 분리 프로세스라 이 파일이 실재해야 한다.
+ */
+export function daemonEntryPath(): string {
+  return new URL("../cli/adde.js", import.meta.url).pathname;
+}
+
+/**
  * plist 생성 후 launchctl load 로 데몬 등록.
  * exit code ≠ 0 이면 actionable throw(NFR-003).
  */
@@ -159,9 +168,8 @@ export async function loadDaemon(proj: string, deps?: LaunchdDeps): Promise<void
   const exec = deps?.exec ?? defaultExec;
 
   const nodeBin = deps?.nodeBin ?? process.execPath;
-  // adde 바이너리: dist/cli/adde.js 절대 경로 해석 — import.meta.url 기준.
   // launchd 가 워커를 기동할 때 동일 Node 바이너리 + 동일 adde.js 를 사용한다.
-  const addeBin = deps?.addeBin ?? new URL("../cli/adde.js", import.meta.url).pathname;
+  const addeBin = deps?.addeBin ?? daemonEntryPath();
 
   // 데몬 실행 파일 존재 가드 — launchd 워커는 분리 프로세스라 tsx 트랜스파일을 못 쓴다.
   // `pnpm run dev up`(tsx) 은 addeBin 이 src/cli/adde.js(부재)로 해석돼 데몬이 MODULE_NOT_FOUND

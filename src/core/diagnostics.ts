@@ -11,7 +11,7 @@ import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
 import { lanePaths, defaultBase, expandTilde, isSafeSegment } from "../shared/paths.js";
 import { parseLaneConf } from "../shared/conf.js";
-import { daemonRegState } from "./launchd.js";
+import { daemonRegState, daemonEntryPath } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
 
 export interface DiagBaseOptions {
@@ -191,6 +191,19 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
           level: "WARN",
           detail: t("doctor.missingPath", { path: base }),
           hint: t("doctor.base.hint"),
+        },
+  );
+
+  // 데몬 진입 파일 — launchd 워커가 실행할 실재 .js. tsx dev(빌드 전)면 부재라 데몬 기동 불가.
+  const daemonEntry = daemonEntryPath();
+  checks.push(
+    (await pathExists(daemonEntry))
+      ? { name: t("doctor.daemonEntry.name"), level: "PASS", detail: daemonEntry }
+      : {
+          name: t("doctor.daemonEntry.name"),
+          level: "WARN",
+          detail: t("doctor.daemonEntry.missing", { path: daemonEntry }),
+          hint: t("doctor.daemonEntry.hint"),
         },
   );
 

@@ -153,6 +153,11 @@ lane add options:
       missing: "no file at resolved path: {{path}}",
       hint: "Install dependencies (pnpm install) — @zed-industries/claude-code-acp missing.",
     },
+    daemonEntry: {
+      name: "daemon entry",
+      missing: "daemon entry not found: {{path}}",
+      hint: "Daemon mode needs a build. Run `pnpm build` and start from dist (`node dist/cli/adde.js up <proj>`), or install globally (`npm i -g .`). `pnpm run dev up` cannot start the daemon.",
+    },
     base: {
       name: "config base directory",
       hint: "Created when you add a lane (adde lane add <proj> <lane>).",

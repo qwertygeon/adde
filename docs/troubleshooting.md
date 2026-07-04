@@ -10,6 +10,8 @@
 
 - [기동이 안 됨](#기동이-안-됨)
 - [레인이 dead 로 표시됨](#레인이-dead-로-표시됨)
+- [레인이 stale(행)로 표시됨](#레인이-stale행로-표시됨)
+- [재부팅 후 복구·orphan 정리](#재부팅-후-복구orphan-정리)
 - [메시지를 보내도 응답이 없음](#메시지를-보내도-응답이-없음)
 - [세션 제어(clear/resume) 후 실패 통지](#세션-제어clearresume-후-실패-통지)
 - [권한 관련](#권한-관련)
@@ -27,6 +29,8 @@
 | `lanes.d 에 conf 없음`               | 레인 미생성                              | `adde lane add <proj> <lane> ...`(또는 `--interactive`)로 생성                                                                                                                                                                        |
 | 토큰 FAIL (telegram)                 | `.env` 에 토큰 없음                      | [Telegram 가이드 4단계](telegram.md#4-봇-토큰-저장)로 토큰 저장                                                                                                                                                                       |
 | cwd FAIL/경고                        | 작업 폴더 없음                           | 폴더를 만들거나 conf 의 `cwd` 수정                                                                                                                                                                                                    |
+| `doctor` 가 launchd 등록 불일치 WARN | plist 존재 vs launchctl 등록 상태 불일치 | `adde down <proj>` 로 정리한 뒤 `adde up <proj>` 로 다시 등록                                                                                                                                                                         |
+| `doctor` 가 데몬 진입 파일 WARN      | 빌드 없이 dev 로 데몬 시도               | `pnpm build` 후 `node dist/cli/adde.js up <proj>` 또는 전역 설치(`npm i -g .`) — 아래 "데몬은 등록됐는데 레인이 안 뜸"과 동일 원인                                                                                                    |
 | 핸드셰이크 무응답으로 기동 실패      | 엔진이 응답 없이 멈춤                    | 엔진 바이너리·헬스 확인 후 `adde up` 재시도(ADDE 는 30초 후 타임아웃하고 child 를 정리). `adde logs <proj> <lane> --engine` 에 `env: node: No such file or directory` 가 보이면 PATH 문제 — 아래 "데몬으로 레인이 안 뜸" 참조         |
 | 데몬은 등록됐는데 레인이 안 뜸       | 빌드 없이 `pnpm run dev up` 로 데몬 기동 | 데몬 워커는 launchd 가 띄우는 분리 프로세스라 tsx(dev)로는 안 됩니다. `pnpm build` 후 `node dist/cli/adde.js up <proj>` 또는 전역 설치(`npm i -g .`) 후 `adde up <proj>` 로 기동하세요(빌드본이 없으면 `adde up` 이 안내와 함께 거부) |
 
@@ -41,6 +45,22 @@ adde up <proj>     # 재기동
 ```
 
 `adde logs <proj> <lane>` 로 종료 직전 활동을 확인하면 원인 파악에 도움이 됩니다.
+
+## 레인이 stale(행)로 표시됨
+
+`adde status` 의 `stale` 은 기동 프로세스(pid)는 살아있지만 하트비트(상태 파일 mtime)가 임계 시간 멈춘 경우입니다 — **행(hung) 의심**. 크래시(`dead`)와 달리 프로세스가 남아 있어 조치가 다릅니다.
+
+```bash
+adde logs <proj> <lane> --engine   # 엔진 stderr — 무엇에 막혔는지 확인
+adde restart <proj>                # 데몬 재기동으로 회수
+```
+
+행의 흔한 원인은 엔진이 긴 작업/외부 대기에 묶였거나 응답이 멈춘 경우입니다. 재기동으로 풀리지 않으면 `--engine` 로그와 `adde doctor <proj>` 로 환경을 점검하세요.
+
+## 재부팅 후 복구·orphan 정리
+
+- **재부팅·로그아웃 후 레인이 안 떠 있음**: `adde up` 으로 등록된 데몬은 `KeepAlive`/`RunAtLoad` 로 자동 복구되지만, 실제 상태는 직접 확인하세요 — `adde status <proj>` 가 `running` 이 아니면 `adde doctor <proj>`(등록 상태 포함) 점검 후 `adde up <proj>` 재기동. plist 는 `adde up` 시점의 PATH 를 담으므로, 그 뒤 node/claude 설치 위치를 옮겼다면 `adde restart <proj>` 로 PATH 를 갱신하세요.
+- **orphan 엔진 프로세스**: 비정상 종료 후 `claude-code-acp` 엔진 프로세스가 남을 수 있습니다. `adde down <proj>` 후 `ps aux | grep claude-code-acp` 로 잔존을 확인하고, 남아 있으면 해당 pid 를 종료하세요.
 
 ## 메시지를 보내도 응답이 없음
 
@@ -58,6 +78,8 @@ adde up <proj>     # 재기동
 - `/compact` 는 재기동 없이 진행 중 세션에 압축 명령을 위임하므로 이 경로에 해당하지 않습니다.
 
 ## 권한 관련
+
+> 권한 모델·티어·denylist 의 개념 설명은 [권한 가이드](permissions.md)에 있습니다. 아래는 증상별 조치입니다.
 
 - **항상 거부됨**: 권한 요청에 제때(기본 10분) 응답하지 않으면 fail-closed 로 자동 거부됩니다. 채널 도달 실패·오류도 거부로 처리됩니다.
 - **기동 시 권한 드리프트 경고**: 엔진의 실효 권한이 ADDE 정책보다 느슨하다고 확인되면(예: bypassPermissions) 콘솔·채널·transcript 에 경고를 표시하고 기동은 계속합니다. 이 상태에선 게이트가 무력화될 수 있으니 엔진 권한 설정을 해제하거나 conf 의 `perm_tier` 에 맞게 정렬하세요. 특히 `autopass` 레인은 엔진이 bypass 면 권한 요청 자체가 오지 않아 denylist 가 동작하지 않습니다.

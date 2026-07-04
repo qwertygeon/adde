@@ -44,7 +44,7 @@ adde doctor        # 프로젝트 인자 없이 전역 환경 점검
 - **레인(lane)**: `(채널 소스 × 백엔드 × 프로젝트 폴더)` 단위의 독립 수직 스택. 입력·승인·출력이 레인 안에서 완결됩니다.
 - **소스(source)**: 지시를 받는 채널. `telegram`(봇 long-poll) 또는 `markdown`(노트 파일 감시, 예: Obsidian).
 - **백엔드(backend)**: AI 엔진 구동 계층. 현재 `acp`(Agent Client Protocol).
-- **게이트(gate)**: 모든 권한 요청을 채널 승인으로 라우팅. 타임아웃·오류 시 기본 거부(fail-closed).
+- **게이트(gate)**: 모든 권한 요청을 채널 승인으로 라우팅. 타임아웃(기본 10분)·오류 시 기본 거부(fail-closed). 티어(`acp` 기본 / `autopass` 옵트인)·allowlist·denylist 로 승인 빈도를 조절합니다 — 개념·권장 설정은 [권한 가이드](permissions.md).
 
 ## 레인 설정
 
@@ -115,6 +115,8 @@ adde logs <proj> <lane>       # 레인 최근 활동(transcript)
 adde sessions <proj> <lane>   # 엔진 세션 장부 목록(재개·초기화는 채널 명령)
 ```
 
+**성공 판정**: `adde status <proj>` 에서 해당 레인이 `running` 이면 기동 성공입니다. `stopped`/`dead`/`stale` 이거나 `adde up` 이 실패하면 [트러블슈팅](troubleshooting.md)으로 넘어가세요.
+
 기동이 안 되거나 응답이 없으면 `adde doctor` 로 먼저 점검하세요. 전체 명령은 [명령 레퍼런스](commands.md), 증상별 조치는 [트러블슈팅](troubleshooting.md)을 참고하세요.
 
 ## 프로젝트 폴더 매핑
@@ -125,6 +127,7 @@ adde sessions <proj> <lane>   # 엔진 세션 장부 목록(재개·초기화는
 
 - Telegram 봇으로 구동: [telegram.md](telegram.md)
 - 마크다운 노트(예: Obsidian)로 메모 기반 구동: [markdown.md](markdown.md)
+- 권한 게이트·티어 이해: [permissions.md](permissions.md)
 - 전체 명령: [commands.md](commands.md)
 - 문제 해결: [troubleshooting.md](troubleshooting.md)
 - 문서 인덱스: [README.md](README.md)

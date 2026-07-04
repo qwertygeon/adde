@@ -154,6 +154,11 @@ lane add 옵션:
       missing: "해석된 경로에 파일 없음: {{path}}",
       hint: "의존성을 설치하세요(pnpm install) — @zed-industries/claude-code-acp 누락.",
     },
+    daemonEntry: {
+      name: "데몬 진입 파일",
+      missing: "데몬 진입 파일을 찾을 수 없음: {{path}}",
+      hint: "데몬 모드는 빌드가 필요합니다. `pnpm build` 후 dist 로 실행(`node dist/cli/adde.js up <proj>`)하거나 전역 설치(`npm i -g .`)하세요. `pnpm run dev up` 으로는 데몬을 띄울 수 없습니다.",
+    },
     base: {
       name: "설정 base 디렉터리",
       hint: "레인을 추가하면 생성됩니다(adde lane add <proj> <lane>).",
@@ -285,6 +290,11 @@ lane add 옵션:
       situation: "launchctl load 실패 (exit {{code}}): {{output}}",
       action:
         "adde doctor {{proj}} 로 등록 상태를 점검하거나, 기존 등록을 먼저 해제하세요 (adde down {{proj}}).",
+    },
+    binMissing: {
+      situation: "데몬 실행 파일을 찾을 수 없습니다: {{path}}",
+      action:
+        "데몬 모드는 빌드가 필요합니다 — `pnpm build` 후 dist 로 실행(`node dist/cli/adde.js up <proj>`)하거나 전역 설치(`npm i -g .`) 후 `adde up <proj>` 하세요. `pnpm run dev up` 으로는 데몬을 띄울 수 없습니다(launchd 가 분리 프로세스를 스폰하므로 tsx 트랜스파일이 적용되지 않습니다).",
     },
   },
   queue: {

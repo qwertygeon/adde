@@ -1,3 +1,4 @@
+import { makeEnvelope } from "../helpers/envelope.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -17,8 +18,8 @@ vi.mock("node:fs/promises", async (orig) => {
   return {
     ...actual,
     writeFile: async (p: unknown, data: unknown, opts?: unknown) => {
-      // 본문 tmp(`.<id>.out.tmp`)만 가로챔 — sidecar tmp 는 `.out.json.tmp` 라 매칭 안 됨.
-      if (h.failOutBodyWrite && typeof p === "string" && p.endsWith(".out.tmp")) {
+      // 본문 tmp(`.<id>.out.<pid>.tmp`)만 가로챔 — sidecar tmp 는 `.out.json.<pid>.tmp` 라 매칭 안 됨.
+      if (h.failOutBodyWrite && typeof p === "string" && /\.out\.\d+\.tmp$/.test(p)) {
         throw new Error("주입된 본문 쓰기 실패");
       }
       return (actual.writeFile as (...a: unknown[]) => Promise<void>)(p, data, opts);
@@ -33,19 +34,6 @@ vi.mock("node:fs/promises", async (orig) => {
 const { writeOut, isDone, readSidecar, claimNext, enqueue, markSent, isSent, findUnsent } =
   await import("../../src/core/queue.js");
 import { lanePaths } from "../../src/shared/paths.js";
-import type { Envelope } from "../../src/shared/envelope.js";
-
-const makeEnvelope = (id: string, text = "t"): Envelope => ({
-  v: 1,
-  id,
-  lane: "lane",
-  source: "telegram",
-  backend: "acp",
-  engine: "claude-code-acp",
-  project: "p",
-  ts: "2026-06-30T00:00:00.000Z",
-  text,
-});
 
 let tmpBase: string;
 let paths: ReturnType<typeof lanePaths>;

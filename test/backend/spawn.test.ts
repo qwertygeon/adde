@@ -129,4 +129,26 @@ describe("spawnEngine stderr 캡처 (SC-R1)", () => {
     expect(child.stderr).toBeNull();
     child.kill();
   });
+
+  it("engine.log 는 시크릿을 마스킹해 기록한다 (side channel 유출 차단)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "adde-spawn-mask-"));
+    const logPath = join(dir, "engine.log");
+    try {
+      // 봇 토큰 형식 문자열을 stderr 로 뱉는 엔진 — 마스킹되어야 한다.
+      spawnEngine(
+        process.execPath,
+        [
+          "-e",
+          "process.stderr.write('err TELEGRAM_BOT_TOKEN=123456:AAaabbccddeeff00112233445566778899x done\\n')",
+        ],
+        { stderrPath: logPath },
+      );
+      const text = await waitForContent(logPath, "done");
+      expect(text).toContain("done"); // 비시크릿 텍스트는 보존
+      expect(text).not.toContain("123456:AAaabbccddeeff00112233445566778899x"); // 토큰 원문 미노출
+      expect(text).toContain("***");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

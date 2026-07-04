@@ -1,30 +1,31 @@
 /**
  * Markdown 소스 어댑터 — 파일 핸드셰이크(버튼 없는 채널).
  * 임의 마크다운 에디터/동기 도구(대표 예: Obsidian)에서 노트 파일 편집만으로 구동.
- * 설계: docs/_internal/design/09-markdown-source-adapter.md.
  * 인박스 노트 편집 + send 체크박스 → envelope → 큐.
  * 권한: approvals 노트에 ⏳ 블록 append → allow/deny 체크 감지 → 게이트 반영. 무응답 → 타임아웃 deny.
  * 출력: out/<id>.out 감시 → 마크다운 출력 노트(one-file-per-message, atomic).
  * 동기 내성: *.sync-conflict* 격리·상태 마커 멱등 자기쓰기 가드·tmp→rename.
  */
 import { t, tFor } from "../shared/i18n.js";
+import { errMsg, errCode } from "../shared/errors.js";
 import { watch, existsSync, mkdirSync, statSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import { readFile, writeFile, rename, mkdir, stat, readdir } from "node:fs/promises";
-import { join, dirname, basename, relative, isAbsolute, resolve } from "node:path";
+import { readFile, rename, mkdir, stat, readdir } from "node:fs/promises";
+import { join, dirname, isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
+import { isPathInside, normCasePath, pathsOverlap } from "../shared/paths.js";
+import { atomicWrite as atomicWriteFile } from "../shared/fs-atomic.js";
 import type { LaneConf } from "../shared/conf.js";
-import { enqueue, hasId } from "../core/queue.js";
-import type { Envelope } from "../shared/envelope.js";
+import { enqueue, hasId, readSidecar } from "../core/queue.js";
+import type { Envelope, ControlRequest } from "../shared/envelope.js";
+import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
 import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
 import type { Source, DecisionCallback, Decision } from "./source.js";
+import { ENQUEUE_FAIL_THRESHOLD } from "./source.js";
 import { formatException } from "../shared/notify.js";
 import type { NotifyT } from "../shared/notify.js";
-
-/** enqueue 연속 실패 임계 — 도달 시 outbox 에 1회 알림(telegram 패턴과 일관, ⑫). */
-const ENQUEUE_FAIL_THRESHOLD = 3;
 
 const DEBOUNCE_MS = 150;
 /** fs.watch 가 놓친 편집을 보정하는 저빈도 폴링 주기(B2 백스톱). */
@@ -38,7 +39,7 @@ export interface MarkdownConfig {
   engine: string;
   paths: LanePaths;
   conf: LaneConf;
-  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요(DEC-001). */
+  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요. */
   onInbound?: (() => void) | undefined;
 }
 
@@ -52,17 +53,22 @@ export function isConflictFile(filename: string): boolean {
 /** 체크박스 라인 파싱: `- [ ]`/`- [x]` + 라벨. */
 const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)$/;
 
-/** 라벨 앞쪽의 이모지·기호·공백을 제거하고 소문자화한 코어 토큰. */
-function labelCore(label: string): string {
-  return label.replace(/^[^\p{L}]+/u, "").toLowerCase();
+/** 라벨 앞쪽의 이모지·기호·공백을 제거한 본문(대소문자 보존 — resume 인자의 세션 id 는 대문자 포함 가능). */
+function labelBody(label: string): string {
+  return label.replace(/^[^\p{L}]+/u, "");
 }
 
-/** send 트리거 라벨 판별 — 코어가 정확히 'send'(A4: 부분일치 금지). */
+/** 라벨 앞쪽의 이모지·기호·공백을 제거하고 소문자화한 코어 토큰. */
+function labelCore(label: string): string {
+  return labelBody(label).toLowerCase();
+}
+
+/** send 트리거 라벨 판별 — 코어가 정확히 'send'(부분일치 금지). */
 function isSendLabel(label: string): boolean {
   return labelCore(label) === "send";
 }
 
-// --- 전송 스탬프 (DEC-001/003/007) -------------------------------------------
+// --- 전송 스탬프 -------------------------------------------
 // 형식 `YYYYMMDD-HHmmss`(로컬 시각) — 파일명 안전(콜론 없음)하면서 inbox 마커와
 // out 노트 파일명에 동일 표기. 기준 시각은 전송(enqueue) 시각이며 envelope.ts 로
 // 영속돼 재렌더에도 파일명이 결정론적이다.
@@ -100,14 +106,17 @@ export function isoFromStamp(stamp: string): string | null {
 
 /** 인박스 액션 — main 이 id 부여·enqueue·종단 마킹을 수행. */
 export interface InboxAction {
-  /** fresh=신규 트리거(새 id 필요) · resume=`sending <id>` 재개 · empty=빈 트리거. */
-  kind: "fresh" | "resume" | "empty";
+  /** fresh=신규 트리거 · resume=`sending <id>` 재개 · empty=빈 트리거 · control=세션 제어 라벨. */
+  kind: "fresh" | "resume" | "empty" | "control";
   lineIndex: number;
   text: string;
   /** resume 시 기존 id. */
   id?: string;
   /** resume 시 sending 라인에 기록된 전송 스탬프(구버전 라인엔 없음). */
   stamp?: string;
+  /** control 시 제어 종류·인자(resume 의 번호/세션 id). */
+  controlKind?: "clear" | "compact" | "resume" | "sessions";
+  controlArg?: string;
 }
 
 export interface InboxParse {
@@ -116,12 +125,12 @@ export interface InboxParse {
   trailingNewline: boolean;
 }
 
-/** send 트리거 라인을 단계별 마커로 재작성하는 헬퍼(A3 2단계 내구 마킹). */
-// 스탬프는 id 뒤에 둔다(DEC-004) — 재개 파서가 sending 다음 첫 토큰을 id 로 읽는다.
+/** send 트리거 라인을 단계별 마커로 재작성하는 헬퍼(2단계 내구 마킹). */
+// 스탬프는 id 뒤에 둔다 — 재개 파서가 sending 다음 첫 토큰을 id 로 읽는다.
 export function sendingLine(id: string, stamp: string): string {
   return `- [x] ⏳ sending ${id} ${stamp}`;
 }
-// 위키링크 텍스트 = out 노트 basename(스탬프+id) — 노트 생성 시 링크가 해소된다(DEC-005).
+// 위키링크 텍스트 = out 노트 basename(스탬프+id) — 노트 생성 시 링크가 해소된다.
 export function sentLine(id: string, stamp: string): string {
   return `- [x] ✅ sent [[${outNoteBase(stamp, id)}]]`;
 }
@@ -178,7 +187,32 @@ export function parseInbox(content: string): InboxParse {
       segmentStart = i + 1; // 체크/미체크 무관 경계
       continue;
     }
-    // send/sent/sending/empty 가 아닌 체크박스 → 본문(경계 아님, segmentStart 유지)
+    // 세션 제어 라벨(send 와 동일 계약: 정확 일치·앞 이모지 허용·체크 시 트리거·항상 경계).
+    // resume 은 인자 허용: `resume 2`(목록 번호)·`resume <세션id>`. 무인자 resume = 목록 조회.
+    if (core === "clear" || core === "compact") {
+      if (checked) {
+        actions.push({ kind: "control", controlKind: core, text: "", lineIndex: i });
+      }
+      segmentStart = i + 1;
+      continue;
+    }
+    // 인자는 소문자 core 가 아니라 본문에서 추출 — 세션 id 의 대문자를 보존해야 장부와 일치.
+    const rm = /^resume(?:\s+(\S+))?$/i.exec(labelBody(label));
+    if (rm) {
+      if (checked) {
+        const action: InboxAction = {
+          kind: "control",
+          controlKind: rm[1] ? "resume" : "sessions",
+          text: "",
+          lineIndex: i,
+        };
+        if (rm[1]) action.controlArg = rm[1];
+        actions.push(action);
+      }
+      segmentStart = i + 1;
+      continue;
+    }
+    // send/sent/sending/empty/제어 가 아닌 체크박스 → 본문(경계 아님, segmentStart 유지)
   }
 
   return { actions, lines, trailingNewline };
@@ -329,22 +363,21 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   let pollOp: Promise<void> = Promise.resolve();
   let inboxBusy = false;
   let running = false;
-  // enqueue 연속 실패 추적(⑫) — 임계 도달 시 outbox 알림 1회, 성공 시 리셋.
+  // enqueue 연속 실패 추적 — 임계 도달 시 outbox 알림 1회, 성공 시 리셋.
   let consecutiveEnqueueFailures = 0;
   let enqueueAlertSent = false;
   // approvals 파일 변경을 직렬화(append·결정 재작성·타임아웃 경합 방지).
   let approvalsLock: Promise<void> = Promise.resolve();
-  // in-flight inbox/approvals 처리 추적 — stop() 이 정리 완료를 대기(H4/DEC-004).
+  // watch 발 격리(fire-and-forget)도 체인으로 추적 — stop() 이 in-flight 격리를 대기
+  // (teardown 뒤 살아남은 mkdir 이 정리된 임시 경로를 재생성하는 것 방지).
+  let quarantineOp: Promise<void> = Promise.resolve();
+  // in-flight inbox/approvals 처리 추적 — stop() 이 정리 완료를 대기.
   let inboxOp: Promise<void> = Promise.resolve();
   let approvalsOp: Promise<void> = Promise.resolve();
 
-  /** 같은 디렉터리 tmp→rename 으로 원자 기록. */
+  /** 원자 기록(shared 위임) + 자기쓰기 echo 가드 등록. */
   async function atomicWrite(filePath: string, content: string): Promise<void> {
-    const dir = dirname(filePath);
-    const tmp = join(dir, `.${basename(filePath)}.tmp`);
-    await mkdir(dir, { recursive: true });
-    await writeFile(tmp, content, "utf8");
-    await rename(tmp, filePath);
+    await atomicWriteFile(filePath, content);
     lastSelfWrite.set(filePath, content);
   }
 
@@ -357,8 +390,8 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     return run;
   }
 
-  // ts 는 전송 스탬프의 원본(SoT) — 호출자가 스탬프와 같은 순간의 값을 넘긴다(DEC-003).
-  function normalize(id: string, text: string, ts: string): Envelope {
+  // ts 는 전송 스탬프의 원본(SoT) — 호출자가 스탬프와 같은 순간의 값을 넘긴다.
+  function normalize(id: string, text: string, ts: string, control?: ControlRequest): Envelope {
     return {
       v: 1,
       id,
@@ -370,7 +403,15 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       ts,
       text,
       reply_ref: { channel_msg_id: id },
+      ...(control ? { control } : {}),
     };
+  }
+
+  /** 제어 라벨 → ControlRequest 해석. resume 인자 해석은 채널 공통(resolveResumeControl). */
+  async function resolveControl(action: InboxAction): Promise<ControlRequest> {
+    const kind = action.controlKind!;
+    if (kind !== "resume") return { kind };
+    return resolveResumeControl(action.controlArg, await readLedger(cfg.paths));
   }
 
   async function readMaybe(filePath: string): Promise<string | null> {
@@ -411,6 +452,8 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       if (actions.length === 0) return;
 
       // Phase A: fresh→id 부여+sending 마킹, empty→마킹 (내구 기록 후 enqueue).
+      // control 은 단일 단계(마킹 없이 enqueue→sent 종단) — 재구성 불가한 제어 정보라 sending
+      // 재개 대상에서 제외하고, 크래시 시 라벨이 남아 재트리거되는 쪽을 택한다(멱등에 가까움).
       const pending: Array<{
         id: string;
         text: string;
@@ -418,12 +461,25 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
         resume: boolean;
         stamp: string;
         ts: string;
+        control?: ControlRequest;
       }> = [];
       let dirtyA = false;
       for (const a of actions) {
         if (a.kind === "empty") {
           lines[a.lineIndex] = emptyLine();
           dirtyA = true;
+        } else if (a.kind === "control") {
+          const id = randomUUID();
+          const d = new Date();
+          pending.push({
+            id,
+            text: `/${a.controlKind!}`,
+            lineIndex: a.lineIndex,
+            resume: false,
+            stamp: formatStamp(d),
+            ts: d.toISOString(),
+            control: await resolveControl(a),
+          });
         } else if (a.kind === "fresh") {
           const id = randomUUID();
           const d = new Date();
@@ -464,7 +520,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
             finalize.push(p); // 이미 enqueue 됨 — 종단만
             continue;
           }
-          await enqueue(cfg.paths, normalize(p.id, p.text, p.ts));
+          await enqueue(cfg.paths, normalize(p.id, p.text, p.ts, p.control));
           finalize.push(p);
           consecutiveEnqueueFailures = 0; // 성공 → 연속 실패 리셋
           enqueueAlertSent = false;
@@ -476,10 +532,10 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
               count: consecutiveEnqueueFailures,
               lane: cfg.lane,
               id: p.id,
-              error: err instanceof Error ? err.message : String(err),
+              error: errMsg(err),
             }),
           );
-          // 임계 도달 시 1회 운영자 알림(⑫) — telegram 패턴과 일관.
+          // 임계 도달 시 1회 운영자 알림 — telegram 패턴과 일관.
           if (consecutiveEnqueueFailures >= ENQUEUE_FAIL_THRESHOLD && !enqueueAlertSent) {
             enqueueAlertSent = true;
             await alertEnqueueFailure(consecutiveEnqueueFailures);
@@ -536,17 +592,19 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       await mkdir(quarantineDir, { recursive: true });
       await rename(join(srcDir, filename), join(quarantineDir, filename));
     } catch (err) {
+      // ENOENT = watch 경로와 폴링 백스톱이 같은 파일을 겹쳐 시도(한쪽이 이미 격리) — 정상 경합, 무음.
+      if (errCode(err) === "ENOENT") return;
       console.error(
         t("log.markdown.quarantineFail", {
           filename,
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
         }),
       );
     }
   }
 
-  /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOut 직후 in-process 호출(DEC-001). */
-  /** enqueue 연속 실패 임계 도달 시 outbox 에 1회 액션형 알림 노트(⑫). 채널이 파일이라 outbox 로 표면화. */
+  /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOut 직후 in-process 호출. */
+  /** enqueue 연속 실패 임계 도달 시 outbox 에 1회 액션형 알림 노트. 채널이 파일이라 outbox 로 표면화. */
   async function alertEnqueueFailure(count: number): Promise<void> {
     const note = formatException(
       {
@@ -556,30 +614,15 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       tl,
     );
     await atomicWrite(join(outboxDir, "_enqueue-alert.md"), note).catch((e: unknown) =>
-      console.error(
-        t("log.markdown.alertWriteError", { error: e instanceof Error ? e.message : String(e) }),
-      ),
+      console.error(t("log.markdown.alertWriteError", { error: errMsg(e) })),
     );
   }
 
   async function renderOut(id: string): Promise<void> {
     const text = await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
-    interface RenderSidecar {
-      reply_ref?: { channel_msg_id?: string };
-      origin_ts?: string;
-      ts?: string;
-      question?: string;
-    }
-    let sidecar: RenderSidecar | null = null;
-    const sidecarRaw = await readMaybe(join(cfg.paths.outDir, `${id}.out.json`));
-    if (sidecarRaw) {
-      try {
-        sidecar = JSON.parse(sidecarRaw) as RenderSidecar;
-      } catch {
-        // sidecar 파손 → 메타 없이 진행(보조 정보).
-      }
-    }
-    // 파일명 스탬프는 전송 시각(origin_ts) 유래 — 재렌더에도 결정론적(DEC-003).
+    // sidecar 읽기는 queue.readSidecar 로 일원화(부재·파손 → null = 메타 없이 진행).
+    const sidecar = await readSidecar(cfg.paths, id);
+    // 파일명 스탬프는 전송 시각(origin_ts) 유래 — 재렌더에도 결정론적.
     // origin_ts 부재(구버전 sidecar)는 종전 `<id>.md` 유지.
     const stamp = sidecar?.origin_ts ? stampFromIso(sidecar.origin_ts) : null;
     const noteName = stamp ? `${outNoteBase(stamp, id)}.md` : `${id}.md`;
@@ -599,9 +642,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   /** handleInbox 를 추적 가능한 형태로 기동(fire-and-forget + .catch, stop 대기 대상). */
   function runInbox(): void {
     inboxOp = handleInbox().catch((err: unknown) =>
-      console.error(
-        t("log.markdown.inboxError", { error: err instanceof Error ? err.message : String(err) }),
-      ),
+      console.error(t("log.markdown.inboxError", { error: errMsg(err) })),
     );
   }
 
@@ -610,7 +651,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     approvalsOp = handleApprovals().catch((err: unknown) =>
       console.error(
         t("log.markdown.approvalsError", {
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
         }),
       ),
     );
@@ -694,6 +735,16 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
         lastFileSig.set(approvalsDir, apprSig);
         debounce(approvalsDir, runApprovals);
       }
+      // 충돌 파일 격리 백스톱: inbox 파일 시그니처·approvals 시그니처는 "충돌 파일 생성" 을
+      // 포착하지 못하므로(watch 가 생성 이벤트를 놓치면 영구 방치) 인박스 디렉터리를 직접 스캔.
+      try {
+        const entries = await readdir(dirname(inboxPath));
+        for (const fn of entries) {
+          if (isConflictFile(fn)) await quarantine(fn, dirname(inboxPath));
+        }
+      } catch {
+        // 디렉터리 부재 — 다음 폴에서 재시도
+      }
     } finally {
       pollBusy = false;
     }
@@ -717,30 +768,22 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       }
     }
 
-    // A1: 제어 노트가 AI 작업폴더(cwd) 내부면 자기승인 위험 → fail-closed 기동 거부.
+    // 제어 노트가 AI 작업폴더(cwd) 내부면 자기승인 위험 → fail-closed 기동 거부.
     const effectiveCwd =
       cfg.conf.cwd && cfg.conf.cwd.length > 0 ? resolve(cfg.conf.cwd) : process.cwd();
-    const isInside = (child: string, parent: string): boolean => {
-      const rel = relative(parent, child);
-      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-    };
     for (const [name, p] of [
       ["inbox", inboxPath],
       ["approvals", approvalsDir],
       ["outbox", outboxDir],
     ] as const) {
-      if (isInside(p, effectiveCwd)) {
+      if (isPathInside(p, effectiveCwd)) {
         throw new Error(t("markdown.controlNoteInCwd", { name, path: p, cwd: effectiveCwd }));
       }
     }
 
     // 상호 배타: 승인/출력/입력/격리 경로가 같거나 포함 관계면 자기쓰기 재발화·승인
     // 오파싱 위험(출력·알림 노트가 승인 감시에 잡힘) → fail-closed 기동 거부.
-    // macOS 기본 FS 는 대소문자 무시라 Shared/shared 가 같은 물리 디렉터리 — darwin 은
-    // 소문자 정규화 후 비교한다(대소문자 구분 볼륨에선 과차단이나 fail-closed 방향이라 수용).
-    const normCase = (p: string): string => (process.platform === "darwin" ? p.toLowerCase() : p);
-    const overlaps = (a: string, b: string): boolean =>
-      isInside(normCase(a), normCase(b)) || isInside(normCase(b), normCase(a));
+    // 판정 규칙은 lane-config 의 생성 시 사전 경고와 동일해야 한다 — shared/paths 가 SSOT.
     const rApprovals = resolve(approvalsDir);
     const rOutbox = resolve(outboxDir);
     const rInbox = resolve(inboxPath);
@@ -750,7 +793,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       ["approvals", rApprovals, "quarantine(.conflicts)", rQuarantine],
       ["outbox", rOutbox, "quarantine(.conflicts)", rQuarantine],
     ] as const) {
-      if (overlaps(a, b)) {
+      if (pathsOverlap(a, b)) {
         throw new Error(t("markdown.pathsOverlap", { nameA, a, nameB, b }));
       }
     }
@@ -758,7 +801,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       ["approvals", rApprovals],
       ["outbox", rOutbox],
     ] as const) {
-      if (isInside(normCase(rInbox), normCase(dir))) {
+      if (isPathInside(normCasePath(rInbox), normCasePath(dir))) {
         throw new Error(t("markdown.inboxInsideDir", { inbox: rInbox, name, dir }));
       }
     }
@@ -769,7 +812,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
 
     const dispatch = (srcDir: string, filename: string): void => {
       if (isConflictFile(filename)) {
-        void quarantine(filename, srcDir);
+        quarantineOp = quarantineOp.then(() => quarantine(filename, srcDir));
         return;
       }
       const full = join(srcDir, filename);
@@ -783,7 +826,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     const dirs = new Set([inboxDir, approvalsDir]);
     for (const dir of dirs) watchDir(dir, (filename) => dispatch(dir, filename));
 
-    // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거, DEC-001).
+    // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거).
     mkdirSync(cfg.paths.outDir, { recursive: true });
     mkdirSync(outboxDir, { recursive: true });
 
@@ -796,9 +839,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     seedSig(inboxPath);
     pollTimer = setInterval(() => {
       pollOp = pollOnce().catch((err: unknown) =>
-        console.error(
-          t("log.markdown.pollError", { error: err instanceof Error ? err.message : String(err) }),
-        ),
+        console.error(t("log.markdown.pollError", { error: errMsg(err) })),
       );
     }, POLL_INTERVAL_MS);
   }
@@ -815,12 +856,13 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     debounceTimers.clear();
     for (const t of permTimers.values()) clearTimeout(t);
     permTimers.clear();
-    // in-flight 처리(폴 + approvals 락 체인 + inbox/approvals op) settle 대기 —
-    // 임시 디렉터리 정리 뒤 살아남은 쓰기가 ENOENT 를 내지 않도록(H4).
+    // in-flight 처리(폴 + approvals 락 체인 + inbox/approvals/격리 op) settle 대기 —
+    // 임시 디렉터리 정리 뒤 살아남은 쓰기가 ENOENT 를 내지 않도록.
     await pollOp.catch(() => {});
     await approvalsLock.catch(() => {});
     await inboxOp.catch(() => {});
     await approvalsOp.catch(() => {});
+    await quarantineOp.catch(() => {});
   }
 
   /**

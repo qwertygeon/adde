@@ -1,129 +1,166 @@
-# 시작하기
+_English | [한국어](getting-started.ko.md)_
 
-ADDE 는 AI CLI 엔진(Claude Code 등)을 채널(Telegram / 마크다운 노트)에서 원격 구동하는 게이트웨이입니다. 이 문서는 설치부터 첫 레인 기동까지를 다룹니다.
+# Getting started
 
-## 목차
+ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) remotely from a channel (Telegram / markdown notes). This document covers everything from installation to starting your first lane.
 
-- [요구사항](#요구사항)
-- [설치](#설치)
-- [핵심 개념](#핵심-개념)
-- [레인 설정](#레인-설정)
-- [기동·종료](#기동종료)
-- [상태·진단](#상태진단)
-- [프로젝트 폴더 매핑](#프로젝트-폴더-매핑)
-- [다음 단계](#다음-단계)
+## Table of Contents
 
-## 요구사항
+- [Requirements](#requirements)
+- [Install](#install)
+- [Core concepts](#core-concepts)
+- [Lane configuration](#lane-configuration)
+- [Start / stop](#start--stop)
+- [Status and diagnostics](#status-and-diagnostics)
+- [Project-folder mapping](#project-folder-mapping)
+- [Uninstall](#uninstall)
+- [Next steps](#next-steps)
 
-- macOS (1차 타깃)
-- Node.js LTS (>=22)
-- AI 엔진 ACP 어댑터 (예: `@zed-industries/claude-code-acp`)
+## Requirements
 
-## 설치
+- macOS (primary target)
+- Node.js LTS (>=22) — the daemon is launched via launchd, so `node` must be on PATH (`adde up` injects the PATH at launch time into the plist).
+- AI engine ACP adapter — `@zed-industries/claude-code-acp` is bundled with `adde` (no separate install needed).
+- **Claude authentication**: the engine drives Claude Code through the bundled adapter, so **Claude must be authenticated under the same user account** (e.g. logged in via Claude Code, or `ANTHROPIC_API_KEY` set). If unauthenticated, the engine handshake fails and the lane will not start — first confirm that Claude works on its own.
 
-배포 방식은 **npm 전역 설치**입니다. 최초 릴리스 발행 후부터 다음 한 줄로 설치합니다(`adde`·`add` 명령 제공):
+## Install
+
+**Global npm install** (the main command is `adde`):
 
 ```bash
-npm i -g adde        # 최초 릴리스 발행 후 제공
+npm i -g adde
 ```
 
-> 발행 전(현재)에는 소스에서 빌드해 사용합니다:
+The single entry point is `adde`. The short aliases (`ad`, `add`) are not installed by default; if you want them, opt in via `adde init` (the onboarding wizard) or `adde alias` — see the [command reference](commands.md#alias--install-short-aliases).
+
+> **Permission error (EACCES)**: common on system/Homebrew Node (root-owned prefix). `sudo npm i -g` is not recommended (the package becomes root-owned, which breaks later updates). Use a version manager (nvm/fnm) or set a user prefix (`npm config set prefix ~/.local` and add `~/.local/bin` to PATH).
 >
-> ```bash
-> pnpm install && pnpm build
-> ```
+> **Running from source (development/contributing)**: after `pnpm install && pnpm build`, run `node dist/cli/adde.js ...`. `pnpm run dev` is for a tsx foreground run; the daemon (`adde up`) requires a build.
 
-설치 후 `adde doctor` 로 사전조건(Node 버전·ACP 어댑터·설정)을 한 번 점검하면, 레인 기동 단계에서야 드러나는 미비를 미리 잡을 수 있습니다.
+After installing, run `adde doctor` once to check prerequisites (Node version, ACP adapter, configuration) so you can catch gaps that would otherwise only surface at lane-startup time.
 
 ```bash
-adde doctor        # 프로젝트 인자 없이 전역 환경 점검
+adde doctor        # global environment check, no project argument
 ```
 
-## 핵심 개념
-
-- **레인(lane)**: `(채널 소스 × 백엔드 × 프로젝트 폴더)` 단위의 독립 수직 스택. 입력·승인·출력이 레인 안에서 완결됩니다.
-- **소스(source)**: 지시를 받는 채널. `telegram`(봇 long-poll) 또는 `markdown`(노트 파일 감시, 예: Obsidian).
-- **백엔드(backend)**: AI 엔진 구동 계층. 현재 `acp`(Agent Client Protocol).
-- **게이트(gate)**: 모든 권한 요청을 채널 승인으로 라우팅. 타임아웃·오류 시 기본 거부(fail-closed).
-
-## 레인 설정
-
-레인은 **파일 1개 = 레인 1개**입니다. `~/.config/adde/<proj>/lanes.d/<lane>.conf` 에 작성합니다.
-
-### 서브커맨드로 설정 (권장)
-
-`adde lane` 서브커맨드가 conf 파일을 대신 생성·조회·삭제합니다(직접 편집도 가능).
+### Update
 
 ```bash
-# telegram 레인 생성 (작업 폴더·자동허용 도구·회신 대상 지정)
+npm i -g adde@latest       # update to the latest version
+adde restart <proj>        # apply the new version to running lanes (restart required)
+```
+
+`npm i -g adde@latest` swaps the installed files, but **an already-running daemon still holds the old code in memory**, so you must restart it with `adde restart <proj>` for the new version to take effect. Pin a specific version with `npm i -g adde@<x.y.z>`. (`adde status` and `adde doctor` print a one-line notice when a newer version is available on npm.)
+
+## Core concepts
+
+- **Lane**: an independent vertical stack per `(channel source × backend × project folder)`. Input, approval, and output are all self-contained within the lane.
+- **Source**: the channel that receives instructions. `telegram` (bot long-poll) or `markdown` (note-file watching, e.g. Obsidian).
+- **Backend**: the AI-engine driving layer. Currently `acp` (Agent Client Protocol).
+- **Gate**: routes every permission request to channel approval. Defaults to deny on timeout (default 10 minutes) or error (fail-closed). Tune approval frequency with tiers (`acp` default / `autopass` opt-in), allowlist, denylist, and hard-deny — for concepts and recommended settings, see the [permissions guide](permissions.md).
+
+## Lane configuration
+
+A lane is **one file = one lane**. Write it in `~/.config/adde/<proj>/lanes.d/<lane>.conf`.
+
+### Fastest start — `adde init`
+
+The fastest way to create your first lane is the onboarding wizard:
+
+```bash
+adde init [<proj>]
+```
+
+It first runs the global `doctor` and shows the results → asks whether to install the short aliases → prompts interactively for project/lane names and lane fields → creates the lane → prints the token-write and `adde up` start hints (TTY only). For a telegram lane the bot token is prompted last with **hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to set it later. Details: [command reference](commands.md#init--onboarding-wizard).
+
+### Configure via subcommands
+
+The `adde lane` subcommands create, list, and delete the conf file for you (direct editing also works).
+
+```bash
+# create a telegram lane (working folder, auto-allowed tools, reply target)
 adde lane add myproj tg-claude --cwd /abs/project --allowlist Read,Grep --chat-id 12345
 
-# telegram 봇 토큰을 stdin 으로 받아 state/<lane>/.env (0600) 에 기록
+# read the telegram bot token from stdin and write it to state/<lane>/.env (0600)
 printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude --token-stdin
 
-# markdown(노트) 레인 생성
+# create a markdown (note) lane
 adde lane add myproj md-claude --source markdown --root /abs/Notes --inbox inbox.md
 
-adde lane ls myproj                # 레인 목록
-adde lane show myproj tg-claude    # conf 출력
-adde lane rm myproj tg-claude      # conf 삭제
+adde lane ls myproj                # list lanes
+adde lane show myproj tg-claude    # print conf
+adde lane rm myproj tg-claude      # delete conf
 ```
 
 ```bash
-# 플래그 암기 없이 대화형으로 생성 (TTY 전용, 토큰은 묻지 않음)
-adde lane add myproj tg-claude --interactive
+# interactive wizard — the default on a TTY when no field flags are given (the telegram token is prompted last, hidden)
+adde lane add myproj tg-claude
+adde lane add myproj tg-claude --interactive   # force the wizard; --no-interactive forces flags-only for scripts
 ```
 
-기본값: `--source telegram`, `--backend acp`, `--engine claude-code-acp`, `--channel`=source, `--perm-tier acp`, `--acp-version v1`. 기존 conf 는 `--force` 없이는 덮어쓰지 않습니다. 생성 시 `cwd`·markdown `root` 부재나 토큰 형식 이상은 경고로 안내합니다(생성은 진행). 전체 옵션은 `adde lane help` 또는 [명령 레퍼런스](commands.md#lane-add-옵션).
+On a TTY, `adde lane add <proj> <lane>` with **no field flags** launches the interactive wizard automatically; passing any field flag (or `--no-interactive`, or a non-TTY stdin) makes it non-interactive. The [command reference](commands.md#lane-add-options) table is authoritative for per-flag defaults and the full set of options (also available via `adde lane help`). An existing conf is not overwritten without `--force`. At creation time, a missing `cwd`, a missing markdown `root`, or a malformed token is reported as a warning (creation still proceeds).
 
-### conf 키 (직접 편집 시)
+### conf keys (when editing directly)
 
-공통 키:
+Common keys:
 
 ```ini
 source=telegram         # telegram | markdown
 backend=acp
-engine=claude-code-acp  # ACP 엔진 기동 프로필
-channel=telegram        # 게이트 분기용
+engine=claude-code-acp  # ACP engine launch profile
+channel=telegram        # for gate routing
 perm_tier=acp
 acp_version=v1
-cwd=/abs/project/dir     # 이 레인 AI 의 작업 폴더(프로젝트 폴더 매핑)
-allowlist=Read,Grep      # 선택: 승인 빈도 축소(게이트 유지)
+cwd=/abs/project/dir     # this lane's AI working folder (project-folder mapping)
+allowlist=Read,Grep      # optional: reduce approval frequency (gate stays on)
 ```
 
-채널별 추가 키:
+Per-channel extra keys:
 
-- **telegram**: `chat_id=<회신 대상>`. 봇 토큰은 conf 가 아니라 `~/.config/adde/<proj>/state/<lane>/.env` 에 `TELEGRAM_BOT_TOKEN=...` 으로 둡니다(인자·로그 비노출). 단계별: [telegram.md](telegram.md).
-- **markdown**: `root=<절대경로, 예: Obsidian vault>`, `inbox=<root 상대>`, (선택) `approvals=`·`outbox=`. → [마크다운 가이드](markdown.md).
+- **telegram**: `chat_id=<reply target>` (setting it also **auto-allows inbound from that chat**). The bot token goes not in the conf but in `~/.config/adde/<proj>/state/<lane>/.env` as `TELEGRAM_BOT_TOKEN=...` (never in arguments or logs). Inbound is processed only from allowed senders (`chat_id` ∪ `allow_from`); with none set, all inbound is denied (fail-closed) — authentication details: [telegram.md](telegram.md).
+- **markdown**: `root=<absolute path, e.g. Obsidian vault>`, `inbox=<relative to root>`, and optionally `approvals=` / `outbox=`. → [markdown guide](markdown.md).
 
-## 기동·종료
+## Start / stop
 
 ```bash
-adde up <proj>     # lanes.d 의 모든 레인을 백그라운드 데몬(macOS launchd)으로 기동 — 등록 후 즉시 반환
-adde down <proj>   # 데몬 종료(어느 터미널에서든)
-adde restart <proj># 데몬 재기동(down + up)
+adde up <proj>     # start all lanes in lanes.d as background daemons (macOS launchd) — returns immediately after registration
+adde down <proj>   # stop the daemon (from any terminal)
+adde restart <proj># restart the daemon (down + up)
 adde --version
 ```
 
-## 상태·진단
+## Status and diagnostics
 
 ```bash
-adde status <proj>            # 레인 상태: running / stale(응답없음) / dead(크래시) / stopped
-adde status                   # 인자 생략: 전 프로젝트에서 실행 중 레인 집계 (--all: 정지 포함)
-adde doctor <proj>            # 환경·설정 정적 점검(기동 전 자가 진단)
-adde logs <proj> <lane>       # 레인 최근 활동(transcript)
+adde status <proj>            # show per-lane status (status value definitions: status section of the command reference)
+adde status                   # no argument: aggregate running lanes across all projects (--all: include stopped)
+adde doctor <proj>            # static check of environment/config (self-diagnosis before startup)
+adde logs <proj> <lane>       # recent lane activity (transcript)
+adde sessions <proj> <lane>   # engine session ledger list (resume/reset are channel commands)
 ```
 
-기동이 안 되거나 응답이 없으면 `adde doctor` 로 먼저 점검하세요. 전체 명령은 [명령 레퍼런스](commands.md), 증상별 조치는 [트러블슈팅](troubleshooting.md)을 참고하세요.
+**Success check**: if the lane shows `running` under `adde status <proj>`, startup succeeded. If it shows `stopped`/`dead`/`stale`, or if `adde up` failed, move on to [troubleshooting](troubleshooting.md).
 
-## 프로젝트 폴더 매핑
+If it won't start or doesn't respond, check with `adde doctor` first. For the full command set see the [command reference](commands.md); for remedies by symptom see [troubleshooting](troubleshooting.md).
 
-각 레인의 `cwd` 가 그 레인 AI 의 작업 디렉터리입니다. 레인마다 다른 `cwd` 를 지정하면 **채널/메모와 프로젝트 폴더를 각각 묶어** 여러 개를 동시에 운용할 수 있습니다. conf 를 여러 개 두면 `adde up` 한 번으로 모두 기동됩니다.
+## Project-folder mapping
 
-## 다음 단계
+Each lane's `cwd` is that lane's AI working directory. Assigning a different `cwd` per lane lets you **pair each channel/note with its own project folder** and run several at once. Keep several confs and one `adde up` starts them all.
 
-- Telegram 봇으로 구동: [telegram.md](telegram.md)
-- 마크다운 노트(예: Obsidian)로 메모 기반 구동: [markdown.md](markdown.md)
-- 전체 명령: [commands.md](commands.md)
-- 문제 해결: [troubleshooting.md](troubleshooting.md)
-- 문서 인덱스: [README.md](README.md)
+## Uninstall
+
+```bash
+adde down <proj>       # 1) stop the daemon first — deregisters the launchd LaunchAgent
+npm uninstall -g adde  # 2) remove the global package
+```
+
+**Order matters**: if you remove the package without `adde down`, the registered launchd LaunchAgent lingers and, even after a reboot, keeps trying to restart the (now-gone) executable. If you have several projects, run `adde down <proj>` for each (check registration status with `adde doctor <proj>`). Config/state files (`~/.config/adde/`) remain, so to remove everything, delete that directory after confirming.
+
+## Next steps
+
+- Drive it with a Telegram bot: [telegram.md](telegram.md)
+- Note-based driving with markdown notes (e.g. Obsidian): [markdown.md](markdown.md)
+- Understand the permission gate and tiers: [permissions.md](permissions.md)
+- Full command set: [commands.md](commands.md)
+- Troubleshooting: [troubleshooting.md](troubleshooting.md)
+- Documentation index: [README.md](README.md)

@@ -1,9 +1,10 @@
 /**
  * transcript 렌더·append·마스킹.
- * FR-006/007: session/update 이벤트를 사람이 읽을 텍스트로 렌더 → mask → append.
+ * session/update 이벤트를 사람이 읽을 텍스트로 렌더 → mask → append.
  * append 실패는 보조(warn↑ 로그 후 흡수) — error-handling.md 보조 분류.
  */
 import { t } from "../shared/i18n.js";
+import { errMsg } from "../shared/errors.js";
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { maskSecrets } from "../shared/mask.js";
@@ -92,7 +93,7 @@ export async function appendTranscript(paths: LanePaths, event: SessionEvent): P
     // 일반 이벤트는 보조 분류로 warn 후 흡수.
     const kind = getEventKind(event);
     const isAudit = kind === "adde_warn" || kind === "adde_auto_allow";
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = errMsg(err);
     if (isAudit) {
       console.error(t("log.transcript.auditAppendFail", { kind, detail }));
     } else {

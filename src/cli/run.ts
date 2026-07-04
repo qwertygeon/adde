@@ -1,7 +1,15 @@
 import { readVersion } from "../core/version.js";
+import { errMsg } from "../shared/errors.js";
 import { COMMANDS, buildUsage, USAGE, cmdError } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
+import { findCommand, suggestCommands } from "./spec.js";
+import { completionScript, SUPPORTED_SHELLS } from "./completion.js";
+
+/** -h/--help 플래그가 인자에 있는지. */
+function wantsHelp(argv: readonly string[]): boolean {
+  return argv.includes("--help") || argv.includes("-h");
+}
 
 /**
  * 포그라운드 데몬 워커 로직 — `adde __daemon <proj>` 가 호출한다.
@@ -58,7 +66,7 @@ async function runDaemonForeground(proj: string): Promise<number> {
         process.stderr.write(
           formatException({
             situation: t("run.shutdownError.situation", {
-              error: err instanceof Error ? err.message : String(err),
+              error: errMsg(err),
             }),
             action: t("run.shutdownError.action"),
           }) + "\n",
@@ -87,6 +95,45 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
+  // 서브커맨드별 도움말 — `adde <cmd> --help`. lane 은 runLane 가 자체 처리(하위 명령 도움말).
+  if (first !== undefined && first !== "lane" && wantsHelp(argv.slice(1))) {
+    const spec = findCommand(first);
+    if (spec?.usageKey && !spec.hidden) {
+      process.stdout.write(t(spec.usageKey as never) + "\n");
+      return 0;
+    }
+  }
+
+  if (first === "completion") {
+    const shell = second;
+    if (!shell) {
+      process.stderr.write(USAGE.completion + "\n");
+      return 1;
+    }
+    const script = completionScript(shell);
+    if (script === null) {
+      process.stderr.write(
+        cmdError(
+          "completion",
+          t("completion.unknownShell", { shell, supported: SUPPORTED_SHELLS.join("|") }),
+        ) + "\n",
+      );
+      return 1;
+    }
+    process.stdout.write(script);
+    return 0;
+  }
+
+  if (first === "init") {
+    const { runInit } = await import("./init.js");
+    return runInit(argv.slice(1));
+  }
+
+  if (first === "alias") {
+    const { runAlias } = await import("./init.js");
+    return runAlias(argv.slice(1));
+  }
+
   if (first === "lane") {
     const { runLane } = await import("./lane.js");
     return runLane(argv.slice(1));
@@ -107,8 +154,13 @@ export async function run(argv: readonly string[]): Promise<number> {
     return runLogs(argv.slice(1));
   }
 
+  if (first === "sessions") {
+    const { runSessions } = await import("./ops.js");
+    return runSessions(argv.slice(1));
+  }
+
   // 내부 서브커맨드 — launchd 가 데몬 워커로 기동하는 포그라운드 상주 진입점.
-  // 도움말 미노출(A-P005 최소 표면). 사용자가 직접 부르지 않는 내부 명령.
+  // 도움말 미노출(최소 표면). 사용자가 직접 부르지 않는 내부 명령.
   if (first === "__daemon") {
     const proj = second;
     if (!proj) {
@@ -118,9 +170,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     try {
       return await runDaemonForeground(proj);
     } catch (err) {
-      process.stderr.write(
-        cmdError("__daemon", err instanceof Error ? err.message : String(err)) + "\n",
-      );
+      process.stderr.write(cmdError("__daemon", errMsg(err)) + "\n");
       return 1;
     }
   }
@@ -138,7 +188,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       process.stdout.write(t("run.statusHint", { proj }) + "\n");
       return 0;
     } catch (err) {
-      process.stderr.write(cmdError("up", err instanceof Error ? err.message : String(err)) + "\n");
+      process.stderr.write(cmdError("up", errMsg(err)) + "\n");
       return 1;
     }
   }
@@ -155,9 +205,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       process.stdout.write(t("run.downDone", { proj }) + "\n");
       return 0;
     } catch (err) {
-      process.stderr.write(
-        cmdError("down", err instanceof Error ? err.message : String(err)) + "\n",
-      );
+      process.stderr.write(cmdError("down", errMsg(err)) + "\n");
       return 1;
     }
   }
@@ -170,20 +218,28 @@ export async function run(argv: readonly string[]): Promise<number> {
     }
     try {
       const { unloadDaemon, loadDaemon } = await import("../core/launchd.js");
-      // down 완료 await 후 up — 부분 실패 시 up 오류 표면화(FR-003).
+      // down 완료 await 후 up — 부분 실패 시 up 오류 표면화.
       await unloadDaemon(proj);
       await loadDaemon(proj);
       process.stdout.write(t("run.restartDone", { proj }) + "\n");
       process.stdout.write(t("run.statusHint", { proj }) + "\n");
       return 0;
     } catch (err) {
-      process.stderr.write(
-        cmdError("restart", err instanceof Error ? err.message : String(err)) + "\n",
-      );
+      process.stderr.write(cmdError("restart", errMsg(err)) + "\n");
       return 1;
     }
   }
 
-  process.stdout.write(`${buildUsage()}\n`);
-  return 0;
+  // 인자 없음·명시적 도움말 → 사용법(정상 종료).
+  if (first === undefined || first === "-h" || first === "--help" || first === "help") {
+    process.stdout.write(`${buildUsage()}\n`);
+    return 0;
+  }
+
+  // 미지원 명령 → stderr 로 오류(+오타 추정 힌트) + 사용법, 비정상 종료(스크립트 오류 은폐 방지).
+  const suggestions = suggestCommands(first);
+  const hint =
+    suggestions.length > 0 ? " " + t("cli.didYouMean", { cmds: suggestions.join(", ") }) : "";
+  process.stderr.write(`${t("cli.unknownCmd", { cmd: first })}${hint}\n\n${buildUsage()}\n`);
+  return 1;
 }

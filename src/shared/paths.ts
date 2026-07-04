@@ -1,8 +1,8 @@
 /**
  * 레인별 경로 동적 구성. 레인 ID 하드코딩 금지 — 전부 파라미터.
- * NFR-004/ADR-009: 레인 A 가 레인 B 의 경로에 접근하지 않도록 파라미터 기반 격리.
+ * 레인 A 가 레인 B 의 경로에 접근하지 않도록 파라미터 기반 격리.
  */
-import { join } from "node:path";
+import { join, relative, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 
 /** 기본 base 경로. 테스트 환경 override 용으로 분리 주입 가능. */
@@ -20,6 +20,8 @@ export interface LanePaths {
   stateDir: string;
   envFile: string;
   sessionIdFile: string;
+  /** 세션 장부(sessions.json) — /resume 목록·마지막 대화 시각의 SSOT(ADDE 자체 관리). */
+  sessionsFile: string;
   transcriptLog: string;
   /** 엔진 서브프로세스 stderr 캡처 파일(append). ACP stdout 은 프로토콜 채널이라 대상 아님. */
   engineLog: string;
@@ -56,6 +58,32 @@ export function isSafeSegment(value: string): boolean {
   return SAFE_SEGMENT_RE.test(value);
 }
 
+// --- 경로 포함/중첩 판정 ------------------------------------------------------
+// markdown 어댑터의 기동 fail-closed 가드와 lane-config 의 생성 시 사전 경고가
+// 반드시 같은 규칙으로 판정해야 하므로(어긋나면 경고 없이 기동만 거부되는 갈림),
+// 판정 로직의 SSOT 를 여기 둔다.
+
+/** child 가 parent 와 같거나 그 내부인지(대소문자 정규화 없음 — 필요 시 normCasePath 로 감싼다). */
+export function isPathInside(child: string, parent: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * 대소문자 정규화 — macOS 기본 FS 는 대소문자 무시라 Shared/shared 가 같은 물리 디렉터리.
+ * darwin 은 소문자 정규화 후 비교한다(대소문자 구분 볼륨에선 과차단이나 fail-closed 방향이라 수용).
+ */
+export function normCasePath(p: string): string {
+  return process.platform === "darwin" ? p.toLowerCase() : p;
+}
+
+/** 두 경로가 같거나 포함 관계인지(대소문자 정규화 적용). */
+export function pathsOverlap(a: string, b: string): boolean {
+  const na = normCasePath(a);
+  const nb = normCasePath(b);
+  return isPathInside(na, nb) || isPathInside(nb, na);
+}
+
 export function lanePaths(base: string, proj: string, lane: string): LanePaths {
   assertSafeSegment("proj", proj);
   assertSafeSegment("lane", lane);
@@ -69,6 +97,7 @@ export function lanePaths(base: string, proj: string, lane: string): LanePaths {
     stateDir,
     envFile: join(stateDir, ".env"),
     sessionIdFile: join(stateDir, "session.id"),
+    sessionsFile: join(stateDir, "sessions.json"),
     transcriptLog: join(stateDir, "transcript.log"),
     engineLog: join(stateDir, "engine.log"),
     runtimeJson: join(stateDir, "runtime.json"),

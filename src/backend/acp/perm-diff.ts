@@ -1,7 +1,7 @@
 /**
  * 설정 차이 비교·WARN.
- * FR-012/013/ADR-007: ADDE 정책 ↔ 엔진 실효 설정 비교.
- * GAP-001 안전망: 조회 실패 시 "확인불가=차이"로 보수적 WARN 발화.
+ * ADDE 정책 ↔ 엔진 실효 설정 비교.
+ * 안전망: 조회 실패 시 "확인불가=차이"로 보수적 WARN 발화.
  */
 import { maskSecrets } from "../../shared/mask.js";
 import { t } from "../../shared/i18n.js";
@@ -14,6 +14,8 @@ export interface AddePolicy {
   allowlist?: string[];
   /** perm_tier=autopass 에서 채널 승인으로 폴백할 도구명 목록. */
   denylist?: string[];
+  /** 방어심화 하드-거부 목록 — 매칭 도구는 티어 무관하게 즉시 거부(채널 프롬프트 없음). */
+  hard_deny?: string[];
 }
 
 export interface EngineEffective {

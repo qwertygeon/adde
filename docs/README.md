@@ -1,26 +1,28 @@
-# ADDE 사용자 문서
+_English | [한국어](README.ko.md)_
 
-ADDE(Ai Driven Development Engine) 사용자 가이드입니다. 프로젝트 개요는 [루트 README](../README.md) 를 참고하세요.
+# ADDE User Documentation
 
-## 목차
+This is the ADDE (Ai Driven Development Engine) user guide. For a project overview, see the [root README](../README.md).
 
-- [문서 목록](#문서-목록)
-- [빠른 경로](#빠른-경로)
+## Table of Contents
 
-## 문서 목록
+- [Document list](#document-list)
+- [Quick paths](#quick-paths)
 
-| 문서                                     | 내용                                                                   |
-| ---------------------------------------- | ---------------------------------------------------------------------- |
-| [getting-started.md](getting-started.md) | 설치·핵심 개념·레인 설정·기동·상태/진단·프로젝트 폴더 매핑             |
-| [telegram.md](telegram.md)               | Telegram 봇으로 AI 구동하기 — 봇 생성·토큰·기동 단계별                 |
-| [markdown.md](markdown.md)               | 마크다운 노트(예: Obsidian)로 AI 구동하기 — 지시·응답·권한 승인 단계별 |
-| [commands.md](commands.md)               | 전체 CLI 명령·옵션 레퍼런스                                            |
-| [troubleshooting.md](troubleshooting.md) | 증상별 진단·조치                                                       |
+## Document list
 
-## 빠른 경로
+| Document                                 | Contents                                                                                                        |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| [getting-started.md](getting-started.md) | Install, core concepts, lane configuration, startup, status/diagnostics, project-folder mapping                 |
+| [telegram.md](telegram.md)               | Driving the AI from a Telegram bot — step by step: bot creation, token, startup                                 |
+| [markdown.md](markdown.md)               | Driving the AI from markdown notes (e.g. Obsidian) — step by step: instructions, responses, permission approval |
+| [commands.md](commands.md)               | Full CLI command and option reference                                                                           |
+| [troubleshooting.md](troubleshooting.md) | Diagnosis and remedies by symptom                                                                               |
 
-- 처음이라면 → [시작하기](getting-started.md)
-- Telegram 봇으로 써보고 싶다면 → [Telegram 가이드](telegram.md)
-- 마크다운 노트(예: Obsidian)로 바로 써보고 싶다면 → [마크다운 가이드](markdown.md)
-- 명령이 궁금하면 → [명령 레퍼런스](commands.md)
-- 문제가 생기면 → [트러블슈팅](troubleshooting.md)
+## Quick paths
+
+- New here → [Getting started](getting-started.md)
+- Want to try it with a Telegram bot → [Telegram guide](telegram.md)
+- Want to use it straight from markdown notes (e.g. Obsidian) → [Markdown guide](markdown.md)
+- Curious about the commands → [Command reference](commands.md)
+- Something went wrong → [Troubleshooting](troubleshooting.md)

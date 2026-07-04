@@ -5,13 +5,13 @@
 import { t } from "../shared/i18n.js";
 import { readFile, stat, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { laneList } from "./lane-config.js";
+import { laneList, resolveFileMode } from "./lane-config.js";
 import { resolveAdapterBin } from "./supervisor.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
 import { lanePaths, defaultBase, expandTilde, isSafeSegment } from "../shared/paths.js";
 import { parseLaneConf } from "../shared/conf.js";
-import { daemonRegState } from "./launchd.js";
+import { daemonRegState, daemonEntryPath } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
 
 export interface DiagBaseOptions {
@@ -148,6 +148,20 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+/** 파일/디렉터리 권한 비트(mode & 0o777). 부재·stat 실패 시 null. */
+async function modeOf(p: string): Promise<number | null> {
+  try {
+    return (await stat(p)).mode & 0o777;
+  } catch {
+    return null;
+  }
+}
+
+/** 권한 비트 → 3자리 8진 문자열(예: 0o640 → "640"). */
+function octal(mode: number): string {
+  return (mode & 0o777).toString(8).padStart(3, "0");
+}
+
 /**
  * 상태 비의존 정적 점검. proj 미지정 시 전역 점검만, 지정 시 레인별 점검 추가.
  * 각 항목 PASS/WARN/FAIL + 실패·경고에 조치 힌트.
@@ -193,6 +207,22 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
           hint: t("doctor.base.hint"),
         },
   );
+
+  // 데몬 진입 파일 — launchd 워커가 실행할 실재 .js. tsx dev(빌드 전)면 부재라 데몬 기동 불가.
+  // 데몬은 macOS 전용(비-darwin 은 loadDaemon 이 assertMacOS 로 거부)이므로 darwin 에서만 점검.
+  if (process.platform === "darwin") {
+    const daemonEntry = daemonEntryPath();
+    checks.push(
+      (await pathExists(daemonEntry))
+        ? { name: t("doctor.daemonEntry.name"), level: "PASS", detail: daemonEntry }
+        : {
+            name: t("doctor.daemonEntry.name"),
+            level: "WARN",
+            detail: t("doctor.daemonEntry.missing", { path: daemonEntry }),
+            hint: t("doctor.daemonEntry.hint"),
+          },
+    );
+  }
 
   if (proj === undefined) return checks;
 
@@ -317,6 +347,41 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
               hint: t("doctor.token.hint", { path: paths.envFile }),
             },
       );
+    }
+
+    // 파일 권한 감사 — 시크릿(.env)·private 모드 상태 디렉터리가 그룹/기타에 노출됐는지.
+    // .env 는 토큰을 담으므로 모드와 무관하게 그룹/기타 접근을 경고한다. state 디렉터리는
+    // file_mode=private 일 때만 0700 을 기대(shared 는 느슨한 권한이 의도된 선택이라 통과).
+    const envMode = await modeOf(paths.envFile);
+    const stateMode = await modeOf(paths.stateDir);
+    const looseEnv = envMode !== null && (envMode & 0o077) !== 0;
+    const looseState =
+      stateMode !== null &&
+      resolveFileMode(conf.file_mode) === "private" &&
+      (stateMode & 0o077) !== 0;
+    // env·state 는 독립 관심사 — 둘 다 느슨하면 둘 다 경고한다(하나가 다른 하나를 가리지 않도록).
+    if (looseEnv) {
+      checks.push({
+        name: t("doctor.perms.name", { lane }),
+        level: "WARN",
+        detail: t("doctor.perms.envLoose", { mode: octal(envMode) }),
+        hint: t("doctor.perms.envHint", { path: paths.envFile }),
+      });
+    }
+    if (looseState) {
+      checks.push({
+        name: t("doctor.perms.name", { lane }),
+        level: "WARN",
+        detail: t("doctor.perms.stateLoose", { mode: octal(stateMode) }),
+        hint: t("doctor.perms.stateHint", { path: paths.stateDir, proj }),
+      });
+    }
+    if (!looseEnv && !looseState && (envMode !== null || stateMode !== null)) {
+      checks.push({
+        name: t("doctor.perms.name", { lane }),
+        level: "PASS",
+        detail: t("doctor.perms.ok"),
+      });
     }
   }
 

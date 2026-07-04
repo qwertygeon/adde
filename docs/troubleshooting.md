@@ -1,75 +1,124 @@
-# 트러블슈팅
+_English | [한국어](troubleshooting.ko.md)_
 
-증상별 진단·조치입니다. 먼저 두 명령으로 대부분을 좁힐 수 있습니다:
+# Troubleshooting
 
-- `adde doctor [<proj>]` — 환경·설정 정적 점검(기동 전에도 실행 가능).
-- `adde status <proj>` — 레인이 running / dead / stopped 중 무엇인지.
-- `adde logs <proj> <lane>` — 최근 세션 활동.
+Diagnosis and remedies by symptom. Two commands narrow down most issues first:
 
-## 목차
+- `adde doctor [<proj>]` — static check of environment/config (can run even before startup).
+- `adde status <proj>` — whether a lane is running / dead / stopped.
+- `adde logs <proj> <lane>` — recent session activity.
 
-- [기동이 안 됨](#기동이-안-됨)
-- [레인이 dead 로 표시됨](#레인이-dead-로-표시됨)
-- [메시지를 보내도 응답이 없음](#메시지를-보내도-응답이-없음)
-- [권한 관련](#권한-관련)
-- [Telegram 전용](#telegram-전용)
-- [마크다운 전용](#마크다운-전용)
+## Table of Contents
 
-## 기동이 안 됨
+- [Issues right after install (npm)](#issues-right-after-install-npm)
+- [Won't start](#wont-start)
+- [Lane shows as dead](#lane-shows-as-dead)
+- [Lane shows as stale (hung)](#lane-shows-as-stale-hung)
+- [Recovery after reboot / orphan cleanup](#recovery-after-reboot--orphan-cleanup)
+- [No response after sending a message](#no-response-after-sending-a-message)
+- [Failure notice after session control (clear/resume)](#failure-notice-after-session-control-clearresume)
+- [Permissions](#permissions)
+- [Telegram-only](#telegram-only)
+- [Markdown-only](#markdown-only)
 
-먼저 `adde doctor <proj>` 를 실행해 `FAIL`/`WARN` 을 확인하세요.
+## Issues right after install (npm)
 
-| 증상                                 | 원인                  | 조치                                                                                    |
-| ------------------------------------ | --------------------- | --------------------------------------------------------------------------------------- |
-| `doctor` 가 ACP 어댑터 바이너리 FAIL | 엔진 어댑터 미설치    | `pnpm install`(예: `@zed-industries/claude-code-acp` 설치) 후 재시도                    |
-| Node 버전 FAIL                       | Node < 22             | Node 22 이상으로 업그레이드                                                             |
-| `lanes.d 에 conf 없음`               | 레인 미생성           | `adde lane add <proj> <lane> ...`(또는 `--interactive`)로 생성                          |
-| 토큰 FAIL (telegram)                 | `.env` 에 토큰 없음   | [Telegram 가이드 4단계](telegram.md#4-봇-토큰-저장)로 토큰 저장                         |
-| cwd FAIL/경고                        | 작업 폴더 없음        | 폴더를 만들거나 conf 의 `cwd` 수정                                                      |
-| 핸드셰이크 무응답으로 기동 실패      | 엔진이 응답 없이 멈춤 | 엔진 바이너리·헬스 확인 후 `adde up` 재시도(ADDE 는 30초 후 타임아웃하고 child 를 정리) |
+Issues you hit right after `npm i -g adde`, before starting a lane.
 
-## 레인이 dead 로 표시됨
+| Symptom                                     | Cause                                               | Remedy                                                                                                                                                                                          |
+| ------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adde: command not found`                   | The global bin isn't on PATH                        | Check that the `npm bin -g` path is on PATH. If using a user prefix, add `~/.local/bin` (or your configured prefix) to PATH                                                                     |
+| The `ad`/`add` short aliases are missing    | Short aliases are not installed by default (opt-in) | Install with `adde alias` (or `adde init`). If a command of the same name already exists, it is skipped rather than overwritten — [command reference](commands.md#alias--install-short-aliases) |
+| `EACCES` permission error on install        | Root-owned Node prefix                              | Use a version manager (nvm/fnm) or a user prefix (`npm config set prefix ~/.local`) instead of `sudo` — [Getting started install section](getting-started.md#install)                           |
+| `adde --version` works but no lane comes up | Claude unauthenticated / engine handshake failure   | Confirm Claude (Claude Code) is authenticated and works under the same user (`ANTHROPIC_API_KEY` or login). Check engine stderr with `adde logs <proj> <lane> --engine`                         |
+| `env: node: No such file` in engine log     | node not on launchd's minimal PATH                  | Run `adde restart <proj>` (re-injects the plist PATH) with `node`'s install location on PATH. See "Won't start" below                                                                           |
 
-`adde status` 에서 `dead` 는 기동 프로세스가 비정상 종료(크래시)했는데 상태 파일이 남은 경우입니다.
+## Won't start
+
+Run `adde doctor <proj>` first to check `FAIL`/`WARN`.
+
+| Symptom                                     | Cause                                                                                  | Remedy                                                                                                                                                                                                                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `doctor` FAILs the ACP adapter binary       | Engine adapter not installed                                                           | Retry after `pnpm install` (e.g. installs `@zed-industries/claude-code-acp`)                                                                                                                                                                                          |
+| Node version FAIL                           | Node < 22                                                                              | Upgrade to Node 22 or higher                                                                                                                                                                                                                                          |
+| `no conf in lanes.d`                        | No lane created                                                                        | Create with `adde lane add <proj> <lane> ...` (or `--interactive` / `adde init`)                                                                                                                                                                                      |
+| Token FAIL (telegram)                       | No token in `.env`                                                                     | Store the token per [Telegram guide step 4](telegram.md#4-store-the-bot-token)                                                                                                                                                                                        |
+| cwd FAIL/warning                            | Working folder missing                                                                 | Create the folder or fix `cwd` in the conf                                                                                                                                                                                                                            |
+| `doctor` file-permission WARN               | `.env` is not 0600, or `file_mode=private` but the state dir is group/other-accessible | Per the remedy hint, `chmod 600 .../.env` (or `chmod 700 state/<lane>`), then `adde restart <proj>`. `shared` mode is an intentional choice and not warned                                                                                                            |
+| `doctor` launchd registration mismatch WARN | plist existence vs launchctl registration mismatch                                     | Clean up with `adde down <proj>`, then re-register with `adde up <proj>`                                                                                                                                                                                              |
+| `doctor` daemon entry-file WARN             | Trying to daemonize from dev without a build                                           | After `pnpm build`, `node dist/cli/adde.js up <proj>` or global install (`npm i -g .`) — same cause as "daemon registered but lane doesn't come up" below                                                                                                             |
+| Startup fails on handshake no-response      | Engine stalls with no response                                                         | Confirm the engine binary/health, then retry `adde up` (ADDE times out after 30s and cleans up the child). If `adde logs <proj> <lane> --engine` shows `env: node: No such file or directory`, it's a PATH problem — see "daemon-launched lane doesn't come up" below |
+| Daemon registered but lane doesn't come up  | Daemonized via `pnpm run dev up` without a build                                       | The daemon worker is a separate process launched by launchd, so tsx (dev) won't work. After `pnpm build`, start with `node dist/cli/adde.js up <proj>`, or global install (`npm i -g .`) then `adde up <proj>` (without a build, `adde up` refuses with guidance)     |
+
+## Lane shows as dead
+
+In `adde status`, `dead` means the launched process exited abnormally (crashed) but the state file remains.
 
 ```bash
-adde down <proj>   # 잔존 상태 정리
-adde doctor <proj> # 원인 점검
-adde up <proj>     # 재기동
+adde down <proj>   # clean up leftover state
+adde doctor <proj> # check the cause
+adde up <proj>     # restart
 ```
 
-`adde logs <proj> <lane>` 로 종료 직전 활동을 확인하면 원인 파악에 도움이 됩니다.
+Checking activity just before exit with `adde logs <proj> <lane>` helps identify the cause.
 
-## 메시지를 보내도 응답이 없음
+## Lane shows as stale (hung)
 
-1. `adde status <proj>` 가 해당 레인을 `running` 으로 보이는지 확인합니다(아니면 위 항목으로).
-2. `adde logs <proj> <lane>` 로 메시지가 수신·처리되는지 봅니다.
-3. AI 턴이 길면 응답은 **턴 종료 시 한 번에** 옵니다(진행 중 스트리밍 없음). 잠시 기다려 보세요.
-4. 디스크가 가득 차거나 권한 문제로 메시지 큐 적재가 연속 실패하면, ADDE 가 운영자 채널로 "enqueue 연속 N회 실패" 알림을 보냅니다 — 디스크 용량·`state` 디렉터리 권한을 확인하세요.
+In `adde status`, `stale` means the launched process (pid) is alive but the heartbeat (state-file mtime) has stopped past a threshold — **suspected hung**. Unlike a crash (`dead`), the process remains, so the remedy differs.
 
-## 권한 관련
+```bash
+adde logs <proj> <lane> --engine   # engine stderr — see what it's blocked on
+adde restart <proj>                # recover by restarting the daemon
+```
 
-- **항상 거부됨**: 권한 요청에 제때(기본 10분) 응답하지 않으면 fail-closed 로 자동 거부됩니다. 채널 도달 실패·오류도 거부로 처리됩니다.
-- **기동 시 권한 드리프트 경고**: 엔진의 실효 권한이 ADDE 정책보다 느슨하다고 확인되면(예: bypassPermissions) 콘솔·채널·transcript 에 경고를 표시하고 기동은 계속합니다. 이 상태에선 게이트가 무력화될 수 있으니 엔진 권한 설정을 해제하거나 conf 의 `perm_tier` 에 맞게 정렬하세요. 특히 `autopass` 레인은 엔진이 bypass 면 권한 요청 자체가 오지 않아 denylist 가 동작하지 않습니다.
-- **승인이 너무 잦음**: 자주 쓰는 안전한 도구를 `--allowlist Read,Grep` 처럼 등록하면 매번 묻지 않습니다(게이트 자체는 유지, 트랜스크립트 기록). `Bash`·파일 쓰기 등 광범위 도구는 넣지 마세요. 대부분을 자동 허용하고 싶으면 옵트인 `--perm-tier autopass --denylist Bash,Write`(denylist 만 확인) 를 검토하세요 — [명령 레퍼런스](commands.md#lane-add-옵션) 참고.
+A common cause of a hang is the engine being tied up in a long task / external wait, or its response stopping. If a restart doesn't clear it, check the environment with the `--engine` log and `adde doctor <proj>`.
 
-## Telegram 전용
+## Recovery after reboot / orphan cleanup
 
-| 증상                  | 확인                                                 |
-| --------------------- | ---------------------------------------------------- |
-| 응답이 안 옴          | conf 에 `chat_id` 가 설정됐는지(미지정 시 렌더 생략) |
-| 토큰 형식 경고        | BotFather 발급 토큰이 `<숫자>:<영숫자>` 형식인지     |
-| 봇이 메시지를 못 받음 | 토큰이 올바른지, 봇이 차단되지 않았는지              |
+- **Lane isn't up after a reboot/logout**: a daemon registered with `adde up` auto-recovers via `KeepAlive`/`RunAtLoad`, but confirm the actual status yourself — if `adde status <proj>` isn't `running`, check `adde doctor <proj>` (including registration status) then restart with `adde up <proj>`. The plist holds the PATH from the time of `adde up`, so if you later moved node/claude's install location, refresh the PATH with `adde restart <proj>`.
+- **Orphan engine process**: a `claude-code-acp` engine process can linger after an abnormal exit. After `adde down <proj>`, check for leftovers with `ps aux | grep claude-code-acp`, and if any remain, terminate that pid.
 
-상세 셋업: [Telegram 가이드](telegram.md).
+## No response after sending a message
 
-## 마크다운 전용
+1. Confirm `adde status <proj>` shows the lane as `running` (otherwise go to the items above).
+2. See whether the message is received/processed with `adde logs <proj> <lane>`.
+3. If the AI turn is long, the response comes **all at once at turn end** (no streaming during progress). Wait a moment.
+4. If message-queue enqueuing fails repeatedly due to a full disk or a permission problem, ADDE sends an "enqueue failed N times in a row" alert to the operator channel — check disk capacity and the `state` directory's permissions.
 
-| 증상                          | 확인                                                                                |
-| ----------------------------- | ----------------------------------------------------------------------------------- |
-| 체크해도 전송 안 됨           | `inbox` 경로 일치, send 박스 체크(`[x]`), 본문 비어있지 않은지                      |
-| 레인이 안 뜸                  | `root` 절대경로가 실제 존재하는지(없으면 fail-closed)                               |
-| 기동이 거부됨(제어 노트 위치) | inbox·approvals·outbox 가 `cwd` **밖**에 있는지(안에 있으면 자기승인 위험으로 거부) |
-| 응답 노트가 안 보임           | `outbox` 경로 확인, AI 턴이 끝났는지(idle)                                          |
+## Failure notice after session control (clear/resume)
 
-상세: [마크다운 가이드](markdown.md#트러블슈팅).
+From the channel, `/clear` or `/resume` **restarts** the engine as a new session. If the restart fails (engine spawn error, handshake no-response, etc.), a `🛑 session control failed — engine restart error` notice arrives on the channel, and that lane's engine may remain down.
+
+- Remedy: recover the lane by restarting the daemon with `adde restart <proj>`.
+- Then check the restart-failure cause with `adde doctor <proj>` (engine adapter / environment check) and `adde logs <proj> <lane> --engine` (engine stderr).
+- `/compact` delegates the compact command to the in-progress session without a restart, so it doesn't fall in this path.
+
+## Permissions
+
+> The conceptual explanation of the permission model, tiers, denylist, and hard-deny is in the [permissions guide](permissions.md). Below are remedies by symptom.
+
+- **Always denied**: if you don't respond to a permission request in time (default 10 minutes), it auto-denies fail-closed. Channel-delivery failure or error is also treated as deny. If a specific tool is refused immediately without even an approval prompt, it matched `hard_deny` (or the `--safe-defaults` danger list) — check `hard_deny=` in the conf.
+- **Permission-drift warning at startup**: if the engine's effective permissions are found looser than ADDE's policy (e.g. bypassPermissions), a warning is shown on the console, channel, and transcript, and startup continues. In this state the gate can be neutralized, so disable the engine's permission setting or align it with the conf `perm_tier`. In particular, an `autopass` lane where the engine bypasses gets no permission requests at all, so the denylist doesn't work.
+- **Approvals too frequent**: registering frequently used safe tools like `--allowlist Read,Grep` stops them from being asked each time (the gate itself stays on, recorded in the transcript). Don't add broad tools like `Bash` or file writes (self-approval risk). If you want to auto-allow most things, consider the opt-in `--perm-tier autopass --denylist Bash,Write` (only the denylist is confirmed) — see the [command reference](commands.md#lane-add-options).
+
+## Telegram-only
+
+| Symptom                                | Check                                                                                                                                                                                                 |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No response                            | Whether `chat_id` is set in the conf (rendering is skipped if unset)                                                                                                                                  |
+| Sent but ignored (unauthorized in log) | The sender is outside the allow list. Add the sender's user/chat id to `chat_id` (own chat auto-allowed) or `allow_from`. If unset, all denied (fail-closed) — engine log shows `unauthorized sender` |
+| Token format warning                   | Whether the BotFather-issued token is in `<digits>:<alphanumeric>` format                                                                                                                             |
+| Bot doesn't receive messages           | Whether the token is correct and the bot isn't blocked                                                                                                                                                |
+
+Detailed setup: [Telegram guide](telegram.md).
+
+## Markdown-only
+
+| Symptom                                 | Check                                                                                                                                                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Checked but not sent                    | inbox path matches, the send box is checked (`[x]`), body not empty                                                                                                                        |
+| Lane doesn't come up                    | Whether the `root` absolute path actually exists (fail-closed if not) · whether the inbox/approvals/outbox paths don't overlap (startup refused if equal or in a containment relationship) |
+| Startup refused (control-note location) | Whether inbox/approvals/outbox are **outside** `cwd` (refused with self-approval risk if inside)                                                                                           |
+| Response note not visible               | Check the `outbox` path, and whether the AI turn has ended (idle)                                                                                                                          |
+
+Detailed setup: [Markdown guide](markdown.md).

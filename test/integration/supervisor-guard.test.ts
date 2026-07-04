@@ -1,3 +1,4 @@
+import { FAKE_ACP_CAPS } from "../helpers/fake-acp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -77,12 +78,7 @@ function makeFakeAcpFactory() {
       if (!launched) throw new Error(`[fake-acp] ${fn} before launch`);
     };
     return {
-      caps: () => ({
-        plane: "acp",
-        perm_tier: "acp",
-        supports_attachments: false,
-        acp_version: "v1",
-      }),
+      caps: () => FAKE_ACP_CAPS,
       launch: vi.fn().mockImplementation(async () => {
         launched = true;
         return { sessionId: "fake-session-guard" };

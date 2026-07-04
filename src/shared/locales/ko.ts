@@ -8,31 +8,39 @@ export const ko = {
     main: `{{primary}} — AI Driven Development Engine
 
 사용법:
-  {{primary}} [command]      주 진입점
-  {{short}} [command]       단축 별칭
+  {{primary}} [command]      주 진입점 ('adde alias' 후 {{short}} 사용 가능)
 
 명령:
+  init [<proj>]            가이드 설정 (doctor + 짧은 별칭 + 레인 생성)
   up <proj>                프로젝트의 모든 레인 백그라운드 데몬으로 기동
   down <proj>              데몬 종료 (어느 터미널에서든 동작)
   restart <proj>           데몬 재기동 (down + up)
   status [<proj>] [--all]  레인 상태 조회 (<proj> 생략 시 실행 중 전체, --all 정지 포함)
   doctor [<proj>]          환경·설정 정적 점검(상태 비의존)
   logs <proj> <lane> [N]   레인 transcript 최근 N줄(기본 50, --engine 시 엔진 stderr)
+  sessions <proj> <lane>   기록된 엔진 세션 목록(재개는 채널에서: /resume 또는 resume 체크박스)
   lane add <proj> <lane>   레인 conf 생성
   lane ls <proj>           레인 목록
   lane show <proj> <lane>  레인 conf 출력
   lane rm <proj> <lane>    레인 conf 삭제
+  completion <bash|zsh>    셸 자동완성 스크립트 출력
+  alias [names...]         짧은 별칭 설치(기본 ad, add) — adde 실행 파일 옆에
 
 옵션:
   -v, --version            버전 출력
   -h, --help               도움말 출력
 
-레인 옵션은 \`adde lane help\` 참조.`,
+명령별 도움말은 \`{{primary}} <command> --help\`, 레인 옵션은 \`adde lane help\` 참조.`,
     up: "사용법: adde up <proj>",
     down: "사용법: adde down <proj>",
     restart: "사용법: adde restart <proj>",
     status: "사용법: adde status [<proj>] [--all] [--json]",
+    doctor: "사용법: adde doctor [<proj>]",
     logs: "사용법: adde logs <proj> <lane> [N] [--engine]",
+    sessions: "사용법: adde sessions <proj> <lane>",
+    completion: "사용법: adde completion <bash|zsh>  (셸 자동완성 스크립트 출력)",
+    init: "사용법: adde init [<proj>]  (가이드 설정: doctor + 짧은 별칭 + 레인 생성; TTY 전용)",
+    alias: "사용법: adde alias [names...]  (adde 실행 파일 옆에 짧은 별칭 설치; 기본: ad add)",
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
     laneLs: "사용법: adde lane ls <proj>",
     laneShow: "사용법: adde lane show <proj> <lane>",
@@ -55,18 +63,28 @@ lane add 옵션:
   --allowlist <a,b,c>           자동 허용 도구(게이트 유지, perm_tier=acp 용)
   --denylist <항목,...>         autopass 에서 채널 승인으로 폴백할 도구·패턴
                                 (예: "Bash,Write(/etc/*)" · 미지정 시 내장 기본 목록: sudo·rm -rf·git 강제 변경·자격증명 읽기 차단)
+  --hard-deny <항목,...>        방어심화: 티어 무관 즉시 거부(프롬프트 없음)할 도구·패턴
+  --safe-defaults               hard-deny 에 내장 위험 목록 채우기(sudo·rm -rf·git 강제·자격증명 읽기)
   --lang <en|ko>                이 레인의 채널 메시지 로케일 (기본: 전역 로케일)
-  --chat-id <id>                telegram 회신 대상
+  --chat-id <id>                telegram 회신 대상(해당 chat 인바운드도 허용)
+  --allow-from <ids>            추가 허용 인바운드 발신자 id(콤마 구분 user/chat id)
+  --file-mode <private|shared>  state/out/queue 디렉터리 권한(기본 private=0700 소유자 전용; shared=umask 기본 유지, 통상 타 사용자 열람 가능)
   --token-stdin                 telegram 봇 토큰을 stdin 에서 읽어 .env(0600) 기록
   --root <abs-path>             markdown 루트(예: Obsidian vault)
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown 노트 경로
   --force                       기존 conf 덮어쓰기
-  --interactive                 대화형으로 필드 입력(TTY 전용, 토큰 제외)`,
+  --interactive                 대화형 위저드 강제(TTY 에서 기본; 봇 토큰은 가려진 입력)
+  --no-interactive              대화형 기본을 끄고 플래그/기본값 사용(스크립트용)`,
   },
   cli: {
     cmdError: "[adde {{cmd}}] 오류: {{detail}}",
     laneError: "[adde lane] {{detail}}",
     unknownSub: "알 수 없는 lane 서브커맨드: {{sub}}",
+    unknownCmd: "알 수 없는 명령: {{cmd}}",
+    didYouMean: "이것을 찾으셨나요: {{cmds}}?",
+  },
+  completion: {
+    unknownShell: '미지원 셸 "{{shell}}" — {{supported}} 중 하나',
   },
   run: {
     laneStartFailed: {
@@ -120,11 +138,27 @@ lane add 옵션:
   lane: {
     valueRequired: "--{{key}} 에 값이 필요합니다",
     sourceRetry: "  telegram 또는 markdown 중 하나를 입력하세요",
+    retry: {
+      permTier: "  perm_tier — acp 또는 autopass 를 입력하세요",
+      fileMode: "  file_mode — private 또는 shared 를 입력하세요",
+      lang: "  lang — en 또는 ko 를 입력하세요(전역은 비움)",
+      chatId: "  chat_id — 숫자 id 를 입력하세요(없으면 비움)",
+      allowFrom: "  allow_from — 콤마 구분 숫자 id 를 입력하세요(없으면 비움)",
+    },
     prompt: {
+      source: "source (telegram 또는 markdown)",
+      permTier: "perm_tier (acp 또는 autopass)",
       allowlist: "allowlist (콤마 구분, 없으면 비움)",
       denylist: "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
+      safeDefaults:
+        "방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N)",
+      lang: "lang (채널 메시지 로케일: en/ko, 전역은 비움)",
+      token: "telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움)",
       cwd: "cwd (레인 작업 폴더 절대경로, 없으면 비움)",
-      chatId: "chat_id (회신 대상, 없으면 비움)",
+      chatId: "chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움)",
+      allowFrom: "allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움)",
+      fileMode:
+        "file_mode (private=소유자 전용 0700 / shared=umask 기본 유지, 통상 타 사용자 열람)",
       root: "root (markdown 루트 절대경로)",
       inbox: "inbox (root 상대)",
       approvals: "approvals (root 상대, 없으면 기본)",
@@ -151,6 +185,11 @@ lane add 옵션:
       name: "ACP 어댑터 바이너리",
       missing: "해석된 경로에 파일 없음: {{path}}",
       hint: "의존성을 설치하세요(pnpm install) — @zed-industries/claude-code-acp 누락.",
+    },
+    daemonEntry: {
+      name: "데몬 진입 파일",
+      missing: "데몬 진입 파일을 찾을 수 없음: {{path}}",
+      hint: "데몬 모드는 빌드가 필요합니다. `pnpm build` 후 dist 로 실행(`node dist/cli/adde.js up <proj>`)하거나 전역 설치(`npm i -g .`)하세요. `pnpm run dev up` 으로는 데몬을 띄울 수 없습니다.",
     },
     base: {
       name: "설정 base 디렉터리",
@@ -191,6 +230,46 @@ lane add 옵션:
       missing: "토큰 없음: {{path}}",
       hint: "봇 토큰을 기록하세요: {{path}} 에 TELEGRAM_BOT_TOKEN=... (또는 lane add --token-stdin).",
     },
+    perms: {
+      name: "{{lane}}: 파일 권한",
+      ok: "state 디렉터리/.env 권한이 제한적입니다",
+      envLoose: "state/.env 가 그룹/기타에서 접근 가능(mode {{mode}}) — 봇 토큰 노출 위험",
+      envHint: "권한을 제한하세요: chmod 600 {{path}}",
+      stateLoose:
+        "state 디렉터리가 그룹/기타에서 접근 가능(mode {{mode}}) — file_mode=private 는 0700 을 기대합니다",
+      stateHint:
+        "권한을 제한하세요: chmod 700 {{path}} — 또는 레인을 재시작(adde restart {{proj}})하면 다시 잠급니다.",
+    },
+  },
+  update: {
+    available:
+      "adde 새 버전이 있습니다: {{current}} → {{latest}}. `npm i -g adde@latest` 로 업데이트하세요(이후 `adde restart <proj>`).",
+  },
+  gate: {
+    hardDeny:
+      "⛔ 하드-거부로 차단됨: {{tool}} — 이 도구는 레인 hard_deny 목록에 있어 승인 프롬프트 없이 거부되었습니다.",
+  },
+  init: {
+    ttyOnly: {
+      situation: "adde init 는 대화형 터미널(TTY)이 필요합니다",
+      action:
+        "터미널에서 실행하거나 수동 설정: adde doctor / adde lane add <proj> <lane> --interactive / adde alias.",
+    },
+    intro: "adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.",
+    doctorWarn:
+      "위에 FAIL 항목이 있습니다. 계속 진행할 수 있으나 데몬 기동(adde up) 전에 해결하세요.",
+    aliasPrompt: "짧은 별칭({{names}})을 adde 명령 옆에 설치할까요? (Y/n)",
+    aliasNoBin:
+      "PATH 에서 adde 명령을 찾지 못했습니다 — 별칭 설치를 건너뜁니다(전역 설치에서만 가능).",
+    aliasCreated: "  ✔ 별칭 생성: {{name}} → {{dir}}",
+    aliasAlready: "  = 별칭이 이미 adde 를 가리킴: {{name}}",
+    aliasSkipped: "  ✘ {{name}} 건너뜀 — 동명 명령이 PATH 에 이미 존재합니다",
+    aliasFailed: "  ✘ 별칭 {{name}} 생성 실패 — {{detail}}",
+    projPrompt: "프로젝트 이름",
+    projRetry: "프로젝트 이름 (영숫자/_/- 만)",
+    lanePrompt: "레인 이름",
+    laneRetry: "레인 이름 (영숫자/_/- 만)",
+    done: "프로젝트 '{{proj}}' 설정 완료.",
   },
   laneConfig: {
     warn: {
@@ -214,6 +293,8 @@ lane add 옵션:
         "[경고] allowlist 와 denylist 에 같은 도구가 있습니다: {{tools}} — denylist 가 우선하여 채널 승인을 거칩니다.\n  ↳ 조치: 의도가 아니라면 한쪽에서 제거하세요.",
       badLang:
         '[경고] lang "{{lang}}" 은 지원 로케일({{supported}})이 아닙니다 — 전역 로케일이 적용됩니다.\n  ↳ 조치: 오타라면 conf 의 lang 을 수정하세요.',
+      telegramNoAuth:
+        "[경고] telegram 레인에 허용 인바운드 발신자가 없습니다 — 모든 인바운드가 거부됩니다(fail-closed). 개인 chat_id 는 자기 인증되지만, 그룹 chat_id(음수)는 회신 대상일 뿐 멤버를 인증하지 않습니다.\n  ↳ 조치: --chat-id <본인 개인 chat id> 설정, 및/또는 --allow-from <id들> 로 멤버 id 를 지정하세요.",
     },
     err: {
       emptyIdent: "{{kind}} 가 비어있습니다",
@@ -221,6 +302,9 @@ lane add 옵션:
       badSource: 'source "{{source}}" 미지원 — {{supported}} 중 하나',
       badChatId: 'chat_id "{{chatId}}" 가 숫자가 아닙니다',
       tokenOnlyTelegram: "token 은 source=telegram 레인에서만 사용합니다",
+      allowFromOnlyTelegram: "allow_from 은 source=telegram 레인에서만 사용합니다",
+      badAllowFrom: 'allow_from 항목 "{{id}}" 가 숫자가 아닙니다(telegram user/chat id)',
+      badFileMode: 'file_mode "{{mode}}" 가 올바르지 않습니다 — {{known}} 중 하나',
       badAllowTool: 'allowlist 도구명 "{{tool}}" 가 올바르지 않습니다 — 영숫자/_/./- 만 허용',
       badDenyEntry:
         'denylist 항목 "{{entry}}" 가 올바르지 않습니다 — "Bash" 또는 "Bash(git push*)" 형식(콤마 불가)',
@@ -284,6 +368,11 @@ lane add 옵션:
       action:
         "adde doctor {{proj}} 로 등록 상태를 점검하거나, 기존 등록을 먼저 해제하세요 (adde down {{proj}}).",
     },
+    binMissing: {
+      situation: "데몬 실행 파일을 찾을 수 없습니다: {{path}}",
+      action:
+        "데몬 모드는 빌드가 필요합니다 — `pnpm build` 후 dist 로 실행(`node dist/cli/adde.js up <proj>`)하거나 전역 설치(`npm i -g .`) 후 `adde up <proj>` 하세요. `pnpm run dev up` 으로는 데몬을 띄울 수 없습니다(launchd 가 분리 프로세스를 스폰하므로 tsx 트랜스파일이 적용되지 않습니다).",
+    },
   },
   queue: {
     claimFail: {
@@ -295,6 +384,21 @@ lane add 옵션:
   },
   injector: {
     injectFailed: "inject 실패 @ {{ts}}: {{detail}}",
+    control: {
+      cleared: "🧹 새 세션을 시작했습니다 — 이전 대화 맥락은 비워졌습니다.",
+      compacted: "✂️ 대화 컨텍스트를 압축했습니다(/compact).",
+      resumed: "⏪ 세션 {{id}} 를 재개했습니다.",
+      resumeFallback: "⚠️ 세션 {{id}} 복귀에 실패해 새 세션으로 시작했습니다.",
+      resumeMissing: "⚠️ 재개할 세션 id 가 없습니다 — 목록에서 선택해 주세요.",
+      unsupported: "⚠️ 이 백엔드는 세션 제어를 지원하지 않습니다.",
+      relaunchFailed:
+        "🛑 세션 제어 실패 — 엔진 재기동 오류: {{error}}. 레인이 중단됐을 수 있습니다 — `adde restart <proj>` 로 복구하세요.",
+      sessionsHeader: "📋 최근 세션 목록 (현재 세션 ◀):",
+      sessionsItem: "{{n}}. {{label}} — 마지막 대화 {{last}} ({{id}})",
+      sessionsNoLabel: "(프롬프트 없음)",
+      sessionsEmpty: "📋 기록된 세션이 아직 없습니다.",
+      sessionsHint: "재개: 체크박스 라벨 `resume <번호>` 또는 `/resume <번호>`.",
+    },
     failNote: {
       situation: "메시지 처리 실패 — id {{id}}: {{detail}}",
       action: "메시지는 보존되어 재기동 시 재처리됩니다. 반복되면 트랜스크립트·로그를 확인하세요.",
@@ -328,11 +432,14 @@ lane add 옵션:
     supervisor: {
       noConf: "[supervisor] {{proj}}: lanes.d 에 conf 없음",
       heartbeatFail: "[supervisor] lane={{lane}} 하트비트 touch 실패(보조): {{error}}",
+      ledgerFail: "[supervisor] lane={{lane}} 세션 장부 갱신 실패(보조): {{error}}",
       deadCleanupFail: "[supervisor] lane={{lane}} dead runtime.json 정리 실패(보조): {{error}}",
       channelWarnFail: "[supervisor] lane={{lane}} 채널 경고 전송 실패(보조): {{error}}",
       injectorStartFail: "[supervisor] lane={{lane}} injector 기동 오류: {{error}}",
       runtimeWriteFail: "[supervisor] lane={{lane}} runtime.json 기록 실패(보조): {{error}}",
       runtimeRemoveFail: "[supervisor] lane={{lane}} runtime.json 제거 실패(보조): {{error}}",
+      securePermsFail:
+        "[supervisor] lane={{lane}} 상태 디렉터리 권한 잠금 실패(보조 — 파일이 타 사용자에 노출될 수 있음): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} 기동 실패: {{reason}}",
     },
     queue: {
@@ -345,12 +452,19 @@ lane add 옵션:
       renderError: "[injector] 렌더 오류 lane={{lane}} id={{id}} — 재전송 대기: {{error}}",
       advanceError: "[injector] 진행 오류 lane={{lane}}: {{error}}",
       failNotifyError: "[injector] 실패 알림 전달 오류 lane={{lane}} id={{id}}: {{error}}",
+      relaunchError:
+        "[injector] 세션 제어 엔진 재기동 실패 lane={{lane}} — 재시작 전까지 레인이 중단될 수 있음: {{error}}",
     },
     telegram: {
       rateLimit: "[telegram] {{method}} 429 레이트리밋 — {{waitMs}}ms 후 재시도({{attempt}})",
       enqueueError: "[telegram] enqueue 오류({{count}}회 연속): {{error}}",
       answerCallbackError: "[telegram] answerCallbackQuery 오류: {{error}}",
       unknownCallback: "[telegram] 알 수 없는 callback decision 무시: {{decision}}",
+      unauthorizedMessage:
+        "[telegram] 미허가 발신자의 인바운드 무시(from={{from}} chat={{chat}}) — chat_id/allow_from 에 추가해 허용",
+      unauthorizedCallback: "[telegram] 미허가 발신자의 권한 콜백 무시(from={{from}})",
+      noAuthConfigured:
+        "[telegram] 허용 발신자 미설정(chat_id/allow_from 비어있음) — 모든 인바운드 거부(fail-closed)",
       pollError: "[telegram] poll 오류({{count}}회 연속, {{backoff}}ms 후 재시도): {{error}}",
       alertSendError: "[telegram] enqueue 실패 알림 전송 오류: {{error}}",
       pollLoopEnd: "[telegram] poll 루프 종료: {{error}}",
@@ -370,6 +484,8 @@ lane add 옵션:
     },
     acp: {
       engineProcessError: "[acp] lane={{lane}} 엔진 프로세스 오류: {{error}}",
+      loadSessionFail:
+        "[acp] lane={{lane}} 세션 복귀(session/load) 실패 — 새 세션으로 폴백: {{error}}",
       subscriberError: "[acp] lane={{lane}} 구독자 오류: {{error}}",
       transcriptWriteFail: "[acp] lane={{lane}} transcript 기록 실패: {{error}}",
       permDiff: "[acp] launch perm-diff: {{note}}",

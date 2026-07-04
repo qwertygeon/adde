@@ -1,3 +1,4 @@
+import { FAKE_ACP_CAPS } from "../helpers/fake-acp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -41,12 +42,7 @@ function makeFakeAcpBackend(sessionId = "fake-session-abc"): AcpBackend & {
 } {
   const subscribers: Array<(e: unknown) => void> = [];
   return {
-    caps: () => ({
-      plane: "acp" as const,
-      perm_tier: "acp",
-      supports_attachments: false,
-      acp_version: "v1" as const,
-    }),
+    caps: () => FAKE_ACP_CAPS,
     // launch: session.id 파일을 직접 기록하는 fake 동작
     launch: vi.fn().mockImplementation(async (_lane: string) => {
       // fake ACP quirk: usage 미emit (launch 는 usage 없이 즉시 완료)
@@ -85,12 +81,7 @@ describe("AcpBackend launch — session.id 영속 (SC-009)", () => {
 
     // fake 더블로 순서 검증
     const fakeBackend: AcpBackend = {
-      caps: () => ({
-        plane: "acp" as const,
-        perm_tier: "acp",
-        supports_attachments: false,
-        acp_version: "v1" as const,
-      }),
+      caps: () => FAKE_ACP_CAPS,
       launch: vi.fn().mockImplementation(async (_lane: string) => {
         // fake ACP quirk: protocolVersion 1 고정
         callOrder.push("initialize");

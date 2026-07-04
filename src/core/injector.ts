@@ -1,11 +1,16 @@
 /**
  * 직렬 idle 게이트·dedup·turn 라이프사이클 루프.
- * FR-004/005/011/ADR-003: state=idle|active. active 동안 다음 envelope 미주입.
+ * state=idle|active. active 동안 다음 envelope 미주입.
  * 크래시 재개: 기동 시 scanProcessing → 각 id 에 isDone? 스킵 : 재처리.
- * 응답 캡처(DEC-002): backend.inject() resolve(=turn 종료) 시 누적 응답을 writeOut + 렌더 트리거 → 다음 큐 진행.
+ * 응답 캡처: backend.inject() resolve(=turn 종료) 시 누적 응답을 writeOut + 렌더 트리거 → 다음 큐 진행.
  *   turn 종료 신호는 inject() resolve 로 감지한다(conn.prompt 가 turn 종료에 resolve) — 별도 idleCallback 배선 불요.
  */
 import { t } from "../shared/i18n.js";
+import type { NotifyT } from "../shared/notify.js";
+import { readFile } from "node:fs/promises";
+import { appendTranscript } from "./transcript.js";
+import { recordSession, touchSession, readLedger, formatWhen } from "./session-ledger.js";
+import { errMsg } from "../shared/errors.js";
 import {
   claimNext,
   scanProcessing,
@@ -81,6 +86,8 @@ export function createInjector(
   backend: AcpBackend,
   render?: RenderCallback,
   onFail?: FailNotifyCallback,
+  /** 제어 결과 등 채널 대면 문구의 로케일(레인 lang). 미지정 시 전역 t. */
+  laneT: NotifyT = t,
 ): Injector {
   let state: InjectorState = "idle";
   let responseText = "";
@@ -98,13 +105,97 @@ export function createInjector(
     if (isAgentMessageChunk(event)) responseText += chunkText(event);
   }
 
-  /** 한 메시지의 turn 을 처리: inject → (turn 종료) 응답 기록 + 렌더. */
+  /** state/<lane>/session.id 읽기 — 장부 갱신용(부재 시 null, 보조 데이터). */
+  async function currentSessionId(): Promise<string | null> {
+    try {
+      return (await readFile(paths.sessionIdFile, "utf8")).trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 제어 요청 수행 — 채널 통지 문구를 반환(레인 로케일). 실패는 throw(처리부 공통 실패 경로). */
+  async function runControl(envelope: Envelope): Promise<string> {
+    const control = envelope.control!;
+    switch (control.kind) {
+      case "clear": {
+        if (!backend.reset) return laneT("injector.control.unsupported");
+        let sessionId: string;
+        try {
+          ({ sessionId } = await backend.reset(lane));
+        } catch (err) {
+          // 재기동 실패 = 레인 엔진 사망 가능 — 일반 실패와 구분해 복구 절차를 명시 통지.
+          console.error(t("log.injector.relaunchError", { lane, error: errMsg(err) }));
+          return laneT("injector.control.relaunchFailed", { error: maskSecrets(errMsg(err)) });
+        }
+        await recordSession(paths, sessionId).catch(() => {});
+        return laneT("injector.control.cleared");
+      }
+      case "compact": {
+        // 엔진 위임 — 슬래시 텍스트를 그대로 주입하면 엔진이 compaction 수행.
+        // 어댑터가 커맨드 출력을 삼키므로(local-command-stdout) 완료 통지는 여기서 생성.
+        await backend.inject(lane, "/compact");
+        const sid = await currentSessionId();
+        if (sid) await touchSession(paths, sid).catch(() => {});
+        return laneT("injector.control.compacted");
+      }
+      case "resume": {
+        if (!backend.resumeSession) return laneT("injector.control.unsupported");
+        if (!control.sessionId) return laneT("injector.control.resumeMissing");
+        let r: { sessionId: string; resumed: boolean };
+        try {
+          r = await backend.resumeSession(lane, control.sessionId);
+        } catch (err) {
+          console.error(t("log.injector.relaunchError", { lane, error: errMsg(err) }));
+          return laneT("injector.control.relaunchFailed", { error: maskSecrets(errMsg(err)) });
+        }
+        await recordSession(paths, r.sessionId).catch(() => {});
+        return r.resumed
+          ? laneT("injector.control.resumed", { id: r.sessionId })
+          : laneT("injector.control.resumeFallback", { id: control.sessionId });
+      }
+      case "sessions": {
+        const entries = await readLedger(paths);
+        if (entries.length === 0) return laneT("injector.control.sessionsEmpty");
+        const current = await currentSessionId();
+        const lines = entries.map((e, i) => {
+          const label = e.label ?? laneT("injector.control.sessionsNoLabel");
+          const mark = e.id === current ? " ◀" : "";
+          return (
+            laneT("injector.control.sessionsItem", {
+              n: i + 1,
+              label,
+              last: formatWhen(e.lastActivityAt),
+              id: e.id,
+            }) + mark
+          );
+        });
+        return `${laneT("injector.control.sessionsHeader")}\n${lines.join("\n")}\n\n${laneT("injector.control.sessionsHint")}`;
+      }
+    }
+  }
+
+  /** 한 메시지의 turn 을 처리: inject → (turn 종료) 응답 기록 + 렌더. 제어 envelope 는 세션 제어로 분기. */
   async function processOne(id: string, envelope: Envelope): Promise<void> {
     state = "active";
     responseText = "";
     try {
+      if (envelope.control) {
+        const message = await runControl(envelope);
+        await appendTranscript(paths, {
+          sessionUpdate: "adde_control",
+          message: `${envelope.control.kind}: ${message}`,
+        }).catch(() => {});
+        const sidecar: OutSidecar = { ts: new Date().toISOString(), origin_ts: envelope.ts };
+        if (envelope.reply_ref?.channel_msg_id) {
+          sidecar.reply_ref = { channel_msg_id: envelope.reply_ref.channel_msg_id };
+        }
+        await writeOut(paths, id, message, sidecar);
+        await deliver(id);
+        return;
+      }
       await backend.inject(lane, envelope.text);
-      // inject resolve = turn 종료 — 누적 응답을 마스킹 후 out 기록(DEC-003) + 렌더(DEC-002).
+      // inject resolve = turn 종료 — 누적 응답을 마스킹 후 out 기록 + 렌더.
       const sidecar: OutSidecar = { ts: new Date().toISOString(), origin_ts: envelope.ts };
       if (envelope.reply_ref?.channel_msg_id) {
         sidecar.reply_ref = { channel_msg_id: envelope.reply_ref.channel_msg_id };
@@ -113,8 +204,11 @@ export function createInjector(
       if (question.length > 0) sidecar.question = question;
       await writeOut(paths, id, maskSecrets(responseText), sidecar);
       await deliver(id);
+      // 세션 장부 갱신(보조): 마지막 대화 시각 + 미기재 시 첫 프롬프트 발췌를 라벨로.
+      const sid = await currentSessionId();
+      if (sid) await touchSession(paths, sid, question || undefined).catch(() => {});
     } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
+      const detail = errMsg(err);
       console.error(t("log.injector.injectError", { lane, id, detail }));
       // 실패를 .failed 사이드카로 보존(E1) — processing/<id>.msg 는 남아 재기동 시 재처리(at-least-once).
       await writeFailed(
@@ -126,7 +220,7 @@ export function createInjector(
           t("log.injector.failedWriteFail", {
             lane,
             id,
-            error: e instanceof Error ? e.message : String(e),
+            error: errMsg(e),
           }),
         ),
       );
@@ -137,7 +231,7 @@ export function createInjector(
             t("log.injector.failNotifyError", {
               lane,
               id,
-              error: e instanceof Error ? e.message : String(e),
+              error: errMsg(e),
             }),
           ),
         );
@@ -149,7 +243,7 @@ export function createInjector(
   }
 
   /**
-   * 응답을 채널로 전송하고 성공 시 .sent 마커 기록(DEC-001/002).
+   * 응답을 채널로 전송하고 성공 시 .sent 마커 기록.
    * render 실패(부분 청크 실패 포함)는 .sent 미기록 → out/ 에 durable 하게 남아 재전송 대상(flushUnsent).
    */
   async function deliver(id: string): Promise<void> {
@@ -171,7 +265,7 @@ export function createInjector(
         t("log.injector.renderError", {
           lane,
           id,
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg(err),
         }),
       );
     } finally {
@@ -192,7 +286,7 @@ export function createInjector(
         console.error(
           t("log.injector.advanceError", {
             lane,
-            error: err instanceof Error ? err.message : String(err),
+            error: errMsg(err),
           }),
         );
       });
@@ -203,7 +297,7 @@ export function createInjector(
     if (state !== "idle" || advancing) return;
     advancing = true;
     try {
-      // 미전송(.out 있고 .sent 부재) 응답을 먼저 재전송 — render 실패·크래시 복구(FR-1).
+      // 미전송(.out 있고 .sent 부재) 응답을 먼저 재전송 — render 실패·크래시 복구.
       await flushUnsent();
 
       const claimed = await claimNext(paths);
@@ -218,7 +312,7 @@ export function createInjector(
       }
 
       await processOne(id, envelope);
-      // turn 종료 후 다음 큐 메시지로 진행(FR-A2).
+      // turn 종료 후 다음 큐 메시지로 진행.
       scheduleNext();
     } finally {
       advancing = false;
@@ -226,7 +320,7 @@ export function createInjector(
   }
 
   async function start(): Promise<void> {
-    // 크래시 재개: 응답은 기록됐으나 미전송된 항목 먼저 재전송(FR-1).
+    // 크래시 재개: 응답은 기록됐으나 미전송된 항목 먼저 재전송.
     await flushUnsent();
     // processing 잔존 파일을 순차 재처리.
     const pendingIds = await scanProcessing(paths);
@@ -237,7 +331,7 @@ export function createInjector(
         const { readFile } = await import("node:fs/promises");
         envelope = parseEnvelope(await readFile(processingFilePath(paths, id), "utf8"));
       } catch (err) {
-        // 손상 메시지 — 격리 후 다음으로(매 기동 동일 파싱오류 반복 차단, FR-2).
+        // 손상 메시지 — 격리 후 다음으로(매 기동 동일 파싱오류 반복 차단).
         await quarantineCorrupt(paths, id, err);
         continue;
       }

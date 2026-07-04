@@ -150,6 +150,19 @@ describe("runDoctor (SC3)", () => {
     expect(node?.level).toBe("PASS");
   });
 
+  it("데몬 진입 파일 점검 — darwin 은 WARN(tsx 부재)·비-darwin(CI 등)은 스킵", async () => {
+    const checks = await runDoctor(undefined, { base: tmpBase });
+    const entry = checks.find((c) => c.name === "데몬 진입 파일");
+    if (process.platform === "darwin") {
+      // vitest 는 src(tsx)로 실행 → src/cli/adde.js 부재 → WARN + 빌드 안내 hint
+      expect(entry?.level).toBe("WARN");
+      expect(entry?.hint).toBeTruthy();
+    } else {
+      // 비-darwin(예: ubuntu CI)에서는 데몬 점검을 스킵하므로 항목 없음
+      expect(entry).toBeUndefined();
+    }
+  });
+
   it("telegram 레인의 토큰 부재는 FAIL + 조치 힌트", async () => {
     writeConf("p", "telegram-claude", conf());
     const checks = await runDoctor("p", { base: tmpBase });
@@ -173,6 +186,52 @@ describe("runDoctor (SC3)", () => {
     const checks = await runDoctor("p", { base: tmpBase });
     const cwd = checks.find((c) => c.name.endsWith("cwd"));
     expect(cwd?.level).toBe("FAIL");
+  });
+
+  it("그룹/기타 읽기 가능한 .env 는 파일 권한 WARN (토큰 노출)", async () => {
+    writeConf("p", "lane1", conf());
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o700);
+    fs.writeFileSync(lp.envFile, "TELEGRAM_BOT_TOKEN=abc\n");
+    fs.chmodSync(lp.envFile, 0o644);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const perms = checks.find((c) => c.name.endsWith("파일 권한"));
+    expect(perms?.level).toBe("WARN");
+    expect(perms?.hint).toContain("chmod 600");
+  });
+
+  it("제한적 권한(.env 0600 + state 0700)은 파일 권한 PASS", async () => {
+    writeConf("p", "lane1", conf());
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o700);
+    fs.writeFileSync(lp.envFile, "TELEGRAM_BOT_TOKEN=abc\n");
+    fs.chmodSync(lp.envFile, 0o600);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const perms = checks.find((c) => c.name.endsWith("파일 권한"));
+    expect(perms?.level).toBe("PASS");
+  });
+
+  it("private 모드인데 느슨한 state 디렉터리(0755)는 파일 권한 WARN", async () => {
+    writeConf("p", "lane1", conf());
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o755);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const perms = checks.find((c) => c.name.endsWith("파일 권한"));
+    expect(perms?.level).toBe("WARN");
+    expect(perms?.hint).toContain("chmod 700");
+  });
+
+  it("shared 모드는 느슨한 state 디렉터리를 경고하지 않는다(의도된 선택)", async () => {
+    writeConf("p", "lane1", conf("file_mode=shared\n"));
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o755);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const perms = checks.find((c) => c.name.endsWith("파일 권한"));
+    expect(perms?.level).toBe("PASS");
   });
 });
 

@@ -16,6 +16,11 @@ export interface LaneConf {
   allowlist: string[];
   /** perm_tier=autopass 에서 채널 승인으로 폴백할 도구명 목록(그 외 도구는 자동 허용). */
   denylist: string[];
+  /**
+   * 방어심화 하드-거부 목록 — 매칭 도구는 티어 무관하게 즉시 거부(채널 승인 프롬프트도 없음).
+   * denylist(autopass 에서 "물어봄")보다 강함. acp 티어의 실수 승인 방지용. `Tool`/`Tool(글롭)` 형식.
+   */
+  hard_deny: string[];
   /** 레인별 엔진 작업 폴더(절대경로). 미지정 시 undefined → 슈퍼바이저 cwd. */
   cwd?: string;
   /** telegram 회신 대상 chat id (문자열 보존, 어댑터가 숫자 변환). */
@@ -30,6 +35,16 @@ export interface LaneConf {
   outbox?: string;
   /** 레인별 채널 메시지 로케일(en|ko). 미지정 시 전역 로케일. */
   lang?: string;
+  /**
+   * telegram 인바운드 발신자 허용 목록(CSV, 숫자 user/chat id). chat_id 와 합쳐 authorizedIds 구성.
+   * 그룹/멀티 발신자 확장용. 미지정+chat_id 부재 시 인바운드 fail-closed(전부 무시).
+   */
+  allow_from?: string;
+  /**
+   * 상태·출력·큐 디렉터리 권한 모드. private=0700(기본, 소유자 전용) / shared=0755(다중 사용자 열람 허용).
+   * 미지정 시 private(secure-by-default).
+   */
+  file_mode?: string;
 }
 
 export function parseLaneConf(text: string): LaneConf {
@@ -62,6 +77,7 @@ export function parseLaneConf(text: string): LaneConf {
     acp_version: conf["acp_version"] ?? "v1",
     allowlist: parseToolList(conf["allowlist"] ?? ""),
     denylist: parseToolList(conf["denylist"] ?? ""),
+    hard_deny: parseToolList(conf["hard_deny"] ?? ""),
   };
 
   // optional 필드는 존재할 때만 채운다(부재 = undefined).
@@ -76,7 +92,17 @@ export function parseLaneConf(text: string): LaneConf {
 }
 
 /** parse/serialize 가 공유하는 optional 키 목록(순서 = 직렬화 순서). */
-const OPTIONAL_KEYS = ["cwd", "chat_id", "root", "inbox", "approvals", "outbox", "lang"] as const;
+const OPTIONAL_KEYS = [
+  "cwd",
+  "chat_id",
+  "root",
+  "inbox",
+  "approvals",
+  "outbox",
+  "lang",
+  "allow_from",
+  "file_mode",
+] as const;
 
 /**
  * LaneConf → .conf INI 텍스트 직렬화. parseLaneConf 의 역연산.
@@ -94,6 +120,7 @@ export function serializeLaneConf(conf: LaneConf): string {
   ];
   if (conf.allowlist.length > 0) lines.push(`allowlist=${conf.allowlist.join(",")}`);
   if (conf.denylist.length > 0) lines.push(`denylist=${conf.denylist.join(",")}`);
+  if (conf.hard_deny.length > 0) lines.push(`hard_deny=${conf.hard_deny.join(",")}`);
   for (const key of OPTIONAL_KEYS) {
     const value = conf[key];
     if (value !== undefined && value.length > 0) lines.push(`${key}=${value}`);

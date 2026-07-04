@@ -1,20 +1,17 @@
 /**
  * atomic 저장·상태 전이·dedup.
- * FR-002/003/005/ADR-004: tmp→rename 으로 부분 쓰기 미노출.
+ * tmp→rename 으로 부분 쓰기 미노출.
  * queue→processing→out 상태 전이는 원자적 rename.
  */
 import { t } from "../shared/i18n.js";
-import { mkdir, writeFile, rename, readdir, access } from "node:fs/promises";
+import { mkdir, rename, readdir, access, readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
+import { atomicWrite } from "../shared/fs-atomic.js";
+import { errMsg, errCode } from "../shared/errors.js";
 import type { LanePaths } from "../shared/paths.js";
-import { serializeEnvelope } from "../shared/envelope.js";
+import { serializeEnvelope, parseEnvelope } from "../shared/envelope.js";
 import type { Envelope } from "../shared/envelope.js";
 import { formatException } from "../shared/notify.js";
-
-/** Node fs 오류 코드 추출(없으면 undefined). */
-function errCode(err: unknown): string | undefined {
-  return (err as NodeJS.ErrnoException | undefined)?.code;
-}
 
 /** queue 파일명 형식: <ts_ms>-<id>.msg */
 function queueFileName(envelope: Envelope): string {
@@ -25,11 +22,6 @@ function queueFileName(envelope: Envelope): string {
 /** processing 파일명: <id>.msg */
 function processingFileName(id: string): string {
   return `${id}.msg`;
-}
-
-/** tmp 파일명: .<name>.tmp */
-function tmpName(name: string): string {
-  return `.${name}.tmp`;
 }
 
 /** id 를 queue 파일명에서 추출. */
@@ -49,14 +41,7 @@ function idFromProcessingFile(filename: string): string {
  * tmp 작성 완료 후 rename → 부분 쓰기가 queue 에 노출되지 않는다.
  */
 export async function enqueue(paths: LanePaths, envelope: Envelope): Promise<void> {
-  await mkdir(paths.queueDir, { recursive: true });
-
-  const name = queueFileName(envelope);
-  const tmpPath = join(paths.queueDir, tmpName(name));
-  const finalPath = join(paths.queueDir, name);
-
-  await writeFile(tmpPath, serializeEnvelope(envelope), "utf8");
-  await rename(tmpPath, finalPath);
+  await atomicWrite(join(paths.queueDir, queueFileName(envelope)), serializeEnvelope(envelope));
 }
 
 /**
@@ -79,9 +64,6 @@ export async function claimNext(
   }
 
   const msgFiles = files.filter((f) => f.endsWith(".msg")).sort();
-
-  const { readFile } = await import("node:fs/promises");
-  const { parseEnvelope } = await import("../shared/envelope.js");
 
   // 정렬 순서대로 claim 시도 — 경합(ENOENT)·손상(parse 실패)은 건너뛰고 다음 메시지로.
   for (const next of msgFiles) {
@@ -130,7 +112,7 @@ export async function quarantineCorrupt(
   id: string,
   reason: unknown,
 ): Promise<void> {
-  const detail = reason instanceof Error ? reason.message : String(reason);
+  const detail = errMsg(reason);
   const src = join(paths.processingDir, processingFileName(id));
   const corrupt = `${src}.corrupt`;
   try {
@@ -145,11 +127,7 @@ export async function quarantineCorrupt(
     paths,
     id,
     t("queue.quarantined", { ts: new Date().toISOString(), detail }),
-  ).catch((e: unknown) =>
-    console.error(
-      t("log.queue.failedWriteFail", { id, error: e instanceof Error ? e.message : String(e) }),
-    ),
-  );
+  ).catch((e: unknown) => console.error(t("log.queue.failedWriteFail", { id, error: errMsg(e) })));
 }
 
 /**
@@ -219,23 +197,11 @@ export async function writeOut(
   text: string,
   sidecar: OutSidecar,
 ): Promise<void> {
-  await mkdir(paths.outDir, { recursive: true });
-
-  const outName = `${id}.out`;
-  const sidecarName = `${id}.out.json`;
-
   // sidecar 를 먼저 확정한다 — `.out` 이 dedup/done 마커(isDone)이므로 본문을 마지막에 rename 하면
   // "`.out` 존재 ⇒ sidecar 존재" 가 성립한다. 두 rename 사이 크래시에도 done 메시지가 reply_ref 를
-  // 잃지 않고, reader 가 `.out` 만 보고 sidecar 부재 창을 만나지 않는다(DEC-001).
-  const tmpSidecar = join(paths.outDir, tmpName(sidecarName));
-  const finalSidecar = join(paths.outDir, sidecarName);
-  await writeFile(tmpSidecar, JSON.stringify(sidecar), "utf8");
-  await rename(tmpSidecar, finalSidecar);
-
-  const tmpOut = join(paths.outDir, tmpName(outName));
-  const finalOut = join(paths.outDir, outName);
-  await writeFile(tmpOut, text, "utf8");
-  await rename(tmpOut, finalOut);
+  // 잃지 않고, reader 가 `.out` 만 보고 sidecar 부재 창을 만나지 않는다.
+  await atomicWrite(join(paths.outDir, `${id}.out.json`), JSON.stringify(sidecar));
+  await atomicWrite(join(paths.outDir, `${id}.out`), text);
 }
 
 /**
@@ -243,12 +209,7 @@ export async function writeOut(
  * "응답은 기록됐으나 채널 미전송" 상태를 표현 — render 실패 시 재전송 대상 판별에 쓰인다.
  */
 export async function markSent(paths: LanePaths, id: string): Promise<void> {
-  await mkdir(paths.outDir, { recursive: true });
-  const name = `${id}.sent`;
-  const tmp = join(paths.outDir, tmpName(name));
-  const final = join(paths.outDir, name);
-  await writeFile(tmp, new Date().toISOString(), "utf8");
-  await rename(tmp, final);
+  await atomicWrite(join(paths.outDir, `${id}.sent`), new Date().toISOString());
 }
 
 /** out/<id>.sent 존재 여부 — 채널 전송 완료 판정. */
@@ -286,12 +247,7 @@ export async function findUnsent(paths: LanePaths): Promise<string[]> {
  * dedup 마커(.out)가 아니므로 processing/<id>.msg 는 남아 재기동 시 재처리된다(at-least-once 유지).
  */
 export async function writeFailed(paths: LanePaths, id: string, reason: string): Promise<void> {
-  await mkdir(paths.outDir, { recursive: true });
-  const name = `${id}.failed`;
-  const tmp = join(paths.outDir, tmpName(name));
-  const final = join(paths.outDir, name);
-  await writeFile(tmp, reason, "utf8");
-  await rename(tmp, final);
+  await atomicWrite(join(paths.outDir, `${id}.failed`), reason);
 }
 
 /** processing/<id>.msg 경로를 직접 반환 (재처리 복원 등에 사용). */
@@ -303,7 +259,6 @@ export function processingFilePath(paths: LanePaths, id: string): string {
 export async function readSidecar(paths: LanePaths, id: string): Promise<OutSidecar | null> {
   const sidecarPath = join(paths.outDir, `${id}.out.json`);
   try {
-    const { readFile } = await import("node:fs/promises");
     const json = await readFile(sidecarPath, "utf8");
     return JSON.parse(json) as OutSidecar;
   } catch {

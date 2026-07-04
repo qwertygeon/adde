@@ -3,9 +3,14 @@
  * core/diagnostics 의 읽기 전용 로직을 호출하고 표/JSON/텍스트로 표면화한다.
  */
 import { collectStatus, collectAllStatus, runDoctor, readLogs } from "../core/diagnostics.js";
+import { checkForUpdate, formatUpdateNotice } from "../core/update-check.js";
+import { errMsg } from "../shared/errors.js";
 import type { LaneStatusRow, AggregatedLaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
 import { USAGE } from "../core/messages.js";
 import { t } from "../shared/i18n.js";
+import { readLedger, formatWhen } from "../core/session-ledger.js";
+import { lanePaths, defaultBase } from "../shared/paths.js";
+import { readFile } from "node:fs/promises";
 
 /** ms → 사람용 경과시간(예: 1h2m, 3m4s, 12s). */
 function formatUptime(ms: number | null): string {
@@ -68,6 +73,19 @@ function statusTableAggregate(rows: AggregatedLaneStatusRow[], all: boolean): st
   return [fmt(header), ...body.map(fmt)].join("\n");
 }
 
+/**
+ * 새 npm 버전이 있으면 안내 한 줄을 stdout 에 덧붙인다(보조 — 조회 실패는 무시).
+ * 네트워크 조회는 대화형(TTY)에서만 허용해 파이프·스크립트에는 지연·잡음을 주지 않는다.
+ */
+async function printUpdateNoticeIfAny(): Promise<void> {
+  try {
+    const notice = await checkForUpdate({ allowNetwork: process.stdout.isTTY === true });
+    if (notice) process.stdout.write("\n" + formatUpdateNotice(notice) + "\n");
+  } catch {
+    // 보조 기능 — 조회 실패는 흡수.
+  }
+}
+
 export async function runStatus(rest: readonly string[]): Promise<number> {
   const json = rest.includes("--json");
   const all = rest.includes("--all");
@@ -101,6 +119,7 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
             "\n",
         );
       }
+      await printUpdateNoticeIfAny();
     }
     return rows.some((r) => r.status === "dead" || r.status === "stale") ? 1 : 0;
   }
@@ -126,6 +145,7 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
           "\n",
       );
     }
+    await printUpdateNoticeIfAny();
   }
   // 비정상(dead 크래시·stale 행) 잔존을 종료 코드로 신호 — 모니터링 친화.
   return rows.some((r) => r.status === "dead" || r.status === "stale") ? 1 : 0;
@@ -149,7 +169,51 @@ export async function runDoctorCli(rest: readonly string[]): Promise<number> {
       t("ops.doctor.summary", { pass: checks.length - fails - warns, warn: warns, fail: fails }) +
       "\n",
   );
+  await printUpdateNoticeIfAny();
   return fails > 0 ? 1 : 0;
+}
+
+/** `adde sessions <proj> <lane>` — 세션 장부 목록(read-only). 재개는 채널 명령으로 수행. */
+export async function runSessions(rest: readonly string[]): Promise<number> {
+  const [proj, lane] = rest;
+  if (!proj || !lane) {
+    process.stderr.write(USAGE.sessions + "\n");
+    return 1;
+  }
+  let paths;
+  try {
+    paths = lanePaths(defaultBase(), proj, lane);
+  } catch (err) {
+    process.stderr.write(errMsg(err) + "\n");
+    return 1;
+  }
+  const entries = await readLedger(paths);
+  if (entries.length === 0) {
+    process.stdout.write(t("injector.control.sessionsEmpty") + "\n");
+    return 0;
+  }
+  let current: string | null = null;
+  try {
+    current = (await readFile(paths.sessionIdFile, "utf8")).trim() || null;
+  } catch {
+    // 세션 파일 부재 — 현재 표시 생략
+  }
+  const lines = entries.map((e, i) => {
+    const label = e.label ?? t("injector.control.sessionsNoLabel");
+    const mark = e.id === current ? " ◀" : "";
+    return (
+      t("injector.control.sessionsItem", {
+        n: i + 1,
+        label,
+        last: formatWhen(e.lastActivityAt),
+        id: e.id,
+      }) + mark
+    );
+  });
+  process.stdout.write(
+    `${t("injector.control.sessionsHeader")}\n${lines.join("\n")}\n\n${t("injector.control.sessionsHint")}\n`,
+  );
+  return 0;
 }
 
 export async function runLogs(rest: readonly string[]): Promise<number> {
@@ -166,7 +230,7 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
     result = await readLogs(proj, lane, n, { engine });
   } catch (err) {
     // proj/lane 검증 실패(경로 탈출 차단 등) — 친절한 메시지 후 비정상 종료코드.
-    process.stderr.write((err instanceof Error ? err.message : String(err)) + "\n");
+    process.stderr.write(errMsg(err) + "\n");
     return 1;
   }
   if (!result.exists) {

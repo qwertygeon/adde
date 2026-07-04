@@ -1,19 +1,24 @@
 /**
  * 레인 라이프사이클 수퍼바이저.
- * FR-001/021/022/ADR-010: lanes.d conf 스캔 → 레인별 기동·헬스.
+ * lanes.d conf 스캔 → 레인별 기동·헬스.
  * adde up → source/injector/backend/gate 인스턴스화 + 기동.
  * adde down → 레인 프로세스 종료.
  */
 import { readdir, readFile, mkdir } from "node:fs/promises";
+import { errMsg } from "../shared/errors.js";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { parseLaneConf } from "../shared/conf.js";
 import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
+import { secureLaneDirs } from "../shared/fs-atomic.js";
+import { parseCsv, resolveFileMode } from "./lane-config.js";
 import { AcpBackendImpl } from "../backend/acp/client.js";
 import type { AcpBackend } from "../backend/acp/client.js";
 import { createInjector } from "./injector.js";
+import { recordSession } from "./session-ledger.js";
 import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
+import { selfAuthorizedChatId } from "../src-adapters/telegram.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
 import { formatWarnNote, formatException } from "../shared/notify.js";
@@ -43,19 +48,6 @@ export function resolveAdapterBin(): string {
   }
   const thisDir = fileURLToPath(new URL(".", import.meta.url));
   return resolve(thisDir, "../../../node_modules/.bin/claude-code-acp");
-}
-
-/** unknown 오류를 사람이 읽을 수 있는 문자열로 — ACP 오류는 Error 가 아닌 객체일 수 있다. */
-function errMsg(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === "object") {
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return String(err);
-    }
-  }
-  return String(err);
 }
 
 interface LaneHandle {
@@ -177,19 +169,28 @@ export async function supervisorUp(
 
     const paths = lanePaths(baseDir, proj, lane);
 
+    // 상태·출력·큐 디렉터리 권한 잠금(private=0700 / shared=no-op). chmod 실패는 보조
+    // 하드닝 신호 — warn 후 흡수(기동 자체는 진행, 권한 미적용은 로그로 가시화).
+    await secureLaneDirs(
+      [paths.stateDir, paths.outDir, paths.queueDir, paths.processingDir, paths.lanesDir],
+      resolveFileMode(conf.file_mode),
+    ).catch((err: unknown) =>
+      console.warn(t("log.supervisor.securePermsFail", { lane, error: errMsg(err) })),
+    );
+
     // 중복 기동 가드 — backend 생성 전 runtime.json + pid 생존 확인.
     const existingRuntime = await readRuntime(paths);
     if (existingRuntime !== null) {
       if (isPidAlive(existingRuntime.pid)) {
-        // 이미 running — 경고+스킵(FR-004/SC-005).
+        // 이미 running — 경고+스킵.
         process.stderr.write(
           t("supervisor.alreadyRunning", { lane, pid: existingRuntime.pid, proj }) + "\n",
         );
         results.push({ lane, status: "running" });
         continue;
       } else {
-        // dead 레인 — 크래시 잔존 runtime.json 정리 후 정상 기동(SC-012/FR-007).
-        // 자식 pid 는 runtime.json 에 미기록(스키마 한계 GAP-004) — removeRuntime 으로 파일만 정리.
+        // dead 레인 — 크래시 잔존 runtime.json 정리 후 정상 기동.
+        // 자식 pid 는 runtime.json 에 미기록(스키마 한계) — removeRuntime 으로 파일만 정리.
         await removeRuntime(paths).catch((err: unknown) =>
           console.warn(t("log.supervisor.deadCleanupFail", { lane, error: errMsg(err) })),
         );
@@ -219,6 +220,7 @@ export async function supervisorUp(
           perm_tier: conf.perm_tier,
           allowlist: conf.allowlist,
           denylist: conf.denylist,
+          hard_deny: conf.hard_deny,
         },
         cwd: conf.cwd,
         channel,
@@ -234,7 +236,7 @@ export async function supervisorUp(
     let source: Source;
 
     // injector 를 source 보다 먼저 생성 — render 는 source 를 지연 참조(closure, turn 종료 시 호출).
-    // in-process 배선(DEC-001): source.onInbound → injector.notify, injector.render → source.renderOut.
+    // in-process 배선: source.onInbound → injector.notify, injector.render → source.renderOut.
     // 주입 실패도 채널로 표면화(onFail → source.notify) — 채널 언어(레인 로케일)로 렌더.
     const laneT = tFor(conf.lang);
     const injector = createInjector(
@@ -254,6 +256,7 @@ export async function supervisorUp(
             laneT,
           ),
         ),
+      laneT,
     );
     const onInbound = () => injector.notify();
 
@@ -262,12 +265,22 @@ export async function supervisorUp(
     } else {
       const chatId =
         conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
+      // 인바운드/콜백 허용 발신자 = allow_from ∪ (개인 chat 인 chatId). 비면 어댑터가 fail-closed.
+      // 음수 chatId(그룹)는 인증 앵커 아님 — 멤버는 allow_from 으로만 인증(어댑터 병합 규칙과 동일).
+      const authorizedIds: number[] = [];
+      const selfAuth = selfAuthorizedChatId(chatId);
+      if (selfAuth !== undefined) authorizedIds.push(selfAuth);
+      for (const raw of conf.allow_from ? parseCsv(conf.allow_from) : []) {
+        const n = Number(raw);
+        if (!Number.isNaN(n)) authorizedIds.push(n);
+      }
       source = createTelegramSource({
         lane,
         proj,
         engine,
         paths,
         chatId,
+        authorizedIds,
         onInbound,
         lang: conf.lang,
       });
@@ -285,6 +298,11 @@ export async function supervisorUp(
       // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
       const { sessionId } = await backend.launch(lane);
 
+      // 세션 장부 기록(보조 — /resume 목록·마지막 대화 시각). 실패는 로그 후 흡수.
+      await recordSession(paths, sessionId).catch((err: unknown) =>
+        console.warn(t("log.supervisor.ledgerFail", { lane, error: errMsg(err) })),
+      );
+
       // 엔진 세션 이벤트 → injector(응답 누적). injector 가 turn 종료에 writeOut + renderOut(B).
       backend.subscribe(lane, (e) => injector.onSessionEvent(e));
 
@@ -301,7 +319,7 @@ export async function supervisorUp(
         try {
           return await gateRequestDecision(req, { sendPermPrompt, waitForDecision });
         } finally {
-          // 모든 종결 경로(timeout·전송오류·정상결정)에서 대기자 정리 — timeout 시 영구 잔존 누수 제거(FR-3).
+          // 모든 종결 경로(timeout·전송오류·정상결정)에서 대기자 정리 — timeout 시 영구 잔존 누수 제거.
           // 늦게 도착한 콜백은 빈 맵에서 no-op(무해).
           pendingDecisions.delete(req.id);
         }
@@ -313,13 +331,13 @@ export async function supervisorUp(
         console.error(
           t("log.supervisor.injectorStartFail", {
             lane,
-            error: err instanceof Error ? err.message : String(err),
+            error: errMsg(err),
           }),
         );
       });
       source.start();
 
-      // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(A-P006 no-silent).
+      // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(no-silent).
       if (conf.perm_tier === "autopass") {
         const tl = tFor(conf.lang);
         const denyDesc =
@@ -357,7 +375,7 @@ export async function supervisorUp(
       handles.push({
         lane,
         paths,
-        // 정지 순서: 소스 먼저(신규 인바운드·turn 차단) → 백엔드 child 정리(C1) → 상태 파일 제거.
+        // 정지 순서: 소스 먼저(신규 인바운드·turn 차단) → 백엔드 child 정리 → 상태 파일 제거.
         async stop() {
           await source.stop();
           await backend.close(lane);

@@ -15,6 +15,36 @@ const validEnvelope = {
   text: "안녕하세요",
 };
 
+describe("control 필드 (세션 제어 envelope)", () => {
+  it("유효한 control(clear/compact/resume/sessions)을 파싱한다", () => {
+    for (const kind of ["clear", "compact", "resume", "sessions"]) {
+      const env = parseEnvelope(JSON.stringify({ ...validEnvelope, control: { kind } }));
+      expect(env.control?.kind).toBe(kind);
+    }
+    const withId = parseEnvelope(
+      JSON.stringify({ ...validEnvelope, control: { kind: "resume", sessionId: "abc-123" } }),
+    );
+    expect(withId.control?.sessionId).toBe("abc-123");
+  });
+
+  it("알 수 없는 control.kind 는 거부한다", () => {
+    expect(() =>
+      parseEnvelope(JSON.stringify({ ...validEnvelope, control: { kind: "reboot" } })),
+    ).toThrow(/control\.kind/);
+  });
+
+  it("sessionId 허용 문자셋 위반(경로 주입)은 거부한다", () => {
+    expect(() =>
+      parseEnvelope(
+        JSON.stringify({
+          ...validEnvelope,
+          control: { kind: "resume", sessionId: "../etc/passwd" },
+        }),
+      ),
+    ).toThrow(/sessionId/);
+  });
+});
+
 describe("parseEnvelope 입력 검증·보안 (011-C)", () => {
   it("text 256KB 초과는 거부한다", () => {
     const big = { ...validEnvelope, text: "x".repeat(256 * 1024 + 1) };

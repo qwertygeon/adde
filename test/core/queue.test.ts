@@ -1,10 +1,10 @@
+import { makeEnvelope } from "../helpers/envelope.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { enqueue, claimNext, scanProcessing, isDone, writeOut } from "../../src/core/queue.js";
 import { lanePaths } from "../../src/shared/paths.js";
-import type { Envelope } from "../../src/shared/envelope.js";
 
 // fake fs quirk 재현: atomic rename 중간상태·.sync-conflict 출현
 // SC-002: atomic rename — tmp 파일이 queue/ 에 노출되지 않음
@@ -13,18 +13,6 @@ import type { Envelope } from "../../src/shared/envelope.js";
 
 let tmpBase: string;
 let paths: ReturnType<typeof lanePaths>;
-
-const makeEnvelope = (id = "msg-001", text = "테스트"): Envelope => ({
-  v: 1,
-  id,
-  lane: "test-lane",
-  source: "telegram",
-  backend: "acp",
-  engine: "claude-code-acp",
-  project: "myproj",
-  ts: new Date().toISOString(),
-  text,
-});
 
 beforeEach(() => {
   tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-test-"));

@@ -3,6 +3,8 @@ import {
   shouldAutoAllow,
   shouldAutopass,
   decideAutoAllow,
+  isHardDenied,
+  resolvePermDecision,
   recordToolName,
   resolveToolName,
 } from "../../src/backend/acp/client.js";
@@ -24,51 +26,8 @@ describe("shouldAutoAllow (A2 allowlist)", () => {
 // SC-010: available_commands_update 이벤트를 수신해도 무크래시 처리
 // fake ACP quirk 재현: turn 완료 전 prompt 큐잉·protocolVersion 1 스키마 형태
 
-// AcpBackend 구독 핸들러의 available_commands_update 분기를 단위 검증
-// 실 ACP 연결이 필요한 부분은 integration 으로 위임(SC-009 deferred)
-
-describe("AcpBackend subscribe — available_commands_update (SC-010)", () => {
-  it("available_commands_update 이벤트를 수신해도 예외를 던지지 않는다 (fake ACP quirk)", async () => {
-    // fake ACP quirk: available_commands_update 는 ACP protocolVersion 1 에서 발화됨
-    // subscribe 콜백이 이 이벤트를 무시/로깅해야 함 (크래시 금지)
-    // handleSessionUpdate 는 AcpBackendImpl 내부 private 로직이므로 직접 export 없음.
-    // 행동 검증은 subscribe → onSessionUpdate 경로(integration 위임).
-    // 단위 검증: 이 이벤트 종류가 올바른 형태임을 확인.
-    const availableCommandsEvent: {
-      sessionUpdate: "available_commands_update";
-      commands: string[];
-    } = {
-      sessionUpdate: "available_commands_update",
-      commands: ["Bash", "Read", "Write"],
-    };
-
-    // available_commands_update 이벤트가 sessionUpdate 형식을 만족하는지 확인
-    expect(availableCommandsEvent.sessionUpdate).toBe("available_commands_update");
-    expect(Array.isArray(availableCommandsEvent.commands)).toBe(true);
-    // 이 이벤트가 존재해도 (클라이언트 구독 콜백이) 예외를 던지지 않음은
-    // integration/transcript.test.ts 구독 경로에서 검증됨 (deferred to integration)
-    expect(true).toBe(true);
-  });
-
-  it("fake ACP 더블 — protocolVersion 1 스키마 형태 검증", () => {
-    // fake ACP quirk: initialize 응답은 반드시 protocolVersion=1
-    const fakeInitializeResponse = {
-      protocolVersion: 1,
-      serverCapabilities: {},
-    };
-    expect(fakeInitializeResponse.protocolVersion).toBe(1);
-  });
-});
-
-describe("AcpBackend fake — turn 완료 전 큐잉 quirk (SC-004 연계)", () => {
-  it("fake ACP 는 stopReason 이벤트 발생 전에 다음 prompt 를 거부한다", () => {
-    // fake ACP quirk 재현: turn 완료(end_turn) 이전에 큐잉된 prompt 는 처리 안 됨
-    // 이 quirk 가 없으면 SC-004 active 보류 테스트가 가짜 GREEN 이 됨
-    const fakeAcpState = { isProcessing: true };
-    const canAcceptPrompt = !fakeAcpState.isProcessing;
-    expect(canAcceptPrompt).toBe(false);
-  });
-});
+// 구독 핸들러의 available_commands_update 크래시-안전은 integration/transcript.test.ts 구독 경로에서,
+// turn 완료 전 큐잉 quirk 는 core/queue.test.ts·queue-safety.test.ts 에서 실제로 검증한다.
 
 // DEC-001/002 (005-gate-auto-respond): autopass 판정 — denylist 외 자동 허용, denylist 는 채널 승인 폴백
 describe("shouldAutopass (005 autopass)", () => {
@@ -167,6 +126,93 @@ describe("도구명 채집·해석·자동 허용 판정 (DEC-006)", () => {
     expect(map.size).toBeLessThanOrEqual(512);
     expect(map.has("t0")).toBe(false);
     expect(map.has("t599")).toBe(true);
+  });
+});
+
+// B-3: 방어심화 하드-거부 — 티어 무관 즉시 거부(자동허용보다 먼저 평가)
+describe("isHardDenied (방어심화 하드-거부)", () => {
+  it("hard_deny 매칭 시 티어 무관 true", () => {
+    expect(
+      isHardDenied({ perm_tier: "acp", hard_deny: ["Bash(sudo *)"] }, "Bash", {
+        command: "sudo rm",
+      }),
+    ).toBe(true);
+    expect(
+      isHardDenied({ perm_tier: "autopass", hard_deny: ["Bash(sudo *)"] }, "Bash", {
+        command: "sudo rm",
+      }),
+    ).toBe(true);
+  });
+
+  it("매칭 안 되면 false(채널 승인·티어 로직으로)", () => {
+    expect(
+      isHardDenied({ perm_tier: "acp", hard_deny: ["Bash(sudo *)"] }, "Bash", { command: "ls" }),
+    ).toBe(false);
+    expect(isHardDenied({ perm_tier: "acp", hard_deny: [] }, "Bash", { command: "sudo rm" })).toBe(
+      false,
+    );
+  });
+
+  it("도구명 미해석(undefined)이면 판정 불가 → false", () => {
+    expect(isHardDenied({ perm_tier: "acp", hard_deny: ["Bash"] }, undefined)).toBe(false);
+  });
+
+  it("hard_deny 미지정이면 false(기본 동작 불변)", () => {
+    expect(isHardDenied({ perm_tier: "acp" }, "Bash", { command: "sudo rm" })).toBe(false);
+  });
+});
+
+// 권한 결정 순서 SoT — hard-deny 가 자동허용(allowlist/autopass)보다 먼저 평가됨을 고정.
+// 이 순서가 게이트의 보안 핵심이며, resolvePermDecision 이 requestPermission 클로저의 유일한 결정 경로다.
+describe("resolvePermDecision — fail-closed 결정 순서", () => {
+  it("allowlist 와 hard_deny 에 모두 있는 도구는 하드-거부가 이긴다(자동승인 안 됨)", () => {
+    // 순서 회귀(자동허용을 먼저 평가) 시 이 도구가 auto:allowlist 로 새므로, 이 단언이 회귀를 잡는다.
+    const decision = resolvePermDecision(
+      { perm_tier: "acp", allowlist: ["Bash"], hard_deny: ["Bash(sudo *)"] },
+      "Bash",
+      { command: "sudo rm -rf /" },
+    );
+    expect(decision).toEqual({ kind: "hard_deny" });
+  });
+
+  it("autopass + hard_deny 도구는 denylist 폴백이 아니라 즉시 거부", () => {
+    const decision = resolvePermDecision(
+      { perm_tier: "autopass", hard_deny: ["Bash(sudo *)"] },
+      "Bash",
+      { command: "cd /tmp && sudo reboot" }, // 체이닝도 하드-거부로 잡힘
+    );
+    expect(decision).toEqual({ kind: "hard_deny" });
+  });
+
+  it("hard_deny 무매칭 + allowlist 매칭이면 auto:allowlist", () => {
+    expect(
+      resolvePermDecision({ perm_tier: "acp", allowlist: ["Read"] }, "Read", { file_path: "/x" }),
+    ).toEqual({ kind: "auto", via: "allowlist" });
+  });
+
+  it("autopass + denylist 무매칭이면 auto:autopass", () => {
+    expect(
+      resolvePermDecision({ perm_tier: "autopass", denylist: ["Bash(sudo *)"] }, "Read", {
+        file_path: "/x",
+      }),
+    ).toEqual({ kind: "auto", via: "autopass" });
+  });
+
+  it("autopass + denylist 매칭이면 채널 승인(ask)", () => {
+    expect(
+      resolvePermDecision({ perm_tier: "autopass", denylist: ["Bash(sudo *)"] }, "Bash", {
+        command: "sudo rm",
+      }),
+    ).toEqual({ kind: "ask" });
+  });
+
+  it("도구명 미해석(undefined)이면 자동허용/하드거부 판정 불가 → ask(fail-closed)", () => {
+    expect(
+      resolvePermDecision(
+        { perm_tier: "autopass", allowlist: ["Bash"], hard_deny: ["Bash"] },
+        undefined,
+      ),
+    ).toEqual({ kind: "ask" });
   });
 });
 

@@ -7,31 +7,40 @@ export const en = {
     main: `{{primary}} — AI Driven Development Engine
 
 Usage:
-  {{primary}} [command]      main entry point
-  {{short}} [command]       short alias
+  {{primary}} [command]      main entry point ({{short}} available after 'adde alias')
 
 Commands:
+  init [<proj>]            guided setup (doctor + short alias + create a lane)
   up <proj>                start all lanes of the project as a background daemon
   down <proj>              stop the daemon (works from any terminal)
   restart <proj>           restart the daemon (down + up)
   status [<proj>] [--all]  lane status (all running projects if <proj> omitted, --all includes stopped)
   doctor [<proj>]          static environment/config checks (state-independent)
   logs <proj> <lane> [N]   last N lines of the lane transcript (default 50, engine stderr with --engine)
+  sessions <proj> <lane>   list recorded engine sessions (resume via channel: /resume or resume checkbox)
   lane add <proj> <lane>   create a lane conf
   lane ls <proj>           list lanes
   lane show <proj> <lane>  print a lane conf
   lane rm <proj> <lane>    delete a lane conf
+  completion <bash|zsh>    print a shell completion script
+  alias [names...]         install short aliases (default ad, add) next to the adde binary
 
 Options:
   -v, --version            print version
   -h, --help               print help
 
-See \`adde lane help\` for lane options.`,
+Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help\` for lane options.`,
     up: "Usage: adde up <proj>",
     down: "Usage: adde down <proj>",
     restart: "Usage: adde restart <proj>",
     status: "Usage: adde status [<proj>] [--all] [--json]",
+    doctor: "Usage: adde doctor [<proj>]",
     logs: "Usage: adde logs <proj> <lane> [N] [--engine]",
+    sessions: "Usage: adde sessions <proj> <lane>",
+    completion: "Usage: adde completion <bash|zsh>  (print a shell completion script)",
+    init: "Usage: adde init [<proj>]  (guided setup: doctor + short alias + create a lane; TTY only)",
+    alias:
+      "Usage: adde alias [names...]  (install short aliases next to the adde binary; default: ad add)",
     laneAdd: "Usage: adde lane add <proj> <lane> [options]",
     laneLs: "Usage: adde lane ls <proj>",
     laneShow: "Usage: adde lane show <proj> <lane>",
@@ -54,18 +63,28 @@ lane add options:
   --allowlist <a,b,c>           auto-allowed tools (gate kept, for perm_tier=acp)
   --denylist <entries,...>      tools/patterns that fall back to channel approval under autopass
                                 (e.g. "Bash,Write(/etc/*)" · built-in default list if omitted: blocks sudo, rm -rf, forced git changes, credential reads)
+  --hard-deny <entries,...>     defense-in-depth: tools/patterns refused outright (no prompt) for any tier
+  --safe-defaults               fill hard-deny with the built-in danger list (sudo, rm -rf, forced git, credential reads)
   --lang <en|ko>                channel message locale for this lane (default: global locale)
-  --chat-id <id>                telegram reply target
+  --chat-id <id>                telegram reply target (also authorizes that chat for inbound)
+  --allow-from <ids>            extra authorized inbound sender ids (comma-separated user/chat ids)
+  --file-mode <private|shared>  state/out/queue dir permissions (default private=0700 owner-only; shared=leave default umask, typically world-readable)
   --token-stdin                 read the telegram bot token from stdin and write it to .env (0600)
   --root <abs-path>             markdown root (e.g. Obsidian vault)
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown note paths
   --force                       overwrite an existing conf
-  --interactive                 interactive field input (TTY only, token excluded)`,
+  --interactive                 force the interactive wizard (default on a TTY; the bot token is entered hidden)
+  --no-interactive              disable the interactive default and use flags/defaults (for scripts)`,
   },
   cli: {
     cmdError: "[adde {{cmd}}] error: {{detail}}",
     laneError: "[adde lane] {{detail}}",
     unknownSub: "Unknown lane subcommand: {{sub}}",
+    unknownCmd: "Unknown command: {{cmd}}",
+    didYouMean: "Did you mean: {{cmds}}?",
+  },
+  completion: {
+    unknownShell: 'unsupported shell "{{shell}}" — one of {{supported}}',
   },
   run: {
     laneStartFailed: {
@@ -119,11 +138,27 @@ lane add options:
   lane: {
     valueRequired: "--{{key}} requires a value",
     sourceRetry: "  enter one of telegram or markdown",
+    retry: {
+      permTier: "  perm_tier — enter acp or autopass",
+      fileMode: "  file_mode — enter private or shared",
+      lang: "  lang — enter en or ko (or leave empty for global)",
+      chatId: "  chat_id — enter a numeric id (or leave empty)",
+      allowFrom: "  allow_from — enter comma-separated numeric ids (or leave empty)",
+    },
     prompt: {
+      source: "source (telegram or markdown)",
+      permTier: "perm_tier (acp or autopass)",
       allowlist: "allowlist (comma-separated, empty for none)",
       denylist: "denylist (tools/patterns that fall back to channel approval, comma-separated)",
+      safeDefaults:
+        "enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (y/N)",
+      lang: "lang (channel message locale: en/ko, empty for global)",
+      token: "telegram bot token (hidden input, empty to set later)",
       cwd: "cwd (absolute lane working directory, empty to skip)",
-      chatId: "chat_id (reply target, empty to skip)",
+      chatId: "chat_id (reply target + authorizes that chat for inbound, empty to skip)",
+      allowFrom: "allow_from (extra authorized sender ids, comma-separated, empty to skip)",
+      fileMode:
+        "file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable)",
       root: "root (absolute markdown root path)",
       inbox: "inbox (relative to root)",
       approvals: "approvals (relative to root, default if empty)",
@@ -150,6 +185,11 @@ lane add options:
       name: "ACP adapter binary",
       missing: "no file at resolved path: {{path}}",
       hint: "Install dependencies (pnpm install) — @zed-industries/claude-code-acp missing.",
+    },
+    daemonEntry: {
+      name: "daemon entry",
+      missing: "daemon entry not found: {{path}}",
+      hint: "Daemon mode needs a build. Run `pnpm build` and start from dist (`node dist/cli/adde.js up <proj>`), or install globally (`npm i -g .`). `pnpm run dev up` cannot start the daemon.",
     },
     base: {
       name: "config base directory",
@@ -190,6 +230,46 @@ lane add options:
       missing: "token missing: {{path}}",
       hint: "Write the bot token: TELEGRAM_BOT_TOKEN=... in {{path}} (or lane add --token-stdin).",
     },
+    perms: {
+      name: "{{lane}}: file permissions",
+      ok: "state dir/.env permissions look restrictive",
+      envLoose: "state/.env is group/other-accessible (mode {{mode}}) — bot token exposure risk",
+      envHint: "Restrict it: chmod 600 {{path}}",
+      stateLoose:
+        "state dir is group/other-accessible (mode {{mode}}) but file_mode=private is expected to be 0700",
+      stateHint:
+        "Restrict it: chmod 700 {{path}} — or restart the lane (adde restart {{proj}}) to re-secure it.",
+    },
+  },
+  update: {
+    available:
+      "A new version of adde is available: {{current}} → {{latest}}. Update with `npm i -g adde@latest` (then `adde restart <proj>`).",
+  },
+  gate: {
+    hardDeny:
+      "⛔ blocked by hard-deny: {{tool}} — this tool is on the lane's hard-deny list and was refused without a prompt.",
+  },
+  init: {
+    ttyOnly: {
+      situation: "adde init needs an interactive terminal (TTY)",
+      action:
+        "Run it in a terminal, or set up manually: adde doctor / adde lane add <proj> <lane> --interactive / adde alias.",
+    },
+    intro: "adde setup — environment check, short aliases, and your first lane.",
+    doctorWarn:
+      "Some checks FAILed above. You can continue, but fix them before starting the daemon (adde up).",
+    aliasPrompt: "install short aliases ({{names}}) next to the adde command? (Y/n)",
+    aliasNoBin:
+      "could not locate the adde command in PATH — skipping aliases (only available on a global install).",
+    aliasCreated: "  ✔ alias created: {{name}} → {{dir}}",
+    aliasAlready: "  = alias already points to adde: {{name}}",
+    aliasSkipped: "  ✘ skipped {{name}} — a command with that name already exists in PATH",
+    aliasFailed: "  ✘ could not create alias {{name}} — {{detail}}",
+    projPrompt: "project name",
+    projRetry: "project name (letters/digits/_/- only)",
+    lanePrompt: "lane name",
+    laneRetry: "lane name (letters/digits/_/- only)",
+    done: "Setup complete for project '{{proj}}'.",
   },
   laneConfig: {
     warn: {
@@ -213,6 +293,8 @@ lane add options:
         "[warning] allowlist and denylist share tool(s): {{tools}} — the denylist wins and channel approval is required.\n  ↳ action: remove from one side if unintended.",
       badLang:
         '[warning] lang "{{lang}}" is not a supported locale ({{supported}}) — the global locale applies.\n  ↳ action: fix lang in the conf if it is a typo.',
+      telegramNoAuth:
+        "[warning] telegram lane has no authorized inbound sender — all inbound will be rejected (fail-closed). A private chat_id self-authorizes, but a group chat_id (negative) is only a reply target and does NOT authorize its members.\n  ↳ action: set --chat-id <your private chat id>, and/or list member ids with --allow-from <ids>.",
     },
     err: {
       emptyIdent: "{{kind}} is empty",
@@ -220,6 +302,9 @@ lane add options:
       badSource: 'source "{{source}}" unsupported — one of {{supported}}',
       badChatId: 'chat_id "{{chatId}}" is not a number',
       tokenOnlyTelegram: "token is only used for source=telegram lanes",
+      allowFromOnlyTelegram: "allow_from is only used for source=telegram lanes",
+      badAllowFrom: 'allow_from entry "{{id}}" is not a number (telegram user/chat id)',
+      badFileMode: 'file_mode "{{mode}}" is invalid — one of {{known}}',
       badAllowTool: 'allowlist tool name "{{tool}}" is invalid — only alphanumerics/_/./- allowed',
       badDenyEntry:
         'denylist entry "{{entry}}" is invalid — expected "Bash" or "Bash(git push*)" form (no commas)',
@@ -286,6 +371,11 @@ lane add options:
       action:
         "Check registration state with adde doctor {{proj}}, or unload the existing registration first (adde down {{proj}}).",
     },
+    binMissing: {
+      situation: "daemon entry not found: {{path}}",
+      action:
+        "Daemon mode needs a build — run `pnpm build` and start from dist (`node dist/cli/adde.js up <proj>`), or install globally (`npm i -g .`) and run `adde up <proj>`. `pnpm run dev up` cannot start the daemon (launchd spawns a detached process that tsx cannot transpile).",
+    },
   },
   queue: {
     claimFail: {
@@ -297,6 +387,21 @@ lane add options:
   },
   injector: {
     injectFailed: "inject failed @ {{ts}}: {{detail}}",
+    control: {
+      cleared: "🧹 Started a fresh session — previous conversation context was cleared.",
+      compacted: "✂️ Conversation context compacted (/compact).",
+      resumed: "⏪ Resumed session {{id}}.",
+      resumeFallback: "⚠️ Could not resume session {{id}} — started a fresh session instead.",
+      resumeMissing: "⚠️ No session id to resume — list sessions and pick one.",
+      unsupported: "⚠️ This backend does not support session control.",
+      relaunchFailed:
+        "🛑 Session control failed — engine relaunch error: {{error}}. The lane may be down; recover with `adde restart <proj>`.",
+      sessionsHeader: "📋 Recent sessions (current marked ◀):",
+      sessionsItem: "{{n}}. {{label}} — last activity {{last}} ({{id}})",
+      sessionsNoLabel: "(no prompt yet)",
+      sessionsEmpty: "📋 No recorded sessions yet.",
+      sessionsHint: "Resume with: resume <n> (checkbox label) or /resume <n>.",
+    },
     failNote: {
       situation: "message processing failed — id {{id}}: {{detail}}",
       action:
@@ -333,6 +438,7 @@ lane add options:
     supervisor: {
       noConf: "[supervisor] {{proj}}: no conf in lanes.d",
       heartbeatFail: "[supervisor] lane={{lane}} heartbeat touch failed (auxiliary): {{error}}",
+      ledgerFail: "[supervisor] lane={{lane}} session ledger update failed (auxiliary): {{error}}",
       deadCleanupFail:
         "[supervisor] lane={{lane}} dead runtime.json cleanup failed (auxiliary): {{error}}",
       channelWarnFail:
@@ -342,6 +448,8 @@ lane add options:
         "[supervisor] lane={{lane}} runtime.json write failed (auxiliary): {{error}}",
       runtimeRemoveFail:
         "[supervisor] lane={{lane}} runtime.json removal failed (auxiliary): {{error}}",
+      securePermsFail:
+        "[supervisor] lane={{lane}} state directory permission lock failed (auxiliary — files may be world-readable): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} start failed: {{reason}}",
     },
     queue: {
@@ -356,12 +464,20 @@ lane add options:
       advanceError: "[injector] advance error lane={{lane}}: {{error}}",
       failNotifyError:
         "[injector] failure notice delivery error lane={{lane}} id={{id}}: {{error}}",
+      relaunchError:
+        "[injector] session-control engine relaunch failed lane={{lane}} — the lane may be down until restart: {{error}}",
     },
     telegram: {
       rateLimit: "[telegram] {{method}} 429 rate limited — retrying in {{waitMs}}ms ({{attempt}})",
       enqueueError: "[telegram] enqueue error ({{count}} in a row): {{error}}",
       answerCallbackError: "[telegram] answerCallbackQuery error: {{error}}",
       unknownCallback: "[telegram] ignoring unknown callback decision: {{decision}}",
+      unauthorizedMessage:
+        "[telegram] ignoring inbound from unauthorized sender (from={{from}} chat={{chat}}) — add to chat_id/allow_from to authorize",
+      unauthorizedCallback:
+        "[telegram] ignoring permission callback from unauthorized sender (from={{from}})",
+      noAuthConfigured:
+        "[telegram] no authorized senders configured (chat_id/allow_from empty) — all inbound is rejected (fail-closed)",
       pollError: "[telegram] poll error ({{count}} in a row, retrying in {{backoff}}ms): {{error}}",
       alertSendError: "[telegram] enqueue failure alert delivery error: {{error}}",
       pollLoopEnd: "[telegram] poll loop ended: {{error}}",
@@ -382,6 +498,8 @@ lane add options:
     },
     acp: {
       engineProcessError: "[acp] lane={{lane}} engine process error: {{error}}",
+      loadSessionFail:
+        "[acp] lane={{lane}} session resume (session/load) failed — falling back to a new session: {{error}}",
       subscriberError: "[acp] lane={{lane}} subscriber error: {{error}}",
       transcriptWriteFail: "[acp] lane={{lane}} transcript write failed: {{error}}",
       permDiff: "[acp] launch perm-diff: {{note}}",

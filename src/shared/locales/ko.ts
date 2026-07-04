@@ -243,7 +243,7 @@ lane add 옵션:
   },
   update: {
     available:
-      "adde 새 버전이 있습니다: {{current}} → {{latest}}. `npm i -g adde@latest` 로 업데이트하세요(이후 `adde restart <proj>`).",
+      "adde 새 버전이 있습니다: {{current}} → {{latest}}. `npm i -g adde-acp@latest` 로 업데이트하세요(이후 `adde restart <proj>`).",
   },
   gate: {
     hardDeny:

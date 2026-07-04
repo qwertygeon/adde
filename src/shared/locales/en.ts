@@ -243,7 +243,7 @@ lane add options:
   },
   update: {
     available:
-      "A new version of adde is available: {{current}} → {{latest}}. Update with `npm i -g adde@latest` (then `adde restart <proj>`).",
+      "A new version of adde is available: {{current}} → {{latest}}. Update with `npm i -g adde-acp@latest` (then `adde restart <proj>`).",
   },
   gate: {
     hardDeny:

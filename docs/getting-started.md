@@ -28,7 +28,7 @@ ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) remotely from
 **Global npm install** (the main command is `adde`):
 
 ```bash
-npm i -g adde
+npm i -g adde-acp
 ```
 
 The single entry point is `adde`. The short aliases (`ad`, `add`) are not installed by default; if you want them, opt in via `adde init` (the onboarding wizard) or `adde alias` — see the [command reference](commands.md#alias--install-short-aliases).
@@ -46,11 +46,11 @@ adde doctor        # global environment check, no project argument
 ### Update
 
 ```bash
-npm i -g adde@latest       # update to the latest version
+npm i -g adde-acp@latest       # update to the latest version
 adde restart <proj>        # apply the new version to running lanes (restart required)
 ```
 
-`npm i -g adde@latest` swaps the installed files, but **an already-running daemon still holds the old code in memory**, so you must restart it with `adde restart <proj>` for the new version to take effect. Pin a specific version with `npm i -g adde@<x.y.z>`. (`adde status` and `adde doctor` print a one-line notice when a newer version is available on npm.)
+`npm i -g adde-acp@latest` swaps the installed files, but **an already-running daemon still holds the old code in memory**, so you must restart it with `adde restart <proj>` for the new version to take effect. Pin a specific version with `npm i -g adde-acp@<x.y.z>`. (`adde status` and `adde doctor` print a one-line notice when a newer version is available on npm.)
 
 ## Core concepts
 
@@ -151,7 +151,7 @@ Each lane's `cwd` is that lane's AI working directory. Assigning a different `cw
 
 ```bash
 adde down <proj>       # 1) stop the daemon first — deregisters the launchd LaunchAgent
-npm uninstall -g adde  # 2) remove the global package
+npm uninstall -g adde-acp  # 2) remove the global package
 ```
 
 **Order matters**: if you remove the package without `adde down`, the registered launchd LaunchAgent lingers and, even after a reboot, keeps trying to restart the (now-gone) executable. If you have several projects, run `adde down <proj>` for each (check registration status with `adde doctor <proj>`). Config/state files (`~/.config/adde/`) remain, so to remove everything, delete that directory after confirming.

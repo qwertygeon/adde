@@ -20,7 +20,7 @@
   - resume: 세션 장부(`state/<lane>/sessions.json`, 레인당 최근 20개 — 첫 프롬프트 발췌·**마지막 대화 시각** 기록)에서 목록 조회·선택 복귀. 복귀 실패 시 새 세션 폴백 통지. 레인 재기동은 종전대로 새 세션(자동 재개 없음).
   - clear/resume 의 엔진 재기동이 실패하면 일반 오류와 구분해 채널로 복구 절차(`adde restart <proj>`)를 명시 통지하고, 재기동 중 구독자(권한 핸들러 등) 승계를 원자화해 유실 창을 제거.
 - `adde sessions <proj> <lane>` — 세션 장부 목록 CLI(번호·발췌·마지막 대화 시각·현재 세션 표시).
-- npm 발행 파이프라인 — `npm i -g adde` 로 설치 가능하도록 발행 배선. `package.json` 에 `prepack`(발행 시 자동 빌드로 `dist/` 보장)·`repository`/`homepage`/`bugs`/`keywords` 추가, `release.yml` 이 태그·GitHub Release 뒤 `npm publish`(러너 Node 24·registry 인증·동일 버전 재발행 skip)를 수행. 인증은 최초 1회 `NPM_TOKEN` 부트스트랩 후 OIDC Trusted Publishing 전환 예정.
+- npm 발행 파이프라인 — `npm i -g adde-acp` 로 설치 가능하도록 발행 배선. `package.json` 에 `prepack`(발행 시 자동 빌드로 `dist/` 보장)·`repository`/`homepage`/`bugs`/`keywords` 추가, `release.yml` 이 태그·GitHub Release 뒤 `npm publish`(러너 Node 24·registry 인증·동일 버전 재발행 skip)를 수행. 인증은 최초 1회 `NPM_TOKEN` 부트스트랩 후 OIDC Trusted Publishing 전환 예정.
 - `adde init [<proj>]` — 온보딩 위저드(TTY 전용). 환경 점검(doctor) → 짧은 별칭 설치(옵트인) → 대화형 레인 생성을 한 흐름으로 안내. 토큰은 화면 노출을 피해 받지 않고 생성 후 안내로 위임.
 - `adde alias [names...]` — 짧은 별칭(기본 `ad`·`add`)을 `adde` 실행 파일 옆에 심볼릭 링크로 설치. PATH 에 동명 명령이 이미 있으면 그 별칭은 실패로 건너뜀(덮어쓰지 않음), 이미 adde 를 가리키면 멱등. 전역 설치가 아니면 안내 후 종료.
 - 업데이트 알림 — `adde status`·`adde doctor` 가 npm 레지스트리의 최신 버전을 비교해 새 버전이 있으면 안내 한 줄 출력(24h 캐시, 대화형 TTY 에서만 네트워크 조회, `ADDE_NO_UPDATE_CHECK` 로 비활성화).
@@ -40,7 +40,7 @@
 - 문서 정리 — 마크다운 트러블슈팅 표를 트러블슈팅 문서로 단일화(가이드는 포인터), 레인 생성 기본값 표의 기준을 명령 레퍼런스로 고정, allowlist 경고 문구 통일.
 - 사용자 문서 보완 — 권한 가이드(`docs/permissions.md`) 신설(게이트 개념·acp/autopass 티어·allowlist/denylist·매칭 한계·드리프트·권장 베이스라인 SSOT, 흩어진 권한 서술은 포인터화). 트러블슈팅에 `stale`(행)·launchd 등록 불일치·재부팅 복구·orphan 정리 항목 추가. Telegram 가이드에 전체 흐름 조감도·봇 토큰 공유(폴링 409) 경고·승인 시 프롬프트 인젝션 주의 추가, 마크다운 가이드에 승인 인젝션 주의 추가. README 에 사용 시나리오·데이터 흐름/프라이버시 고지·ACP 어댑터 요구 명시. getting-started 성공 판정 기준 추가.
 - 버전 SoT 를 루트 `VERSION` 파일에서 `package.json.version` 단일로 전환 — `VERSION` 파일 제거, `adde --version`·릴리스 트리거·발행이 모두 `package.json.version` 을 참조(SoT 이원화 제거). 릴리스 트리거는 `main` 의 `package.json` push 로 변경되며, 버전이 안 바뀐 변경은 태그·발행 멱등 가드가 no-op 처리.
-- 설치 문서 발행 전환 — `npm i -g adde` 정식 설치 안내, 업데이트(`npm i -g adde@latest` + 실행 중 데몬 `adde restart`)·권한 오류(EACCES) 안내 추가.
+- 설치 문서 발행 전환 — `npm i -g adde-acp` 정식 설치 안내, 업데이트(`npm i -g adde-acp@latest` + 실행 중 데몬 `adde restart`)·권한 오류(EACCES) 안내 추가.
 - 미지원 최상위 명령 종료 코드 — 오타 등 알 수 없는 명령은 stderr 에 `Unknown command` + 근접 명령 추정(`Did you mean: …?`)을 내고 종료 코드 1 을 반환(종전엔 사용법 출력 후 0 이라 스크립트에서 오타가 조용히 성공 처리되던 문제). 인자 없음·`-h`/`--help`/`help` 는 종전대로 사용법 출력 후 0.
 - 셸 자동완성 `adde completion <bash|zsh>` — 명령·플래그 자동완성 스크립트 생성(zsh·bash). 명령/플래그 SSOT(`cli/spec.ts`)에서 파생돼 명령 추가 시 자동완성·도움말·오타 힌트가 함께 갱신됨(확장성).
 - 서브커맨드별 도움말 `adde <command> --help`(`-h`) — 각 명령의 사용법을 출력. `adde lane <sub> --help` 는 lane 전체 옵션 출력. 최상위 usage 에 `completion` 및 명령별 `--help` 안내 추가.

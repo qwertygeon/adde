@@ -23,7 +23,7 @@ Diagnosis and remedies by symptom. Two commands narrow down most issues first:
 
 ## Issues right after install (npm)
 
-Issues you hit right after `npm i -g adde`, before starting a lane.
+Issues you hit right after `npm i -g adde-acp`, before starting a lane.
 
 | Symptom                                     | Cause                                               | Remedy                                                                                                                                                                                          |
 | ------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

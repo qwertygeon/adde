@@ -67,8 +67,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          if npm view "adde@${VERSION}" version >/dev/null 2>&1; then
-            echo "adde@${VERSION} already published; skipping."
+          if npm view "adde-acp@${VERSION}" version >/dev/null 2>&1; then
+            echo "adde-acp@${VERSION} already published; skipping."
             exit 0
           fi
           npm publish

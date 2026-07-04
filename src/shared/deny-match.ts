@@ -48,15 +48,16 @@ function globMatches(glob: string, value: string): boolean {
 }
 
 /**
- * 셸 명령을 제어 연산자(`;` `&&` `||` `|` `&` 개행)와 명령치환 경계(`$(` `)` 백틱)로
- * 분해해 체이닝된 하위 명령을 개별 후보로 낸다. 각 세그먼트의 선행 환경변수 대입
- * (`FOO=1 sudo …`)은 제거해 실제 실행 명령 토큰이 앞에 오도록 한다.
- * 앵커 글롭이 전체 문자열만 봤을 때 `cd /tmp && sudo rm -rf /` 같은 체이닝이 위험 패턴을
- * 우회하던 문제를 막는다(과분리=더 많은 후보를 denylist 에 대조 = 안전 방향).
+ * 셸 명령을 제어 연산자(`;` `&&` `||` `|` `&` 개행)와 그룹·명령치환 경계
+ * (`(` `)` `{` `}` `$(` 백틱)로 분해해 체이닝·서브셸·그룹의 하위 명령을 개별 후보로 낸다.
+ * 각 세그먼트의 선행 환경변수 대입(`FOO=1 sudo …`)은 제거해 실제 실행 명령 토큰이 앞에 오도록 한다.
+ * 앵커 글롭이 전체 문자열만 봤을 때 `cd /tmp && sudo rm -rf /`·`(sudo rm -rf /)` 같은
+ * 체이닝·서브셸이 위험 패턴을 우회하던 문제를 막는다(과분리=더 많은 후보 대조=안전 방향).
+ * best-effort 다 — 따옴표를 인식하지 않으므로 인용부 안 연산자에서도 분리한다(과매칭=안전).
  */
 function shellSegments(command: string): string[] {
   const out: string[] = [];
-  for (const raw of command.split(/(?:&&|\|\||[;&|\n]|\$\(|\)|`)/)) {
+  for (const raw of command.split(/(?:&&|\|\||[;&|(){}\n]|`)/)) {
     const seg = raw.replace(/^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "").trim();
     if (seg) out.push(seg);
   }

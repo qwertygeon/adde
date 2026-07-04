@@ -11,7 +11,7 @@
 - 엔진 stderr 로그(`engine.log`) 마스킹 — transcript 만 마스킹하던 것을 엔진 stderr 캡처 경로에도 라인 단위 시크릿 마스킹을 적용해 토큰·민감 경로가 side channel 로 평문 기록되지 않도록 보강.
 - 방어심화 하드-거부 `hard_deny`(`--hard-deny`/`--safe-defaults`) — 매칭 도구를 **티어 무관하게 즉시 거부**(채널 승인 프롬프트도 없음)하는 레이어. autopass 의 denylist("물어봄")보다 강하며 기본 `acp` 티어에도 적용돼, 파괴적 명령(sudo·rm -rf·git 강제·자격증명 읽기)이 실수로 승인되는 것을 원천 차단. `--safe-defaults` 로 내장 위험 목록을 채우며 대화형 생성 시 기본 켬을 질의. 하드-거부 히트는 transcript 기록 + 채널 통지.
 - `adde doctor` 파일 권한 감사 — 레인별로 `.env`(봇 토큰)가 그룹/기타에서 읽히면(0600 기대) WARN, `file_mode=private` 인데 state 디렉터리가 0700 이 아니면 WARN(+chmod/재시작 조치). `shared` 모드는 의도된 선택이라 경고하지 않음. (env·state 는 독립 점검이라 둘 다 느슨하면 둘 다 경고.)
-- denylist·hard_deny 매칭 강화 — 셸 명령 체이닝(`cd /tmp && sudo …`)·파이프·선행 환경변수 대입(`FOO=1 sudo …`)을 세그먼트 분해로 잡아, 전체-문자열 접두 앵커 글롭을 우회하던 위험 하위 명령을 차단(best-effort, 완전한 셸 파서는 아님). 기본 자격증명 저장소 목록 확대(ssh·aws 에 더해 npm·gh·kube·docker·gcloud 토큰/키). 권한 결정 순서(hard-deny→자동허용→채널 승인)를 단일 출처로 고정해 순서 회귀를 테스트로 방지.
+- denylist·hard_deny 매칭 강화 — 셸 명령 체이닝(`cd /tmp && sudo …`)·파이프·서브셸/그룹(`(sudo …)`·`{ … }`)·명령치환(`$(…)`·백틱)·선행 환경변수 대입(`FOO=1 sudo …`)을 세그먼트 분해로 잡아, 전체-문자열 접두 앵커 글롭을 우회하던 위험 하위 명령을 차단(best-effort, 완전한 셸 파서는 아님 — 래퍼 `bash -c "…"`·따옴표 안 실행은 범위 밖, `--safe-defaults` 는 인용부 연산자 substring 을 포함한 정상 명령을 거부할 수 있음). 기본 자격증명 저장소 목록 확대(ssh·aws 에 더해 npm·gh·kube·docker·gcloud 토큰/키). 권한 결정 순서(hard-deny→자동허용→채널 승인)를 단일 출처로 고정해 순서 회귀를 테스트로 방지.
 
 ### Added
 

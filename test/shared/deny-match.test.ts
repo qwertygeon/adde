@@ -55,6 +55,12 @@ describe("matchesDenylist — 글롭 의미론 (DEC-001/003)", () => {
     expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "FOO=1 sudo make" })).toBe(true);
     // 명령치환 안의 위험 명령도 세그먼트로 노출.
     expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "echo $(sudo id)" })).toBe(true);
+    // 서브셸·브레이스 그룹의 하위 명령도 분해된다(그룹 경계 (){}).
+    expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "(sudo rm -rf /)" })).toBe(true);
+    expect(matchesDenylist(["Bash(sudo *)"], "Bash", { command: "{ sudo rm -rf /; }" })).toBe(true);
+    expect(
+      matchesDenylist(["Bash(sudo *)"], "Bash", { command: "cat f | (sudo tee /etc/x)" }),
+    ).toBe(true);
   });
 
   it("세그먼트 매칭이 무해한 문자열을 과오매칭하지 않는다", () => {

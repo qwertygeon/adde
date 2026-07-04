@@ -7,7 +7,7 @@
 ### Security
 
 - Telegram 인바운드 발신자 인증 — 인바운드 메시지·권한 승인 콜백을 허용 발신자(`chat_id` ∪ 신규 `allow_from`)만 처리하고 그 외는 무시(fail-closed). 허용 집합이 비면 전 인바운드 거부. 봇에 도달 가능한 임의 사용자가 호스트 실행 세션에 프롬프트를 주입하거나 무단으로 권한을 승인하던 경계 공백을 차단. `chat_id` 설정 시 자기 chat 자동 인증, 그룹·복수 사용자는 `--allow-from` 으로 확장.
-- 레인 상태·출력·큐 디렉터리 권한 옵션 `file_mode`(`--file-mode`) — 기본 `private` 는 `state`/`out`/`queue`/`processing` 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답 열람을 차단. `shared`(0755) 는 잠그지 않는 옵트인. (봇 토큰 `.env` 는 종전대로 항상 0600.)
+- 레인 상태·출력·큐 디렉터리 권한 옵션 `file_mode`(`--file-mode`) — 기본 `private` 는 `state`/`out`/`queue`/`processing`/`lanes.d` 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답·설정 메타 열람을 차단. `shared` 는 잠그지 않는 옵트인(기존 umask 기본 권한 유지, 통상 0755). (봇 토큰 `.env` 는 종전대로 항상 0600.)
 - 엔진 stderr 로그(`engine.log`) 마스킹 — transcript 만 마스킹하던 것을 엔진 stderr 캡처 경로에도 라인 단위 시크릿 마스킹을 적용해 토큰·민감 경로가 side channel 로 평문 기록되지 않도록 보강.
 
 ### Added

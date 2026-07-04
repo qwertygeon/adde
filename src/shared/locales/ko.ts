@@ -60,7 +60,7 @@ lane add 옵션:
   --lang <en|ko>                이 레인의 채널 메시지 로케일 (기본: 전역 로케일)
   --chat-id <id>                telegram 회신 대상(해당 chat 인바운드도 허용)
   --allow-from <ids>            추가 허용 인바운드 발신자 id(콤마 구분 user/chat id)
-  --file-mode <private|shared>  state/out/queue 디렉터리 권한(기본 private=0700 소유자 전용; shared=0755 타 사용자 열람)
+  --file-mode <private|shared>  state/out/queue 디렉터리 권한(기본 private=0700 소유자 전용; shared=umask 기본 유지, 통상 타 사용자 열람 가능)
   --token-stdin                 telegram 봇 토큰을 stdin 에서 읽어 .env(0600) 기록
   --root <abs-path>             markdown 루트(예: Obsidian vault)
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown 노트 경로
@@ -131,7 +131,8 @@ lane add 옵션:
       cwd: "cwd (레인 작업 폴더 절대경로, 없으면 비움)",
       chatId: "chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움)",
       allowFrom: "allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움)",
-      fileMode: "file_mode (private=소유자 전용 0700 / shared=타 사용자 열람 0755)",
+      fileMode:
+        "file_mode (private=소유자 전용 0700 / shared=umask 기본 유지, 통상 타 사용자 열람)",
       root: "root (markdown 루트 절대경로)",
       inbox: "inbox (root 상대)",
       approvals: "approvals (root 상대, 없으면 기본)",

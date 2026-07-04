@@ -145,26 +145,26 @@ adde lane help                       # 전체 옵션
 
 ### lane add 옵션
 
-| 옵션                                                 | 기본값                                             | 설명                                                                                                         |
-| ---------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `--source <telegram\|markdown>`                      | `telegram`                                         | 채널 소스                                                                                                    |
-| `--engine <name>`                                    | `claude-code-acp`                                  | ACP 엔진 프로필                                                                                              |
-| `--backend <name>`                                   | `acp`                                              | 백엔드                                                                                                       |
-| `--channel <name>`                                   | source 값                                          | 게이트 분기                                                                                                  |
-| `--perm-tier <acp\|autopass>`                        | `acp`                                              | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인)                                |
-| `--acp-version <v>`                                  | `v1`                                               | ACP 버전                                                                                                     |
-| `--cwd <abs-path>`                                   | (supervisor cwd)                                   | 이 레인 AI 의 작업 폴더(프로젝트 매핑)                                                                       |
-| `--allowlist <a,b,c>`                                | (없음)                                             | 자동 허용 도구(게이트는 유지, `perm_tier=acp` 용)                                                            |
-| `--denylist <항목,...>`                              | autopass 시 내장 기본 목록(아래 **기본 denylist**) | `autopass` 에서 채널 승인으로 폴백할 도구·패턴 — `Bash`(도구 전체) 또는 `"Bash(git push*)"`(대표 인자 글롭)  |
-| `--lang <en\|ko>`                                    | (전역 로케일)                                      | 이 레인의 **채널 메시지** 언어(권한 프롬프트·경고 배너·알림 노트)                                            |
-| `--chat-id <id>`                                     | (없음)                                             | telegram 회신 대상. **개인 chat**(양수)이면 인바운드 자동 허용(그룹=음수는 회신만, 멤버는 `allow_from`)      |
-| `--allow-from <ids>`                                 | (없음)                                             | telegram 인바운드 허용 발신자 user id(콤마 구분). 개인 `chat_id` 와 합쳐 인증(그룹 멤버 인증에 필수)         |
-| `--file-mode <private\|shared>`                      | `private`                                          | state/out/queue 디렉터리 권한. `private`=0700(소유자 전용) / `shared`=0755(타 로컬 사용자 열람 허용, 옵트인) |
-| `--token-stdin`                                      | —                                                  | telegram 봇 토큰을 stdin 에서 읽어 `.env`(0600) 기록                                                         |
-| `--root <abs-path>`                                  | (없음)                                             | markdown 루트(예: Obsidian vault)                                                                            |
-| `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | —                                                  | markdown 노트 경로(root 상대)                                                                                |
-| `--force`                                            | —                                                  | 기존 conf 덮어쓰기                                                                                           |
-| `--interactive`                                      | —                                                  | 대화형으로 필드 입력(TTY 전용, **토큰은 묻지 않음**)                                                         |
+| 옵션                                                 | 기본값                                             | 설명                                                                                                                    |
+| ---------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `--source <telegram\|markdown>`                      | `telegram`                                         | 채널 소스                                                                                                               |
+| `--engine <name>`                                    | `claude-code-acp`                                  | ACP 엔진 프로필                                                                                                         |
+| `--backend <name>`                                   | `acp`                                              | 백엔드                                                                                                                  |
+| `--channel <name>`                                   | source 값                                          | 게이트 분기                                                                                                             |
+| `--perm-tier <acp\|autopass>`                        | `acp`                                              | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인)                                           |
+| `--acp-version <v>`                                  | `v1`                                               | ACP 버전                                                                                                                |
+| `--cwd <abs-path>`                                   | (supervisor cwd)                                   | 이 레인 AI 의 작업 폴더(프로젝트 매핑)                                                                                  |
+| `--allowlist <a,b,c>`                                | (없음)                                             | 자동 허용 도구(게이트는 유지, `perm_tier=acp` 용)                                                                       |
+| `--denylist <항목,...>`                              | autopass 시 내장 기본 목록(아래 **기본 denylist**) | `autopass` 에서 채널 승인으로 폴백할 도구·패턴 — `Bash`(도구 전체) 또는 `"Bash(git push*)"`(대표 인자 글롭)             |
+| `--lang <en\|ko>`                                    | (전역 로케일)                                      | 이 레인의 **채널 메시지** 언어(권한 프롬프트·경고 배너·알림 노트)                                                       |
+| `--chat-id <id>`                                     | (없음)                                             | telegram 회신 대상. **개인 chat**(양수)이면 인바운드 자동 허용(그룹=음수는 회신만, 멤버는 `allow_from`)                 |
+| `--allow-from <ids>`                                 | (없음)                                             | telegram 인바운드 허용 발신자 user id(콤마 구분). 개인 `chat_id` 와 합쳐 인증(그룹 멤버 인증에 필수)                    |
+| `--file-mode <private\|shared>`                      | `private`                                          | state/out/queue 디렉터리 권한. `private`=0700(소유자 전용) / `shared`=잠그지 않음(umask 기본, 통상 타 사용자 열람 가능) |
+| `--token-stdin`                                      | —                                                  | telegram 봇 토큰을 stdin 에서 읽어 `.env`(0600) 기록                                                                    |
+| `--root <abs-path>`                                  | (없음)                                             | markdown 루트(예: Obsidian vault)                                                                                       |
+| `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | —                                                  | markdown 노트 경로(root 상대)                                                                                           |
+| `--force`                                            | —                                                  | 기존 conf 덮어쓰기                                                                                                      |
+| `--interactive`                                      | —                                                  | 대화형으로 필드 입력(TTY 전용, **토큰은 묻지 않음**)                                                                    |
 
 `--interactive` 는 대화형 터미널(TTY)에서만 동작합니다. 봇 토큰은 화면 노출을 피하기 위해 인터랙티브에서 받지 않으며, 생성 후 `--token-stdin` 또는 `.env` 직접 기록으로 설정합니다. 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
 
@@ -178,7 +178,7 @@ adde lane help                       # 전체 옵션
 
 > **인바운드 인증(telegram)**: 인바운드 메시지·권한 콜백은 허용 발신자만 처리하고 나머지는 무시합니다(fail-closed). 허용 집합 = **개인 `chat_id`(양수 = 그 사용자, 자기 인증) ∪ `allow_from`**. **그룹 `chat_id`(음수)는 회신 대상일 뿐 멤버를 인증하지 않으므로**, 그룹에서는 허용 멤버 user id 를 `--allow-from` 으로 지정하세요(그룹 chat_id 만으로 그룹 전체가 허용되지 않음). 허용 발신자가 없으면 모든 인바운드가 거부됩니다. 봇에 접근 가능한 임의 사용자가 호스트 실행 세션에 프롬프트를 주입하거나 무단으로 권한을 승인하는 것을 막는 경계입니다.
 
-> **파일 권한(`--file-mode`)**: 기본 `private` 는 레인의 state/out/queue 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답 열람을 차단합니다. `shared`(0755)는 이 잠금을 하지 않는 옵트인으로, 열람 공유가 필요한 경우에만 사용하세요. (봇 토큰 `.env` 는 모드와 무관하게 항상 0600.)
+> **파일 권한(`--file-mode`)**: 기본 `private` 는 레인의 state/out/queue/lanes.d 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답·설정 메타 열람을 차단합니다. `shared` 는 이 잠금을 하지 않는 옵트인(기존 umask 기본 권한 유지 — 통상 0755)으로, 열람 공유가 필요한 경우에만 사용하세요. (봇 토큰 `.env` 는 모드와 무관하게 항상 0600.)
 
 ## 종료 코드
 

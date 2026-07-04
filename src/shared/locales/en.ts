@@ -59,7 +59,7 @@ lane add options:
   --lang <en|ko>                channel message locale for this lane (default: global locale)
   --chat-id <id>                telegram reply target (also authorizes that chat for inbound)
   --allow-from <ids>            extra authorized inbound sender ids (comma-separated user/chat ids)
-  --file-mode <private|shared>  state/out/queue dir permissions (default private=0700 owner-only; shared=0755 world-readable)
+  --file-mode <private|shared>  state/out/queue dir permissions (default private=0700 owner-only; shared=leave default umask, typically world-readable)
   --token-stdin                 read the telegram bot token from stdin and write it to .env (0600)
   --root <abs-path>             markdown root (e.g. Obsidian vault)
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown note paths
@@ -130,7 +130,8 @@ lane add options:
       cwd: "cwd (absolute lane working directory, empty to skip)",
       chatId: "chat_id (reply target + authorizes that chat for inbound, empty to skip)",
       allowFrom: "allow_from (extra authorized sender ids, comma-separated, empty to skip)",
-      fileMode: "file_mode (private=owner-only 0700 / shared=world-readable 0755)",
+      fileMode:
+        "file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable)",
       root: "root (absolute markdown root path)",
       inbox: "inbox (relative to root)",
       approvals: "approvals (relative to root, default if empty)",

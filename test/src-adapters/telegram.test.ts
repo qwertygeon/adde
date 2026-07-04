@@ -616,3 +616,113 @@ describe("renderOut 4096 초과 분할 전송 (011-A)", () => {
     expect(sent[1]?.["reply_to_message_id"]).toBeUndefined();
   });
 });
+
+describe("인바운드 인증 거부 (e2e 폴 루프)", () => {
+  it("미허가 발신자의 메시지는 큐에 적재하지 않는다 (fail-closed drop)", async () => {
+    // authorizedIds=[99] 인데 발신자(from.id=555, chat.id=555)는 미허가 → drop 되어야 한다.
+    const fakeUpdate = {
+      update_id: 5001,
+      message: {
+        message_id: 70,
+        from: { id: 555, first_name: "Stranger" },
+        chat: { id: 555, type: "private" },
+        text: "무단 지시",
+        date: 1700000000,
+      },
+    };
+    const { fetchMock, releasePending } = makeSingleCycleFetch([fakeUpdate]);
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-code-acp",
+      paths,
+      authorizedIds: [99],
+    });
+
+    source.start();
+    // 두 번째 getUpdates 호출 = 첫 update 처리 완료 신호(그 시점엔 이미 drop 판정 끝).
+    await waitFor(() => fetchMock.mock.calls.length >= 2);
+    releasePending();
+    await source.stop();
+
+    const msgs = fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg"));
+    expect(msgs.length).toBe(0); // 미허가 → enqueue 안 됨
+  });
+
+  it("허가 발신자의 메시지는 정상 적재한다 (positive 경로 대조)", async () => {
+    const fakeUpdate = {
+      update_id: 5002,
+      message: {
+        message_id: 71,
+        from: { id: 99, first_name: "Owner" },
+        chat: { id: 99, type: "private" },
+        text: "정상 지시",
+        date: 1700000000,
+      },
+    };
+    const { releasePending } = makeSingleCycleFetch([fakeUpdate]);
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-code-acp",
+      paths,
+      authorizedIds: [99],
+    });
+
+    source.start();
+    await waitFor(
+      () => fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length >= 1,
+    );
+    releasePending();
+    await source.stop();
+
+    expect(fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length).toBe(1);
+  });
+
+  it("미허가 발신자의 권한 콜백은 게이트에 전달하지 않는다 (스피너는 해제)", async () => {
+    // 그룹 시나리오: 프롬프트는 그룹(chatId=-100, 음수라 인증 앵커 아님)에 게시되고,
+    // allow_from 밖 멤버(from.id=999)가 Allow 를 누른다 → from.id·chat.id 모두 미허가 → 무시.
+    const answeredCallbacks: string[] = [];
+    const gateCallbackCalls: string[] = [];
+    const fakeUpdate = {
+      update_id: 5003,
+      callback_query: {
+        id: "cbq-unauth",
+        from: { id: 999, first_name: "Stranger" }, // allow_from 밖
+        message: { message_id: 100, chat: { id: -100 } }, // 그룹 chat(음수)
+        data: "allow:req-1",
+      },
+    };
+    const { fetchMock, releasePending } = makeSingleCycleFetch([fakeUpdate], {
+      answerCallbackQuery: (params) => {
+        answeredCallbacks.push(params["callback_query_id"] as string);
+        return true;
+      },
+    });
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-code-acp",
+      paths,
+      chatId: -100, // 그룹 회신 대상(자기 인증 앵커 아님)
+      authorizedIds: [111], // 허가 멤버는 111 뿐
+    });
+    source.onCallbackQuery((reqId, decision) => {
+      gateCallbackCalls.push(`${reqId}:${decision}`);
+    });
+
+    source.start();
+    // 스피너 해제(answerCallbackQuery)는 인증과 무관하게 호출됨 — 그걸 처리 완료 신호로 사용.
+    await waitFor(() => answeredCallbacks.length >= 1);
+    // 폴 루프가 다음 getUpdates 로 진행(= 콜백 처리 완료)까지 대기 후 판정.
+    await waitFor(() => fetchMock.mock.calls.length >= 2);
+    releasePending();
+    await source.stop();
+
+    expect(answeredCallbacks).toContain("cbq-unauth"); // 스피너는 해제
+    expect(gateCallbackCalls.length).toBe(0); // 결정은 게이트에 미전달(무단 승인 차단)
+  });
+});

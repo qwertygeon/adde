@@ -19,7 +19,7 @@ ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely
 ## Quick start
 
 ```sh
-npm i -g adde     # global install
+npm i -g adde-acp     # global install
 adde init         # guided setup (environment check + short alias + first lane)
 ```
 
@@ -64,7 +64,7 @@ For lane configuration details see [Getting started](docs/getting-started.md#lan
 
 ## Install / runtime
 
-- Install: **global npm install** `npm i -g adde`. Update with `npm i -g adde@latest` then `adde restart <proj>` (`status`/`doctor` notify you of a new version). For development/contribution, build from source (`pnpm install && pnpm build`). Details and permission (EACCES) notes: [Getting started](docs/getting-started.md#install).
+- Install: **global npm install** `npm i -g adde-acp`. Update with `npm i -g adde-acp@latest` then `adde restart <proj>` (`status`/`doctor` notify you of a new version). For development/contribution, build from source (`pnpm install && pnpm build`). Details and permission (EACCES) notes: [Getting started](docs/getting-started.md#install).
 - The short aliases `ad`/`add` are **not** installed automatically — opt in via `adde init` or `adde alias` (avoids clashing with common global command names).
 - TypeScript + Node.js LTS (>=22)
 - **An AI engine ACP adapter is required** (e.g. `@zed-industries/claude-code-acp`) — `adde doctor` checks for it up front.

@@ -157,7 +157,7 @@ Scans each lane in `lanes.d` and determines its status.
 - If there are `dead`/`stale` lanes, remedy guidance is appended (`SEEN` = time since the last heartbeat).
 - Heartbeat: `adde up` periodically refreshes the state-file mtime. Even if the pid is alive, if the refresh stops past a threshold it is judged `stale` (hung).
 - `--json`: an array of lane objects (for monitoring/scripts, including `lastSeenAt`; annotated with `proj` when aggregating).
-- **Update notice**: if a newer version is available on npm, a one-line notice is appended (`npm i -g adde@latest` … then `adde restart`). It uses a 24-hour cache (under the config base), only hits the network in an interactive terminal (TTY), and can be disabled with the `ADDE_NO_UPDATE_CHECK` env var.
+- **Update notice**: if a newer version is available on npm, a one-line notice is appended (`npm i -g adde-acp@latest` … then `adde restart`). It uses a 24-hour cache (under the config base), only hits the network in an interactive terminal (TTY), and can be disabled with the `ADDE_NO_UPDATE_CHECK` env var.
 - Read-only (no side effects).
 
 ```bash

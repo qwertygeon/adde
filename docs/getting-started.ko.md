@@ -28,7 +28,7 @@ ADDE 는 AI CLI 엔진(Claude Code 등)을 채널(Telegram / 마크다운 노트
 **npm 전역 설치**입니다(주 명령은 `adde`):
 
 ```bash
-npm i -g adde
+npm i -g adde-acp
 ```
 
 주 진입점은 `adde` 하나입니다. 짧은 별칭(`ad`·`add`)은 기본 설치되지 않으며, 원하면 `adde init`(온보딩 마법사)이나 `adde alias` 로 옵트인 설치할 수 있습니다 — [명령 레퍼런스](commands.ko.md#alias--단축-별칭-설치) 참고.
@@ -46,11 +46,11 @@ adde doctor        # 프로젝트 인자 없이 전역 환경 점검
 ### 업데이트
 
 ```bash
-npm i -g adde@latest       # 최신 버전으로 갱신
+npm i -g adde-acp@latest       # 최신 버전으로 갱신
 adde restart <proj>        # 실행 중 레인에 새 버전 적용(재기동 필요)
 ```
 
-`npm i -g adde@latest` 는 설치 파일을 교체하지만, **이미 실행 중인 데몬은 옛 코드를 메모리에 물고 있으므로** `adde restart <proj>` 로 재기동해야 새 버전이 적용됩니다. 특정 버전 고정은 `npm i -g adde@<x.y.z>`. (`adde status`·`adde doctor` 는 새 버전이 npm 에 올라오면 안내 한 줄을 표시합니다.)
+`npm i -g adde-acp@latest` 는 설치 파일을 교체하지만, **이미 실행 중인 데몬은 옛 코드를 메모리에 물고 있으므로** `adde restart <proj>` 로 재기동해야 새 버전이 적용됩니다. 특정 버전 고정은 `npm i -g adde-acp@<x.y.z>`. (`adde status`·`adde doctor` 는 새 버전이 npm 에 올라오면 안내 한 줄을 표시합니다.)
 
 ## 핵심 개념
 
@@ -151,7 +151,7 @@ adde sessions <proj> <lane>   # 엔진 세션 장부 목록(재개·초기화는
 
 ```bash
 adde down <proj>       # 1) 먼저 데몬 종료 — launchd LaunchAgent 등록 해제
-npm uninstall -g adde  # 2) 전역 패키지 제거
+npm uninstall -g adde-acp  # 2) 전역 패키지 제거
 ```
 
 **순서가 중요합니다**: `adde down` 없이 패키지만 지우면 등록된 launchd LaunchAgent 가 남아 재부팅 후에도 (없어진) 실행 파일을 계속 재기동하려 합니다. 프로젝트가 여러 개면 각각 `adde down <proj>` 하세요(등록 상태는 `adde doctor <proj>` 로 확인). 설정·상태 파일(`~/.config/adde/`)은 그대로 남으므로, 완전 삭제하려면 확인 후 이 디렉터리를 지우세요.

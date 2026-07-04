@@ -1,12 +1,40 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readVersion } from "../src/core/version.js";
 import { COMMANDS, buildUsage } from "../src/core/messages.js";
+import { run } from "../src/cli/run.js";
 
 describe("cli usage", () => {
   it("usage 텍스트에 두 명령 표면을 모두 노출한다", () => {
     const usage = buildUsage();
     expect(usage).toContain(COMMANDS.primary);
     expect(usage).toContain(COMMANDS.short);
+  });
+});
+
+describe("run 최상위 디스패치", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("인자 없으면 usage 를 stdout 에 출력하고 0 을 반환한다", async () => {
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const code = await run([]);
+    expect(code).toBe(0);
+    expect(out).toHaveBeenCalled();
+  });
+
+  it("-h/--help 은 usage 를 출력하고 0 을 반환한다", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    expect(await run(["--help"])).toBe(0);
+    expect(await run(["-h"])).toBe(0);
+  });
+
+  it("미지원 명령은 stderr 에 오류를 내고 1 을 반환한다 (오타 은폐 방지)", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const code = await run(["statsu"]);
+    expect(code).toBe(1);
+    expect(err).toHaveBeenCalled();
+    const errText = err.mock.calls.map((c) => String(c[0])).join("");
+    expect(errText).toContain("statsu");
   });
 });
 

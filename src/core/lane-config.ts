@@ -17,7 +17,7 @@ import {
   pathsOverlap,
 } from "../shared/paths.js";
 import { parseDenyEntry, DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
-import { atomicWrite } from "../shared/fs-atomic.js";
+import { atomicWrite, secureLaneDirs } from "../shared/fs-atomic.js";
 
 /** proj/lane 식별자 — 디렉터리·파일명이 되므로 안전 문자만 허용. */
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
@@ -25,6 +25,11 @@ const NAME_RE = /^[A-Za-z0-9_-]+$/;
 const CHAT_ID_RE = /^-?\d+$/;
 /** allowlist/denylist 도구명 — 도구 식별자 안전 문자셋(C). */
 const ALLOWLIST_ITEM_RE = /^[A-Za-z0-9_.-]+$/;
+/** allow_from 항목 — telegram user/chat id(그룹은 음수). */
+const ALLOW_FROM_RE = /^-?\d+$/;
+
+/** 파일 권한 모드 허용값. 미지정 시 private(secure-by-default). */
+export const KNOWN_FILE_MODES = ["private", "shared"] as const;
 
 /** 구현된 perm_tier 값. 오타 시 acp 처럼 동작(안전 방향)하지만 의도와 다르므로 생성 시 경고. */
 export const KNOWN_PERM_TIERS = ["acp", "autopass"] as const;
@@ -59,6 +64,10 @@ export interface LaneAddOptions extends LaneCommandBaseOptions {
   outbox?: string;
   /** 레인별 채널 메시지 로케일(en|ko). 미지정 시 전역 로케일. */
   lang?: string;
+  /** telegram 인바운드 허용 발신자(CSV, 숫자 user/chat id). */
+  allow_from?: string;
+  /** 상태·출력·큐 디렉터리 권한(private|shared). 미지정 시 private. */
+  file_mode?: string;
   /** 봇 토큰(telegram). 주어지면 state/<lane>/.env 에 0600 으로 기록. */
   token?: string;
   /** 기존 conf(및 token 지정 시 .env) 를 덮어쓴다. */
@@ -129,6 +138,16 @@ async function collectAddWarnings(conf: LaneConf, token?: string): Promise<strin
   if (conf.source === "telegram" && token !== undefined && !TELEGRAM_TOKEN_RE.test(token)) {
     warnings.push(t("laneConfig.warn.tokenFormat"));
   }
+  // 인바운드 인증 앵커 부재 → 기동 시 전 인바운드 fail-closed 무시. 생성 시점에 미리 안내.
+  // 자기 인증은 개인 chat(양수 chat_id)만 성립 — 그룹(음수) chat_id 는 회신 대상일 뿐 멤버를
+  // 인증하지 않으므로, 그룹만 있고 allow_from 이 없으면 여전히 전부 거부된다.
+  if (conf.source === "telegram") {
+    const chatIdNum = conf.chat_id ? Number(conf.chat_id) : NaN;
+    const hasSelfAuth = Number.isFinite(chatIdNum) && chatIdNum > 0;
+    if (!hasSelfAuth && !conf.allow_from) {
+      warnings.push(t("laneConfig.warn.telegramNoAuth"));
+    }
+  }
   if (conf.lang && !(SUPPORTED_LOCALES as readonly string[]).includes(conf.lang)) {
     warnings.push(
       t("laneConfig.warn.badLang", { lang: conf.lang, supported: SUPPORTED_LOCALES.join("|") }),
@@ -169,6 +188,19 @@ export interface LaneShowResult {
 export interface LaneRemoveResult {
   lane: string;
   confPath: string;
+}
+
+/** CSV 를 트림·빈값 제거해 항목 배열로. allow_from 등 목록 문자열 파싱 공용. */
+export function parseCsv(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/** conf.file_mode → 정규화된 권한 모드. 미지정/미지값은 private(secure-by-default). */
+export function resolveFileMode(mode: string | undefined): "private" | "shared" {
+  return mode === "shared" ? "shared" : "private";
 }
 
 function assertName(kind: "proj" | "lane", value: string): void {
@@ -218,6 +250,27 @@ export async function laneAdd(
   if (opts.token !== undefined && src !== "telegram") {
     throw new LaneConfigError(t("laneConfig.err.tokenOnlyTelegram"));
   }
+  if (opts.allow_from !== undefined && opts.allow_from !== "") {
+    if (src !== "telegram") {
+      throw new LaneConfigError(t("laneConfig.err.allowFromOnlyTelegram"));
+    }
+    for (const id of parseCsv(opts.allow_from)) {
+      if (!ALLOW_FROM_RE.test(id)) {
+        throw new LaneConfigError(t("laneConfig.err.badAllowFrom", { id }));
+      }
+    }
+  }
+  if (
+    opts.file_mode !== undefined &&
+    !(KNOWN_FILE_MODES as readonly string[]).includes(opts.file_mode)
+  ) {
+    throw new LaneConfigError(
+      t("laneConfig.err.badFileMode", {
+        mode: opts.file_mode,
+        known: KNOWN_FILE_MODES.join("|"),
+      }),
+    );
+  }
   for (const tool of opts.allowlist ?? []) {
     if (!ALLOWLIST_ITEM_RE.test(tool)) {
       throw new LaneConfigError(t("laneConfig.err.badAllowTool", { tool }));
@@ -251,6 +304,8 @@ export async function laneAdd(
   if (opts.approvals) conf.approvals = opts.approvals;
   if (opts.outbox) conf.outbox = opts.outbox;
   if (opts.lang) conf.lang = opts.lang;
+  if (opts.allow_from) conf.allow_from = opts.allow_from;
+  if (opts.file_mode) conf.file_mode = opts.file_mode;
 
   const base = opts.base ?? defaultBase();
   const paths = lanePaths(base, proj, lane);
@@ -261,6 +316,8 @@ export async function laneAdd(
 
   await mkdir(paths.lanesDir, { recursive: true });
   await writeAtomic(paths.confFile, serializeLaneConf(conf));
+  // conf 는 chat_id·allow_from·cwd 등 메타를 담는다 — private 모드에서 lanes.d 도 잠근다(0700).
+  await secureLaneDirs([paths.lanesDir], resolveFileMode(conf.file_mode));
 
   const result: LaneAddResult = { lane, confPath: paths.confFile, conf, warnings: [] };
 
@@ -274,6 +331,8 @@ export async function laneAdd(
       }
     }
     await mkdir(paths.stateDir, { recursive: true });
+    // 토큰이 사는 state 디렉터리를 권한 모드대로 잠근다(private=0700). .env 자체도 0600.
+    await secureLaneDirs([paths.stateDir], resolveFileMode(conf.file_mode));
     await writeAtomic(paths.envFile, `TELEGRAM_BOT_TOKEN=${token}\n`, 0o600);
     result.envPath = paths.envFile;
   }

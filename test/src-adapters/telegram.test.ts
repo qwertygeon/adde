@@ -179,6 +179,7 @@ describe("TelegramSource long-poll (SC-014)", () => {
       proj: "myproj",
       engine: "claude-code-acp",
       paths,
+      authorizedIds: [99],
     });
 
     source.start();
@@ -225,6 +226,7 @@ describe("TelegramSource long-poll (SC-014)", () => {
       proj: "myproj",
       engine: "claude-code-acp",
       paths,
+      authorizedIds: [99],
     });
 
     source.start();
@@ -336,6 +338,7 @@ describe("TelegramSource inline 버튼 (SC-017)", () => {
       proj: "myproj",
       engine: "claude-code-acp",
       paths,
+      authorizedIds: [99],
     });
 
     await source.sendPermPrompt(0, "perm-001", {
@@ -394,6 +397,7 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
       proj: "myproj",
       engine: "claude-code-acp",
       paths,
+      authorizedIds: [99],
     });
 
     source.onCallbackQuery((reqId, decision) => {
@@ -440,6 +444,7 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
       proj: "myproj",
       engine: "claude-code-acp",
       paths,
+      authorizedIds: [99],
     });
     source.onCallbackQuery((reqId, decision) => {
       gateCallbackCalls.push(`${reqId}:${decision}`);
@@ -478,6 +483,7 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
       proj: "myproj",
       engine: "claude-code-acp",
       paths,
+      authorizedIds: [99],
     });
 
     source.onCallbackQuery((reqId, decision) => {

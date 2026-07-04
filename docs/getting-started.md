@@ -11,13 +11,15 @@ ADDE 는 AI CLI 엔진(Claude Code 등)을 채널(Telegram / 마크다운 노트
 - [기동·종료](#기동종료)
 - [상태·진단](#상태진단)
 - [프로젝트 폴더 매핑](#프로젝트-폴더-매핑)
+- [제거](#제거)
 - [다음 단계](#다음-단계)
 
 ## 요구사항
 
 - macOS (1차 타깃)
-- Node.js LTS (>=22)
-- AI 엔진 ACP 어댑터 (예: `@zed-industries/claude-code-acp`)
+- Node.js LTS (>=22) — 데몬은 launchd 로 기동되므로 `node` 가 PATH 에 있어야 합니다(`adde up` 이 실행 시점 PATH 를 plist 에 주입).
+- AI 엔진 ACP 어댑터 — `adde` 에 `@zed-industries/claude-code-acp` 가 번들됩니다(별도 설치 불요).
+- **Claude 인증**: 엔진은 번들 어댑터를 통해 Claude Code 를 구동하므로, **같은 사용자 계정에서 Claude 가 인증된 상태**여야 합니다(예: Claude Code 로 로그인했거나 `ANTHROPIC_API_KEY` 설정). 미인증 시 엔진 핸드셰이크가 실패해 레인이 기동되지 않습니다 — 먼저 Claude 가 단독으로 동작하는지 확인하세요.
 
 ## 설치
 
@@ -100,7 +102,7 @@ allowlist=Read,Grep      # 선택: 승인 빈도 축소(게이트 유지)
 
 채널별 추가 키:
 
-- **telegram**: `chat_id=<회신 대상>`. 봇 토큰은 conf 가 아니라 `~/.config/adde/<proj>/state/<lane>/.env` 에 `TELEGRAM_BOT_TOKEN=...` 으로 둡니다(인자·로그 비노출). 단계별: [telegram.md](telegram.md).
+- **telegram**: `chat_id=<회신 대상>`(설정하면 **그 chat 의 인바운드도 자동 허용**). 봇 토큰은 conf 가 아니라 `~/.config/adde/<proj>/state/<lane>/.env` 에 `TELEGRAM_BOT_TOKEN=...` 으로 둡니다(인자·로그 비노출). 인바운드는 허용 발신자(`chat_id` ∪ `allow_from`)만 처리하며 미설정 시 전부 거부(fail-closed) — 인증 상세: [telegram.md](telegram.md).
 - **markdown**: `root=<절대경로, 예: Obsidian vault>`, `inbox=<root 상대>`, (선택) `approvals=`·`outbox=`. → [마크다운 가이드](markdown.md).
 
 ## 기동·종료
@@ -129,6 +131,15 @@ adde sessions <proj> <lane>   # 엔진 세션 장부 목록(재개·초기화는
 ## 프로젝트 폴더 매핑
 
 각 레인의 `cwd` 가 그 레인 AI 의 작업 디렉터리입니다. 레인마다 다른 `cwd` 를 지정하면 **채널/메모와 프로젝트 폴더를 각각 묶어** 여러 개를 동시에 운용할 수 있습니다. conf 를 여러 개 두면 `adde up` 한 번으로 모두 기동됩니다.
+
+## 제거
+
+```bash
+adde down <proj>       # 1) 먼저 데몬 종료 — launchd LaunchAgent 등록 해제
+npm uninstall -g adde  # 2) 전역 패키지 제거
+```
+
+**순서가 중요합니다**: `adde down` 없이 패키지만 지우면 등록된 launchd LaunchAgent 가 남아 재부팅 후에도 (없어진) 실행 파일을 계속 재기동하려 합니다. 프로젝트가 여러 개면 각각 `adde down <proj>` 하세요(등록 상태는 `adde doctor <proj>` 로 확인). 설정·상태 파일(`~/.config/adde/`)은 그대로 남으므로, 완전 삭제하려면 확인 후 이 디렉터리를 지우세요.
 
 ## 다음 단계
 

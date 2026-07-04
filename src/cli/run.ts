@@ -184,6 +184,13 @@ export async function run(argv: readonly string[]): Promise<number> {
     }
   }
 
-  process.stdout.write(`${buildUsage()}\n`);
-  return 0;
+  // 인자 없음·명시적 도움말 → 사용법(정상 종료).
+  if (first === undefined || first === "-h" || first === "--help" || first === "help") {
+    process.stdout.write(`${buildUsage()}\n`);
+    return 0;
+  }
+
+  // 미지원 명령 → stderr 로 오류 + 사용법, 비정상 종료(스크립트 오류 은폐 방지).
+  process.stderr.write(`${t("cli.unknownCmd", { cmd: first })}\n\n${buildUsage()}\n`);
+  return 1;
 }

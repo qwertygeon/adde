@@ -11,11 +11,14 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { parseLaneConf } from "../shared/conf.js";
 import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
+import { secureLaneDirs } from "../shared/fs-atomic.js";
+import { parseCsv, resolveFileMode } from "./lane-config.js";
 import { AcpBackendImpl } from "../backend/acp/client.js";
 import type { AcpBackend } from "../backend/acp/client.js";
 import { createInjector } from "./injector.js";
 import { recordSession } from "./session-ledger.js";
 import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
+import { selfAuthorizedChatId } from "../src-adapters/telegram.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
 import { formatWarnNote, formatException } from "../shared/notify.js";
@@ -166,6 +169,15 @@ export async function supervisorUp(
 
     const paths = lanePaths(baseDir, proj, lane);
 
+    // 상태·출력·큐 디렉터리 권한 잠금(private=0700 / shared=no-op). chmod 실패는 보조
+    // 하드닝 신호 — warn 후 흡수(기동 자체는 진행, 권한 미적용은 로그로 가시화).
+    await secureLaneDirs(
+      [paths.stateDir, paths.outDir, paths.queueDir, paths.processingDir, paths.lanesDir],
+      resolveFileMode(conf.file_mode),
+    ).catch((err: unknown) =>
+      console.warn(t("log.supervisor.securePermsFail", { lane, error: errMsg(err) })),
+    );
+
     // 중복 기동 가드 — backend 생성 전 runtime.json + pid 생존 확인.
     const existingRuntime = await readRuntime(paths);
     if (existingRuntime !== null) {
@@ -252,12 +264,22 @@ export async function supervisorUp(
     } else {
       const chatId =
         conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
+      // 인바운드/콜백 허용 발신자 = allow_from ∪ (개인 chat 인 chatId). 비면 어댑터가 fail-closed.
+      // 음수 chatId(그룹)는 인증 앵커 아님 — 멤버는 allow_from 으로만 인증(어댑터 병합 규칙과 동일).
+      const authorizedIds: number[] = [];
+      const selfAuth = selfAuthorizedChatId(chatId);
+      if (selfAuth !== undefined) authorizedIds.push(selfAuth);
+      for (const raw of conf.allow_from ? parseCsv(conf.allow_from) : []) {
+        const n = Number(raw);
+        if (!Number.isNaN(n)) authorizedIds.push(n);
+      }
       source = createTelegramSource({
         lane,
         proj,
         engine,
         paths,
         chatId,
+        authorizedIds,
         onInbound,
         lang: conf.lang,
       });

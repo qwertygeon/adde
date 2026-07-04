@@ -4,6 +4,12 @@
 
 ## [0.1.3] - 2026-07-04
 
+### Security
+
+- Telegram 인바운드 발신자 인증 — 인바운드 메시지·권한 승인 콜백을 허용 발신자(`chat_id` ∪ 신규 `allow_from`)만 처리하고 그 외는 무시(fail-closed). 허용 집합이 비면 전 인바운드 거부. 봇에 도달 가능한 임의 사용자가 호스트 실행 세션에 프롬프트를 주입하거나 무단으로 권한을 승인하던 경계 공백을 차단. `chat_id` 설정 시 자기 chat 자동 인증, 그룹·복수 사용자는 `--allow-from` 으로 확장.
+- 레인 상태·출력·큐 디렉터리 권한 옵션 `file_mode`(`--file-mode`) — 기본 `private` 는 `state`/`out`/`queue`/`processing` 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답 열람을 차단. `shared`(0755) 는 잠그지 않는 옵트인. (봇 토큰 `.env` 는 종전대로 항상 0600.)
+- 엔진 stderr 로그(`engine.log`) 마스킹 — transcript 만 마스킹하던 것을 엔진 stderr 캡처 경로에도 라인 단위 시크릿 마스킹을 적용해 토큰·민감 경로가 side channel 로 평문 기록되지 않도록 보강.
+
 ### Added
 
 - 세션 제어(채널 명령) — Claude Code 의 /clear·/compact·/resume 등가 기능. Telegram 은 정확 일치 명령(`/clear`·`/compact`·`/resume [번호|세션id]`), 마크다운은 send 형 전용 체크박스 라벨(`clear`·`compact`·`resume [n]`). 제어는 메시지 큐에 직렬 처리(진행 중 턴 존중)되고 결과가 채널 응답으로 통지됩니다.
@@ -26,6 +32,8 @@
 - 사용자 문서 보완 — 권한 가이드(`docs/permissions.md`) 신설(게이트 개념·acp/autopass 티어·allowlist/denylist·매칭 한계·드리프트·권장 베이스라인 SSOT, 흩어진 권한 서술은 포인터화). 트러블슈팅에 `stale`(행)·launchd 등록 불일치·재부팅 복구·orphan 정리 항목 추가. Telegram 가이드에 전체 흐름 조감도·봇 토큰 공유(폴링 409) 경고·승인 시 프롬프트 인젝션 주의 추가, 마크다운 가이드에 승인 인젝션 주의 추가. README 에 사용 시나리오·데이터 흐름/프라이버시 고지·ACP 어댑터 요구 명시. getting-started 성공 판정 기준 추가.
 - 버전 SoT 를 루트 `VERSION` 파일에서 `package.json.version` 단일로 전환 — `VERSION` 파일 제거, `adde --version`·릴리스 트리거·발행이 모두 `package.json.version` 을 참조(SoT 이원화 제거). 릴리스 트리거는 `main` 의 `package.json` push 로 변경되며, 버전이 안 바뀐 변경은 태그·발행 멱등 가드가 no-op 처리.
 - 설치 문서 발행 전환 — `npm i -g adde` 정식 설치 안내, 업데이트(`npm i -g adde@latest` + 실행 중 데몬 `adde restart`)·권한 오류(EACCES) 안내 추가.
+- 미지원 최상위 명령 종료 코드 — 오타 등 알 수 없는 명령은 stderr 에 `Unknown command` 를 내고 종료 코드 1 을 반환(종전엔 사용법 출력 후 0 이라 스크립트에서 오타가 조용히 성공 처리되던 문제). 인자 없음·`-h`/`--help`/`help` 는 종전대로 사용법 출력 후 0.
+- 발행 전 사용자 문서 보완 — `claude`(Anthropic) 인증 전제·`node` PATH 요구를 요구사항에 명시, 제거(uninstall) 절차(`adde down` → `npm uninstall -g`) 추가, 트러블슈팅에 npm 설치 직후 문제(command not found·EACCES·claude 미인증) 절 추가, Telegram 가이드에 인바운드 인증 절 추가.
 
 ## [0.1.2] - 2026-07-03
 

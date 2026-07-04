@@ -57,7 +57,9 @@ lane add options:
   --denylist <entries,...>      tools/patterns that fall back to channel approval under autopass
                                 (e.g. "Bash,Write(/etc/*)" · built-in default list if omitted: blocks sudo, rm -rf, forced git changes, credential reads)
   --lang <en|ko>                channel message locale for this lane (default: global locale)
-  --chat-id <id>                telegram reply target
+  --chat-id <id>                telegram reply target (also authorizes that chat for inbound)
+  --allow-from <ids>            extra authorized inbound sender ids (comma-separated user/chat ids)
+  --file-mode <private|shared>  state/out/queue dir permissions (default private=0700 owner-only; shared=0755 world-readable)
   --token-stdin                 read the telegram bot token from stdin and write it to .env (0600)
   --root <abs-path>             markdown root (e.g. Obsidian vault)
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown note paths
@@ -68,6 +70,7 @@ lane add options:
     cmdError: "[adde {{cmd}}] error: {{detail}}",
     laneError: "[adde lane] {{detail}}",
     unknownSub: "Unknown lane subcommand: {{sub}}",
+    unknownCmd: "Unknown command: {{cmd}}",
   },
   run: {
     laneStartFailed: {
@@ -125,7 +128,9 @@ lane add options:
       allowlist: "allowlist (comma-separated, empty for none)",
       denylist: "denylist (tools/patterns that fall back to channel approval, comma-separated)",
       cwd: "cwd (absolute lane working directory, empty to skip)",
-      chatId: "chat_id (reply target, empty to skip)",
+      chatId: "chat_id (reply target + authorizes that chat for inbound, empty to skip)",
+      allowFrom: "allow_from (extra authorized sender ids, comma-separated, empty to skip)",
+      fileMode: "file_mode (private=owner-only 0700 / shared=world-readable 0755)",
       root: "root (absolute markdown root path)",
       inbox: "inbox (relative to root)",
       approvals: "approvals (relative to root, default if empty)",
@@ -220,6 +225,8 @@ lane add options:
         "[warning] allowlist and denylist share tool(s): {{tools}} — the denylist wins and channel approval is required.\n  ↳ action: remove from one side if unintended.",
       badLang:
         '[warning] lang "{{lang}}" is not a supported locale ({{supported}}) — the global locale applies.\n  ↳ action: fix lang in the conf if it is a typo.',
+      telegramNoAuth:
+        "[warning] telegram lane has no authorized inbound sender — all inbound will be rejected (fail-closed). A private chat_id self-authorizes, but a group chat_id (negative) is only a reply target and does NOT authorize its members.\n  ↳ action: set --chat-id <your private chat id>, and/or list member ids with --allow-from <ids>.",
     },
     err: {
       emptyIdent: "{{kind}} is empty",
@@ -227,6 +234,9 @@ lane add options:
       badSource: 'source "{{source}}" unsupported — one of {{supported}}',
       badChatId: 'chat_id "{{chatId}}" is not a number',
       tokenOnlyTelegram: "token is only used for source=telegram lanes",
+      allowFromOnlyTelegram: "allow_from is only used for source=telegram lanes",
+      badAllowFrom: 'allow_from entry "{{id}}" is not a number (telegram user/chat id)',
+      badFileMode: 'file_mode "{{mode}}" is invalid — one of {{known}}',
       badAllowTool: 'allowlist tool name "{{tool}}" is invalid — only alphanumerics/_/./- allowed',
       badDenyEntry:
         'denylist entry "{{entry}}" is invalid — expected "Bash" or "Bash(git push*)" form (no commas)',
@@ -370,6 +380,8 @@ lane add options:
         "[supervisor] lane={{lane}} runtime.json write failed (auxiliary): {{error}}",
       runtimeRemoveFail:
         "[supervisor] lane={{lane}} runtime.json removal failed (auxiliary): {{error}}",
+      securePermsFail:
+        "[supervisor] lane={{lane}} state directory permission lock failed (auxiliary — files may be world-readable): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} start failed: {{reason}}",
     },
     queue: {
@@ -392,6 +404,12 @@ lane add options:
       enqueueError: "[telegram] enqueue error ({{count}} in a row): {{error}}",
       answerCallbackError: "[telegram] answerCallbackQuery error: {{error}}",
       unknownCallback: "[telegram] ignoring unknown callback decision: {{decision}}",
+      unauthorizedMessage:
+        "[telegram] ignoring inbound from unauthorized sender (from={{from}} chat={{chat}}) — add to chat_id/allow_from to authorize",
+      unauthorizedCallback:
+        "[telegram] ignoring permission callback from unauthorized sender (from={{from}})",
+      noAuthConfigured:
+        "[telegram] no authorized senders configured (chat_id/allow_from empty) — all inbound is rejected (fail-closed)",
       pollError: "[telegram] poll error ({{count}} in a row, retrying in {{backoff}}ms): {{error}}",
       alertSendError: "[telegram] enqueue failure alert delivery error: {{error}}",
       pollLoopEnd: "[telegram] poll loop ended: {{error}}",

@@ -71,7 +71,7 @@ The fastest way to create your first lane is the onboarding wizard:
 adde init [<proj>]
 ```
 
-It first runs the global `doctor` and shows the results → asks whether to install the short aliases → prompts interactively for project/lane names and lane fields → creates the lane → prints the token-save and `adde up` start hints (TTY only; the bot token is not prompted, to keep the secret off-screen). Details: [command reference](commands.md#init--onboarding-wizard).
+It first runs the global `doctor` and shows the results → asks whether to install the short aliases → prompts interactively for project/lane names and lane fields → creates the lane → prints the token-write and `adde up` start hints (TTY only). For a telegram lane the bot token is prompted last with **hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to set it later. Details: [command reference](commands.md#init--onboarding-wizard).
 
 ### Configure via subcommands
 
@@ -93,11 +93,12 @@ adde lane rm myproj tg-claude      # delete conf
 ```
 
 ```bash
-# create interactively without memorizing flags (TTY only; token is not prompted)
-adde lane add myproj tg-claude --interactive
+# interactive wizard — the default on a TTY when no field flags are given (the telegram token is prompted last, hidden)
+adde lane add myproj tg-claude
+adde lane add myproj tg-claude --interactive   # force the wizard; --no-interactive forces flags-only for scripts
 ```
 
-The [command reference](commands.md#lane-add-options) table is authoritative for per-flag defaults and the full set of options (also available via `adde lane help`). An existing conf is not overwritten without `--force`. At creation time, a missing `cwd`, a missing markdown `root`, or a malformed token is reported as a warning (creation still proceeds).
+On a TTY, `adde lane add <proj> <lane>` with **no field flags** launches the interactive wizard automatically; passing any field flag (or `--no-interactive`, or a non-TTY stdin) makes it non-interactive. The [command reference](commands.md#lane-add-options) table is authoritative for per-flag defaults and the full set of options (also available via `adde lane help`). An existing conf is not overwritten without `--force`. At creation time, a missing `cwd`, a missing markdown `root`, or a malformed token is reported as a warning (creation still proceeds).
 
 ### conf keys (when editing directly)
 

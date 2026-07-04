@@ -5,13 +5,12 @@
  * 생성 후 .env/--token-stdin 안내로 위임한다(collectInteractive 와 동일 원칙).
  * `adde alias [names...]` — 별칭만 따로 설치하는 경량 진입점(재실행용).
  */
-import * as readline from "node:readline/promises";
 import { t } from "../shared/i18n.js";
 import { formatException } from "../shared/notify.js";
 import { runDoctor } from "../core/diagnostics.js";
 import { laneAdd, LaneConfigError } from "../core/lane-config.js";
 import { collectInteractive } from "./lane.js";
-import type { Ask } from "./lane.js";
+import { createPrompter } from "./prompt.js";
 import { laneError } from "../core/messages.js";
 import { RECOMMENDED_ALIASES, setupAliases, resolveAliasDeps } from "./alias.js";
 import type { AliasSetupResult } from "./alias.js";
@@ -40,11 +39,8 @@ export async function runInit(argv: readonly string[]): Promise<number> {
     );
     return 1;
   }
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const ask: Ask = async (q, def) => {
-    const a = (await rl.question(`${q}${def ? ` [${def}]` : ""}: `)).trim();
-    return a || (def ?? "");
-  };
+  const prompter = createPrompter();
+  const ask = prompter.ask;
   try {
     process.stdout.write(t("init.intro") + "\n\n");
 
@@ -79,13 +75,15 @@ export async function runInit(argv: readonly string[]): Promise<number> {
     let lane = await ask(t("init.lanePrompt"), "main");
     while (!NAME_RE.test(lane)) lane = await ask(t("init.laneRetry"), "main");
 
-    const opts = await collectInteractive(ask);
+    const opts = await collectInteractive(ask, prompter.askSecret);
     const result = await laneAdd(proj, lane, opts);
     for (const w of result.warnings) process.stdout.write(w + "\n");
     process.stdout.write(
       t("lane.created", { lane: result.lane, confPath: result.confPath }) + "\n",
     );
-    if (result.conf.source === "telegram") {
+    if (result.envPath) {
+      process.stdout.write(t("lane.tokenWritten", { envPath: result.envPath }) + "\n");
+    } else if (result.conf.source === "telegram") {
       process.stdout.write(
         t("lane.tokenNext", {
           envPath: result.confPath.replace(/lanes\.d\/.*$/, `state/${result.lane}/.env`),
@@ -102,7 +100,7 @@ export async function runInit(argv: readonly string[]): Promise<number> {
     }
     throw err;
   } finally {
-    rl.close();
+    prompter.close();
   }
 }
 

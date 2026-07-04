@@ -55,15 +55,62 @@ describe("collectInteractive (007 SC1)", () => {
 
   it("잘못된 source 는 유효값이 올 때까지 재질의한다", async () => {
     let calls = 0;
-    const ask: Ask = async (q) => {
+    const ask: Ask = async (q, def) => {
       if (q.includes("source") || q.includes("telegram 또는 markdown")) {
         calls++;
         return calls < 2 ? "bogus" : "telegram";
       }
-      return "";
+      return def ?? "";
     };
     const opts = await collectInteractive(ask);
     expect(opts.source).toBe("telegram");
     expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("enum 필드(perm_tier)는 유효값이 올 때까지 재질의한다 (B1)", async () => {
+    let calls = 0;
+    const ask: Ask = async (q, def) => {
+      if (q.includes("perm_tier")) {
+        calls++;
+        return calls < 2 ? "bogus" : "autopass";
+      }
+      return def ?? "";
+    };
+    const opts = await collectInteractive(ask);
+    expect(opts.perm_tier).toBe("autopass");
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("숫자 필드(chat_id)는 유효값이 올 때까지 재질의한다 (B1)", async () => {
+    let calls = 0;
+    const ask: Ask = async (q, def) => {
+      if (q.includes("source")) return "telegram";
+      if (q.includes("chat_id")) {
+        calls++;
+        return calls < 2 ? "not-a-number" : "12345";
+      }
+      return def ?? "";
+    };
+    const opts = await collectInteractive(ask);
+    expect(opts.chat_id).toBe("12345");
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("askSecret 가 주어지면 토큰을 가려진 입력으로 수집한다 (B2)", async () => {
+    const { ask } = scriptedAsk({ source: "telegram" });
+    let secretAsked = false;
+    const askSecret = async (): Promise<string> => {
+      secretAsked = true;
+      return "111:ABCDEF";
+    };
+    const opts = await collectInteractive(ask, askSecret);
+    expect(secretAsked).toBe(true);
+    expect(opts.token).toBe("111:ABCDEF");
+  });
+
+  it("askSecret 미제공 시 토큰을 수집하지 않는다(생성 후 위임)", async () => {
+    const { ask } = scriptedAsk({ source: "telegram" });
+    const opts = await collectInteractive(ask);
+    expect(opts.token).toBeUndefined();
   });
 });

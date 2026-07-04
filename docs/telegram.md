@@ -57,10 +57,11 @@ Create a telegram lane by specifying the working folder (`--cwd`) and the reply 
 adde lane add myproj tg-claude --cwd /abs/project --chat-id 12345 --allowlist Read,Grep
 ```
 
-Or interactively (no flags to memorize, **token is not prompted**):
+Or interactively — on a TTY this is the **default** when you pass no field flags (the bot token is prompted last with hidden input and written to `.env`; leave it empty to set it later):
 
 ```bash
-adde lane add myproj tg-claude --interactive
+adde lane add myproj tg-claude              # interactive wizard (default on a TTY)
+adde lane add myproj tg-claude --interactive  # force the wizard explicitly
 ```
 
 If this is your first time, the `adde init` onboarding wizard also walks you through the doctor check and offering to install aliases — [command reference](commands.md#init--onboarding-wizard).
@@ -88,17 +89,20 @@ adde lane add myproj tg-team --chat-id -1001234567890 --allow-from 111111,222222
 
 ## 4. Store the bot token
 
-The token goes not in the conf but in the lane's `.env` (never in arguments or logs). Writing it via stdin is recommended:
+The token goes not in the conf but in the lane's `.env` (never in arguments or logs). You have three ways to store it:
 
-```bash
-printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude --token-stdin --force
-```
+- **In the interactive wizard**: the last prompt (`telegram bot token (hidden input, empty to set later):`) accepts the token with hidden input and writes it to `.env` (0600) — nothing separate is needed. This is the simplest path.
+- **Via stdin** (scripts, or updating an existing lane) — recommended for non-interactive use:
 
-Or place the following directly in `~/.config/adde/myproj/state/tg-claude/.env` (file mode 0600 recommended):
+  ```bash
+  printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude --token-stdin --force
+  ```
 
-```
-TELEGRAM_BOT_TOKEN=123456789:ABC...
-```
+- **By editing `.env` directly** — place the following in `~/.config/adde/myproj/state/tg-claude/.env` (file mode 0600 recommended):
+
+  ```
+  TELEGRAM_BOT_TOKEN=123456789:ABC...
+  ```
 
 ## 5. Check and start
 

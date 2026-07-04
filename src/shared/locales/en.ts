@@ -73,7 +73,8 @@ lane add options:
   --root <abs-path>             markdown root (e.g. Obsidian vault)
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown note paths
   --force                       overwrite an existing conf
-  --interactive                 interactive field input (TTY only, token excluded)`,
+  --interactive                 force the interactive wizard (default on a TTY; the bot token is entered hidden)
+  --no-interactive              disable the interactive default and use flags/defaults (for scripts)`,
   },
   cli: {
     cmdError: "[adde {{cmd}}] error: {{detail}}",
@@ -137,11 +138,20 @@ lane add options:
   lane: {
     valueRequired: "--{{key}} requires a value",
     sourceRetry: "  enter one of telegram or markdown",
+    retry: {
+      permTier: "  perm_tier — enter acp or autopass",
+      fileMode: "  file_mode — enter private or shared",
+      lang: "  lang — enter en or ko (or leave empty for global)",
+      chatId: "  chat_id — enter a numeric id (or leave empty)",
+      allowFrom: "  allow_from — enter comma-separated numeric ids (or leave empty)",
+    },
     prompt: {
       allowlist: "allowlist (comma-separated, empty for none)",
       denylist: "denylist (tools/patterns that fall back to channel approval, comma-separated)",
       safeDefaults:
         "enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (y/N)",
+      lang: "lang (channel message locale: en/ko, empty for global)",
+      token: "telegram bot token (hidden input, empty to set later)",
       cwd: "cwd (absolute lane working directory, empty to skip)",
       chatId: "chat_id (reply target + authorizes that chat for inbound, empty to skip)",
       allowFrom: "allow_from (extra authorized sender ids, comma-separated, empty to skip)",

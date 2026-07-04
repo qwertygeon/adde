@@ -73,7 +73,8 @@ lane add 옵션:
   --root <abs-path>             markdown 루트(예: Obsidian vault)
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown 노트 경로
   --force                       기존 conf 덮어쓰기
-  --interactive                 대화형으로 필드 입력(TTY 전용, 토큰 제외)`,
+  --interactive                 대화형 위저드 강제(TTY 에서 기본; 봇 토큰은 가려진 입력)
+  --no-interactive              대화형 기본을 끄고 플래그/기본값 사용(스크립트용)`,
   },
   cli: {
     cmdError: "[adde {{cmd}}] 오류: {{detail}}",
@@ -137,11 +138,20 @@ lane add 옵션:
   lane: {
     valueRequired: "--{{key}} 에 값이 필요합니다",
     sourceRetry: "  telegram 또는 markdown 중 하나를 입력하세요",
+    retry: {
+      permTier: "  perm_tier — acp 또는 autopass 를 입력하세요",
+      fileMode: "  file_mode — private 또는 shared 를 입력하세요",
+      lang: "  lang — en 또는 ko 를 입력하세요(전역은 비움)",
+      chatId: "  chat_id — 숫자 id 를 입력하세요(없으면 비움)",
+      allowFrom: "  allow_from — 콤마 구분 숫자 id 를 입력하세요(없으면 비움)",
+    },
     prompt: {
       allowlist: "allowlist (콤마 구분, 없으면 비움)",
       denylist: "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
       safeDefaults:
         "방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N)",
+      lang: "lang (채널 메시지 로케일: en/ko, 전역은 비움)",
+      token: "telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움)",
       cwd: "cwd (레인 작업 폴더 절대경로, 없으면 비움)",
       chatId: "chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움)",
       allowFrom: "allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움)",

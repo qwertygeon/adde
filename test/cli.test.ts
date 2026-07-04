@@ -51,7 +51,7 @@ describe("run 최상위 디스패치", () => {
     const code = await run(["completion", "bash"]);
     expect(code).toBe(0);
     const text = out.mock.calls.map((c) => String(c[0])).join("");
-    expect(text).toContain("complete -F _adde adde add");
+    expect(text).toContain("complete -F _adde adde ad add");
   });
 
   it("completion 미지원 셸은 stderr + 1", async () => {

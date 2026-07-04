@@ -45,9 +45,49 @@ adde init [<proj>]
 1. 전역 `doctor` 를 실행해 결과를 출력합니다(`FAIL` 이 있어도 경고와 함께 계속 진행).
 2. 짧은 별칭 설치를 제안합니다(기본 예 — 아래 `alias` 참조).
 3. 프로젝트·레인 이름을 묻습니다(검증: 영문·숫자·`_`·`-` 만 허용).
-4. 레인 필드를 대화형으로 입력받습니다(`lane add --interactive` 와 동일한 필드 — **봇 토큰은 화면 노출을 피해 묻지 않음**).
+4. 레인 필드를 대화형으로 입력받습니다(대화형 `lane add` 와 동일한 필드). telegram 레인은 봇 토큰을 **마지막에 가려진 입력**(키 입력이 화면에 에코되지 않음)으로 받아 `.env`(0600)에 기록합니다. 비워 두면 나중으로 미루며(`--token-stdin` 또는 `.env` 직접 편집으로 설정), 그 경우 완료 출력이 토큰 저장 대신 안내가 됩니다.
 5. 레인을 생성합니다.
-6. 토큰 저장 다음 단계 힌트와 `adde up` 기동 힌트를 출력합니다.
+6. 토큰 기록(또는 토큰 저장 안내) 힌트와 `adde up` 기동 힌트를 출력합니다.
+
+**예시 세션** (telegram 레인, 토큰은 가려진 입력 — 화면에 표시되지 않음):
+
+```text
+$ adde init
+adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
+
+  ✔ Node 버전: v22.14.0
+  ✔ ACP 어댑터 바이너리: @zed-industries/claude-code-acp 해석됨
+  ✔ 설정 base 디렉터리: ~/.config/adde
+
+짧은 별칭(ad, add)을 adde 명령 옆에 설치할까요? (Y/n) [y]: y
+  ✔ 별칭 생성: ad → /usr/local/bin
+  ✔ 별칭 생성: add → /usr/local/bin
+
+프로젝트 이름 [default]: myproj
+레인 이름 [main]: tg-claude
+source (telegram/markdown) [telegram]: telegram
+engine [claude-code-acp]:
+backend [acp]:
+channel [telegram]:
+perm_tier (acp/autopass) [acp]:
+acp_version [v1]:
+allowlist (콤마 구분, 없으면 비움): Read,Grep
+방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N) [y]: y
+lang (채널 메시지 로케일: en/ko, 전역은 비움):
+cwd (레인 작업 폴더 절대경로, 없으면 비움): /Users/me/work/my-project
+chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움): 12345678
+allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움):
+file_mode (private=소유자 전용 0700 / shared=umask 기본 유지, 통상 타 사용자 열람) [private]:
+telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입력 숨김⟩
+
+레인 "tg-claude" 생성: ~/.config/adde/myproj/lanes.d/tg-claude.conf
+토큰 기록: ~/.config/adde/myproj/state/tg-claude/.env (0600)
+
+프로젝트 'myproj' 설정 완료.
+기동: adde up myproj
+```
+
+빈 응답은 표시된 기본값(`[…]`)을 채택합니다. `source`·`engine`·`backend`·`channel`·`perm_tier`·`acp_version` 프롬프트는 로케일과 무관하게 영문으로 표시됩니다. 토큰을 비워 두면 마지막 두 줄이 `토큰 기록` 대신 `다음: 봇 토큰을 …/.env 에 TELEGRAM_BOT_TOKEN=... 으로 두세요` 안내가 됩니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`/`approvals`/`outbox` 로 바뀝니다.
 
 ## alias — 단축 별칭 설치
 
@@ -57,6 +97,7 @@ adde alias [names...]
 
 PATH 에서 찾은 `adde` 실행 파일 옆에 짧은 별칭 심링크를 설치합니다(기본 `ad`·`add`). 이름을 인자로 주면 그 이름들로 설치합니다.
 
+- `[names...]`: 설치할 별칭 이름 하나 이상(기본 `ad add`). 예: `adde alias co assistant` 는 `co`·`assistant` 를 설치.
 - **이미 존재하는 명령은 건너뜀**: PATH 에 그 이름의 명령이 이미 있고 우리 심링크가 아니면 **덮어쓰지 않고 실패로 보고**합니다.
 - **멱등**: 이미 adde 를 가리키는 심링크는 "이미 설정됨" 으로 보고합니다.
 - **`adde` 미발견**: PATH 에서 `adde` 를 찾지 못하면(예: 전역 설치가 아님) 안내를 출력하고 종료 코드 1.
@@ -118,6 +159,12 @@ adde status [<proj>] [--all] [--json]
 - **업데이트 안내**: npm 에 새 버전이 있으면 안내 한 줄(`npm i -g adde@latest` … 후 `adde restart`)을 덧붙입니다. 24시간 캐시(설정 base 하위)를 쓰며, 대화형 터미널(TTY)에서만 네트워크를 조회하고, `ADDE_NO_UPDATE_CHECK` 환경변수로 끌 수 있습니다.
 - 읽기 전용(부수효과 없음).
 
+```bash
+adde status myproj          # 한 프로젝트의 레인별 표(정지 포함)
+adde status --all           # 전 프로젝트, 정지 레인 포함
+adde status myproj --json   # 기계 판독 배열(모니터링/스크립트)
+```
+
 ## doctor — 환경 점검
 
 ```bash
@@ -141,7 +188,12 @@ adde logs <proj> <lane> [N] [--engine]
 
 해당 레인의 `transcript.log`(ACP 세션 이벤트 기록) 최근 `N` 줄을 출력합니다(기본 50). 파일이 없으면 안내를 출력합니다.
 
+- `N`: 출력할 마지막 줄 수(기본 50).
 - `--engine`: transcript 대신 `engine.log`(엔진 서브프로세스 stderr 캡처)를 출력합니다. 엔진 자체의 진단 출력을 볼 때 사용합니다(`stale`/기동 실패 원인 추적 등).
+
+```bash
+adde logs myproj tg-claude 100 --engine   # 엔진 stderr 로그 마지막 100줄
+```
 
 ## sessions — 세션 목록
 
@@ -203,9 +255,60 @@ adde lane help                       # 전체 옵션
 | `--root <abs-path>`                                  | (없음)                                             | markdown 루트(예: Obsidian vault)                                                                                             |
 | `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | —                                                  | markdown 노트 경로(root 상대)                                                                                                 |
 | `--force`                                            | —                                                  | 기존 conf 덮어쓰기                                                                                                            |
-| `--interactive`                                      | —                                                  | 대화형으로 필드 입력(TTY 전용, **토큰은 묻지 않음**)                                                                          |
+| `--interactive`                                      | —                                                  | 대화형 마법사 강제(TTY 전용 — 비TTY 에서는 오류)                                                                              |
+| `--no-interactive`                                   | —                                                  | 비대화형 강제(플래그·기본값 사용, 프롬프트 없음) — 스크립트·CI 용                                                             |
 
-`--interactive` 는 대화형 터미널(TTY)에서만 동작합니다. 봇 토큰은 화면 노출을 피하기 위해 인터랙티브에서 받지 않으며, 생성 후 `--token-stdin` 또는 `.env` 직접 기록으로 설정합니다. 인터랙티브는 `--safe-defaults`(hard-deny 위험 목록) 활성화 여부도 묻습니다(기본 예). 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
+**기본 대화형**: TTY 에서 `adde lane add <proj> <lane>` 를 **필드 플래그 없이** 실행하면 대화형 마법사가 자동으로 뜹니다 — `--interactive` 불요. 필드 플래그(`--source`·`--engine`·`--backend`·`--channel`·`--perm-tier`·`--acp-version`·`--cwd`·`--allowlist`·`--denylist`·`--hard-deny`·`--safe-defaults`·`--lang`·`--chat-id`·`--allow-from`·`--file-mode`·`--root`·`--inbox`·`--approvals`·`--outbox`·`--token-stdin`) 중 하나라도 주거나, `--no-interactive` 를 주거나, stdin 이 TTY 가 아니면(스크립트·CI) 비대화형이 됩니다. `--interactive` 는 대화형을 강제하고(비TTY 에서는 오류), `--no-interactive` 는 비대화형을 강제합니다. `<proj>`·`<lane>` 은 항상 필수 위치 인자입니다.
+
+마법사에서 telegram 봇 토큰은 **마지막에 가려진 입력**(키 입력 비에코)으로 받아 `.env`(0600)에 기록하며, 비워 두면 나중으로 미룹니다(`--token-stdin` 또는 `.env` 직접 편집). 마법사는 `--safe-defaults`(hard-deny 위험 목록) 활성화 여부도 묻습니다(기본 예). enum·숫자 필드는 입력 시점에 검증되어 잘못되면 재질의합니다 — `perm_tier`(acp|autopass)·`file_mode`(private|shared)·`lang`(en|ko 또는 빈값)·`chat_id`(숫자 또는 빈값)·`allow_from`(콤마 구분 숫자 또는 빈값)·`source`(telegram|markdown). 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
+
+**예시: 대화형** (TTY 에서 자동 실행 — 필수 `<proj> <lane>` 뒤로 필드 프롬프트가 이어짐):
+
+```text
+$ adde lane add myproj tg-claude
+source (telegram/markdown) [telegram]: telegram
+engine [claude-code-acp]:
+backend [acp]:
+channel [telegram]:
+perm_tier (acp/autopass) [acp]: autopass
+acp_version [v1]:
+allowlist (콤마 구분, 없으면 비움): Read,Grep
+denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분) [Bash(sudo *),Bash(rm -rf /*),Bash(rm -rf ~*),Bash(rm -rf .*),Bash(git push --force*),Bash(git push -f*),Bash(git reset --hard*),Bash(git clean -fd*),Read(~/.ssh/**),Read(~/.aws/**)]:
+방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N) [y]: y
+lang (채널 메시지 로케일: en/ko, 전역은 비움): ko
+cwd (레인 작업 폴더 절대경로, 없으면 비움): /Users/me/work/my-project
+chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움): 12345678
+allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움):
+file_mode (private=소유자 전용 0700 / shared=umask 기본 유지, 통상 타 사용자 열람) [private]:
+telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입력 숨김⟩
+
+레인 "tg-claude" 생성: ~/.config/adde/myproj/lanes.d/tg-claude.conf
+토큰 기록: ~/.config/adde/myproj/state/tg-claude/.env (0600)
+기동: adde up myproj
+```
+
+(`denylist` 프롬프트는 `perm_tier=autopass` 일 때만 나옵니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`(기본 `inbox.md`)/`approvals`/`outbox` 로 바뀝니다. `source`·`engine`·`backend`·`channel`·`perm_tier`·`acp_version` 프롬프트는 로케일과 무관하게 영문입니다.)
+
+**예시: 스크립트** (비대화형, 모든 값을 플래그로, 토큰은 stdin 으로 — 프롬프트 없음):
+
+```bash
+printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude \
+  --source telegram \
+  --cwd /Users/me/work/my-project \
+  --perm-tier autopass \
+  --denylist "Bash(git push*),Write(/etc/*)" \
+  --safe-defaults \
+  --hard-deny "Bash(sudo *)" \
+  --allowlist Read,Grep \
+  --chat-id 12345678 \
+  --allow-from 111111,222222 \
+  --file-mode private \
+  --lang ko \
+  --no-interactive \
+  --token-stdin
+```
+
+`--token-stdin`(또는 임의의 필드 플래그)만으로도 비대화형이 됩니다. `--no-interactive` 는 명시성을 위해 함께 적었으며, stdin 이 여전히 TTY 일 수 있는 CI 에서 확실히 비대화형으로 두려면 이 플래그를 씁니다.
 
 > ⚠️ `--perm-tier autopass` 는 denylist 에 없는 **모든 도구(파일 쓰기·Bash 포함)를 채널 확인 없이 자동 허용**하는 옵트인 모드입니다. 확인이 필요한 도구는 `--denylist` 에 두세요. 자동 허용 내역은 transcript 에 기록되고, 기동 시 채널로 경고 배너가 전송됩니다. 기본값(`acp`)의 동작은 변하지 않습니다.
 >
@@ -227,7 +330,7 @@ adde lane help                       # 전체 옵션
 adde completion <bash|zsh>
 ```
 
-명령·플래그 자동완성 스크립트를 stdout 으로 출력합니다(맥 기본 zsh + bash 지원). 명령/플래그 스펙에서 생성되므로 명령이 늘면 자동완성도 함께 갱신됩니다.
+명령·플래그 자동완성 스크립트를 stdout 으로 출력합니다(맥 기본 zsh + bash 지원). 명령/플래그 스펙에서 생성되므로 명령이 늘면 자동완성도 함께 갱신됩니다. 스크립트는 `adde` 와 짧은 별칭 `ad`·`add` 를 함께 등록합니다.
 
 ```bash
 # zsh: compinit 후 fpath 에 두거나 .zshrc 에서 source
@@ -237,7 +340,15 @@ adde completion zsh > "${fpath[1]}/_adde"   # 또는: adde completion zsh >> ~/.
 adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 ```
 
-완성 대상: 최상위 명령(up/down/…/lane/completion), `lane` 하위 명령(add/ls/show/rm), `lane add` 옵션 플래그, `status --all/--json`·`logs --engine`·`completion bash|zsh`. 미지원 셸은 오류 + 종료 코드 1.
+**완성 대상**:
+
+- **최상위 명령 + 전역 플래그** — `up`/`down`/…/`lane`/`completion`, `-h`/`--help`/`-v`/`--version`. zsh 는 각 명령 옆에 짧은 설명을 표시합니다.
+- **하위 명령·고정 값** — `lane add|ls|show|rm|help`, `completion bash|zsh`, `alias` 뒤 별칭 이름 제안, `status --all/--json`, `logs --engine`, `lane add` 옵션 플래그.
+- **동적 프로젝트/레인 이름** — `${ADDE_HOME:-~/.config/adde}` 를 셸에서 직접 스캔합니다(`adde` 프로세스 미스폰): `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` 와 `lane ls|show|rm|add` 의 첫 위치에서 프로젝트 이름(예: `adde up <TAB>`, `adde status <TAB>`), 다음 위치에서 레인 이름(예: `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
+- **enum 플래그 값** — `--source`(telegram|markdown), `--perm-tier`(acp|autopass), `--file-mode`(private|shared), `--lang`(en|ko) 뒤.
+- **디렉터리 경로** — `--cwd`·`--root` 뒤.
+
+미지원 셸은 오류 + 종료 코드 1.
 
 ## 도움말·오타 힌트
 

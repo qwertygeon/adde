@@ -15,16 +15,34 @@ describe("completionScript", () => {
     expect(script).not.toBeNull();
     const s = script as string;
     for (const c of visibleCommands()) expect(s).toContain(c.name);
-    expect(s).toContain("complete -F _adde adde add"); // 두 진입점 등록
+    expect(s).toContain("complete -F _adde adde ad add"); // adde + 짧은 별칭(ad·add) 등록
     // lane add 플래그가 완성 후보에 포함
     expect(s).toContain("--allow-from");
     expect(s).toContain("--file-mode");
   });
 
-  it("zsh 스크립트는 compdef 헤더와 등록을 포함한다", () => {
+  it("동적 proj/lane·enum·디렉터리 완성 배선이 포함된다 (A1-A3)", () => {
+    const bash = completionScript("bash") as string;
+    // 동적 이름: base 스캔 헬퍼
+    expect(bash).toContain("_adde_projects");
+    expect(bash).toContain("_adde_lanes");
+    // enum 값: --source telegram|markdown, --perm-tier acp|autopass
+    expect(bash).toContain("telegram markdown");
+    expect(bash).toContain("acp autopass");
+    // 디렉터리 플래그
+    expect(bash).toContain("--cwd|--root");
+    expect(bash).toContain("compgen -d");
+    const zsh = completionScript("zsh") as string;
+    expect(zsh).toContain("_adde_projects");
+    expect(zsh).toContain("_files -/");
+  });
+
+  it("zsh 스크립트는 compdef 헤더와 등록(ad·add)·명령 설명을 포함한다", () => {
     const s = completionScript("zsh") as string;
-    expect(s.startsWith("#compdef adde add")).toBe(true);
-    expect(s).toContain("compdef _adde adde add");
+    expect(s.startsWith("#compdef adde ad add")).toBe(true);
+    expect(s).toContain("compdef _adde adde ad add");
+    // _describe 명령 설명(desc)
+    expect(s).toContain("'init:guided setup'");
     for (const f of LANE_ADD_FLAGS) expect(s).toContain(f);
   });
 

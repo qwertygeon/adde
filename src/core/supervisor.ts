@@ -220,6 +220,7 @@ export async function supervisorUp(
           perm_tier: conf.perm_tier,
           allowlist: conf.allowlist,
           denylist: conf.denylist,
+          hard_deny: conf.hard_deny,
         },
         cwd: conf.cwd,
         channel,

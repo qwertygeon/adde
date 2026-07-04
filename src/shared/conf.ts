@@ -16,6 +16,11 @@ export interface LaneConf {
   allowlist: string[];
   /** perm_tier=autopass 에서 채널 승인으로 폴백할 도구명 목록(그 외 도구는 자동 허용). */
   denylist: string[];
+  /**
+   * 방어심화 하드-거부 목록 — 매칭 도구는 티어 무관하게 즉시 거부(채널 승인 프롬프트도 없음).
+   * denylist(autopass 에서 "물어봄")보다 강함. acp 티어의 실수 승인 방지용. `Tool`/`Tool(글롭)` 형식.
+   */
+  hard_deny: string[];
   /** 레인별 엔진 작업 폴더(절대경로). 미지정 시 undefined → 슈퍼바이저 cwd. */
   cwd?: string;
   /** telegram 회신 대상 chat id (문자열 보존, 어댑터가 숫자 변환). */
@@ -72,6 +77,7 @@ export function parseLaneConf(text: string): LaneConf {
     acp_version: conf["acp_version"] ?? "v1",
     allowlist: parseToolList(conf["allowlist"] ?? ""),
     denylist: parseToolList(conf["denylist"] ?? ""),
+    hard_deny: parseToolList(conf["hard_deny"] ?? ""),
   };
 
   // optional 필드는 존재할 때만 채운다(부재 = undefined).
@@ -114,6 +120,7 @@ export function serializeLaneConf(conf: LaneConf): string {
   ];
   if (conf.allowlist.length > 0) lines.push(`allowlist=${conf.allowlist.join(",")}`);
   if (conf.denylist.length > 0) lines.push(`denylist=${conf.denylist.join(",")}`);
+  if (conf.hard_deny.length > 0) lines.push(`hard_deny=${conf.hard_deny.join(",")}`);
   for (const key of OPTIONAL_KEYS) {
     const value = conf[key];
     if (value !== undefined && value.length > 0) lines.push(`${key}=${value}`);

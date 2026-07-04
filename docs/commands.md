@@ -1,251 +1,292 @@
-# 명령 레퍼런스
+_English | [한국어](commands.ko.md)_
 
-ADDE CLI 의 전체 명령·옵션입니다. 주 진입점은 `adde`, 단축 별칭은 `add` 로 동일하게 동작합니다.
+# Command reference
 
-## 목차
+The full command and option set of the ADDE CLI. The single main entry point is `adde`. The short aliases (`ad`, `add`) are not installed by default; you can opt into them via `adde init` (the onboarding wizard) or `adde alias`.
 
-- [전역 옵션](#전역-옵션)
-- [up — 레인 기동 (데몬)](#up--레인-기동-데몬)
-- [down — 레인 종료](#down--레인-종료)
-- [restart — 레인 재기동](#restart--레인-재기동)
-- [status — 레인 상태](#status--레인-상태)
-- [doctor — 환경 점검](#doctor--환경-점검)
-- [logs — 최근 활동](#logs--최근-활동)
-- [sessions — 세션 목록](#sessions--세션-목록)
-- [세션 제어 (채널 명령)](#세션-제어-채널-명령)
-- [lane — 레인 설정](#lane--레인-설정)
-- [completion — 셸 자동완성](#completion--셸-자동완성)
-- [도움말·오타 힌트](#도움말오타-힌트)
-- [종료 코드](#종료-코드)
-- [경로](#경로)
-- [macOS 전용 기능](#macos-전용-기능)
+## Table of Contents
 
-## 전역 옵션
+- [Global options](#global-options)
+- [init — onboarding wizard](#init--onboarding-wizard)
+- [alias — install short aliases](#alias--install-short-aliases)
+- [up — start lanes (daemon)](#up--start-lanes-daemon)
+- [down — stop lanes](#down--stop-lanes)
+- [restart — restart lanes](#restart--restart-lanes)
+- [status — lane status](#status--lane-status)
+- [doctor — environment check](#doctor--environment-check)
+- [logs — recent activity](#logs--recent-activity)
+- [sessions — session list](#sessions--session-list)
+- [Session control (channel commands)](#session-control-channel-commands)
+- [lane — lane configuration](#lane--lane-configuration)
+- [completion — shell completion](#completion--shell-completion)
+- [Help and typo hints](#help-and-typo-hints)
+- [Exit codes](#exit-codes)
+- [Language (locale)](#language-locale)
+- [Paths](#paths)
+- [macOS-only features](#macos-only-features)
 
-| 옵션              | 설명        |
-| ----------------- | ----------- |
-| `-v`, `--version` | 버전 출력   |
-| `-h`, `--help`    | 도움말 출력 |
+## Global options
 
-인자 없이 `adde` 를 실행하거나 `-h`/`--help`/`help` 는 전체 사용법을 출력합니다. 특정 명령의 도움말은 `adde <command> --help` (예: `adde status --help`, `adde lane add --help`).
+| Option            | Description   |
+| ----------------- | ------------- |
+| `-v`, `--version` | Print version |
+| `-h`, `--help`    | Print help    |
 
-## up — 레인 기동 (데몬)
+Running `adde` with no arguments, or `-h`/`--help`/`help`, prints the overall usage. For a specific command's help, `adde <command> --help` (e.g. `adde status --help`, `adde lane add --help`).
+
+## init — onboarding wizard
+
+```bash
+adde init [<proj>]
+```
+
+An onboarding wizard that creates your first lane interactively (**TTY only** — in a non-interactive environment it prints an error and exits with code 1). It proceeds in this order:
+
+1. Runs the global `doctor` and prints the results (continues even if there are `FAIL`s, with a warning).
+2. Offers to install the short aliases (default yes — see `alias` below).
+3. Prompts for project and lane names (validated: letters, digits, `_`, `-` only).
+4. Collects lane fields interactively (the same fields as `lane add --interactive` — **the bot token is not prompted, to keep the secret off-screen**).
+5. Creates the lane.
+6. Prints the token-next hint and the `adde up` start hint.
+
+## alias — install short aliases
+
+```bash
+adde alias [names...]
+```
+
+Installs short-alias symlinks next to the `adde` executable found in PATH (default `ad`, `add`). Passing names as arguments installs those names instead.
+
+- **An existing command is skipped**: if a command with that name already exists in PATH and is not our own symlink, it is **not overwritten and is reported as a failure**.
+- **Idempotent**: a symlink already pointing to adde is reported as already set.
+- **`adde` not found**: if `adde` is not found in PATH (e.g. not a global install), it prints a notice and exits with code 1.
+
+## up — start lanes (daemon)
 
 ```bash
 adde up <proj>
 ```
 
-`~/.config/adde/<proj>/lanes.d/` 의 모든 `*.conf` 레인을 **macOS launchd LaunchAgent 데몬**으로 기동합니다. `adde up` 자체는 plist 등록 후 즉시 종료되고, 실제 레인은 백그라운드 데몬(`launchd` 관리)으로 상주합니다.
+Starts every `*.conf` lane in `~/.config/adde/<proj>/lanes.d/` as a **macOS launchd LaunchAgent daemon**. `adde up` itself exits immediately after registering the plist, and the actual lanes run as background daemons (managed by `launchd`).
 
-- **터미널 독립**: 터미널을 닫아도 데몬이 계속 동작합니다.
-- **자동 복구**: macOS 재부팅·로그아웃 후에도 launchd가 자동으로 데몬을 재기동합니다.
-- **중복 기동 가드**: 이미 실행 중인 레인은 경고 메시지와 조치 힌트를 출력하고 스킵합니다. 이중 기동은 발생하지 않습니다.
-- **macOS 전용**: launchd 기능은 macOS에서만 동작합니다. 상세는 [macOS 전용 기능](#macos-전용-기능)을 참조하세요.
+- **Terminal-independent**: the daemon keeps running even after you close the terminal.
+- **Auto-recovery**: launchd automatically restarts the daemon after a macOS reboot/logout.
+- **Double-start guard**: an already-running lane prints a warning and remedy hint and is skipped. Double starts do not happen.
+- **macOS only**: the launchd feature works only on macOS. See [macOS-only features](#macos-only-features) for details.
 
-기동 시 plist 파일(`~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist`)이 생성되고 launchd에 등록됩니다. 각 레인의 상태는 `state/<lane>/runtime.json`에 기록됩니다.
+At startup a plist file (`~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist`) is created and registered with launchd. Each lane's status is recorded in `state/<lane>/runtime.json`.
 
-## down — 레인 종료
+## down — stop lanes
 
 ```bash
 adde down <proj>
 ```
 
-해당 프로젝트의 launchd 데몬을 종료하고 plist 파일을 제거합니다. **어느 터미널에서든** 실행 가능합니다(교차 프로세스 종료).
+Stops that project's launchd daemon and removes the plist file. It can run **from any terminal** (cross-process termination).
 
-## restart — 레인 재기동
+## restart — restart lanes
 
 ```bash
 adde restart <proj>
 ```
 
-`down` 후 `up`을 순서대로 수행합니다. 설정 변경 후 데몬을 다시 기동하거나, 데몬 상태를 초기화할 때 사용합니다.
+Performs `down` then `up`, in order. Use it to restart the daemon after a config change, or to reset the daemon state.
 
-- `down` 성공 후 `up` 실패 시, `up` 오류를 표면화하고 종료 코드 1을 반환합니다.
+- If `up` fails after `down` succeeds, it surfaces the `up` error and returns exit code 1.
 
-## status — 레인 상태
+## status — lane status
 
 ```bash
 adde status [<proj>] [--all] [--json]
 ```
 
-`lanes.d` 의 각 레인을 스캔해 상태를 판정합니다.
+Scans each lane in `lanes.d` and determines its status.
 
-| 상태      | 의미                                                                   |
-| --------- | ---------------------------------------------------------------------- |
-| `running` | 상태 파일이 있고 기동 프로세스(pid)가 살아있으며 하트비트가 신선함     |
-| `stale`   | pid 는 살아있으나 하트비트(상태 파일 mtime)가 끊김 — **행(hung) 의심** |
-| `dead`    | 상태 파일이 있으나 프로세스가 없음 — **비정상 종료(크래시) 잔존**      |
-| `stopped` | 상태 파일 없음 — 정상 종료 또는 미기동                                 |
+| Status    | Meaning                                                                                |
+| --------- | -------------------------------------------------------------------------------------- |
+| `running` | State file exists, the launched process (pid) is alive, and the heartbeat is fresh     |
+| `stale`   | The pid is alive but the heartbeat (state-file mtime) has stopped — **suspected hung** |
+| `dead`    | State file exists but the process is gone — **abnormal exit (crash) residue**          |
+| `stopped` | No state file — normal exit or never started                                           |
 
-- **`<proj>` 지정**: 해당 프로젝트의 모든 레인(정지 포함)을 `LANE · STATUS · PID · UPTIME · SEEN · SOURCE` 표로 출력.
-- **`<proj>` 생략**: 전 프로젝트(`~/.config/adde/*/`)를 집계해 **실행 중(정지 제외) 레인**을 `PROJECT · LANE · …` 표로 출력. 실행 중 레인이 없으면 안내 메시지.
-- **`--all`**(`<proj>` 생략 시): 정지(`stopped`) 포함 전 레인을 표시.
-- `dead`·`stale` 레인이 있으면 조치 안내를 덧붙입니다(`SEEN` = 마지막 하트비트 경과).
-- 하트비트: `adde up` 이 주기적으로 상태 파일 mtime 을 갱신합니다. pid 가 살아있어도 갱신이 임계 시간 멈추면 `stale`(행) 로 판정합니다.
-- `--json`: 레인 객체 배열(모니터링/스크립트용, `lastSeenAt` 포함; 집계 시 `proj` 부기).
-- 읽기 전용(부수효과 없음).
+- **With `<proj>`**: prints all lanes of that project (including stopped) in a `LANE · STATUS · PID · UPTIME · SEEN · SOURCE` table.
+- **Without `<proj>`**: aggregates all projects (`~/.config/adde/*/`) and prints **running (non-stopped) lanes** in a `PROJECT · LANE · …` table. If no lanes are running, an informational message.
+- **`--all`** (when `<proj>` is omitted): show all lanes including stopped (`stopped`).
+- If there are `dead`/`stale` lanes, remedy guidance is appended (`SEEN` = time since the last heartbeat).
+- Heartbeat: `adde up` periodically refreshes the state-file mtime. Even if the pid is alive, if the refresh stops past a threshold it is judged `stale` (hung).
+- `--json`: an array of lane objects (for monitoring/scripts, including `lastSeenAt`; annotated with `proj` when aggregating).
+- **Update notice**: if a newer version is available on npm, a one-line notice is appended (`npm i -g adde@latest` … then `adde restart`). It uses a 24-hour cache (under the config base), only hits the network in an interactive terminal (TTY), and can be disabled with the `ADDE_NO_UPDATE_CHECK` env var.
+- Read-only (no side effects).
 
-## doctor — 환경 점검
+## doctor — environment check
 
 ```bash
 adde doctor [<proj>]
 ```
 
-상태와 무관한 정적 점검을 수행하고 각 항목을 `PASS` / `WARN` / `FAIL` 로 보고합니다. 실패·경고에는 조치 힌트(`↳ 조치:`)가 붙습니다.
+Performs a static check independent of status and reports each item as `PASS` / `WARN` / `FAIL`. Failures/warnings carry a remedy hint (`↳ remedy:`).
 
-- 전역: Node 버전(≥22) · ACP 어댑터 바이너리 해석 · 설정 base 디렉터리.
-- `<proj>` 지정 시 레인별: source 유효성 · `cwd` 존재 · (telegram) `.env` 토큰 존재.
-- `<proj>` 지정 시 macOS에서는 launchd 데몬 등록 상태도 점검합니다 — plist 존재 여부와 launchctl 등록 여부를 교차 확인하고, 불일치(plist는 있으나 launchd 미등록, 또는 그 역)를 `WARN`으로 표면화합니다.
-- 읽기 전용. 기동 전 "왜 안 뜨나"를 자가 진단하는 용도입니다.
+- Global: Node version (≥22) · ACP adapter binary resolution · config base directory.
+- With `<proj>`, per lane: source validity · `cwd` existence · (telegram) `.env` token presence.
+- **File-permission audit** (with `<proj>`, per lane): `WARN` if `state/<lane>/.env` is group/other-accessible (expects 0600 — bot-token exposure risk), and `WARN` if `file_mode=private` but the `state/<lane>` directory is group/other-accessible (expects 0700), with a `chmod`/`adde restart` hint. `file_mode=shared` is treated as an intentional choice and not warned.
+- With `<proj>`, on macOS it also checks the launchd daemon registration state — it cross-checks plist existence against launchctl registration and surfaces a mismatch (plist present but not registered with launchd, or vice versa) as `WARN`.
+- **Update notice**: like `status`, if a newer version is available on npm it prints a one-line notice (24-hour cache · network only in TTY · disable with `ADDE_NO_UPDATE_CHECK`).
+- Read-only. It's for self-diagnosing "why won't it start" before startup.
 
-## logs — 최근 활동
+## logs — recent activity
 
 ```bash
 adde logs <proj> <lane> [N] [--engine]
 ```
 
-해당 레인의 `transcript.log`(ACP 세션 이벤트 기록) 최근 `N` 줄을 출력합니다(기본 50). 파일이 없으면 안내를 출력합니다.
+Prints the last `N` lines of that lane's `transcript.log` (ACP session event record) (default 50). If the file doesn't exist, prints an informational message.
 
-- `--engine`: transcript 대신 `engine.log`(엔진 서브프로세스 stderr 캡처)를 출력합니다. 엔진 자체의 진단 출력을 볼 때 사용합니다(`stale`/기동 실패 원인 추적 등).
+- `--engine`: prints `engine.log` (the engine subprocess's captured stderr) instead of the transcript. Use it to see the engine's own diagnostic output (tracing `stale`/startup-failure causes, etc.).
 
-## sessions — 세션 목록
+## sessions — session list
 
 ```bash
 adde sessions <proj> <lane>
 ```
 
-레인의 엔진 세션 장부를 출력합니다 — 번호·첫 프롬프트 발췌·**마지막 대화 시각**·세션 id(현재 세션은 `◀` 표시). 세션 재개·초기화는 채널에서 수행합니다(아래 "세션 제어 (채널 명령)").
+Prints the lane's engine session ledger — number, first-prompt excerpt, **last conversation time**, and session id (the current session marked with `◀`). Resuming/resetting sessions is done from the channel (see "Session control (channel commands)" below).
 
-## 세션 제어 (채널 명령)
+## Session control (channel commands)
 
-대화 세션의 초기화·압축·재개는 CLI 가 아니라 **채널에서** 지시합니다(진행 중인 턴을 존중해 메시지 큐에 직렬로 처리되고, 결과가 채널 응답으로 통지됩니다).
+Resetting, compacting, and resuming a conversation session is instructed **from the channel**, not the CLI (it respects the in-progress turn, is processed serially in the message queue, and the result is announced as a channel response).
 
-| 동작                 | Telegram (정확 일치)     | 마크다운 (전용 체크박스 라벨) | 결과                                              |
-| -------------------- | ------------------------ | ----------------------------- | ------------------------------------------------- |
-| 새 세션 시작(초기화) | `/clear`                 | `- [x] 🧹 clear`              | 엔진을 새 세션으로 재기동 — 이전 대화 맥락 소거   |
-| 컨텍스트 압축        | `/compact`               | `- [x] compact`               | 엔진의 압축 명령 실행(대화는 유지, 컨텍스트 축약) |
-| 세션 목록            | `/resume`                | `- [x] resume`                | 최근 세션 목록(번호·발췌·마지막 대화 시각) 응답   |
-| 세션 재개            | `/resume <번호\|세션id>` | `- [x] resume <번호\|세션id>` | 해당 세션으로 복귀(찾지 못하면 새 세션 폴백 통지) |
+| Action                      | Telegram (exact match)         | Markdown (dedicated checkbox label) | Result                                                                          |
+| --------------------------- | ------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------- |
+| Start a new session (reset) | `/clear`                       | `- [x] 🧹 clear`                    | Restart the engine as a new session — clears prior conversation context         |
+| Compact context             | `/compact`                     | `- [x] compact`                     | Run the engine's compact command (conversation kept, context condensed)         |
+| Session list                | `/resume`                      | `- [x] resume`                      | Respond with a recent-session list (number, excerpt, last conversation time)    |
+| Resume a session            | `/resume <number\|session-id>` | `- [x] resume <number\|session-id>` | Return to that session (falls back to a new session with a notice if not found) |
 
-- Telegram 은 메시지 전체가 명령과 **정확히 일치**할 때만 제어로 해석합니다 — 문장 속 `/clear` 는 일반 프롬프트로 전달됩니다. 그룹 채팅의 봇멘션 접미(`/clear@봇이름`·`/compact@봇이름`·`/resume@봇이름 <번호>`)는 허용합니다.
-- 마크다운 라벨은 send 와 같은 계약입니다: 라벨 정확 일치(앞 이모지 허용), 체크 시 실행, 처리 후 해당 줄이 `✅ sent [[...]]` 로 종단되고 결과 노트가 링크됩니다.
-- 레인 재기동(`adde restart`)도 새 세션으로 시작합니다(자동 재개 없음 — 이어가려면 재기동 후 `/resume` 으로 선택 복귀).
+- Telegram interprets it as control only when the whole message **exactly matches** a command — a `/clear` inside a sentence is passed through as an ordinary prompt. In group chats the bot-mention suffix (`/clear@botname`, `/compact@botname`, `/resume@botname <number>`) is allowed.
+- Markdown labels use the same contract as send: exact label match (leading emoji allowed), runs on check, and after processing the line terminates as `✅ sent [[...]]` with the result note linked.
+- A lane restart (`adde restart`) also starts a new session (no auto-resume — to continue, restart then pick with `/resume`).
 
-## lane — 레인 설정
+## lane — lane configuration
 
-레인 conf(`lanes.d/<lane>.conf`)를 생성·조회·삭제합니다. 파일 1개 = 레인 1개.
+Creates, lists, and deletes a lane conf (`lanes.d/<lane>.conf`). One file = one lane.
 
 ```bash
-adde lane add <proj> <lane> [옵션]   # 생성
-adde lane ls <proj>                  # 목록
-adde lane show <proj> <lane>         # conf 출력
-adde lane rm <proj> <lane>           # 삭제 (state/queue 등 부수 데이터는 보존)
-adde lane help                       # 전체 옵션
+adde lane add <proj> <lane> [options]   # create
+adde lane ls <proj>                      # list
+adde lane show <proj> <lane>             # print conf
+adde lane rm <proj> <lane>               # delete (side data like state/queue is preserved)
+adde lane help                           # all options
 ```
 
-`ls`/`rm` 은 각각 `list`/`remove` 로도 쓸 수 있습니다(동일 동작).
+`ls`/`rm` can also be written as `list`/`remove` (same behavior).
 
-### lane add 옵션
+### lane add options
 
-| 옵션                                                 | 기본값                                             | 설명                                                                                                                    |
-| ---------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `--source <telegram\|markdown>`                      | `telegram`                                         | 채널 소스                                                                                                               |
-| `--engine <name>`                                    | `claude-code-acp`                                  | ACP 엔진 프로필                                                                                                         |
-| `--backend <name>`                                   | `acp`                                              | 백엔드                                                                                                                  |
-| `--channel <name>`                                   | source 값                                          | 게이트 분기                                                                                                             |
-| `--perm-tier <acp\|autopass>`                        | `acp`                                              | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인)                                           |
-| `--acp-version <v>`                                  | `v1`                                               | ACP 버전                                                                                                                |
-| `--cwd <abs-path>`                                   | (supervisor cwd)                                   | 이 레인 AI 의 작업 폴더(프로젝트 매핑)                                                                                  |
-| `--allowlist <a,b,c>`                                | (없음)                                             | 자동 허용 도구(게이트는 유지, `perm_tier=acp` 용)                                                                       |
-| `--denylist <항목,...>`                              | autopass 시 내장 기본 목록(아래 **기본 denylist**) | `autopass` 에서 채널 승인으로 폴백할 도구·패턴 — `Bash`(도구 전체) 또는 `"Bash(git push*)"`(대표 인자 글롭)             |
-| `--lang <en\|ko>`                                    | (전역 로케일)                                      | 이 레인의 **채널 메시지** 언어(권한 프롬프트·경고 배너·알림 노트)                                                       |
-| `--chat-id <id>`                                     | (없음)                                             | telegram 회신 대상. **개인 chat**(양수)이면 인바운드 자동 허용(그룹=음수는 회신만, 멤버는 `allow_from`)                 |
-| `--allow-from <ids>`                                 | (없음)                                             | telegram 인바운드 허용 발신자 user id(콤마 구분). 개인 `chat_id` 와 합쳐 인증(그룹 멤버 인증에 필수)                    |
-| `--file-mode <private\|shared>`                      | `private`                                          | state/out/queue 디렉터리 권한. `private`=0700(소유자 전용) / `shared`=잠그지 않음(umask 기본, 통상 타 사용자 열람 가능) |
-| `--token-stdin`                                      | —                                                  | telegram 봇 토큰을 stdin 에서 읽어 `.env`(0600) 기록                                                                    |
-| `--root <abs-path>`                                  | (없음)                                             | markdown 루트(예: Obsidian vault)                                                                                       |
-| `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | —                                                  | markdown 노트 경로(root 상대)                                                                                           |
-| `--force`                                            | —                                                  | 기존 conf 덮어쓰기                                                                                                      |
-| `--interactive`                                      | —                                                  | 대화형으로 필드 입력(TTY 전용, **토큰은 묻지 않음**)                                                                    |
+| Option                                               | Default                                                         | Description                                                                                                                                                     |
+| ---------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--source <telegram\|markdown>`                      | `telegram`                                                      | Channel source                                                                                                                                                  |
+| `--engine <name>`                                    | `claude-code-acp`                                               | ACP engine profile                                                                                                                                              |
+| `--backend <name>`                                   | `acp`                                                           | Backend                                                                                                                                                         |
+| `--channel <name>`                                   | source value                                                    | Gate routing                                                                                                                                                    |
+| `--perm-tier <acp\|autopass>`                        | `acp`                                                           | Permission tier. `acp`=channel-approve every tool / `autopass`=auto-allow outside the denylist (opt-in)                                                         |
+| `--acp-version <v>`                                  | `v1`                                                            | ACP version                                                                                                                                                     |
+| `--cwd <abs-path>`                                   | (supervisor cwd)                                                | This lane's AI working folder (project mapping)                                                                                                                 |
+| `--allowlist <a,b,c>`                                | (none)                                                          | Auto-allowed tools (gate stays on; for `perm_tier=acp`)                                                                                                         |
+| `--denylist <entries,...>`                           | built-in default list under autopass (see **default denylist**) | Tools/patterns to fall back to channel approval under `autopass` — `Bash` (whole tool) or `"Bash(git push*)"` (representative-argument glob)                    |
+| `--hard-deny <entries,...>`                          | (none)                                                          | Tools/patterns to **refuse outright** regardless of tier (no channel prompt at all, conf key `hard_deny=`) — same format as `--denylist`                        |
+| `--safe-defaults`                                    | —                                                               | Fill hard-deny with the built-in danger list (union with any explicit `--hard-deny`). The interactive `lane add`/`init` asks whether to enable it (default yes) |
+| `--lang <en\|ko>`                                    | (global locale)                                                 | Language of this lane's **channel messages** (permission prompts, warning banner, notice notes)                                                                 |
+| `--chat-id <id>`                                     | (none)                                                          | telegram reply target. A **private chat** (positive) auto-allows inbound (group = negative is reply-only; members via `allow_from`)                             |
+| `--allow-from <ids>`                                 | (none)                                                          | telegram inbound-allowed sender user ids (comma-separated). Combined with the private `chat_id` for authentication (required to authenticate group members)     |
+| `--file-mode <private\|shared>`                      | `private`                                                       | Permissions of the state/out/queue directories. `private`=0700 (owner only) / `shared`=not locked (umask default, typically readable by other users)            |
+| `--token-stdin`                                      | —                                                               | Read the telegram bot token from stdin and write it to `.env` (0600)                                                                                            |
+| `--root <abs-path>`                                  | (none)                                                          | markdown root (e.g. Obsidian vault)                                                                                                                             |
+| `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | —                                                               | markdown note paths (relative to root)                                                                                                                          |
+| `--force`                                            | —                                                               | Overwrite an existing conf                                                                                                                                      |
+| `--interactive`                                      | —                                                               | Enter fields interactively (TTY only, **token is not prompted**)                                                                                                |
 
-`--interactive` 는 대화형 터미널(TTY)에서만 동작합니다. 봇 토큰은 화면 노출을 피하기 위해 인터랙티브에서 받지 않으며, 생성 후 `--token-stdin` 또는 `.env` 직접 기록으로 설정합니다. 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
+`--interactive` works only in an interactive terminal (TTY). The bot token is not accepted interactively (to avoid on-screen exposure); set it after creation via `--token-stdin` or by writing `.env` directly. Interactive mode also asks whether to enable `--safe-defaults` (the hard-deny danger list, default yes). At creation, a missing `cwd`, a missing markdown `root`, or a malformed telegram token is reported as a **warning** but creation still proceeds.
 
-> ⚠️ `--perm-tier autopass` 는 denylist 에 없는 **모든 도구(파일 쓰기·Bash 포함)를 채널 확인 없이 자동 허용**하는 옵트인 모드입니다. 확인이 필요한 도구는 `--denylist` 에 두세요. 자동 허용 내역은 transcript 에 기록되고, 기동 시 채널로 경고 배너가 전송됩니다. 기본값(`acp`)의 동작은 변하지 않습니다.
+> ⚠️ `--perm-tier autopass` is an opt-in mode that **auto-allows every tool not in the denylist (including file writes and `Bash`) without channel confirmation**. Put tools that need confirmation in `--denylist`. Auto-allow entries are recorded in the transcript, and a warning banner is sent to the channel at startup. The behavior of the default (`acp`) does not change.
 >
-> allowlist/denylist 매칭은 엔진이 알려주는 원시 도구명(예: `Bash`, `Write`) 기준이며, 도구명을 확인할 수 없는 요청은 자동 허용하지 않고 채널 승인으로 보냅니다(fail-closed). 현재 도구명 제공은 `claude-code-acp` 엔진에서 확인되었습니다 — 도구명을 제공하지 않는 엔진에서는 autopass 여도 모든 요청이 채널 승인을 거칩니다(안전 방향).
+> allowlist/denylist matching is based on the raw tool name the engine reports (e.g. `Bash`, `Write`); a request whose tool name cannot be determined is not auto-allowed and is sent to channel approval (fail-closed). Tool-name provision is currently confirmed for the `claude-code-acp` engine — with an engine that does not provide tool names, every request goes through channel approval even under autopass (the safe direction).
 >
-> **denylist 패턴**: `Tool(글롭)` 형식으로 대표 인자를 매칭합니다 — Bash 는 명령 문자열, Read/Write/Edit 는 파일 경로, WebFetch 는 URL. `*` 는 임의 문자열(경로 구분자 포함)이고 전체 일치 기준이라 접두 차단은 `Bash(git push*)`, 포함 차단은 `Bash(*sudo *)` 처럼 씁니다. 인자를 확인할 수 없는 요청·패턴을 지원하지 않는 도구는 도구명만 맞아도 채널 승인으로 갑니다(과매칭=안전 방향). 도구명 비교는 대소문자를 무시합니다. **한계**: 매칭은 명령 문자열 전체 기준이라 셸 체이닝(`echo x && sudo y`)은 접두 패턴(`sudo *`)에 걸리지 않습니다 — 포함 패턴(`*sudo *`)을 추가하거나, 확실한 차단이 필요하면 도구 전체(`Bash`)를 지정하세요.
+> **denylist patterns**: `Tool(glob)` format matches the representative argument — Bash is the command string, Read/Write/Edit the file path, WebFetch the URL. `*` is any string (including path separators) and matches against the whole, so a prefix block is `Bash(git push*)` and a contains block is `Bash(*sudo *)`. A request whose argument cannot be determined, or a tool that doesn't support patterns, goes to channel approval even if only the tool name matches (over-matching = the safe direction). Tool-name comparison is case-insensitive. **Limit**: matching is against the whole command string, so shell chaining (`echo x && sudo y`) is not caught by a prefix pattern (`sudo *`) — add a contains pattern (`*sudo *`), or if a certain block is needed, specify the whole tool (`Bash`).
 >
-> **기본 denylist**: `--perm-tier autopass` 에서 `--denylist` 를 생략하면 파괴적 셸 명령과 자격증명 읽기를 승인으로 돌리는 내장 기본 목록을 conf 에 기록합니다 — `Bash(sudo *)` · `Bash(rm -rf /*)` · `Bash(rm -rf ~*)` · `Bash(rm -rf .*)` · `Bash(git push --force*)` · `Bash(git push -f*)` · `Bash(git reset --hard*)` · `Bash(git clean -fd*)` · `Read(~/.ssh/**)` · `Read(~/.aws/**)`. 항목은 목록일 뿐 완전한 방어가 아닙니다(위 셸 체이닝 한계 참고) — 프로젝트에 맞게 조정하세요.
+> **default denylist**: under `--perm-tier autopass`, omitting `--denylist` records into the conf a built-in default list that sends destructive shell commands and credential reads back to approval — `Bash(sudo *)` · `Bash(rm -rf /*)` · `Bash(rm -rf ~*)` · `Bash(rm -rf .*)` · `Bash(git push --force*)` · `Bash(git push -f*)` · `Bash(git reset --hard*)` · `Bash(git clean -fd*)` · `Read(~/.ssh/**)` · `Read(~/.aws/**)`. The entries are just a list, not complete defense (see the shell-chaining limit above) — tune it to your project.
+>
+> **hard-deny (`--hard-deny` / `--safe-defaults`)**: the same `Tool(glob)` format as `--denylist`, but its strength differs — denylist removes from auto-allow under `autopass` and **falls back to channel approval**, whereas hard-deny **refuses (cancels) a matching request immediately, regardless of `perm_tier` (including the default `acp`), with no channel prompt at all**. It's the last line of defense that prevents catastrophic commands from being accidentally approved. `--safe-defaults` fills hard-deny with the same danger list as the **default denylist** above (union with any explicit `--hard-deny`). Hard-deny hits are recorded in the transcript and announced to the channel. For concepts and recommended use, see the [permissions guide](permissions.md#hard-deny-outright-refusal).
 
-> **인바운드 인증(telegram)**: 인바운드 메시지·권한 콜백은 허용 발신자만 처리하고 나머지는 무시합니다(fail-closed). 허용 집합 = **개인 `chat_id`(양수 = 그 사용자, 자기 인증) ∪ `allow_from`**. **그룹 `chat_id`(음수)는 회신 대상일 뿐 멤버를 인증하지 않으므로**, 그룹에서는 허용 멤버 user id 를 `--allow-from` 으로 지정하세요(그룹 chat_id 만으로 그룹 전체가 허용되지 않음). 허용 발신자가 없으면 모든 인바운드가 거부됩니다. 봇에 접근 가능한 임의 사용자가 호스트 실행 세션에 프롬프트를 주입하거나 무단으로 권한을 승인하는 것을 막는 경계입니다.
+> **Inbound authentication (telegram)**: inbound messages and permission callbacks are processed only from allowed senders and the rest are ignored (fail-closed). Allowed set = **private `chat_id` (positive = that user, self-authenticated) ∪ `allow_from`**. **A group `chat_id` (negative) is only a reply target and does not authenticate members**, so in a group specify the allowed members' user ids with `--allow-from` (a group chat_id alone does not allow the whole group). With no allowed sender, all inbound is denied. This is the boundary that prevents an arbitrary user with access to the bot from injecting a prompt into the host-executing session or approving permissions without authorization.
+>
+> **File permissions (`--file-mode`)**: the default `private` locks the lane's state/out/queue/lanes.d directories to 0700 (owner only) to block other local users on a multi-user host from reading the conversation, responses, and config metadata. `shared` is an opt-in that does not apply this lock (keeps the existing umask default — typically 0755); use it only when read sharing is needed. (The bot-token `.env` is always 0600 regardless of mode.)
 
-> **파일 권한(`--file-mode`)**: 기본 `private` 는 레인의 state/out/queue/lanes.d 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답·설정 메타 열람을 차단합니다. `shared` 는 이 잠금을 하지 않는 옵트인(기존 umask 기본 권한 유지 — 통상 0755)으로, 열람 공유가 필요한 경우에만 사용하세요. (봇 토큰 `.env` 는 모드와 무관하게 항상 0600.)
-
-## completion — 셸 자동완성
+## completion — shell completion
 
 ```bash
 adde completion <bash|zsh>
 ```
 
-명령·플래그 자동완성 스크립트를 stdout 으로 출력합니다(맥 기본 zsh + bash 지원). 명령/플래그 스펙에서 생성되므로 명령이 늘면 자동완성도 함께 갱신됩니다.
+Prints a command/flag completion script to stdout (supports macOS-default zsh + bash). It is generated from the command/flag spec, so completion updates automatically as commands grow.
 
 ```bash
-# zsh: compinit 후 fpath 에 두거나 .zshrc 에서 source
-adde completion zsh > "${fpath[1]}/_adde"   # 또는: adde completion zsh >> ~/.zshrc 후 재로그인
+# zsh: place on fpath after compinit, or source from .zshrc
+adde completion zsh > "${fpath[1]}/_adde"   # or: adde completion zsh >> ~/.zshrc, then re-login
 
-# bash: bash-completion 디렉터리에 두거나 .bashrc 에서 source
+# bash: place in the bash-completion directory, or source from .bashrc
 adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 ```
 
-완성 대상: 최상위 명령(up/down/…/lane/completion), `lane` 하위 명령(add/ls/show/rm), `lane add` 옵션 플래그, `status --all/--json`·`logs --engine`·`completion bash|zsh`. 미지원 셸은 오류 + 종료 코드 1.
+Completion targets: top-level commands (up/down/…/lane/completion), `lane` subcommands (add/ls/show/rm), `lane add` option flags, `status --all/--json` · `logs --engine` · `completion bash|zsh`. An unsupported shell gives an error + exit code 1.
 
-## 도움말·오타 힌트
+## Help and typo hints
 
-- `adde <command> --help`(또는 `-h`) — 해당 명령의 사용법을 출력하고 종료 코드 0. `adde lane <sub> --help` 는 lane 전체 옵션을 출력합니다.
-- 오타 등 **미지원 명령**은 stderr 에 `Unknown command` + 근접 명령 추정(`Did you mean: …?`)을 출력하고 종료 코드 1(스크립트에서 오타가 조용히 성공 처리되는 것 방지).
+- `adde <command> --help` (or `-h`) — prints that command's usage and exits with code 0. `adde lane <sub> --help` prints the full lane options.
+- An **unsupported command** (typo, etc.) prints `Unknown command` + a nearest-command guess (`Did you mean: …?`) to stderr and exits with code 1 (prevents a typo from silently succeeding in a script).
 
-## 종료 코드
+## Exit codes
 
-| 명령         | 0                             | 1                                    |
-| ------------ | ----------------------------- | ------------------------------------ |
-| `up`         | 데몬 등록 성공                | launchd 등록 실패·인자 누락          |
-| `down`       | 데몬 종료 성공(이미 없어도 0) | 오류 발생                            |
-| `restart`    | down+up 모두 성공             | down 또는 up 실패                    |
-| `status`     | 모두 정상                     | `dead`(크래시)·`stale`(행) 레인 존재 |
-| `doctor`     | FAIL 없음                     | FAIL 항목 존재                       |
-| `logs`       | 항상(파일 없어도 안내 후 0)   | —                                    |
-| `lane *`     | 성공                          | 인자 누락·검증 오류                  |
-| `completion` | 스크립트 출력                 | 셸 인자 누락·미지원 셸               |
+| Command      | 0                                               | 1                                                      |
+| ------------ | ----------------------------------------------- | ------------------------------------------------------ |
+| `up`         | Daemon registration succeeded                   | launchd registration failure · missing argument        |
+| `down`       | Daemon stop succeeded (0 even if already gone)  | Error occurred                                         |
+| `restart`    | Both down+up succeeded                          | down or up failed                                      |
+| `status`     | All healthy                                     | A `dead` (crash) / `stale` (hung) lane exists          |
+| `doctor`     | No FAIL                                         | A FAIL item exists                                     |
+| `logs`       | Always (0 with an info message even if no file) | —                                                      |
+| `init`       | Wizard completed                                | Non-TTY · missing argument · validation/creation error |
+| `alias`      | Aliases installed · already-set confirmed       | `adde` not found in PATH · install failed              |
+| `lane *`     | Success                                         | Missing argument · validation error                    |
+| `completion` | Script output                                   | Missing shell argument · unsupported shell             |
 
-인자 없이 실행하거나 `-h`/`--help`/`help` 는 사용법을 출력하고 `0` 을 반환합니다. **미지원 명령**(오타 등)은 stderr 에 `Unknown command` 를 출력하고 `1` 을 반환합니다(스크립트에서 오타가 조용히 성공으로 처리되는 것을 막음).
+Running with no arguments, or `-h`/`--help`/`help`, prints usage and returns `0`. An **unsupported command** (typo, etc.) prints `Unknown command` to stderr and returns `1` (prevents a typo from silently succeeding in a script).
 
-## 언어(로케일)
+## Language (locale)
 
-CLI 출력·채널 메시지는 en/ko 두 언어를 지원합니다.
+CLI output and channel messages support two languages, en/ko.
 
-- **결정 순서**: `ADDE_LANG`(명시) > `LC_ALL` > `LC_MESSAGES` > `LANG`(언어 코드 파싱, `ko*`→한국어) > 기본 **영어**. 한국어 macOS(`LANG=ko_KR.UTF-8`)에서는 별도 설정 없이 한국어로 출력됩니다.
-- **레인별 채널 언어**: `adde lane add --lang <en|ko>`(또는 conf `lang=`) 로 그 레인의 채널 메시지(권한 프롬프트·경고 배너·알림 노트) 언어를 고정할 수 있습니다. 미지정 시 데몬 프로세스의 전역 로케일을 따릅니다.
-- **주의(launchd 데몬)**: launchd 로 기동된 데몬은 셸의 `LANG` 을 상속하지 않을 수 있습니다 — 채널 메시지 언어를 확실히 하려면 레인 conf 에 `lang=` 을 지정하세요.
+- **Decision order**: `ADDE_LANG` (explicit) > `LC_ALL` > `LC_MESSAGES` > `LANG` (language-code parsing, `ko*`→Korean) > default **English**. On Korean macOS (`LANG=ko_KR.UTF-8`), output is in Korean without any extra setting.
+- **Per-lane channel language**: `adde lane add --lang <en|ko>` (or conf `lang=`) can fix the language of that lane's channel messages (permission prompts, warning banner, notice notes). If unset, it follows the daemon process's global locale.
+- **Note (launchd daemon)**: a daemon launched by launchd may not inherit the shell's `LANG` — to be sure of the channel-message language, set `lang=` in the lane conf.
 
-## 경로
+## Paths
 
-- 설정 base: `~/.config/adde`(환경변수 `ADDE_HOME` 로 변경 가능).
-- 프로젝트: `<base>/<proj>/`.
-- 레인 conf: `<base>/<proj>/lanes.d/<lane>.conf`.
-- 레인 상태: `<base>/<proj>/state/<lane>/`(`.env`·`session.id`·`sessions.json`(세션 장부)·`transcript.log`·`engine.log`·`runtime.json`).
-- launchd plist: `~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist` (macOS 전용, `adde up` 이 생성·관리).
+- Config base: `~/.config/adde` (changeable via the `ADDE_HOME` env var).
+- Project: `<base>/<proj>/`.
+- Lane conf: `<base>/<proj>/lanes.d/<lane>.conf`.
+- Lane state: `<base>/<proj>/state/<lane>/` (`.env` · `session.id` · `sessions.json` (session ledger) · `transcript.log` · `engine.log` · `runtime.json`).
+- launchd plist: `~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist` (macOS only, created/managed by `adde up`).
 
-## macOS 전용 기능
+## macOS-only features
 
-`adde up`/`down`/`restart` 의 데몬 관리 기능은 macOS launchd에 의존합니다. Linux/WSL 환경에서는 이 명령들이 오류를 반환합니다.
+The daemon-management features of `adde up`/`down`/`restart` depend on macOS launchd. On Linux/WSL these commands return an error.
 
-**재부팅 자동복구**: `adde up` 으로 등록한 데몬은 macOS 재부팅·로그아웃 후에도 자동으로 재기동됩니다(`KeepAlive`/`RunAtLoad` 설정). 재부팅 후 `adde status <proj>` 로 복구를 직접 확인하는 것을 권장합니다.
+**Reboot auto-recovery**: a daemon registered with `adde up` is automatically restarted after a macOS reboot/logout (`KeepAlive`/`RunAtLoad` settings). Confirming recovery yourself with `adde status <proj>` after a reboot is recommended.
 
-**운영 검증 체크리스트**: 아래 항목은 자동 검증 범위 밖으로, 실 macOS 환경에서 직접 확인해야 합니다.
+**Operational verification checklist**: the items below are outside the automated verification scope and must be confirmed directly on a real macOS environment.
 
-1. `adde up <proj>` → 터미널 종료 → 새 터미널에서 `adde status <proj>` 가 `running` 인지 확인
-2. 다른 터미널에서 `adde down <proj>` 후 `adde status <proj>` 가 `stopped` 인지 확인
-3. macOS 재부팅 후 `adde status <proj>` — 자동 복구 확인
-4. `adde up <proj>` 연속 두 번 실행 — 이중 기동 없음 확인(경고 메시지 출력 후 스킵)
-5. `adde down <proj>` 후 `ps aux | grep claude-code-acp` — orphan 프로세스 없음 확인
+1. `adde up <proj>` → close the terminal → confirm `adde status <proj>` is `running` in a new terminal
+2. `adde down <proj>` from another terminal, then confirm `adde status <proj>` is `stopped`
+3. After a macOS reboot, `adde status <proj>` — confirm auto-recovery
+4. Run `adde up <proj>` twice in a row — confirm no double start (warning printed, then skipped)
+5. `adde down <proj>` then `ps aux | grep claude-code-acp` — confirm no orphan process

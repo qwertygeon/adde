@@ -270,6 +270,7 @@ describe("createMarkdownSource (통합)", () => {
       acp_version: "v1",
       allowlist: [],
       denylist: [],
+      hard_deny: [],
       root: rootDir,
       inbox: "inbox.md",
     };

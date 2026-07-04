@@ -121,6 +121,20 @@ export function decideAutoAllow(
   return null;
 }
 
+/**
+ * 방어심화 하드-거부 판정 — 티어 무관, hard_deny 매칭 시 true(즉시 거부, 채널 프롬프트 없음).
+ * 도구명 미해석(undefined)이면 판정 불가 → false(채널 승인 경로로; 자동허용도 fail-closed 로 차단됨).
+ * autopass denylist("물어봄")보다 강하며 자동허용 판정보다 먼저 평가되어야 한다.
+ */
+export function isHardDenied(
+  policy: AddePolicy | undefined,
+  toolName: string | undefined,
+  rawInput?: unknown,
+): boolean {
+  if (toolName === undefined) return false;
+  return matchesDenylist(policy?.hard_deny, toolName, rawInput);
+}
+
 /** launch 옵션 — resumeSessionId 지정 시 새 세션 대신 해당 세션 복귀(session/load)를 시도한다. */
 export interface LaunchOpts {
   resumeSessionId?: string;
@@ -345,10 +359,27 @@ export class AcpBackendImpl implements AcpBackend {
             params.toolCall as unknown as Record<string, unknown>,
           );
 
+          const rawInput = (params.toolCall as unknown as Record<string, unknown>)["rawInput"];
+
+          // 방어심화 하드-거부 — 매칭 도구는 티어 무관하게 즉시 거부(채널 승인 프롬프트도 없음).
+          // acp 티어의 실수 승인 방지. denylist(autopass 에서 "물어봄")보다 강하며 자동허용보다 먼저 평가.
+          // 도구명 미해석(undefined)이면 하드-거부 판정 불가 → 아래 채널 승인 경로로(자동허용도 fail-closed).
+          if (isHardDenied(addePolicy, rawToolName, rawInput)) {
+            const msg = `hard-deny: ${rawToolName} — ${toolTitle}`;
+            console.warn(`[acp] ${msg}`);
+            if (channelWarn) channelWarn(maskSecrets(tl("gate.hardDeny", { tool: rawToolName })));
+            if (paths) {
+              await appendTranscript(paths, {
+                sessionUpdate: "adde_hard_deny",
+                message: maskSecrets(msg),
+              }).catch(() => {});
+            }
+            return { outcome: { outcome: "cancelled" } };
+          }
+
           // allowlist / autopass 자동 허용 — 채널 프롬프트 없이 allow 로 결정(게이트는 끄지 않고 결정).
           // autopass: denylist 외 전 도구 자동 허용, denylist 도구는 아래 채널 승인 폴백.
           // 투명성(no-silent): 트랜스크립트에 auto-allow 기록.
-          const rawInput = (params.toolCall as unknown as Record<string, unknown>)["rawInput"];
           const autoAllowVia = decideAutoAllow(addePolicy, rawToolName, rawInput);
           if (autoAllowVia) {
             const allowOption = params.options.find(

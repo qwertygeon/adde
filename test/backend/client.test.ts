@@ -3,6 +3,7 @@ import {
   shouldAutoAllow,
   shouldAutopass,
   decideAutoAllow,
+  isHardDenied,
   recordToolName,
   resolveToolName,
 } from "../../src/backend/acp/client.js";
@@ -167,6 +168,39 @@ describe("도구명 채집·해석·자동 허용 판정 (DEC-006)", () => {
     expect(map.size).toBeLessThanOrEqual(512);
     expect(map.has("t0")).toBe(false);
     expect(map.has("t599")).toBe(true);
+  });
+});
+
+// B-3: 방어심화 하드-거부 — 티어 무관 즉시 거부(자동허용보다 먼저 평가)
+describe("isHardDenied (방어심화 하드-거부)", () => {
+  it("hard_deny 매칭 시 티어 무관 true", () => {
+    expect(
+      isHardDenied({ perm_tier: "acp", hard_deny: ["Bash(sudo *)"] }, "Bash", {
+        command: "sudo rm",
+      }),
+    ).toBe(true);
+    expect(
+      isHardDenied({ perm_tier: "autopass", hard_deny: ["Bash(sudo *)"] }, "Bash", {
+        command: "sudo rm",
+      }),
+    ).toBe(true);
+  });
+
+  it("매칭 안 되면 false(채널 승인·티어 로직으로)", () => {
+    expect(
+      isHardDenied({ perm_tier: "acp", hard_deny: ["Bash(sudo *)"] }, "Bash", { command: "ls" }),
+    ).toBe(false);
+    expect(isHardDenied({ perm_tier: "acp", hard_deny: [] }, "Bash", { command: "sudo rm" })).toBe(
+      false,
+    );
+  });
+
+  it("도구명 미해석(undefined)이면 판정 불가 → false", () => {
+    expect(isHardDenied({ perm_tier: "acp", hard_deny: ["Bash"] }, undefined)).toBe(false);
+  });
+
+  it("hard_deny 미지정이면 false(기본 동작 불변)", () => {
+    expect(isHardDenied({ perm_tier: "acp" }, "Bash", { command: "sudo rm" })).toBe(false);
   });
 });
 

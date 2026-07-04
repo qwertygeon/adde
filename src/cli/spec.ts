@@ -35,6 +35,8 @@ export const LANE_ADD_FLAGS = [
   "--cwd",
   "--allowlist",
   "--denylist",
+  "--hard-deny",
+  "--safe-defaults",
   "--lang",
   "--chat-id",
   "--allow-from",
@@ -53,6 +55,7 @@ export const LANE_SUBS = ["add", "ls", "show", "rm", "help"] as const;
 
 /** 최상위 명령 SSOT. hidden 명령은 도움말·자동완성에서 제외. */
 export const COMMAND_SPECS: readonly CommandSpec[] = [
+  { name: "init", args: "[<proj>]", flags: [], usageKey: "usage.init" },
   { name: "up", args: "<proj>", flags: [], usageKey: "usage.up" },
   { name: "down", args: "<proj>", flags: [], usageKey: "usage.down" },
   { name: "restart", args: "<proj>", flags: [], usageKey: "usage.restart" },
@@ -62,6 +65,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: "sessions", args: "<proj> <lane>", flags: [], usageKey: "usage.sessions" },
   { name: "lane", args: "<add|ls|show|rm>", flags: [], subs: LANE_SUBS, usageKey: "usage.lane" },
   { name: "completion", args: "<bash|zsh>", flags: [], usageKey: "usage.completion" },
+  { name: "alias", args: "[names...]", flags: [], usageKey: "usage.alias" },
   { name: "__daemon", args: "<proj>", flags: [], usageKey: "usage.daemon", hidden: true },
 ] as const;
 

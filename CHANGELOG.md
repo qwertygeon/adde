@@ -9,6 +9,8 @@
 - Telegram 인바운드 발신자 인증 — 인바운드 메시지·권한 승인 콜백을 허용 발신자(`chat_id` ∪ 신규 `allow_from`)만 처리하고 그 외는 무시(fail-closed). 허용 집합이 비면 전 인바운드 거부. 봇에 도달 가능한 임의 사용자가 호스트 실행 세션에 프롬프트를 주입하거나 무단으로 권한을 승인하던 경계 공백을 차단. `chat_id` 설정 시 자기 chat 자동 인증, 그룹·복수 사용자는 `--allow-from` 으로 확장.
 - 레인 상태·출력·큐 디렉터리 권한 옵션 `file_mode`(`--file-mode`) — 기본 `private` 는 `state`/`out`/`queue`/`processing`/`lanes.d` 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답·설정 메타 열람을 차단. `shared` 는 잠그지 않는 옵트인(기존 umask 기본 권한 유지, 통상 0755). (봇 토큰 `.env` 는 종전대로 항상 0600.)
 - 엔진 stderr 로그(`engine.log`) 마스킹 — transcript 만 마스킹하던 것을 엔진 stderr 캡처 경로에도 라인 단위 시크릿 마스킹을 적용해 토큰·민감 경로가 side channel 로 평문 기록되지 않도록 보강.
+- 방어심화 하드-거부 `hard_deny`(`--hard-deny`/`--safe-defaults`) — 매칭 도구를 **티어 무관하게 즉시 거부**(채널 승인 프롬프트도 없음)하는 레이어. autopass 의 denylist("물어봄")보다 강하며 기본 `acp` 티어에도 적용돼, 파괴적 명령(sudo·rm -rf·git 강제·자격증명 읽기)이 실수로 승인되는 것을 원천 차단. `--safe-defaults` 로 내장 위험 목록을 채우며 대화형 생성 시 기본 켬을 질의. 하드-거부 히트는 transcript 기록 + 채널 통지.
+- `adde doctor` 파일 권한 감사 — 레인별로 `.env`(봇 토큰)가 그룹/기타에서 읽히면(0600 기대) WARN, `file_mode=private` 인데 state 디렉터리가 0700 이 아니면 WARN(+chmod/재시작 조치). `shared` 모드는 의도된 선택이라 경고하지 않음.
 
 ### Added
 
@@ -18,6 +20,9 @@
   - clear/resume 의 엔진 재기동이 실패하면 일반 오류와 구분해 채널로 복구 절차(`adde restart <proj>`)를 명시 통지하고, 재기동 중 구독자(권한 핸들러 등) 승계를 원자화해 유실 창을 제거.
 - `adde sessions <proj> <lane>` — 세션 장부 목록 CLI(번호·발췌·마지막 대화 시각·현재 세션 표시).
 - npm 발행 파이프라인 — `npm i -g adde` 로 설치 가능하도록 발행 배선. `package.json` 에 `prepack`(발행 시 자동 빌드로 `dist/` 보장)·`repository`/`homepage`/`bugs`/`keywords` 추가, `release.yml` 이 태그·GitHub Release 뒤 `npm publish`(러너 Node 24·registry 인증·동일 버전 재발행 skip)를 수행. 인증은 최초 1회 `NPM_TOKEN` 부트스트랩 후 OIDC Trusted Publishing 전환 예정.
+- `adde init [<proj>]` — 온보딩 위저드(TTY 전용). 환경 점검(doctor) → 짧은 별칭 설치(옵트인) → 대화형 레인 생성을 한 흐름으로 안내. 토큰은 화면 노출을 피해 받지 않고 생성 후 안내로 위임.
+- `adde alias [names...]` — 짧은 별칭(기본 `ad`·`add`)을 `adde` 실행 파일 옆에 심볼릭 링크로 설치. PATH 에 동명 명령이 이미 있으면 그 별칭은 실패로 건너뜀(덮어쓰지 않음), 이미 adde 를 가리키면 멱등. 전역 설치가 아니면 안내 후 종료.
+- 업데이트 알림 — `adde status`·`adde doctor` 가 npm 레지스트리의 최신 버전을 비교해 새 버전이 있으면 안내 한 줄 출력(24h 캐시, 대화형 TTY 에서만 네트워크 조회, `ADDE_NO_UPDATE_CHECK` 로 비활성화).
 
 ### Fixed
 
@@ -36,6 +41,8 @@
 - 셸 자동완성 `adde completion <bash|zsh>` — 명령·플래그 자동완성 스크립트 생성(zsh·bash). 명령/플래그 SSOT(`cli/spec.ts`)에서 파생돼 명령 추가 시 자동완성·도움말·오타 힌트가 함께 갱신됨(확장성).
 - 서브커맨드별 도움말 `adde <command> --help`(`-h`) — 각 명령의 사용법을 출력. `adde lane <sub> --help` 는 lane 전체 옵션 출력. 최상위 usage 에 `completion` 및 명령별 `--help` 안내 추가.
 - 발행 전 사용자 문서 보완 — `claude`(Anthropic) 인증 전제·`node` PATH 요구를 요구사항에 명시, 제거(uninstall) 절차(`adde down` → `npm uninstall -g`) 추가, 트러블슈팅에 npm 설치 직후 문제(command not found·EACCES·claude 미인증) 절 추가, Telegram 가이드에 인바운드 인증 절 추가.
+- 짧은 별칭 `add` 를 `package.json` `bin` 에서 제거 — `npm i -g` 시 자동 설치되던 흔한 명령명(`add`)이 타 도구와 충돌하던 문제를 없애고, `adde init`/`adde alias` 옵트인 설치로 전환(`ad`·`add`).
+- 영문 사용자 문서 병기 — README·`docs/*` 를 영문 기본(`.md`) + 한국어(`.ko.md`) 이중 구조로 재편(언어 토글 링크), `package.json` description 영문화. 해외 npm 사용자 진입점(README) 확보.
 
 ## [0.1.2] - 2026-07-03
 

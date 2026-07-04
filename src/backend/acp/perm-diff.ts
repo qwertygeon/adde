@@ -14,6 +14,8 @@ export interface AddePolicy {
   allowlist?: string[];
   /** perm_tier=autopass 에서 채널 승인으로 폴백할 도구명 목록. */
   denylist?: string[];
+  /** 방어심화 하드-거부 목록 — 매칭 도구는 티어 무관하게 즉시 거부(채널 프롬프트 없음). */
+  hard_deny?: string[];
 }
 
 export interface EngineEffective {

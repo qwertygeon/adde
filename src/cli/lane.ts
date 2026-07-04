@@ -52,6 +52,7 @@ const ADD_VALUE_KEYS = new Set([
   "cwd",
   "allowlist",
   "denylist",
+  "hard-deny",
   "chat-id",
   "allow-from",
   "file-mode",
@@ -109,6 +110,9 @@ export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
     const deny = await ask(t("lane.prompt.denylist"), DEFAULT_AUTOPASS_DENYLIST.join(","));
     if (deny) opts.denylist = splitTools(deny);
   }
+  // 방어심화 하드-거부 기본값(sudo·rm -rf·git 강제·자격증명 읽기 등 즉시 거부) — 기본 켬 권장.
+  const safeDefaults = (await ask(t("lane.prompt.safeDefaults"), "y")).toLowerCase();
+  if (safeDefaults === "y" || safeDefaults === "yes") opts.safe_defaults = true;
   const cwd = await ask(t("lane.prompt.cwd"), "");
   if (cwd) opts.cwd = cwd;
 
@@ -203,6 +207,9 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     if (allowlist !== undefined) opts.allowlist = splitTools(allowlist);
     const denylist = flagStr(flags, "denylist");
     if (denylist !== undefined) opts.denylist = splitTools(denylist);
+    const hardDeny = flagStr(flags, "hard-deny");
+    if (hardDeny !== undefined) opts.hard_deny = splitTools(hardDeny);
+    if (flags["safe-defaults"] === true) opts.safe_defaults = true;
     if (flags["force"] === true) opts.force = true;
     if (flags["token-stdin"] === true) opts.token = (await readStdin()).trim();
   }

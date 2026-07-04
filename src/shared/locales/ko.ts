@@ -8,10 +8,10 @@ export const ko = {
     main: `{{primary}} — AI Driven Development Engine
 
 사용법:
-  {{primary}} [command]      주 진입점
-  {{short}} [command]       단축 별칭
+  {{primary}} [command]      주 진입점 ('adde alias' 후 {{short}} 사용 가능)
 
 명령:
+  init [<proj>]            가이드 설정 (doctor + 짧은 별칭 + 레인 생성)
   up <proj>                프로젝트의 모든 레인 백그라운드 데몬으로 기동
   down <proj>              데몬 종료 (어느 터미널에서든 동작)
   restart <proj>           데몬 재기동 (down + up)
@@ -24,6 +24,7 @@ export const ko = {
   lane show <proj> <lane>  레인 conf 출력
   lane rm <proj> <lane>    레인 conf 삭제
   completion <bash|zsh>    셸 자동완성 스크립트 출력
+  alias [names...]         짧은 별칭 설치(기본 ad, add) — adde 실행 파일 옆에
 
 옵션:
   -v, --version            버전 출력
@@ -38,6 +39,8 @@ export const ko = {
     logs: "사용법: adde logs <proj> <lane> [N] [--engine]",
     sessions: "사용법: adde sessions <proj> <lane>",
     completion: "사용법: adde completion <bash|zsh>  (셸 자동완성 스크립트 출력)",
+    init: "사용법: adde init [<proj>]  (가이드 설정: doctor + 짧은 별칭 + 레인 생성; TTY 전용)",
+    alias: "사용법: adde alias [names...]  (adde 실행 파일 옆에 짧은 별칭 설치; 기본: ad add)",
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
     laneLs: "사용법: adde lane ls <proj>",
     laneShow: "사용법: adde lane show <proj> <lane>",
@@ -60,6 +63,8 @@ lane add 옵션:
   --allowlist <a,b,c>           자동 허용 도구(게이트 유지, perm_tier=acp 용)
   --denylist <항목,...>         autopass 에서 채널 승인으로 폴백할 도구·패턴
                                 (예: "Bash,Write(/etc/*)" · 미지정 시 내장 기본 목록: sudo·rm -rf·git 강제 변경·자격증명 읽기 차단)
+  --hard-deny <항목,...>        방어심화: 티어 무관 즉시 거부(프롬프트 없음)할 도구·패턴
+  --safe-defaults               hard-deny 에 내장 위험 목록 채우기(sudo·rm -rf·git 강제·자격증명 읽기)
   --lang <en|ko>                이 레인의 채널 메시지 로케일 (기본: 전역 로케일)
   --chat-id <id>                telegram 회신 대상(해당 chat 인바운드도 허용)
   --allow-from <ids>            추가 허용 인바운드 발신자 id(콤마 구분 user/chat id)
@@ -135,6 +140,8 @@ lane add 옵션:
     prompt: {
       allowlist: "allowlist (콤마 구분, 없으면 비움)",
       denylist: "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
+      safeDefaults:
+        "방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N)",
       cwd: "cwd (레인 작업 폴더 절대경로, 없으면 비움)",
       chatId: "chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움)",
       allowFrom: "allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움)",
@@ -211,6 +218,45 @@ lane add 옵션:
       missing: "토큰 없음: {{path}}",
       hint: "봇 토큰을 기록하세요: {{path}} 에 TELEGRAM_BOT_TOKEN=... (또는 lane add --token-stdin).",
     },
+    perms: {
+      name: "{{lane}}: 파일 권한",
+      ok: "state 디렉터리/.env 권한이 제한적입니다",
+      envLoose: "state/.env 가 그룹/기타에서 접근 가능(mode {{mode}}) — 봇 토큰 노출 위험",
+      envHint: "권한을 제한하세요: chmod 600 {{path}}",
+      stateLoose:
+        "state 디렉터리가 그룹/기타에서 접근 가능(mode {{mode}}) — file_mode=private 는 0700 을 기대합니다",
+      stateHint:
+        "권한을 제한하세요: chmod 700 {{path}} — 또는 레인을 재시작(adde restart {{proj}})하면 다시 잠급니다.",
+    },
+  },
+  update: {
+    available:
+      "adde 새 버전이 있습니다: {{current}} → {{latest}}. `npm i -g adde@latest` 로 업데이트하세요(이후 `adde restart <proj>`).",
+  },
+  gate: {
+    hardDeny:
+      "⛔ 하드-거부로 차단됨: {{tool}} — 이 도구는 레인 hard_deny 목록에 있어 승인 프롬프트 없이 거부되었습니다.",
+  },
+  init: {
+    ttyOnly: {
+      situation: "adde init 는 대화형 터미널(TTY)이 필요합니다",
+      action:
+        "터미널에서 실행하거나 수동 설정: adde doctor / adde lane add <proj> <lane> --interactive / adde alias.",
+    },
+    intro: "adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.",
+    doctorWarn:
+      "위에 FAIL 항목이 있습니다. 계속 진행할 수 있으나 데몬 기동(adde up) 전에 해결하세요.",
+    aliasPrompt: "짧은 별칭({{names}})을 adde 명령 옆에 설치할까요? (Y/n)",
+    aliasNoBin:
+      "PATH 에서 adde 명령을 찾지 못했습니다 — 별칭 설치를 건너뜁니다(전역 설치에서만 가능).",
+    aliasCreated: "  ✔ 별칭 생성: {{name}} → {{dir}}",
+    aliasAlready: "  = 별칭이 이미 adde 를 가리킴: {{name}}",
+    aliasSkipped: "  ✘ {{name}} 건너뜀 — 동명 명령이 PATH 에 이미 존재합니다",
+    projPrompt: "프로젝트 이름",
+    projRetry: "프로젝트 이름 (영숫자/_/- 만)",
+    lanePrompt: "레인 이름",
+    laneRetry: "레인 이름 (영숫자/_/- 만)",
+    done: "프로젝트 '{{proj}}' 설정 완료.",
   },
   laneConfig: {
     warn: {

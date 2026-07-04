@@ -1,6 +1,6 @@
 /**
  * transcript 렌더·append·마스킹.
- * FR-006/007: session/update 이벤트를 사람이 읽을 텍스트로 렌더 → mask → append.
+ * session/update 이벤트를 사람이 읽을 텍스트로 렌더 → mask → append.
  * append 실패는 보조(warn↑ 로그 후 흡수) — error-handling.md 보조 분류.
  */
 import { t } from "../shared/i18n.js";

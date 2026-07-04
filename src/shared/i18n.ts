@@ -1,6 +1,6 @@
 /**
  * i18n 로케일 결정·조회 SoT — i18next 단일 인스턴스(인라인 en/ko 리소스).
- * 로케일 우선순위: ADDE_LANG > LC_ALL > LC_MESSAGES > LANG > en (POSIX 관행, DEC-002).
+ * 로케일 우선순위: ADDE_LANG > LC_ALL > LC_MESSAGES > LANG > en (POSIX 관행).
  * 모듈 로드 시 동기 초기화 — 진입점(CLI·데몬·테스트)의 명시 init 불요.
  */
 import i18next from "i18next";

@@ -1,6 +1,6 @@
 /**
  * 레인 라이프사이클 수퍼바이저.
- * FR-001/021/022/ADR-010: lanes.d conf 스캔 → 레인별 기동·헬스.
+ * lanes.d conf 스캔 → 레인별 기동·헬스.
  * adde up → source/injector/backend/gate 인스턴스화 + 기동.
  * adde down → 레인 프로세스 종료.
  */
@@ -170,15 +170,15 @@ export async function supervisorUp(
     const existingRuntime = await readRuntime(paths);
     if (existingRuntime !== null) {
       if (isPidAlive(existingRuntime.pid)) {
-        // 이미 running — 경고+스킵(FR-004/SC-005).
+        // 이미 running — 경고+스킵.
         process.stderr.write(
           t("supervisor.alreadyRunning", { lane, pid: existingRuntime.pid, proj }) + "\n",
         );
         results.push({ lane, status: "running" });
         continue;
       } else {
-        // dead 레인 — 크래시 잔존 runtime.json 정리 후 정상 기동(SC-012/FR-007).
-        // 자식 pid 는 runtime.json 에 미기록(스키마 한계 GAP-004) — removeRuntime 으로 파일만 정리.
+        // dead 레인 — 크래시 잔존 runtime.json 정리 후 정상 기동.
+        // 자식 pid 는 runtime.json 에 미기록(스키마 한계) — removeRuntime 으로 파일만 정리.
         await removeRuntime(paths).catch((err: unknown) =>
           console.warn(t("log.supervisor.deadCleanupFail", { lane, error: errMsg(err) })),
         );
@@ -223,7 +223,7 @@ export async function supervisorUp(
     let source: Source;
 
     // injector 를 source 보다 먼저 생성 — render 는 source 를 지연 참조(closure, turn 종료 시 호출).
-    // in-process 배선(DEC-001): source.onInbound → injector.notify, injector.render → source.renderOut.
+    // in-process 배선: source.onInbound → injector.notify, injector.render → source.renderOut.
     // 주입 실패도 채널로 표면화(onFail → source.notify) — 채널 언어(레인 로케일)로 렌더.
     const laneT = tFor(conf.lang);
     const injector = createInjector(
@@ -296,7 +296,7 @@ export async function supervisorUp(
         try {
           return await gateRequestDecision(req, { sendPermPrompt, waitForDecision });
         } finally {
-          // 모든 종결 경로(timeout·전송오류·정상결정)에서 대기자 정리 — timeout 시 영구 잔존 누수 제거(FR-3).
+          // 모든 종결 경로(timeout·전송오류·정상결정)에서 대기자 정리 — timeout 시 영구 잔존 누수 제거.
           // 늦게 도착한 콜백은 빈 맵에서 no-op(무해).
           pendingDecisions.delete(req.id);
         }
@@ -314,7 +314,7 @@ export async function supervisorUp(
       });
       source.start();
 
-      // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(A-P006 no-silent).
+      // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(no-silent).
       if (conf.perm_tier === "autopass") {
         const tl = tFor(conf.lang);
         const denyDesc =
@@ -352,7 +352,7 @@ export async function supervisorUp(
       handles.push({
         lane,
         paths,
-        // 정지 순서: 소스 먼저(신규 인바운드·turn 차단) → 백엔드 child 정리(C1) → 상태 파일 제거.
+        // 정지 순서: 소스 먼저(신규 인바운드·turn 차단) → 백엔드 child 정리 → 상태 파일 제거.
         async stop() {
           await source.stop();
           await backend.close(lane);

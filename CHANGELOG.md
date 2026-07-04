@@ -2,7 +2,7 @@
 
 이 프로젝트의 주목할 변경을 기록합니다. [Keep a Changelog](https://keepachangelog.com/) 형식, [SemVer](https://semver.org/) 준수.
 
-## [Unreleased]
+## [0.1.3] - 2026-07-04
 
 ### Added
 
@@ -11,6 +11,7 @@
   - resume: 세션 장부(`state/<lane>/sessions.json`, 레인당 최근 20개 — 첫 프롬프트 발췌·**마지막 대화 시각** 기록)에서 목록 조회·선택 복귀. 복귀 실패 시 새 세션 폴백 통지. 레인 재기동은 종전대로 새 세션(자동 재개 없음).
   - clear/resume 의 엔진 재기동이 실패하면 일반 오류와 구분해 채널로 복구 절차(`adde restart <proj>`)를 명시 통지하고, 재기동 중 구독자(권한 핸들러 등) 승계를 원자화해 유실 창을 제거.
 - `adde sessions <proj> <lane>` — 세션 장부 목록 CLI(번호·발췌·마지막 대화 시각·현재 세션 표시).
+- npm 발행 파이프라인 — `npm i -g adde` 로 설치 가능하도록 발행 배선. `package.json` 에 `prepack`(발행 시 자동 빌드로 `dist/` 보장)·`repository`/`homepage`/`bugs`/`keywords` 추가, `release.yml` 이 태그·GitHub Release 뒤 `npm publish`(러너 Node 24·registry 인증·동일 버전 재발행 skip)를 수행. 인증은 최초 1회 `NPM_TOKEN` 부트스트랩 후 OIDC Trusted Publishing 전환 예정.
 
 ### Fixed
 
@@ -23,6 +24,8 @@
 - 내부 중복 정리(동작보존 리팩터) — 경로 포함/중첩 판정·원자적 파일 쓰기(tmp→rename)·오류 메시지 표기·sidecar 읽기를 shared 공통 모듈로 일원화(생성 시 사전 경고와 기동 거부 가드가 같은 판정 규칙을 공유), 테스트 공용 픽스처(test/helpers) 신설.
 - 문서 정리 — 마크다운 트러블슈팅 표를 트러블슈팅 문서로 단일화(가이드는 포인터), 레인 생성 기본값 표의 기준을 명령 레퍼런스로 고정, allowlist 경고 문구 통일.
 - 사용자 문서 보완 — 권한 가이드(`docs/permissions.md`) 신설(게이트 개념·acp/autopass 티어·allowlist/denylist·매칭 한계·드리프트·권장 베이스라인 SSOT, 흩어진 권한 서술은 포인터화). 트러블슈팅에 `stale`(행)·launchd 등록 불일치·재부팅 복구·orphan 정리 항목 추가. Telegram 가이드에 전체 흐름 조감도·봇 토큰 공유(폴링 409) 경고·승인 시 프롬프트 인젝션 주의 추가, 마크다운 가이드에 승인 인젝션 주의 추가. README 에 사용 시나리오·데이터 흐름/프라이버시 고지·ACP 어댑터 요구 명시. getting-started 성공 판정 기준 추가.
+- 버전 SoT 를 루트 `VERSION` 파일에서 `package.json.version` 단일로 전환 — `VERSION` 파일 제거, `adde --version`·릴리스 트리거·발행이 모두 `package.json.version` 을 참조(SoT 이원화 제거). 릴리스 트리거는 `main` 의 `package.json` push 로 변경되며, 버전이 안 바뀐 변경은 태그·발행 멱등 가드가 no-op 처리.
+- 설치 문서 발행 전환 — `npm i -g adde` 정식 설치 안내, 업데이트(`npm i -g adde@latest` + 실행 중 데몬 `adde restart`)·권한 오류(EACCES) 안내 추가.
 
 ## [0.1.2] - 2026-07-03
 

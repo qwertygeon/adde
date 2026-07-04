@@ -1,7 +1,6 @@
 /**
  * Markdown 소스 어댑터 — 파일 핸드셰이크(버튼 없는 채널).
  * 임의 마크다운 에디터/동기 도구(대표 예: Obsidian)에서 노트 파일 편집만으로 구동.
- * 설계: docs/_internal/design/09-markdown-source-adapter.md.
  * 인박스 노트 편집 + send 체크박스 → envelope → 큐.
  * 권한: approvals 노트에 ⏳ 블록 append → allow/deny 체크 감지 → 게이트 반영. 무응답 → 타임아웃 deny.
  * 출력: out/<id>.out 감시 → 마크다운 출력 노트(one-file-per-message, atomic).
@@ -40,7 +39,7 @@ export interface MarkdownConfig {
   engine: string;
   paths: LanePaths;
   conf: LaneConf;
-  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요(DEC-001). */
+  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요. */
   onInbound?: (() => void) | undefined;
 }
 
@@ -64,12 +63,12 @@ function labelCore(label: string): string {
   return labelBody(label).toLowerCase();
 }
 
-/** send 트리거 라벨 판별 — 코어가 정확히 'send'(A4: 부분일치 금지). */
+/** send 트리거 라벨 판별 — 코어가 정확히 'send'(부분일치 금지). */
 function isSendLabel(label: string): boolean {
   return labelCore(label) === "send";
 }
 
-// --- 전송 스탬프 (DEC-001/003/007) -------------------------------------------
+// --- 전송 스탬프 -------------------------------------------
 // 형식 `YYYYMMDD-HHmmss`(로컬 시각) — 파일명 안전(콜론 없음)하면서 inbox 마커와
 // out 노트 파일명에 동일 표기. 기준 시각은 전송(enqueue) 시각이며 envelope.ts 로
 // 영속돼 재렌더에도 파일명이 결정론적이다.
@@ -126,12 +125,12 @@ export interface InboxParse {
   trailingNewline: boolean;
 }
 
-/** send 트리거 라인을 단계별 마커로 재작성하는 헬퍼(A3 2단계 내구 마킹). */
-// 스탬프는 id 뒤에 둔다(DEC-004) — 재개 파서가 sending 다음 첫 토큰을 id 로 읽는다.
+/** send 트리거 라인을 단계별 마커로 재작성하는 헬퍼(2단계 내구 마킹). */
+// 스탬프는 id 뒤에 둔다 — 재개 파서가 sending 다음 첫 토큰을 id 로 읽는다.
 export function sendingLine(id: string, stamp: string): string {
   return `- [x] ⏳ sending ${id} ${stamp}`;
 }
-// 위키링크 텍스트 = out 노트 basename(스탬프+id) — 노트 생성 시 링크가 해소된다(DEC-005).
+// 위키링크 텍스트 = out 노트 basename(스탬프+id) — 노트 생성 시 링크가 해소된다.
 export function sentLine(id: string, stamp: string): string {
   return `- [x] ✅ sent [[${outNoteBase(stamp, id)}]]`;
 }
@@ -364,7 +363,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   let pollOp: Promise<void> = Promise.resolve();
   let inboxBusy = false;
   let running = false;
-  // enqueue 연속 실패 추적(⑫) — 임계 도달 시 outbox 알림 1회, 성공 시 리셋.
+  // enqueue 연속 실패 추적 — 임계 도달 시 outbox 알림 1회, 성공 시 리셋.
   let consecutiveEnqueueFailures = 0;
   let enqueueAlertSent = false;
   // approvals 파일 변경을 직렬화(append·결정 재작성·타임아웃 경합 방지).
@@ -372,7 +371,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
   // watch 발 격리(fire-and-forget)도 체인으로 추적 — stop() 이 in-flight 격리를 대기
   // (teardown 뒤 살아남은 mkdir 이 정리된 임시 경로를 재생성하는 것 방지).
   let quarantineOp: Promise<void> = Promise.resolve();
-  // in-flight inbox/approvals 처리 추적 — stop() 이 정리 완료를 대기(H4/DEC-004).
+  // in-flight inbox/approvals 처리 추적 — stop() 이 정리 완료를 대기.
   let inboxOp: Promise<void> = Promise.resolve();
   let approvalsOp: Promise<void> = Promise.resolve();
 
@@ -391,7 +390,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     return run;
   }
 
-  // ts 는 전송 스탬프의 원본(SoT) — 호출자가 스탬프와 같은 순간의 값을 넘긴다(DEC-003).
+  // ts 는 전송 스탬프의 원본(SoT) — 호출자가 스탬프와 같은 순간의 값을 넘긴다.
   function normalize(id: string, text: string, ts: string, control?: ControlRequest): Envelope {
     return {
       v: 1,
@@ -536,7 +535,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
               error: errMsg(err),
             }),
           );
-          // 임계 도달 시 1회 운영자 알림(⑫) — telegram 패턴과 일관.
+          // 임계 도달 시 1회 운영자 알림 — telegram 패턴과 일관.
           if (consecutiveEnqueueFailures >= ENQUEUE_FAIL_THRESHOLD && !enqueueAlertSent) {
             enqueueAlertSent = true;
             await alertEnqueueFailure(consecutiveEnqueueFailures);
@@ -604,8 +603,8 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     }
   }
 
-  /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOut 직후 in-process 호출(DEC-001). */
-  /** enqueue 연속 실패 임계 도달 시 outbox 에 1회 액션형 알림 노트(⑫). 채널이 파일이라 outbox 로 표면화. */
+  /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOut 직후 in-process 호출. */
+  /** enqueue 연속 실패 임계 도달 시 outbox 에 1회 액션형 알림 노트. 채널이 파일이라 outbox 로 표면화. */
   async function alertEnqueueFailure(count: number): Promise<void> {
     const note = formatException(
       {
@@ -623,7 +622,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     const text = await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
     // sidecar 읽기는 queue.readSidecar 로 일원화(부재·파손 → null = 메타 없이 진행).
     const sidecar = await readSidecar(cfg.paths, id);
-    // 파일명 스탬프는 전송 시각(origin_ts) 유래 — 재렌더에도 결정론적(DEC-003).
+    // 파일명 스탬프는 전송 시각(origin_ts) 유래 — 재렌더에도 결정론적.
     // origin_ts 부재(구버전 sidecar)는 종전 `<id>.md` 유지.
     const stamp = sidecar?.origin_ts ? stampFromIso(sidecar.origin_ts) : null;
     const noteName = stamp ? `${outNoteBase(stamp, id)}.md` : `${id}.md`;
@@ -769,7 +768,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
       }
     }
 
-    // A1: 제어 노트가 AI 작업폴더(cwd) 내부면 자기승인 위험 → fail-closed 기동 거부.
+    // 제어 노트가 AI 작업폴더(cwd) 내부면 자기승인 위험 → fail-closed 기동 거부.
     const effectiveCwd =
       cfg.conf.cwd && cfg.conf.cwd.length > 0 ? resolve(cfg.conf.cwd) : process.cwd();
     for (const [name, p] of [
@@ -827,7 +826,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     const dirs = new Set([inboxDir, approvalsDir]);
     for (const dir of dirs) watchDir(dir, (filename) => dispatch(dir, filename));
 
-    // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거, DEC-001).
+    // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거).
     mkdirSync(cfg.paths.outDir, { recursive: true });
     mkdirSync(outboxDir, { recursive: true });
 
@@ -858,7 +857,7 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     for (const t of permTimers.values()) clearTimeout(t);
     permTimers.clear();
     // in-flight 처리(폴 + approvals 락 체인 + inbox/approvals/격리 op) settle 대기 —
-    // 임시 디렉터리 정리 뒤 살아남은 쓰기가 ENOENT 를 내지 않도록(H4).
+    // 임시 디렉터리 정리 뒤 살아남은 쓰기가 ENOENT 를 내지 않도록.
     await pollOp.catch(() => {});
     await approvalsLock.catch(() => {});
     await inboxOp.catch(() => {});

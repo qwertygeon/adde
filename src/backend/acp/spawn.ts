@@ -1,7 +1,6 @@
 /**
  * 엔진 서브프로세스 spawn — clean env 보장.
- * FR-008/NFR-001/ADR-005: CLAUDECODE·CLAUDE_CODE_ENTRYPOINT 삭제 후 spawn.
- * PoC spike.ts:69-71 패턴.
+ * CLAUDECODE·CLAUDE_CODE_ENTRYPOINT 삭제 후 spawn.
  */
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";

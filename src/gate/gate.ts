@@ -1,9 +1,9 @@
 /**
  * fail-closed 권한 게이트.
- * FR-019/020/NFR-003/ADR-006: Promise.race([userDecision, timeout]).
+ * Promise.race([userDecision, timeout]).
  * timeout/sendMessage 오류/도달 실패 → decision:deny (default).
  * allow 는 명시적 사용자 콜백 수신 시에만.
- * DEC-001: 기본 타임아웃 = 600초(10분) (레인 conf 에서 재정의 가능).
+ * 기본 타임아웃 = 600초(10분) (레인 conf 에서 재정의 가능).
  */
 
 export interface PermRequest {
@@ -23,7 +23,7 @@ export interface PermResponse {
   reason?: string;
 }
 
-/** 기본 게이트 타임아웃 — 600초(10분, DEC-001). 테스트 주입 가능하도록 export. */
+/** 기본 게이트 타임아웃 — 600초(10분). 테스트 주입 가능하도록 export. */
 export const DEFAULT_GATE_TIMEOUT_MS = 600_000;
 
 export type SendPermPrompt = (req: PermRequest) => Promise<void>;

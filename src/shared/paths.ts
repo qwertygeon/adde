@@ -1,6 +1,6 @@
 /**
  * 레인별 경로 동적 구성. 레인 ID 하드코딩 금지 — 전부 파라미터.
- * NFR-004/ADR-009: 레인 A 가 레인 B 의 경로에 접근하지 않도록 파라미터 기반 격리.
+ * 레인 A 가 레인 B 의 경로에 접근하지 않도록 파라미터 기반 격리.
  */
 import { join, relative, isAbsolute } from "node:path";
 import { homedir } from "node:os";

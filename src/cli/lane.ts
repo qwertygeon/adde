@@ -78,8 +78,8 @@ export type Ask = (question: string, def?: string) => Promise<string>;
 
 /**
  * 소스별 필드를 순차 질의해 LaneAddOptions 를 구성한다(--interactive).
- * 시크릿 비노출(DEC-002): 봇 토큰은 받지 않는다 — 생성 후 .env/--token-stdin 안내로 위임.
- * ask 주입으로 단위 테스트 가능(DEC-001).
+ * 시크릿 비노출: 봇 토큰은 받지 않는다 — 생성 후 .env/--token-stdin 안내로 위임.
+ * ask 주입으로 단위 테스트 가능.
  */
 export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
   const opts: LaneAddOptions = {};

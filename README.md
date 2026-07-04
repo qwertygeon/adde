@@ -49,7 +49,7 @@ add  …                       # adde 단축 별칭
 
 ## 설치 / 런타임
 
-- 설치: **npm 전역 설치**(`npm i -g adde`) — 최초 릴리스 발행 후 제공. 발행 전에는 소스 빌드(`pnpm install && pnpm build`). 상세: [시작하기](docs/getting-started.md#설치).
+- 설치: **npm 전역 설치** `npm i -g adde`. 업데이트는 `npm i -g adde@latest` 후 `adde restart <proj>`. 개발·기여는 소스 빌드(`pnpm install && pnpm build`). 상세·권한(EACCES) 안내: [시작하기](docs/getting-started.md#설치).
 - TypeScript + Node.js LTS (>=22)
 - **AI 엔진 ACP 어댑터 필수**(예: `@zed-industries/claude-code-acp`) — `adde doctor` 가 사전 점검합니다.
 - macOS 1차 타깃 — `adde up`/`down`/`restart` 는 macOS launchd LaunchAgent 기반. 재부팅·로그아웃 후 자동 복구. Linux/WSL은 현재 지원 범위 밖.

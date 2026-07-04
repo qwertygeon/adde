@@ -21,23 +21,30 @@ ADDE 는 AI CLI 엔진(Claude Code 등)을 채널(Telegram / 마크다운 노트
 
 ## 설치
 
-배포 방식은 **npm 전역 설치**입니다. 최초 릴리스 발행 후부터 다음 한 줄로 설치합니다(`adde`·`add` 명령 제공):
+**npm 전역 설치**입니다(`adde`·`add` 두 명령 제공):
 
 ```bash
-npm i -g adde        # 최초 릴리스 발행 후 제공
+npm i -g adde
 ```
 
-> 발행 전(현재)에는 소스에서 빌드해 사용합니다:
+> **권한 오류(EACCES)**: 시스템/Homebrew Node(root 소유 prefix)에서 흔합니다. `sudo npm i -g` 는 권하지 않습니다(패키지가 root 소유가 되어 이후 업데이트가 깨짐). 버전 매니저(nvm/fnm)를 쓰거나 사용자 prefix(`npm config set prefix ~/.local` + `~/.local/bin` 을 PATH 에)를 설정하세요.
 >
-> ```bash
-> pnpm install && pnpm build
-> ```
+> **소스에서 실행(개발·기여)**: `pnpm install && pnpm build` 후 `node dist/cli/adde.js ...`. `pnpm run dev` 는 tsx 포그라운드 실행용이며, 데몬(`adde up`)은 빌드본이 필요합니다.
 
 설치 후 `adde doctor` 로 사전조건(Node 버전·ACP 어댑터·설정)을 한 번 점검하면, 레인 기동 단계에서야 드러나는 미비를 미리 잡을 수 있습니다.
 
 ```bash
 adde doctor        # 프로젝트 인자 없이 전역 환경 점검
 ```
+
+### 업데이트
+
+```bash
+npm i -g adde@latest       # 최신 버전으로 갱신
+adde restart <proj>        # 실행 중 레인에 새 버전 적용(재기동 필요)
+```
+
+`npm i -g adde@latest` 는 설치 파일을 교체하지만, **이미 실행 중인 데몬은 옛 코드를 메모리에 물고 있으므로** `adde restart <proj>` 로 재기동해야 새 버전이 적용됩니다. 특정 버전 고정은 `npm i -g adde@<x.y.z>`.
 
 ## 핵심 개념
 

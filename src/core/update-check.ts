@@ -11,7 +11,7 @@ import { readVersion } from "./version.js";
 import { t } from "../shared/i18n.js";
 
 /** dist-tag latest 를 직접 반환하는 레지스트리 엔드포인트. */
-const REGISTRY_URL = "https://registry.npmjs.org/adde/latest";
+const REGISTRY_URL = "https://registry.npmjs.org/adde-acp/latest";
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 1500;
 const CACHE_FILE = ".update-check.json";

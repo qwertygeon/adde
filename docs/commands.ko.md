@@ -157,7 +157,7 @@ adde status [<proj>] [--all] [--json]
 - `dead`·`stale` 레인이 있으면 조치 안내를 덧붙입니다(`SEEN` = 마지막 하트비트 경과).
 - 하트비트: `adde up` 이 주기적으로 상태 파일 mtime 을 갱신합니다. pid 가 살아있어도 갱신이 임계 시간 멈추면 `stale`(행) 로 판정합니다.
 - `--json`: 레인 객체 배열(모니터링/스크립트용, `lastSeenAt` 포함; 집계 시 `proj` 부기).
-- **업데이트 안내**: npm 에 새 버전이 있으면 안내 한 줄(`npm i -g adde@latest` … 후 `adde restart`)을 덧붙입니다. 24시간 캐시(설정 base 하위)를 쓰며, 대화형 터미널(TTY)에서만 네트워크를 조회하고, `ADDE_NO_UPDATE_CHECK` 환경변수로 끌 수 있습니다.
+- **업데이트 안내**: npm 에 새 버전이 있으면 안내 한 줄(`npm i -g adde-acp@latest` … 후 `adde restart`)을 덧붙입니다. 24시간 캐시(설정 base 하위)를 쓰며, 대화형 터미널(TTY)에서만 네트워크를 조회하고, `ADDE_NO_UPDATE_CHECK` 환경변수로 끌 수 있습니다.
 - 읽기 전용(부수효과 없음).
 
 ```bash

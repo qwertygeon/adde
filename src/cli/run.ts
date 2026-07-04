@@ -124,6 +124,16 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
+  if (first === "init") {
+    const { runInit } = await import("./init.js");
+    return runInit(argv.slice(1));
+  }
+
+  if (first === "alias") {
+    const { runAlias } = await import("./init.js");
+    return runAlias(argv.slice(1));
+  }
+
   if (first === "lane") {
     const { runLane } = await import("./lane.js");
     return runLane(argv.slice(1));

@@ -187,6 +187,52 @@ describe("runDoctor (SC3)", () => {
     const cwd = checks.find((c) => c.name.endsWith("cwd"));
     expect(cwd?.level).toBe("FAIL");
   });
+
+  it("그룹/기타 읽기 가능한 .env 는 파일 권한 WARN (토큰 노출)", async () => {
+    writeConf("p", "lane1", conf());
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o700);
+    fs.writeFileSync(lp.envFile, "TELEGRAM_BOT_TOKEN=abc\n");
+    fs.chmodSync(lp.envFile, 0o644);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const perms = checks.find((c) => c.name.endsWith("파일 권한"));
+    expect(perms?.level).toBe("WARN");
+    expect(perms?.hint).toContain("chmod 600");
+  });
+
+  it("제한적 권한(.env 0600 + state 0700)은 파일 권한 PASS", async () => {
+    writeConf("p", "lane1", conf());
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o700);
+    fs.writeFileSync(lp.envFile, "TELEGRAM_BOT_TOKEN=abc\n");
+    fs.chmodSync(lp.envFile, 0o600);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const perms = checks.find((c) => c.name.endsWith("파일 권한"));
+    expect(perms?.level).toBe("PASS");
+  });
+
+  it("private 모드인데 느슨한 state 디렉터리(0755)는 파일 권한 WARN", async () => {
+    writeConf("p", "lane1", conf());
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o755);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const perms = checks.find((c) => c.name.endsWith("파일 권한"));
+    expect(perms?.level).toBe("WARN");
+    expect(perms?.hint).toContain("chmod 700");
+  });
+
+  it("shared 모드는 느슨한 state 디렉터리를 경고하지 않는다(의도된 선택)", async () => {
+    writeConf("p", "lane1", conf("file_mode=shared\n"));
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o755);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const perms = checks.find((c) => c.name.endsWith("파일 권한"));
+    expect(perms?.level).toBe("PASS");
+  });
 });
 
 describe("readLogs (SC4)", () => {

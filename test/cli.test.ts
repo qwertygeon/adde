@@ -51,7 +51,7 @@ describe("run 최상위 디스패치", () => {
     const code = await run(["completion", "bash"]);
     expect(code).toBe(0);
     const text = out.mock.calls.map((c) => String(c[0])).join("");
-    expect(text).toContain("complete -F _adde adde add");
+    expect(text).toContain("complete -F _adde adde ad add");
   });
 
   it("completion 미지원 셸은 stderr + 1", async () => {
@@ -67,6 +67,39 @@ describe("run 최상위 디스패치", () => {
     const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     expect(await run(["completion"])).toBe(1);
     expect(err.mock.calls.map((c) => String(c[0])).join("")).toContain("completion");
+  });
+
+  it("init --help 는 init usage 를 출력하고 0", async () => {
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const code = await run(["init", "--help"]);
+    expect(code).toBe(0);
+    expect(out.mock.calls.map((c) => String(c[0])).join("")).toContain("adde init");
+  });
+
+  it("alias --help 는 alias usage 를 출력하고 0", async () => {
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const code = await run(["alias", "--help"]);
+    expect(code).toBe(0);
+    expect(out.mock.calls.map((c) => String(c[0])).join("")).toContain("adde alias");
+  });
+
+  it("비TTY 에서 init 은 안내 후 1(대화형 필요)", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const orig = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    try {
+      expect(await run(["init"])).toBe(1);
+      expect(err.mock.calls.map((c) => String(c[0])).join("")).toContain("TTY");
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: orig, configurable: true });
+    }
+  });
+
+  it("usage 에 init·alias 명령이 노출된다", () => {
+    const usage = buildUsage();
+    expect(usage).toContain("init");
+    expect(usage).toContain("alias");
   });
 });
 

@@ -5,7 +5,7 @@
 import { t } from "../shared/i18n.js";
 import { readFile, stat, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { laneList } from "./lane-config.js";
+import { laneList, resolveFileMode } from "./lane-config.js";
 import { resolveAdapterBin } from "./supervisor.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
@@ -146,6 +146,20 @@ async function pathExists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** 파일/디렉터리 권한 비트(mode & 0o777). 부재·stat 실패 시 null. */
+async function modeOf(p: string): Promise<number | null> {
+  try {
+    return (await stat(p)).mode & 0o777;
+  } catch {
+    return null;
+  }
+}
+
+/** 권한 비트 → 3자리 8진 문자열(예: 0o640 → "640"). */
+function octal(mode: number): string {
+  return (mode & 0o777).toString(8).padStart(3, "0");
 }
 
 /**
@@ -333,6 +347,41 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
               hint: t("doctor.token.hint", { path: paths.envFile }),
             },
       );
+    }
+
+    // 파일 권한 감사 — 시크릿(.env)·private 모드 상태 디렉터리가 그룹/기타에 노출됐는지.
+    // .env 는 토큰을 담으므로 모드와 무관하게 그룹/기타 접근을 경고한다. state 디렉터리는
+    // file_mode=private 일 때만 0700 을 기대(shared 는 느슨한 권한이 의도된 선택이라 통과).
+    const envMode = await modeOf(paths.envFile);
+    const stateMode = await modeOf(paths.stateDir);
+    const looseEnv = envMode !== null && (envMode & 0o077) !== 0;
+    const looseState =
+      stateMode !== null &&
+      resolveFileMode(conf.file_mode) === "private" &&
+      (stateMode & 0o077) !== 0;
+    // env·state 는 독립 관심사 — 둘 다 느슨하면 둘 다 경고한다(하나가 다른 하나를 가리지 않도록).
+    if (looseEnv) {
+      checks.push({
+        name: t("doctor.perms.name", { lane }),
+        level: "WARN",
+        detail: t("doctor.perms.envLoose", { mode: octal(envMode) }),
+        hint: t("doctor.perms.envHint", { path: paths.envFile }),
+      });
+    }
+    if (looseState) {
+      checks.push({
+        name: t("doctor.perms.name", { lane }),
+        level: "WARN",
+        detail: t("doctor.perms.stateLoose", { mode: octal(stateMode) }),
+        hint: t("doctor.perms.stateHint", { path: paths.stateDir, proj }),
+      });
+    }
+    if (!looseEnv && !looseState && (envMode !== null || stateMode !== null)) {
+      checks.push({
+        name: t("doctor.perms.name", { lane }),
+        level: "PASS",
+        detail: t("doctor.perms.ok"),
+      });
     }
   }
 

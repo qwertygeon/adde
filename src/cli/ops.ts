@@ -3,6 +3,7 @@
  * core/diagnostics 의 읽기 전용 로직을 호출하고 표/JSON/텍스트로 표면화한다.
  */
 import { collectStatus, collectAllStatus, runDoctor, readLogs } from "../core/diagnostics.js";
+import { checkForUpdate, formatUpdateNotice } from "../core/update-check.js";
 import { errMsg } from "../shared/errors.js";
 import type { LaneStatusRow, AggregatedLaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
 import { USAGE } from "../core/messages.js";
@@ -72,6 +73,19 @@ function statusTableAggregate(rows: AggregatedLaneStatusRow[], all: boolean): st
   return [fmt(header), ...body.map(fmt)].join("\n");
 }
 
+/**
+ * 새 npm 버전이 있으면 안내 한 줄을 stdout 에 덧붙인다(보조 — 조회 실패는 무시).
+ * 네트워크 조회는 대화형(TTY)에서만 허용해 파이프·스크립트에는 지연·잡음을 주지 않는다.
+ */
+async function printUpdateNoticeIfAny(): Promise<void> {
+  try {
+    const notice = await checkForUpdate({ allowNetwork: process.stdout.isTTY === true });
+    if (notice) process.stdout.write("\n" + formatUpdateNotice(notice) + "\n");
+  } catch {
+    // 보조 기능 — 조회 실패는 흡수.
+  }
+}
+
 export async function runStatus(rest: readonly string[]): Promise<number> {
   const json = rest.includes("--json");
   const all = rest.includes("--all");
@@ -105,6 +119,7 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
             "\n",
         );
       }
+      await printUpdateNoticeIfAny();
     }
     return rows.some((r) => r.status === "dead" || r.status === "stale") ? 1 : 0;
   }
@@ -130,6 +145,7 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
           "\n",
       );
     }
+    await printUpdateNoticeIfAny();
   }
   // 비정상(dead 크래시·stale 행) 잔존을 종료 코드로 신호 — 모니터링 친화.
   return rows.some((r) => r.status === "dead" || r.status === "stale") ? 1 : 0;
@@ -153,6 +169,7 @@ export async function runDoctorCli(rest: readonly string[]): Promise<number> {
       t("ops.doctor.summary", { pass: checks.length - fails - warns, warn: warns, fail: fails }) +
       "\n",
   );
+  await printUpdateNoticeIfAny();
   return fails > 0 ? 1 : 0;
 }
 

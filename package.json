@@ -1,7 +1,7 @@
 {
   "name": "adde",
   "version": "0.1.3",
-  "description": "AI Driven Development Engine — ACP 기반으로 AI CLI 엔진을 채널에서 원격 구동하는 게이트웨이",
+  "description": "AI Driven Development Engine — an ACP-based gateway that drives AI CLI engines remotely from chat channels (Telegram/Markdown)",
   "type": "module",
   "repository": {
     "type": "git",
@@ -23,8 +23,7 @@
     "node": ">=22"
   },
   "bin": {
-    "adde": "dist/cli/adde.js",
-    "add": "dist/cli/add.js"
+    "adde": "dist/cli/adde.js"
   },
   "files": [
     "dist"

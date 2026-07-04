@@ -121,6 +121,41 @@ export function decideAutoAllow(
   return null;
 }
 
+/**
+ * 방어심화 하드-거부 판정 — 티어 무관, hard_deny 매칭 시 true(즉시 거부, 채널 프롬프트 없음).
+ * 도구명 미해석(undefined)이면 판정 불가 → false(채널 승인 경로로; 자동허용도 fail-closed 로 차단됨).
+ * autopass denylist("물어봄")보다 강하며 자동허용 판정보다 먼저 평가되어야 한다.
+ */
+export function isHardDenied(
+  policy: AddePolicy | undefined,
+  toolName: string | undefined,
+  rawInput?: unknown,
+): boolean {
+  if (toolName === undefined) return false;
+  return matchesDenylist(policy?.hard_deny, toolName, rawInput);
+}
+
+/** 권한 게이트 결정 — 즉시 거부 / 자동 허용(경유 표기) / 채널 승인. */
+export type PermDecision =
+  { kind: "hard_deny" } | { kind: "auto"; via: "allowlist" | "autopass" } | { kind: "ask" };
+
+/**
+ * 권한 결정 순서의 단일 출처(SoT) — hard-deny → 자동허용 → 채널 승인.
+ * 이 순서가 보안 핵심이다: hard_deny 는 allowlist/autopass 자동허용보다 반드시 먼저 평가되어야
+ * allowlist 에도 hard_deny 에도 있는 위험 도구(예: sudo)가 자동승인되지 않는다. 순서를 뒤집으면
+ * 그런 도구가 새므로, requestPermission 클로저는 반드시 이 함수를 통해 결정한다(순서 테스트 가능).
+ */
+export function resolvePermDecision(
+  policy: AddePolicy | undefined,
+  toolName: string | undefined,
+  rawInput?: unknown,
+): PermDecision {
+  if (isHardDenied(policy, toolName, rawInput)) return { kind: "hard_deny" };
+  const via = decideAutoAllow(policy, toolName, rawInput);
+  if (via) return { kind: "auto", via };
+  return { kind: "ask" };
+}
+
 /** launch 옵션 — resumeSessionId 지정 시 새 세션 대신 해당 세션 복귀(session/load)를 시도한다. */
 export interface LaunchOpts {
   resumeSessionId?: string;
@@ -345,12 +380,32 @@ export class AcpBackendImpl implements AcpBackend {
             params.toolCall as unknown as Record<string, unknown>,
           );
 
+          const rawInput = (params.toolCall as unknown as Record<string, unknown>)["rawInput"];
+
+          // 권한 결정은 resolvePermDecision 단일 출처를 통해 내린다 — hard-deny → 자동허용 → 채널 승인
+          // 순서가 그 안에 고정돼 있어(보안 핵심) 순서 회귀를 단위 테스트로 잡는다.
+          const decision = resolvePermDecision(addePolicy, rawToolName, rawInput);
+
+          // 방어심화 하드-거부 — 매칭 도구는 티어 무관하게 즉시 거부(채널 승인 프롬프트도 없음).
+          // acp 티어의 실수 승인 방지. 도구명 미해석 시엔 hard_deny 아님 → 아래 자동허용도 fail-closed.
+          if (decision.kind === "hard_deny") {
+            const msg = `hard-deny: ${rawToolName} — ${toolTitle}`;
+            console.warn(`[acp] ${msg}`);
+            if (channelWarn) channelWarn(maskSecrets(tl("gate.hardDeny", { tool: rawToolName })));
+            if (paths) {
+              await appendTranscript(paths, {
+                sessionUpdate: "adde_hard_deny",
+                message: maskSecrets(msg),
+              }).catch(() => {});
+            }
+            return { outcome: { outcome: "cancelled" } };
+          }
+
           // allowlist / autopass 자동 허용 — 채널 프롬프트 없이 allow 로 결정(게이트는 끄지 않고 결정).
           // autopass: denylist 외 전 도구 자동 허용, denylist 도구는 아래 채널 승인 폴백.
           // 투명성(no-silent): 트랜스크립트에 auto-allow 기록.
-          const rawInput = (params.toolCall as unknown as Record<string, unknown>)["rawInput"];
-          const autoAllowVia = decideAutoAllow(addePolicy, rawToolName, rawInput);
-          if (autoAllowVia) {
+          if (decision.kind === "auto") {
+            const autoAllowVia = decision.via;
             const allowOption = params.options.find(
               (o) => o.kind === "allow_once" || o.kind === "allow_always",
             );

@@ -56,6 +56,10 @@ export interface LaneAddOptions extends LaneCommandBaseOptions {
   acp_version?: string;
   allowlist?: string[];
   denylist?: string[];
+  /** 방어심화 하드-거부 목록(티어 무관 즉시 거부). `Tool`/`Tool(글롭)` 형식. */
+  hard_deny?: string[];
+  /** true 면 hard_deny 에 내장 위험명령 기본 목록을 채운다(explicit hard_deny 와 합집합). */
+  safe_defaults?: boolean;
   cwd?: string;
   chat_id?: string;
   root?: string;
@@ -282,6 +286,12 @@ export async function laneAdd(
       throw new LaneConfigError(t("laneConfig.err.badDenyEntry", { entry }));
     }
   }
+  // hard_deny 도 denylist 와 동일한 항목 형식.
+  for (const entry of opts.hard_deny ?? []) {
+    if (entry.includes(",") || !parseDenyEntry(entry)) {
+      throw new LaneConfigError(t("laneConfig.err.badDenyEntry", { entry }));
+    }
+  }
 
   const permTier = opts.perm_tier ?? "acp";
   const conf: LaneConf = {
@@ -295,6 +305,10 @@ export async function laneAdd(
     // autopass 인데 denylist 미지정 → 내장 기본 denylist. conf 에 구체 목록을
     // 명시 기록한다(암묵 기본값이 파일에 안 보이는 상태 회피). 명시 지정(빈 배열 포함)이 우선.
     denylist: opts.denylist ?? (permTier === "autopass" ? [...DEFAULT_AUTOPASS_DENYLIST] : []),
+    // 방어심화 하드-거부 — safe_defaults 면 내장 위험 목록에 explicit hard_deny 를 합집합(중복 제거).
+    hard_deny: opts.safe_defaults
+      ? [...new Set([...DEFAULT_AUTOPASS_DENYLIST, ...(opts.hard_deny ?? [])])]
+      : (opts.hard_deny ?? []),
   };
   // exactOptionalPropertyTypes: undefined 대입 금지 — 값이 있을 때만 설정.
   if (opts.cwd) conf.cwd = opts.cwd;

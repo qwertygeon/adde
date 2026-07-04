@@ -1,52 +1,69 @@
-# 권한 (게이트)
+_English | [한국어](permissions.ko.md)_
 
-ADDE 는 AI 엔진의 모든 권한 요청(파일 쓰기·셸 실행 등)을 **채널 승인으로 라우팅**합니다. 이 문서는 왜 그런지, 티어를 어떻게 고르는지, 무엇을 조심할지를 설명합니다. 옵션·플래그의 전체 레퍼런스는 [명령 레퍼런스 — lane add 옵션](commands.md#lane-add-옵션)이 기준입니다.
+# Permissions (the gate)
 
-## 목차
+ADDE **routes every permission request** from the AI engine (file write, shell execution, etc.) **to channel approval**. This document explains why, how to choose a tier, and what to watch out for. The full reference for options and flags is the [command reference — lane add options](commands.md#lane-add-options).
 
-- [왜 게이트인가](#왜-게이트인가)
-- [권한 티어](#권한-티어)
+## Table of Contents
+
+- [Why a gate](#why-a-gate)
+- [Permission tiers](#permission-tiers)
 - [allowlist / denylist](#allowlist--denylist)
-- [매칭 규칙과 한계](#매칭-규칙과-한계)
-- [권한 드리프트 경고](#권한-드리프트-경고)
-- [권장 베이스라인](#권장-베이스라인)
+- [hard-deny (outright refusal)](#hard-deny-outright-refusal)
+- [Matching rules and limits](#matching-rules-and-limits)
+- [Permission-drift warning](#permission-drift-warning)
+- [Recommended baseline](#recommended-baseline)
 
-## 왜 게이트인가
+## Why a gate
 
-엔진은 헤드리스(ACP 서브프로세스)로 돌기 때문에, 터미널 앞에서 프롬프트에 응답할 사람이 없습니다. ADDE 가 그 승인 요청을 대신 **채널(Telegram inline 버튼 / 마크다운 승인 노트)로 보내** 사람이 원격에서 허용/거부하게 합니다.
+The engine runs headless (an ACP subprocess), so there is no one at a terminal to answer prompts. ADDE takes those approval requests and **sends them to a channel (Telegram inline buttons / markdown approval notes)** so a person can allow/deny remotely.
 
-- **fail-closed**: 제때(기본 10분) 응답하지 않으면 자동 **거부**됩니다. 채널 도달 실패·오류도 거부로 처리됩니다 — "모르면 막는다".
-- 모든 결정(허용·거부·자동 허용)은 transcript 에 기록됩니다.
+- **fail-closed**: if you don't respond in time (default 10 minutes), it auto-**denies**. Channel-delivery failure or error is also treated as deny — "when in doubt, block."
+- Every decision (allow, deny, auto-allow) is recorded in the transcript.
 
-## 권한 티어
+## Permission tiers
 
-레인마다 `perm_tier` 로 고릅니다(`adde lane add --perm-tier <acp|autopass>` 또는 conf `perm_tier=`).
+Choose per lane with `perm_tier` (`adde lane add --perm-tier <acp|autopass>` or conf `perm_tier=`).
 
-| 티어                | 무엇이 자동 허용         | 무엇이 채널로 오는가         | 위험도                                                          |
-| ------------------- | ------------------------ | ---------------------------- | --------------------------------------------------------------- |
-| `acp` **(기본)**    | `allowlist` 에 둔 도구만 | 그 외 **모든** 도구 요청     | 낮음 — 기본적으로 전부 사람이 확인                              |
-| `autopass` (옵트인) | `denylist` **밖의** 전부 | `denylist` 에 든 도구·패턴만 | 높음 — 파일 쓰기·`Bash` 포함 대부분이 확인 없이 실행(전량 기록) |
+| Tier                | What is auto-allowed              | What comes to the channel         | Risk                                                                                   |
+| ------------------- | --------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------- |
+| `acp` **(default)** | only tools in `allowlist`         | **every** other tool request      | Low — by default a human confirms everything                                           |
+| `autopass` (opt-in) | everything **outside** `denylist` | only tools/patterns in `denylist` | High — most, including file writes and `Bash`, run without confirmation (all recorded) |
 
-- `autopass` 레인은 기동 시 채널로 **경고 배너**(자동 허용 모드·denylist 구성)를 보냅니다.
-- 기본값(`acp`)의 동작은 어떤 경우에도 바뀌지 않습니다.
+- An `autopass` lane sends a **warning banner** to the channel at startup (auto-allow mode and denylist composition).
+- The behavior of the default (`acp`) never changes under any circumstance.
 
 ## allowlist / denylist
 
-- **allowlist** (`--allowlist Read,Grep`): `acp` 티어에서 매번 묻지 않을 도구. 게이트 자체는 유지되고 자동 허용 내역은 기록됩니다. `Bash`·파일 쓰기 등 광범위 도구는 넣지 마세요(자기승인 위험).
-- **denylist** (`--denylist "Bash,Write,Bash(git push*)"`): `autopass` 티어에서 자동 허용에서 빼고 채널 승인으로 되돌릴 도구·패턴. `--denylist` 를 생략하면 파괴적 명령·자격증명 읽기를 막는 내장 기본 목록이 conf 에 기록됩니다.
+- **allowlist** (`--allowlist Read,Grep`): tools not to be asked each time under the `acp` tier. The gate itself stays on and auto-allow entries are recorded. Don't add broad tools like `Bash` or file writes (self-approval risk).
+- **denylist** (`--denylist "Bash,Write,Bash(git push*)"`): tools/patterns to remove from auto-allow under the `autopass` tier and return to channel approval. Omitting `--denylist` records a built-in default list into the conf that blocks destructive commands and credential reads.
 
-## 매칭 규칙과 한계
+## hard-deny (outright refusal)
 
-- 매칭 키는 엔진이 알려주는 **원시 도구명**(예: `Bash`, `Write`)이며 대소문자를 무시합니다. 도구명을 확인할 수 없는 요청은 자동 허용하지 않고 채널 승인으로 보냅니다(fail-closed).
-- **패턴** `Tool(글롭)` 은 대표 인자를 매칭합니다 — Bash=명령 문자열, Read/Write/Edit=파일 경로, WebFetch=URL. `*` 는 임의 문자열(경로 구분자 포함), 전체 일치 기준입니다(접두 차단 `Bash(git push*)`, 포함 차단 `Bash(*sudo *)`).
-- **셸 체이닝 한계**: 매칭은 명령 문자열 전체 기준이라 `echo x && sudo y` 는 접두 패턴(`sudo *`)에 걸리지 않습니다 — 포함 패턴(`*sudo *`)을 쓰거나, 확실한 차단은 도구 전체(`Bash`)를 지정하세요.
+**hard-deny** (`--hard-deny "Bash(sudo *),Bash(rm -rf /*)"`, conf key `hard_deny=`) is a defense-in-depth outright-refusal list. It uses the same `Tool` / `Tool(glob)` format as `--denylist`, but its strength differs.
 
-## 권한 드리프트 경고
+- **denylist ("return to ask")**: under `autopass`, removes from auto-allow and **falls back to channel approval** — it runs if a human approves.
+- **hard-deny ("refuse outright")**: **refuses (cancels) a matching request immediately, regardless of `perm_tier`, with no channel prompt at all**. Because it applies even to the default `acp` tier, it **prevents a catastrophic command from being accidentally approved** in the first place. Hard-deny hits are recorded in the transcript and a notice is sent to the channel.
 
-엔진의 실효 권한이 ADDE 정책보다 느슨하다고 확인되면(예: 엔진이 `bypassPermissions`), 콘솔·채널·transcript 에 경고하고 기동은 계속합니다. 이 상태에선 게이트가 무력화될 수 있으니 엔진 권한 설정을 해제하거나 conf `perm_tier` 에 맞게 정렬하세요. 특히 **`autopass` 레인은 엔진이 bypass 면 권한 요청 자체가 오지 않아 denylist 가 동작하지 않습니다.**
+Enabling `--safe-defaults` (reflected in the conf key; the interactive `lane add`/`adde init` asks whether to enable it, default yes) fills hard-deny with the built-in danger list (union with any explicit `--hard-deny`):
 
-## 권장 베이스라인
+`Bash(sudo *)` · `Bash(rm -rf /*)` · `Bash(rm -rf ~*)` · `Bash(rm -rf .*)` · `Bash(git push --force*)` · `Bash(git push -f*)` · `Bash(git reset --hard*)` · `Bash(git clean -fd*)` · `Read(~/.ssh/**)` · `Read(~/.aws/**)` · `Read(~/.npmrc)` · `Read(~/.config/gh/hosts.yml)` · `Read(~/.kube/config)` · `Read(~/.docker/config.json)` · `Read(~/.config/gcloud/**)`.
 
-- 기본 `acp` 티어를 유지하고, 자주 쓰는 **안전한 읽기 계열 도구만 `--allowlist`**(예: `Read,Grep`)에 둡니다.
-- 대부분을 자동 허용해야 한다면 `autopass` 를 **옵트인**하되, 되돌리기 어려운 도구(`Bash`·파일 쓰기·자격증명 읽기)는 반드시 `denylist` 로 확인을 유지하세요.
-- 프롬프트 응답 모드로 게이트를 우회하려 하지 말고, **denylist·allowlist 로 조이는 방향**을 택하세요.
+A list is just a list, not complete defense (see shell chaining below) — tune it to your project.
+
+## Matching rules and limits
+
+- The match key is the **raw tool name** the engine reports (e.g. `Bash`, `Write`), case-insensitive. A request whose tool name cannot be determined is not auto-allowed and is sent to channel approval (fail-closed).
+- **Patterns** `Tool(glob)` match the representative argument — Bash = command string, Read/Write/Edit = file path, WebFetch = URL. `*` is any string (including path separators), matched against the whole (prefix block `Bash(git push*)`, contains block `Bash(*sudo *)`).
+- **Shell chaining**: for Bash commands, each chained/grouped sub-command (split on `;` `&&` `||` `|` `&`, grouping `(` `)` `{` `}`, `$(…)`, backticks, and newline, with leading `VAR=` assignments stripped) is matched too, so a prefix pattern (`sudo *`) catches `echo x && sudo y`, `(sudo y)`, and `FOO=1 sudo y`. Matching is best-effort, not a full shell parser: it does not resolve aliases, `eval`, variable expansion, or wrapper invocations (`bash -c "sudo y"` is **not** caught), and it splits on operator characters even inside quotes — so under `--safe-defaults` a benign command whose quoted argument contains an operator plus a danger token (e.g. `git commit -m "fix && sudo cleanup"`) may be refused with no override. For a certain block, specify the whole tool (`Bash`).
+
+## Permission-drift warning
+
+If the engine's effective permissions are found looser than ADDE's policy (e.g. the engine has `bypassPermissions`), it warns on the console, channel, and transcript, and startup continues. In this state the gate can be neutralized, so disable the engine's permission setting or align it with the conf `perm_tier`. In particular, **an `autopass` lane where the engine bypasses gets no permission requests at all, so the denylist doesn't work.**
+
+## Recommended baseline
+
+- Keep the default `acp` tier and put only frequently used **safe read-type tools in `--allowlist`** (e.g. `Read,Grep`).
+- If you must auto-allow most things, **opt in** to `autopass`, but always keep confirmation on hard-to-undo tools (`Bash`, file writes, credential reads) via the `denylist`.
+- Lock catastrophic commands to be refused outright regardless of tier with `--hard-deny` (or `--safe-defaults`) — this removes any room for accidental approval.
+- Don't try to bypass the gate via a prompt-response mode; instead **tighten with the denylist, allowlist, and hard-deny**.

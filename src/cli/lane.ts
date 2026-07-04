@@ -2,13 +2,23 @@
  * `adde lane <add|ls|show|rm>` 서브커맨드 그룹 — 레인 .conf 설정 CLI.
  * argv 파싱 후 core/lane-config 의 코어 함수에 위임하고, 결과/오류를 stdout/stderr 로 표면화.
  */
-import { laneAdd, laneList, laneShow, laneRemove, LaneConfigError } from "../core/lane-config.js";
+import {
+  laneAdd,
+  laneList,
+  laneShow,
+  laneRemove,
+  LaneConfigError,
+  parseCsv,
+} from "../core/lane-config.js";
 import type { LaneAddOptions } from "../core/lane-config.js";
 import { USAGE, buildLaneUsage, laneError, unknownLaneSub } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
 import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
-import * as readline from "node:readline/promises";
+import { createPrompter } from "./prompt.js";
+import type { Ask } from "./prompt.js";
+
+export type { Ask } from "./prompt.js";
 
 /** `--key value` / `--flag` 혼합 파싱. 값이 필요한 키는 valueKeys 로 지정. */
 interface ParsedArgs {
@@ -52,6 +62,7 @@ const ADD_VALUE_KEYS = new Set([
   "cwd",
   "allowlist",
   "denylist",
+  "hard-deny",
   "chat-id",
   "allow-from",
   "file-mode",
@@ -61,6 +72,24 @@ const ADD_VALUE_KEYS = new Set([
   "approvals",
   "outbox",
 ]);
+
+/**
+ * 대화형 여부 결정 — 명시 `--interactive`, 또는 (`--no-interactive` 아님 && 필드 플래그 없음 && TTY).
+ * 필드 플래그(값 키·`--safe-defaults`·`--token-stdin`)가 하나라도 있으면 스크립트 의도로 보고 비대화형.
+ */
+export function shouldRunInteractive(
+  flags: Record<string, string | true>,
+  isTTY: boolean,
+): boolean {
+  const fieldFlagsGiven =
+    [...ADD_VALUE_KEYS].some((k) => flags[k] !== undefined) ||
+    flags["safe-defaults"] === true ||
+    flags["token-stdin"] === true;
+  return (
+    flags["interactive"] === true ||
+    (flags["no-interactive"] !== true && !fieldFlagsGiven && isTTY === true)
+  );
+}
 
 function flagStr(flags: Record<string, string | true>, key: string): string | undefined {
   const v = flags[key];
@@ -75,18 +104,37 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** 한 줄 질의 함수 — (질문, 기본값) → 응답. readline 또는 테스트 더블이 공급. */
-export type Ask = (question: string, def?: string) => Promise<string>;
+/** 유효한 응답이 나올 때까지 재질의한다(enum·숫자 필드 입력 시점 검증). */
+async function askUntil(
+  ask: Ask,
+  question: string,
+  def: string,
+  valid: (v: string) => boolean,
+  retry: string,
+): Promise<string> {
+  let v = await ask(question, def);
+  while (!valid(v)) v = await ask(retry, def);
+  return v;
+}
 
 /**
- * 소스별 필드를 순차 질의해 LaneAddOptions 를 구성한다(--interactive).
- * 시크릿 비노출: 봇 토큰은 받지 않는다 — 생성 후 .env/--token-stdin 안내로 위임.
- * ask 주입으로 단위 테스트 가능.
+ * 소스별 필드를 순차 질의해 LaneAddOptions 를 구성한다(대화형 default).
+ * enum·숫자 필드는 입력 시점에 검증·재질의한다. askSecret 이 주어지면 telegram 봇 토큰을
+ * 가려진 입력으로 수집한다(없거나 빈 입력이면 생성 후 .env/--token-stdin 안내로 위임).
+ * ask/askSecret 주입으로 단위 테스트 가능.
  */
-export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
+export async function collectInteractive(
+  ask: Ask,
+  askSecret?: (question: string) => Promise<string>,
+): Promise<LaneAddOptions> {
   const opts: LaneAddOptions = {};
+  const isNumericId = (v: string): boolean => /^-?\d+$/.test(v);
+  const isIdCsv = (v: string): boolean => {
+    const ids = parseCsv(v);
+    return ids.length > 0 && ids.every(isNumericId);
+  };
 
-  let source = (await ask("source (telegram/markdown)", "telegram")).toLowerCase();
+  let source = (await ask(t("lane.prompt.source"), "telegram")).toLowerCase();
   while (source !== "telegram" && source !== "markdown") {
     source = (await ask(t("lane.sourceRetry"), "telegram")).toLowerCase();
   }
@@ -94,28 +142,53 @@ export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
   opts.engine = await ask("engine", "claude-code-acp");
   opts.backend = await ask("backend", "acp");
   opts.channel = await ask("channel", source);
-  opts.perm_tier = await ask("perm_tier (acp/autopass)", "acp");
+  opts.perm_tier = await askUntil(
+    ask,
+    t("lane.prompt.permTier"),
+    "acp",
+    (v) => v === "acp" || v === "autopass",
+    t("lane.retry.permTier"),
+  );
   opts.acp_version = await ask("acp_version", "v1");
 
-  const splitTools = (raw: string): string[] =>
-    raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-
   const allow = await ask(t("lane.prompt.allowlist"), "");
-  if (allow) opts.allowlist = splitTools(allow);
+  if (allow) opts.allowlist = parseCsv(allow);
   if (opts.perm_tier === "autopass") {
     const deny = await ask(t("lane.prompt.denylist"), DEFAULT_AUTOPASS_DENYLIST.join(","));
-    if (deny) opts.denylist = splitTools(deny);
+    if (deny) opts.denylist = parseCsv(deny);
   }
+  // 방어심화 하드-거부 기본값(sudo·rm -rf·git 강제·자격증명 읽기 등 즉시 거부) — 기본 켬 권장.
+  const safeDefaults = (await ask(t("lane.prompt.safeDefaults"), "y")).toLowerCase();
+  if (safeDefaults === "y" || safeDefaults === "yes") opts.safe_defaults = true;
+
+  const lang = await askUntil(
+    ask,
+    t("lane.prompt.lang"),
+    "",
+    (v) => v === "" || v === "en" || v === "ko",
+    t("lane.retry.lang"),
+  );
+  if (lang) opts.lang = lang;
+
   const cwd = await ask(t("lane.prompt.cwd"), "");
   if (cwd) opts.cwd = cwd;
 
   if (source === "telegram") {
-    const chatId = await ask(t("lane.prompt.chatId"), "");
+    const chatId = await askUntil(
+      ask,
+      t("lane.prompt.chatId"),
+      "",
+      (v) => v === "" || isNumericId(v),
+      t("lane.retry.chatId"),
+    );
     if (chatId) opts.chat_id = chatId;
-    const allowFrom = await ask(t("lane.prompt.allowFrom"), "");
+    const allowFrom = await askUntil(
+      ask,
+      t("lane.prompt.allowFrom"),
+      "",
+      (v) => v === "" || isIdCsv(v),
+      t("lane.retry.allowFrom"),
+    );
     if (allowFrom) opts.allow_from = allowFrom;
   } else {
     const root = await ask(t("lane.prompt.root"), "");
@@ -128,8 +201,20 @@ export async function collectInteractive(ask: Ask): Promise<LaneAddOptions> {
     if (outbox) opts.outbox = outbox;
   }
 
-  const fileMode = (await ask(t("lane.prompt.fileMode"), "private")).toLowerCase();
+  const fileMode = await askUntil(
+    ask,
+    t("lane.prompt.fileMode"),
+    "private",
+    (v) => v === "private" || v === "shared",
+    t("lane.retry.fileMode"),
+  );
   if (fileMode && fileMode !== "private") opts.file_mode = fileMode;
+
+  // 봇 토큰(telegram) — 가려진 입력. 빈 입력이면 생성 후 안내로 위임(시크릿 비노출).
+  if (source === "telegram" && askSecret) {
+    const token = await askSecret(t("lane.prompt.token"));
+    if (token) opts.token = token;
+  }
 
   return opts;
 }
@@ -142,8 +227,10 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     return 1;
   }
 
+  const wantInteractive = shouldRunInteractive(flags, process.stdin.isTTY === true);
+
   let opts: LaneAddOptions;
-  if (flags["interactive"] === true) {
+  if (wantInteractive) {
     if (!process.stdin.isTTY) {
       process.stderr.write(
         formatException({
@@ -153,15 +240,13 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
       );
       return 1;
     }
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const prompter = createPrompter();
     try {
-      opts = await collectInteractive(async (q, def) => {
-        const a = (await rl.question(`${q}${def ? ` [${def}]` : ""}: `)).trim();
-        return a || (def ?? "");
-      });
+      opts = await collectInteractive(prompter.ask, prompter.askSecret);
     } finally {
-      rl.close();
+      prompter.close();
     }
+    if (flags["force"] === true) opts.force = true;
   } else {
     opts = {};
     const source = flagStr(flags, "source");
@@ -203,6 +288,9 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     if (allowlist !== undefined) opts.allowlist = splitTools(allowlist);
     const denylist = flagStr(flags, "denylist");
     if (denylist !== undefined) opts.denylist = splitTools(denylist);
+    const hardDeny = flagStr(flags, "hard-deny");
+    if (hardDeny !== undefined) opts.hard_deny = splitTools(hardDeny);
+    if (flags["safe-defaults"] === true) opts.safe_defaults = true;
     if (flags["force"] === true) opts.force = true;
     if (flags["token-stdin"] === true) opts.token = (await readStdin()).trim();
   }

@@ -83,6 +83,36 @@ describe("laneAdd", () => {
     expect(conf.chat_id).toBe("12345");
   });
 
+  it("--safe-defaults 는 hard_deny 에 내장 위험 목록을 채운다", async () => {
+    const res = await laneAdd("proj", "tg", { base, safe_defaults: true });
+    const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(conf.hard_deny).toContain("Bash(sudo *)");
+    expect(conf.hard_deny).toContain("Read(~/.ssh/**)");
+  });
+
+  it("--safe-defaults 는 explicit hard_deny 와 합집합(중복 제거)", async () => {
+    const res = await laneAdd("proj", "tg", {
+      base,
+      safe_defaults: true,
+      hard_deny: ["Write(/etc/*)", "Bash(sudo *)"],
+    });
+    const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(conf.hard_deny).toContain("Write(/etc/*)");
+    expect(conf.hard_deny.filter((e) => e === "Bash(sudo *)").length).toBe(1);
+  });
+
+  it("hard_deny 미지정이면 빈 목록(기본 동작 불변)", async () => {
+    const res = await laneAdd("proj", "tg", { base });
+    const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(conf.hard_deny).toEqual([]);
+  });
+
+  it("잘못된 hard_deny 항목은 거부한다", async () => {
+    await expect(laneAdd("proj", "tg", { base, hard_deny: ["Bash(("] })).rejects.toThrow(
+      LaneConfigError,
+    );
+  });
+
   it("source=markdown 과 markdown 키를 반영한다", async () => {
     const res = await laneAdd("proj", "md", {
       base,

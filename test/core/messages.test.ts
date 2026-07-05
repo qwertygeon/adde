@@ -25,10 +25,12 @@ describe("messages — 도움말/사용법 SoT", () => {
     }
   });
 
-  it("USAGE 의 각 명령 사용법은 'adde' 로 시작하는 한 줄", () => {
-    for (const line of Object.values(USAGE)) {
-      expect(line).toMatch(/^사용법: adde /);
-      expect(line).not.toContain("\n");
+  it("USAGE 의 각 명령 사용법은 'adde' 로 시작한다(첫 줄)", () => {
+    // 대부분 한 줄. completion 은 왜/무엇/어디 설명을 담은 상세 블록이라 여러 줄 허용 —
+    // 불변식은 '첫 줄이 사용법: adde 로 시작'.
+    for (const usage of Object.values(USAGE)) {
+      const firstLine = usage.split("\n")[0] ?? "";
+      expect(firstLine).toMatch(/^사용법: adde /);
     }
   });
 

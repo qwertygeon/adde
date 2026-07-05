@@ -18,6 +18,14 @@ import type { AliasSetupResult } from "./alias.js";
 /** proj/lane 식별자 — 경로 세그먼트 안전 문자셋(lane-config NAME_RE 와 동일 규약). */
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
 
+/** $SHELL 로 사용자 셸 추정(bash|zsh). 그 외·미상은 null — 자동완성 안내를 건너뛴다. */
+function detectShell(): "bash" | "zsh" | null {
+  const sh = process.env["SHELL"] ?? "";
+  if (sh === "zsh" || sh.endsWith("/zsh")) return "zsh";
+  if (sh === "bash" || sh.endsWith("/bash")) return "bash";
+  return null;
+}
+
 /** 별칭 설치 결과를 stdout 에 표면화(init·alias 공용). */
 function printAliasResult(result: AliasSetupResult, binDir: string): void {
   for (const n of result.created)
@@ -72,6 +80,20 @@ export async function runInit(argv: readonly string[]): Promise<number> {
       }
     }
     process.stdout.write("\n");
+
+    // 2.5) 셸 탭 자동완성 설정 안내(옵트인) — 감지된 셸에 맞는 설치 명령을 출력한다.
+    // 파일을 대신 쓰지 않고 실행할 명령을 안내한다(셸 rc/fpath 자동 수정은 위험 — 사용자가 직접 실행).
+    const shell = detectShell();
+    if (shell) {
+      const wantComp = (await ask(t("init.completionPrompt", { shell }), "y")).toLowerCase();
+      if (wantComp === "y" || wantComp === "yes") {
+        process.stdout.write(t("init.completionWhat") + "\n");
+        process.stdout.write(
+          t(shell === "zsh" ? "init.completionZsh" : "init.completionBash") + "\n",
+        );
+      }
+      process.stdout.write("\n");
+    }
 
     // 3) 레인 생성(대화형) — proj/lane 이름을 먼저 검증(잘못되면 재질의)한 뒤 필드 수집.
     let proj = projArg ?? (await ask(t("init.projPrompt"), "default"));

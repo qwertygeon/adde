@@ -104,7 +104,7 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** 유효한 응답이 나올 때까지 재질의한다(enum·숫자 필드 입력 시점 검증). */
+/** 유효한 응답이 나올 때까지 재질의한다(숫자·CSV 필드 입력 시점 검증). */
 async function askUntil(
   ask: Ask,
   question: string,
@@ -115,6 +115,29 @@ async function askUntil(
   let v = await ask(question, def);
   while (!valid(v)) v = await ask(retry, def);
   return v;
+}
+
+/**
+ * enum 필드를 번호(1/2/…) 또는 값 문자열로 선택한다. 유효할 때까지 재질의하고 정규화된 값을 반환.
+ * 번호는 options 순서(1-기반)에 매핑한다. allowEmpty 면 빈 입력을 ""(전역/기본 위임)로 허용.
+ * 직접 타이핑 없이 번호로 고를 수 있게 하는 대화형 편의 — 라벨 아래 번호 메뉴를 함께 출력한다.
+ */
+async function askEnum(
+  ask: Ask,
+  label: string,
+  options: readonly string[],
+  def: string,
+  opts: { allowEmpty?: boolean } = {},
+): Promise<string> {
+  const menu = options.map((o, i) => `  ${i + 1}) ${o}`).join("\n");
+  const question = `${label}\n${menu}`;
+  for (;;) {
+    const raw = (await ask(question, def)).trim().toLowerCase();
+    if (opts.allowEmpty && raw === "") return "";
+    if (options.includes(raw)) return raw;
+    const n = Number(raw);
+    if (Number.isInteger(n) && n >= 1 && n <= options.length) return options[n - 1] as string;
+  }
 }
 
 /**
@@ -134,21 +157,12 @@ export async function collectInteractive(
     return ids.length > 0 && ids.every(isNumericId);
   };
 
-  let source = (await ask(t("lane.prompt.source"), "markdown")).toLowerCase();
-  while (source !== "telegram" && source !== "markdown") {
-    source = (await ask(t("lane.sourceRetry"), "markdown")).toLowerCase();
-  }
+  const source = await askEnum(ask, t("lane.prompt.source"), ["markdown", "telegram"], "markdown");
   opts.source = source;
   opts.engine = await ask("engine", "claude-agent-acp");
   opts.backend = await ask("backend", "acp");
   opts.channel = await ask("channel", source);
-  opts.perm_tier = await askUntil(
-    ask,
-    t("lane.prompt.permTier"),
-    "acp",
-    (v) => v === "acp" || v === "autopass",
-    t("lane.retry.permTier"),
-  );
+  opts.perm_tier = await askEnum(ask, t("lane.prompt.permTier"), ["acp", "autopass"], "acp");
   opts.acp_version = await ask("acp_version", "v1");
 
   const allow = await ask(t("lane.prompt.allowlist"), "");
@@ -161,13 +175,7 @@ export async function collectInteractive(
   const safeDefaults = (await ask(t("lane.prompt.safeDefaults"), "y")).toLowerCase();
   if (safeDefaults === "y" || safeDefaults === "yes") opts.safe_defaults = true;
 
-  const lang = await askUntil(
-    ask,
-    t("lane.prompt.lang"),
-    "",
-    (v) => v === "" || v === "en" || v === "ko",
-    t("lane.retry.lang"),
-  );
+  const lang = await askEnum(ask, t("lane.prompt.lang"), ["en", "ko"], "", { allowEmpty: true });
   if (lang) opts.lang = lang;
 
   const cwd = await ask(t("lane.prompt.cwd"), "");
@@ -201,13 +209,7 @@ export async function collectInteractive(
     if (outbox) opts.outbox = outbox;
   }
 
-  const fileMode = await askUntil(
-    ask,
-    t("lane.prompt.fileMode"),
-    "private",
-    (v) => v === "private" || v === "shared",
-    t("lane.retry.fileMode"),
-  );
+  const fileMode = await askEnum(ask, t("lane.prompt.fileMode"), ["private", "shared"], "private");
   if (fileMode && fileMode !== "private") opts.file_mode = fileMode;
 
   // 봇 토큰(telegram) — 가려진 입력. 빈 입력이면 생성 후 안내로 위임(시크릿 비노출).
@@ -337,14 +339,18 @@ async function handleShow(rest: readonly string[]): Promise<number> {
 }
 
 async function handleRemove(rest: readonly string[]): Promise<number> {
-  const { positional } = parseArgs(rest, new Set());
+  const { positional, flags } = parseArgs(rest, new Set());
   const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneRm + "\n");
     return 1;
   }
-  const { confPath } = await laneRemove(proj, lane);
-  process.stdout.write(t("lane.removed", { lane, confPath }) + "\n");
+  const purge = flags["purge"] === true;
+  const { confPath, purged } = await laneRemove(proj, lane, { purge });
+  process.stdout.write(
+    (purged ? t("lane.removedPurged", { lane, confPath }) : t("lane.removed", { lane, confPath })) +
+      "\n",
+  );
   return 0;
 }
 

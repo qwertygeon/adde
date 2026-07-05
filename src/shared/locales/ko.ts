@@ -22,8 +22,10 @@ export const ko = {
   lane add <proj> <lane>   레인 conf 생성
   lane ls <proj>           레인 목록
   lane show <proj> <lane>  레인 conf 출력
-  lane rm <proj> <lane>    레인 conf 삭제
-  completion <bash|zsh>    셸 자동완성 스크립트 출력
+  lane rm <proj> <lane>    레인 conf 삭제 (--purge 시 state/queue/out 도 삭제)
+  proj ls                  등록된 프로젝트 목록(레인·실행 수 포함)
+  proj rm <proj>           프로젝트 삭제(모든 레인 + state; 확인 후 삭제)
+  completion <bash|zsh>    셸 자동완성 스크립트 출력(명령·프로젝트/레인 Tab 완성; 설정은 'adde completion --help')
   alias [names...]         짧은 별칭 설치(기본 ad, add) — adde 실행 파일 옆에
 
 옵션:
@@ -38,7 +40,20 @@ export const ko = {
     doctor: "사용법: adde doctor [<proj>]",
     logs: "사용법: adde logs <proj> <lane> [N] [--engine]",
     sessions: "사용법: adde sessions <proj> <lane>",
-    completion: "사용법: adde completion <bash|zsh>  (셸 자동완성 스크립트 출력)",
+    completion: `사용법: adde completion <bash|zsh>
+
+셸 자동완성 스크립트를 stdout 으로 출력합니다 — 설치는 하지 않습니다(installer 아님).
+왜: adde 명령·프로젝트/레인 이름·옵션 값을 Tab 으로 완성할 수 있게 합니다.
+무엇: 셸용 스크립트이며, 셸의 자동완성 디렉터리로 직접 리다이렉트해 넣습니다.
+어디에/어떻게 결정 (본인 셸 확인: echo $SHELL):
+  bash → adde completion bash > /usr/local/etc/bash_completion.d/adde   (또는 ~/.bashrc 에 'source <(adde completion bash)' 추가)
+  zsh  → adde completion zsh  > "\${fpath[1]}/_adde"                     (그 뒤 compinit; ~/.zshrc 에 'autoload -Uz compinit && compinit' 필요)
+팁: 'adde init' 이 이 설정을 단계별로 안내합니다.`,
+    proj: `사용법:
+  adde proj ls               등록된 프로젝트 목록(레인·실행 수 포함)
+  adde proj rm <proj>        프로젝트 삭제 — 모든 레인과 state 를 제거
+
+  --force                    확인 프롬프트 건너뛰기(비대화형 셸에선 필수)`,
     init: "사용법: adde init [<proj>]  (가이드 설정: doctor + 짧은 별칭 + 레인 생성; TTY 전용)",
     alias: "사용법: adde alias [names...]  (adde 실행 파일 옆에 짧은 별칭 설치; 기본: ad add)",
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
@@ -50,7 +65,7 @@ export const ko = {
   adde lane add <proj> <lane> [옵션]   레인 conf 생성
   adde lane ls <proj>                  레인 목록
   adde lane show <proj> <lane>         레인 conf 출력
-  adde lane rm <proj> <lane>           레인 conf 삭제
+  adde lane rm <proj> <lane> [--purge] 레인 conf 삭제 (--purge 시 state/queue/out 데이터도 삭제)
 
 lane add 옵션:
   --source <markdown|telegram>  (기본 markdown)
@@ -85,6 +100,8 @@ lane add 옵션:
   },
   completion: {
     unknownShell: '미지원 셸 "{{shell}}" — {{supported}} 중 하나',
+    installHint:
+      "↳ 이것은 자동완성 스크립트 출력이며 installer 가 아닙니다. 사용하려면 {{shell}} 자동완성 디렉터리로 리다이렉트하세요(스크립트 상단 주석 참조). 정확한 경로는 'adde completion {{shell}} --help'.",
   },
   run: {
     laneStartFailed: {
@@ -104,6 +121,10 @@ lane add 옵션:
       action: "잔존 엔진 프로세스를 수동 확인/종료하세요(ps | grep claude-agent-acp).",
     },
     upDone: "[adde] {{proj}} 데몬 등록 완료. 백그라운드에서 레인이 기동됩니다.",
+    alreadyUp:
+      "[adde] {{proj}} 는 이미 기동 중입니다 — 레인 {{running}}/{{total}} 실행 중. 새로 기동할 것이 없습니다.",
+    alreadyUpHint:
+      "  확인: adde status {{proj}} · 설정 변경 반영: adde restart {{proj}} · 종료: adde down {{proj}}",
     statusHint: "  상태 확인: adde status {{proj}}",
     downDone: "[adde] {{proj}} 데몬 종료 완료.",
     restartDone: "[adde] {{proj}} 재기동 완료. 백그라운드에서 레인이 기동됩니다.",
@@ -137,22 +158,18 @@ lane add 옵션:
   },
   lane: {
     valueRequired: "--{{key}} 에 값이 필요합니다",
-    sourceRetry: "  markdown 또는 telegram 중 하나를 입력하세요",
     retry: {
-      permTier: "  perm_tier — acp 또는 autopass 를 입력하세요",
-      fileMode: "  file_mode — private 또는 shared 를 입력하세요",
-      lang: "  lang — en 또는 ko 를 입력하세요(전역은 비움)",
       chatId: "  chat_id — 숫자 id 를 입력하세요(없으면 비움)",
       allowFrom: "  allow_from — 콤마 구분 숫자 id 를 입력하세요(없으면 비움)",
     },
     prompt: {
-      source: "source (markdown 또는 telegram)",
-      permTier: "perm_tier (acp 또는 autopass)",
+      source: "source (번호 또는 값 입력)",
+      permTier: "perm_tier (acp = 도구마다 채널 승인 / autopass = denylist 외 자동 허용)",
       allowlist: "allowlist (콤마 구분, 없으면 비움)",
       denylist: "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
       safeDefaults:
         "방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N)",
-      lang: "lang (채널 메시지 로케일: en/ko, 전역은 비움)",
+      lang: "lang (채널 메시지 로케일, 전역은 비움)",
       token: "telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움)",
       cwd: "cwd (레인 작업 폴더 절대경로, 없으면 비움)",
       chatId: "chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움)",
@@ -172,9 +189,22 @@ lane add 옵션:
     created: '레인 "{{lane}}" 생성: {{confPath}}',
     noLanes: "{{proj}}: 레인 없음",
     removed: '레인 "{{lane}}" 삭제: {{confPath}}',
+    removedPurged: '레인 "{{lane}}" 삭제 + state/queue/out 정리: {{confPath}}',
     tokenWritten: "토큰 기록: {{envPath}} (0600)",
     tokenNext: "다음: 봇 토큰을 {{envPath}} 에 TELEGRAM_BOT_TOKEN=... 으로 두세요",
     startHint: "기동: adde up {{proj}}",
+  },
+  proj: {
+    none: "등록된 프로젝트 없음 (adde lane add <proj> <lane> 로 생성).",
+    removed: '프로젝트 "{{proj}}" 삭제됨: {{path}}',
+    notFound: '프로젝트 "{{proj}}" 없음 ({{path}})',
+    running:
+      '프로젝트 "{{proj}}" 에 활성 레인이 있습니다: {{lanes}} — 먼저 데몬을 내리세요(adde down {{proj}}), 또는 --force 로 강제 삭제.',
+    needForce:
+      "확인 없이 삭제를 거부합니다 — 터미널에서 실행해 대화형으로 확인하거나 --force 를 주세요.",
+    confirmPrompt:
+      '삭제를 확인하려면 프로젝트 이름 "{{proj}}" 을 입력하세요(모든 레인과 state 제거)',
+    aborted: "취소됨 — 이름이 일치하지 않습니다.",
   },
   doctor: {
     node: {
@@ -269,6 +299,12 @@ lane add 옵션:
     doctorWarn:
       "위에 FAIL 항목이 있습니다. 계속 진행할 수 있으나 데몬 기동(adde up) 전에 해결하세요.",
     aliasPrompt: "짧은 별칭({{names}})을 adde 명령 옆에 설치할까요? (Y/n)",
+    completionPrompt: "{{shell}} 셸 탭 자동완성을 지금 설정할까요? (실행할 명령을 출력) (Y/n)",
+    completionWhat: "  탭 자동완성으로 adde 명령·프로젝트/레인 이름·옵션 값을 완성할 수 있습니다.",
+    completionBash:
+      "  실행: adde completion bash > /usr/local/etc/bash_completion.d/adde   (또는 ~/.bashrc 에 'source <(adde completion bash)' 추가 후 새 셸)",
+    completionZsh:
+      "  실행: adde completion zsh > \"${fpath[1]}/_adde\"   (~/.zshrc 에 'autoload -Uz compinit && compinit' 확인 후 새 셸)",
     aliasNoBin:
       "PATH 에서 adde 명령을 찾지 못했습니다 — 별칭 설치를 건너뜁니다(전역 설치에서만 가능).",
     aliasCreated: "  ✔ 별칭 생성: {{name}} → {{dir}}",

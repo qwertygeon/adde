@@ -5,6 +5,30 @@
  */
 import * as readline from "node:readline/promises";
 import { Writable } from "node:stream";
+import * as fs from "node:fs";
+import { dirname, basename, join } from "node:path";
+import { expandTilde } from "../shared/paths.js";
+
+/**
+ * 경로 입력용 Tab 완성기 — cwd/root/inbox 등 경로 프롬프트에서 디렉터리·파일명을 완성한다.
+ * 현재 입력의 상위 디렉터리를 스캔해 접두사 매칭 후보를 반환(디렉터리는 끝에 `/`).
+ * 경로가 아닌 프롬프트에서 Tab 을 눌러도 매칭이 없으면 무동작이라 해가 없다.
+ */
+function pathCompleter(line: string): [string[], string] {
+  try {
+    const expanded = expandTilde(line.trim());
+    const endsSlash = expanded.endsWith("/");
+    const dir = endsSlash ? expanded : dirname(expanded) || ".";
+    const prefix = endsSlash ? "" : basename(expanded);
+    const matches = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.name.startsWith(prefix))
+      .map((e) => join(dir, e.name) + (e.isDirectory() ? "/" : ""));
+    return [matches, line];
+  } catch {
+    return [[], line];
+  }
+}
 
 /** 한 줄 질의 함수 — (질문, 기본값) → 응답. */
 export type Ask = (question: string, def?: string) => Promise<string>;
@@ -34,7 +58,12 @@ export function createPrompter(deps: PrompterDeps = {}): Prompter {
       cb();
     },
   });
-  const rl = readline.createInterface({ input, output: out, terminal: true });
+  const rl = readline.createInterface({
+    input,
+    output: out,
+    terminal: true,
+    completer: pathCompleter,
+  });
 
   const ask: Ask = async (question, def) => {
     const a = (await rl.question(`${question}${def ? ` [${def}]` : ""}: `)).trim();

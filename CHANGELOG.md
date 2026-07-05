@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `adde proj ls` / `adde proj rm <proj>` — 프로젝트 단위 명령. `ls` 는 등록된 프로젝트와 레인·실행 수를 표(또는 `--json`)로 보여주고(레인 단위 `status` 와 상보), `rm` 은 프로젝트 디렉터리 전체(lanes.d + state + queue + processing + out)를 삭제한다. 파괴적이라 실행 중 레인이 있으면 거부(`--force` 로 우회)하고, TTY 에선 프로젝트 이름 재입력 확인, 비대화형에선 `--force` 를 요구한다.
+- `adde lane rm <proj> <lane> --purge` — conf 만 지우던 기존 동작에 더해 해당 레인의 state/queue/processing/out 디렉터리까지 정리하는 옵션(고아 데이터 정리). `--purge` 없으면 종전대로 conf 만 삭제.
+- 대화형 레인 생성(번호 선택·경로 자동완성) — `adde init`·`adde lane add --interactive` 에서 enum 필드(source·perm_tier·file_mode·lang)를 번호(1/2)로 고를 수 있게 하고(값 직접 입력도 계속 허용), cwd/root 등 경로 입력에 Tab 디렉터리 자동완성을 추가.
+- `adde init` 셸 자동완성 설정 안내 — 별칭 설치 단계에 이어, 감지된 셸(bash/zsh)에 맞는 자동완성 설치 명령을 옵트인으로 안내(셸 rc/fpath 를 대신 수정하지 않고 실행할 명령을 출력). `adde completion` 도움말을 "왜·무엇·어디에·어떻게 결정하는지" 로 상세화하고, 터미널에서 바로 실행 시 설치 힌트를 stderr 로 표시(리다이렉트 시엔 stdout 순수 유지).
+- `adde up` 이미 기동 중 안내 — 데몬이 이미 등록·상주 중일 때 재실행하면 launchctl 재등록 실패(혼란스러운 오류) 대신 "이미 기동 중"(실행 중/전체 레인 수)과 조치 힌트(status/restart/down)를 사용자 터미널에 표면화. 종전엔 중복 기동 가드가 데몬 내부(분리 프로세스) stderr 로만 기록돼 `adde up` 사용자에게 보이지 않던 것을 CLI 단에서 표면화.
+
 ### Changed
 
 - ACP 엔진 어댑터 마이그레이션 — deprecated·이름변경된 `@zed-industries/claude-code-acp`(0.16.2)를 후속 `@agentclientprotocol/claude-agent-acp`(0.55.0)로 교체하고 `@agentclientprotocol/sdk` 를 0.14.1 → 1.1.0 으로 승급. 기본 엔진 프로필·바이너리 해석·`--engine` 안내·문서를 새 이름(`claude-agent-acp`)으로 갱신. 권한 게이트 매칭 키(`_meta.claudeCode.toolName`)와 ACP 프로토콜 버전(v1) 유지를 신규 어댑터 소스로 실측 확인했고, requestPermission 의 도구명·인자 추출·결정 배선을 통합 테스트로 회귀 보호. `npm i -g adde-acp` 설치 시 출력되던 `npm warn deprecated` 가 사라짐.

@@ -72,6 +72,12 @@ export const LANE_ADD_FLAGS = [
 /** lane 하위 명령(정식 이름 — list/remove 별칭은 자동완성 미노출, 디스패치만 허용). */
 export const LANE_SUBS = ["add", "ls", "show", "rm", "help"] as const;
 
+/** proj 하위 명령 — ls(프로젝트 목록)·rm(프로젝트 삭제). */
+export const PROJ_SUBS = ["ls", "rm", "help"] as const;
+
+/** `proj rm` 옵션 플래그(자동완성·힌트용). */
+export const PROJ_RM_FLAGS = ["--force", "--purge"] as const;
+
 /** 최상위 명령 SSOT. hidden 명령은 도움말·자동완성에서 제외. */
 export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: "init", args: "[<proj>]", flags: [], positional: ["proj"], desc: "guided setup", usageKey: "usage.init" }, // prettier-ignore
@@ -83,6 +89,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: "logs", args: "<proj> <lane> [N]", flags: ["--engine"], positional: ["proj", "lane"], desc: "lane logs", usageKey: "usage.logs" }, // prettier-ignore
   { name: "sessions", args: "<proj> <lane>", flags: [], positional: ["proj", "lane"], desc: "engine sessions", usageKey: "usage.sessions" }, // prettier-ignore
   { name: "lane", args: "<add|ls|show|rm>", flags: [], subs: LANE_SUBS, desc: "manage lane configs", usageKey: "usage.lane" }, // prettier-ignore
+  { name: "proj", args: "<ls|rm>", flags: [], subs: PROJ_SUBS, desc: "list/delete projects", usageKey: "usage.proj" }, // prettier-ignore
   { name: "completion", args: "<bash|zsh>", flags: [], desc: "shell completion", usageKey: "usage.completion" }, // prettier-ignore
   { name: "alias", args: "[names...]", flags: [], desc: "install short aliases", usageKey: "usage.alias" }, // prettier-ignore
   { name: "__daemon", args: "<proj>", flags: [], usageKey: "usage.daemon", hidden: true },

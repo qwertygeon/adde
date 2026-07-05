@@ -18,6 +18,7 @@ The full command and option set of the ADDE CLI. The single main entry point is 
 - [sessions — session list](#sessions--session-list)
 - [Session control (channel commands)](#session-control-channel-commands)
 - [lane — lane configuration](#lane--lane-configuration)
+- [proj — project listing and deletion](#proj--project-listing-and-deletion)
 - [completion — shell completion](#completion--shell-completion)
 - [Help and typo hints](#help-and-typo-hints)
 - [Exit codes](#exit-codes)
@@ -113,7 +114,8 @@ Starts every `*.conf` lane in `~/.config/adde/<proj>/lanes.d/` as a **macOS laun
 
 - **Terminal-independent**: the daemon keeps running even after you close the terminal.
 - **Auto-recovery**: launchd automatically restarts the daemon after a macOS reboot/logout.
-- **Double-start guard**: an already-running lane prints a warning and remedy hint and is skipped. Double starts do not happen.
+- **Already-up notice**: if the daemon is already registered, `adde up` does not re-register (which would fail as "already loaded"). Instead it prints an "already up" line with the running/total lane count and hints (`adde status` to view, `adde restart` to apply conf changes, `adde down` to stop).
+- **Double-start guard**: within the daemon, an already-running lane is skipped with a warning (recorded in the daemon log). Double starts do not happen.
 - **macOS only**: the launchd feature works only on macOS. See [macOS-only features](#macos-only-features) for details.
 
 At startup a plist file (`~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist`) is created and registered with launchd. Each lane's status is recorded in `state/<lane>/runtime.json`.
@@ -227,9 +229,11 @@ Creates, lists, and deletes a lane conf (`lanes.d/<lane>.conf`). One file = one 
 adde lane add <proj> <lane> [options]   # create
 adde lane ls <proj>                      # list
 adde lane show <proj> <lane>             # print conf
-adde lane rm <proj> <lane>               # delete (side data like state/queue is preserved)
+adde lane rm <proj> <lane> [--purge]     # delete conf (--purge also removes state/queue/out)
 adde lane help                           # all options
 ```
+
+By default `lane rm` deletes only the conf and preserves side data (state/queue/out). `--purge` also removes the lane's `state`/`queue`/`processing`/`out` directories (orphan cleanup).
 
 `ls`/`rm` can also be written as `list`/`remove` (same behavior).
 
@@ -261,26 +265,34 @@ adde lane help                           # all options
 
 **Interactive by default**: on a TTY, `adde lane add <proj> <lane>` with **no field flags** launches the interactive wizard automatically — no `--interactive` needed. It becomes non-interactive when any field flag is given (`--source`, `--engine`, `--backend`, `--channel`, `--perm-tier`, `--acp-version`, `--cwd`, `--allowlist`, `--denylist`, `--hard-deny`, `--safe-defaults`, `--lang`, `--chat-id`, `--allow-from`, `--file-mode`, `--root`, `--inbox`, `--approvals`, `--outbox`, `--token-stdin`), when `--no-interactive` is passed, or when stdin is not a TTY (scripts/CI). `--interactive` force-enables it (and errors on a non-TTY); `--no-interactive` force-disables it. `<proj>` and `<lane>` are always required positional arguments.
 
-In the wizard, the telegram bot token is prompted **last, with hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to defer it (set it later via `--token-stdin` or by editing `.env`). The wizard also asks whether to enable `--safe-defaults` (the hard-deny danger list, default yes). Enum/numeric fields are validated at entry and re-prompt on bad input — `perm_tier` (acp|autopass), `file_mode` (private|shared), `lang` (en|ko or empty), `chat_id` (numeric or empty), `allow_from` (comma-separated numeric or empty), and `source` (markdown|telegram). At creation, a missing `cwd`, a missing markdown `root`, or a malformed telegram token is reported as a **warning** but creation still proceeds.
+In the wizard, the telegram bot token is prompted **last, with hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to defer it (set it later via `--token-stdin` or by editing `.env`). The wizard also asks whether to enable `--safe-defaults` (the hard-deny danger list, default yes). **Enum fields are shown as a numbered menu** — you can answer with the **number** (`1`, `2`, …) or type the value; `source`, `perm_tier`, `file_mode`, and `lang` work this way. **Path fields (`cwd`, `root`, …) support Tab directory completion.** Numeric fields (`chat_id`, `allow_from`) are validated at entry and re-prompt on bad input. At creation, a missing `cwd`, a missing markdown `root`, or a malformed telegram token is reported as a **warning** but creation still proceeds.
 
 **Example: interactive** (auto-launched on a TTY — the field prompts follow the required `<proj> <lane>`):
 
 ```text
 $ adde lane add myproj tg-claude
-source (markdown or telegram) [markdown]: telegram
+source (enter a number or the value)
+  1) markdown
+  2) telegram [markdown]: 2
 engine [claude-agent-acp]:
 backend [acp]:
 channel [telegram]:
-perm_tier (acp or autopass) [acp]: autopass
+perm_tier (acp = approve each tool in the channel / autopass = auto-allow except denylist)
+  1) acp
+  2) autopass [acp]: 2
 acp_version [v1]:
 allowlist (comma-separated, empty for none): Read,Grep
-denylist (tools/patterns that fall back to channel approval, comma-separated) [Bash(sudo *),Bash(rm -rf /*),Bash(rm -rf ~*),Bash(rm -rf .*),Bash(git push --force*),Bash(git push -f*),Bash(git reset --hard*),Bash(git clean -fd*),Read(~/.ssh/**),Read(~/.aws/**),Read(~/.npmrc),Read(~/.config/gh/hosts.yml),Read(~/.kube/config),Read(~/.docker/config.json),Read(~/.config/gcloud/**)]:
+denylist (tools/patterns that fall back to channel approval, comma-separated) [Bash(sudo *),…]:
 enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (y/N) [y]: y
-lang (channel message locale: en/ko, empty for global): ko
-cwd (absolute lane working directory, empty to skip): /Users/me/work/my-project
+lang (channel message locale, empty for global)
+  1) en
+  2) ko: 2
+cwd (absolute lane working directory, empty to skip): /Users/me/work/my-project    # Tab completes paths
 chat_id (reply target + authorizes that chat for inbound, empty to skip): 12345678
 allow_from (extra authorized sender ids, comma-separated, empty to skip):
-file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable) [private]:
+file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable)
+  1) private
+  2) shared [private]:
 telegram bot token (hidden input, empty to set later): ⟨input hidden⟩
 
 lane "tg-claude" created: ~/.config/adde/myproj/lanes.d/tg-claude.conf
@@ -325,13 +337,36 @@ Passing `--token-stdin` (or any field flag) already makes the command non-intera
 >
 > **File permissions (`--file-mode`)**: the default `private` locks the lane's state/out/queue/lanes.d directories to 0700 (owner only) to block other local users on a multi-user host from reading the conversation, responses, and config metadata. `shared` is an opt-in that does not apply this lock (keeps the existing umask default — typically 0755); use it only when read sharing is needed. (The bot-token `.env` is always 0600 regardless of mode.)
 
+## proj — project listing and deletion
+
+Project-level view and teardown (complements the lane-oriented `lane`/`status`).
+
+```bash
+adde proj ls                    # list registered projects (with lane + running counts)
+adde proj rm <proj> [--force]   # delete a project: all its lanes + state
+```
+
+`ls`/`rm` can also be written as `list`/`remove`.
+
+- **`proj ls`** — one row per registered project (a directory under the config base that has a `lanes.d/`) with its lane count and running count. `--json` prints an array for scripts.
+- **`proj rm <proj>`** — deletes the entire project directory (`lanes.d` + `state` + `queue` + `processing` + `out`). Because it is destructive:
+  - it **refuses** if the project has running/dead/stale lanes — stop the daemon first (`adde down <proj>`), or pass `--force` to delete anyway;
+  - on a TTY it asks you to **re-type the project name** to confirm; in a non-interactive shell it requires `--force`.
+
+```bash
+adde proj ls                    # PROJECT · LANES · RUNNING table
+adde down myproj                # stop first if running
+adde proj rm myproj             # confirm by re-typing the name
+adde proj rm myproj --force     # skip confirmation (scripts/CI)
+```
+
 ## completion — shell completion
 
 ```bash
 adde completion <bash|zsh>
 ```
 
-Prints a command/flag completion script to stdout (supports macOS-default zsh + bash). It is generated from the command/flag spec, so completion updates automatically as commands grow. The script registers for `adde` plus the short aliases `ad` and `add`.
+Prints a command/flag completion script to stdout — **it does not install anything** (you redirect it into your shell's completion directory). It is generated from the command/flag spec, so completion updates automatically as commands grow. The script registers for `adde` plus the short aliases `ad` and `add`. `adde completion --help` explains why/what/where for each shell, and **`adde init` can walk you through installing it** (opt-in, right after the alias step). When run on a terminal (not redirected) it also prints an install hint to stderr.
 
 ```bash
 # zsh: place on fpath after compinit, or source from .zshrc
@@ -344,7 +379,7 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 **What it completes**:
 
 - **Top-level commands + global flags** — `up`/`down`/…/`lane`/`completion`, and `-h`/`--help`/`-v`/`--version`. In zsh each command shows a short description next to it.
-- **Subcommands and fixed values** — `lane add|ls|show|rm|help`, `completion bash|zsh`, the alias-name suggestions after `alias`, `status --all/--json`, `logs --engine`, and the `lane add` option flags.
+- **Subcommands and fixed values** — `lane add|ls|show|rm|help`, `proj ls|rm` (project name after `proj rm`), `completion bash|zsh`, the alias-name suggestions after `alias`, `status --all/--json`, `logs --engine`, and the `lane add` option flags.
 - **Dynamic project/lane names** — scanned live from `${ADDE_HOME:-~/.config/adde}` (no `adde` process is spawned): a project name at the first position of `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` and `lane ls|show|rm|add` (e.g. `adde up <TAB>`, `adde status <TAB>`), and a lane name at the next position (e.g. `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
 - **Enum flag values** — after `--source` (markdown|telegram), `--perm-tier` (acp|autopass), `--file-mode` (private|shared), `--lang` (en|ko).
 - **Directory paths** — after `--cwd` and `--root`.

@@ -121,6 +121,10 @@ export async function run(argv: readonly string[]): Promise<number> {
       return 1;
     }
     process.stdout.write(script);
+    // stdout 이 터미널이면(리다이렉트 아님) 설치 힌트를 stderr 로 — 파이프/리다이렉트 시엔 stdout 은 순수 스크립트 유지.
+    if (process.stdout.isTTY) {
+      process.stderr.write("\n" + t("completion.installHint", { shell }) + "\n");
+    }
     return 0;
   }
 
@@ -137,6 +141,11 @@ export async function run(argv: readonly string[]): Promise<number> {
   if (first === "lane") {
     const { runLane } = await import("./lane.js");
     return runLane(argv.slice(1));
+  }
+
+  if (first === "proj") {
+    const { runProj } = await import("./proj.js");
+    return runProj(argv.slice(1));
   }
 
   if (first === "status") {
@@ -182,7 +191,18 @@ export async function run(argv: readonly string[]): Promise<number> {
       return 1;
     }
     try {
-      const { loadDaemon } = await import("../core/launchd.js");
+      const { loadDaemon, daemonRegState } = await import("../core/launchd.js");
+      // 이미 등록·상주 중이면 launchctl load 는 "already loaded" 로 실패한다 — 혼란스러운
+      // 오류 대신 "이미 기동 중"을 명시 안내한다(실행 중 레인 수를 runtime.json 에서 읽어 표면화).
+      const reg = await daemonRegState(proj);
+      if (reg.launchctlRegistered) {
+        const { collectStatus } = await import("../core/diagnostics.js");
+        const rows = await collectStatus(proj);
+        const running = rows.filter((r) => r.status === "running").length;
+        process.stdout.write(t("run.alreadyUp", { proj, running, total: rows.length }) + "\n");
+        process.stdout.write(t("run.alreadyUpHint", { proj }) + "\n");
+        return 0;
+      }
       await loadDaemon(proj);
       process.stdout.write(t("run.upDone", { proj }) + "\n");
       process.stdout.write(t("run.statusHint", { proj }) + "\n");

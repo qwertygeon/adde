@@ -4,7 +4,7 @@
  * 모든 검증을 통과한 뒤에만 디스크에 쓴다(validate-then-commit). 쓰기는 tmp→rename 원자적.
  */
 import { t, SUPPORTED_LOCALES } from "../shared/i18n.js";
-import { readdir, readFile, mkdir, unlink, stat } from "node:fs/promises";
+import { readdir, readFile, mkdir, unlink, rm, stat } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { parseLaneConf, serializeLaneConf } from "../shared/conf.js";
 import type { LaneConf } from "../shared/conf.js";
@@ -192,6 +192,19 @@ export interface LaneShowResult {
 export interface LaneRemoveResult {
   lane: string;
   confPath: string;
+  /** purge 로 state/queue/processing/out 부수 데이터까지 지웠는지. */
+  purged: boolean;
+}
+
+export interface LaneRemoveOptions extends LaneCommandBaseOptions {
+  /** conf 뿐 아니라 레인의 state/queue/processing/out 디렉터리까지 삭제. */
+  purge?: boolean;
+}
+
+export interface ProjRemoveResult {
+  proj: string;
+  /** 삭제한 프로젝트 디렉터리 경로. */
+  path: string;
 }
 
 /** CSV 를 트림·빈값 제거해 항목 배열로. allow_from 등 목록 문자열 파싱 공용. */
@@ -396,11 +409,15 @@ export async function laneShow(
   return { lane, confPath: paths.confFile, conf: parseLaneConf(text), text };
 }
 
-/** `adde lane rm` — 레인 conf 삭제. 부재 시 에러. state/queue 등 부수 데이터는 보존. */
+/**
+ * `adde lane rm` — 레인 conf 삭제. 부재 시 에러.
+ * 기본은 conf 만 지우고 state/queue 등 부수 데이터는 보존한다.
+ * purge 면 레인의 state/queue/processing/out 디렉터리까지 삭제한다(고아 데이터 정리).
+ */
 export async function laneRemove(
   proj: string,
   lane: string,
-  opts: LaneCommandBaseOptions = {},
+  opts: LaneRemoveOptions = {},
 ): Promise<LaneRemoveResult> {
   assertName("proj", proj);
   assertName("lane", lane);
@@ -411,5 +428,30 @@ export async function laneRemove(
   } catch {
     throw new LaneConfigError(t("laneConfig.err.laneNotFound", { lane, confFile: paths.confFile }));
   }
-  return { lane, confPath: paths.confFile };
+  const purged = opts.purge === true;
+  if (purged) {
+    // conf 제거 후 부수 데이터 정리 — 경로는 lanePaths(안전 세그먼트 검증 완료)에서 파생.
+    for (const dir of [paths.stateDir, paths.queueDir, paths.processingDir, paths.outDir]) {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+  return { lane, confPath: paths.confFile, purged };
+}
+
+/**
+ * `adde proj rm` — 프로젝트 디렉터리(<base>/<proj>) 전체 삭제(lanes.d + state + queue + processing + out).
+ * 부재 시 에러. 파괴적이므로 CLI 계층이 실행 중 레인 확인·사용자 확인을 선행한다.
+ */
+export async function projRemove(
+  proj: string,
+  opts: LaneCommandBaseOptions = {},
+): Promise<ProjRemoveResult> {
+  assertName("proj", proj);
+  const base = opts.base ?? defaultBase();
+  const projDir = join(base, proj);
+  if (!(await exists(projDir))) {
+    throw new LaneConfigError(t("proj.notFound", { proj, path: projDir }));
+  }
+  await rm(projDir, { recursive: true, force: true });
+  return { proj, path: projDir };
 }

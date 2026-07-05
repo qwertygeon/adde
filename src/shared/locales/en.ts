@@ -21,8 +21,10 @@ Commands:
   lane add <proj> <lane>   create a lane conf
   lane ls <proj>           list lanes
   lane show <proj> <lane>  print a lane conf
-  lane rm <proj> <lane>    delete a lane conf
-  completion <bash|zsh>    print a shell completion script
+  lane rm <proj> <lane>    delete a lane conf (--purge also removes state/queue/out)
+  proj ls                  list registered projects (with lane + running counts)
+  proj rm <proj>           delete a project (all its lanes + state; asks to confirm)
+  completion <bash|zsh>    print a shell completion script (Tab-complete commands/projects/lanes; run 'adde completion --help' for setup)
   alias [names...]         install short aliases (default ad, add) next to the adde binary
 
 Options:
@@ -37,7 +39,20 @@ Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help
     doctor: "Usage: adde doctor [<proj>]",
     logs: "Usage: adde logs <proj> <lane> [N] [--engine]",
     sessions: "Usage: adde sessions <proj> <lane>",
-    completion: "Usage: adde completion <bash|zsh>  (print a shell completion script)",
+    completion: `Usage: adde completion <bash|zsh>
+
+Prints a shell completion script to stdout — it does NOT install anything.
+Why: enables Tab-completion of adde commands, project/lane names, and option values.
+What: a script for your shell; you redirect it into your shell's completion directory.
+Where/how to decide (check your shell with: echo $SHELL):
+  bash → adde completion bash > /usr/local/etc/bash_completion.d/adde   (or add 'source <(adde completion bash)' to ~/.bashrc)
+  zsh  → adde completion zsh  > "\${fpath[1]}/_adde"                     (then run compinit; ensure 'autoload -Uz compinit && compinit' is in ~/.zshrc)
+Tip: 'adde init' can walk you through this setup.`,
+    proj: `Usage:
+  adde proj ls               list registered projects (with lane + running counts)
+  adde proj rm <proj>        delete a project — removes ALL its lanes and state
+
+  --force                    skip the confirmation prompt (required in non-interactive shells)`,
     init: "Usage: adde init [<proj>]  (guided setup: doctor + short alias + create a lane; TTY only)",
     alias:
       "Usage: adde alias [names...]  (install short aliases next to the adde binary; default: ad add)",
@@ -50,7 +65,7 @@ Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help
   adde lane add <proj> <lane> [options]   create a lane conf
   adde lane ls <proj>                     list lanes
   adde lane show <proj> <lane>            print a lane conf
-  adde lane rm <proj> <lane>              delete a lane conf
+  adde lane rm <proj> <lane> [--purge]    delete a lane conf (--purge also removes its state/queue/out data)
 
 lane add options:
   --source <markdown|telegram>  (default markdown)
@@ -85,6 +100,8 @@ lane add options:
   },
   completion: {
     unknownShell: 'unsupported shell "{{shell}}" — one of {{supported}}',
+    installHint:
+      "↳ This printed a completion script, not an installer. To enable it, redirect this into your {{shell}} completion directory (see the comment at the top of the script), or run 'adde completion {{shell}} --help' for the exact path.",
   },
   run: {
     laneStartFailed: {
@@ -104,6 +121,10 @@ lane add options:
       action: "Manually check/stop leftover engine processes (ps | grep claude-agent-acp).",
     },
     upDone: "[adde] {{proj}} daemon registered. Lanes are starting in the background.",
+    alreadyUp:
+      "[adde] {{proj}} is already up — {{running}}/{{total}} lane(s) running. Nothing to start.",
+    alreadyUpHint:
+      "  View: adde status {{proj}} · apply conf changes: adde restart {{proj}} · stop: adde down {{proj}}",
     statusHint: "  Check status: adde status {{proj}}",
     downDone: "[adde] {{proj}} daemon stopped.",
     restartDone: "[adde] {{proj}} restarted. Lanes are starting in the background.",
@@ -137,22 +158,19 @@ lane add options:
   },
   lane: {
     valueRequired: "--{{key}} requires a value",
-    sourceRetry: "  enter one of markdown or telegram",
     retry: {
-      permTier: "  perm_tier — enter acp or autopass",
-      fileMode: "  file_mode — enter private or shared",
-      lang: "  lang — enter en or ko (or leave empty for global)",
       chatId: "  chat_id — enter a numeric id (or leave empty)",
       allowFrom: "  allow_from — enter comma-separated numeric ids (or leave empty)",
     },
     prompt: {
-      source: "source (markdown or telegram)",
-      permTier: "perm_tier (acp or autopass)",
+      source: "source (enter a number or the value)",
+      permTier:
+        "perm_tier (acp = approve each tool in the channel / autopass = auto-allow except denylist)",
       allowlist: "allowlist (comma-separated, empty for none)",
       denylist: "denylist (tools/patterns that fall back to channel approval, comma-separated)",
       safeDefaults:
         "enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (y/N)",
-      lang: "lang (channel message locale: en/ko, empty for global)",
+      lang: "lang (channel message locale, empty for global)",
       token: "telegram bot token (hidden input, empty to set later)",
       cwd: "cwd (absolute lane working directory, empty to skip)",
       chatId: "chat_id (reply target + authorizes that chat for inbound, empty to skip)",
@@ -172,9 +190,22 @@ lane add options:
     created: 'lane "{{lane}}" created: {{confPath}}',
     noLanes: "{{proj}}: no lanes",
     removed: 'lane "{{lane}}" removed: {{confPath}}',
+    removedPurged: 'lane "{{lane}}" removed with state/queue/out purged: {{confPath}}',
     tokenWritten: "token written: {{envPath}} (0600)",
     tokenNext: "Next: put the bot token in {{envPath}} as TELEGRAM_BOT_TOKEN=...",
     startHint: "Start: adde up {{proj}}",
+  },
+  proj: {
+    none: "no projects registered (create one with adde lane add <proj> <lane>).",
+    removed: 'project "{{proj}}" deleted: {{path}}',
+    notFound: 'project "{{proj}}" not found ({{path}})',
+    running:
+      'project "{{proj}}" has active lane(s): {{lanes}} — stop the daemon first (adde down {{proj}}), or pass --force to delete anyway.',
+    needForce:
+      "refusing to delete without confirmation — run it in a terminal to confirm interactively, or pass --force.",
+    confirmPrompt:
+      'type the project name "{{proj}}" to confirm deletion (removes ALL its lanes and state)',
+    aborted: "aborted — the name did not match.",
   },
   doctor: {
     node: {
@@ -269,6 +300,14 @@ lane add options:
     doctorWarn:
       "Some checks FAILed above. You can continue, but fix them before starting the daemon (adde up).",
     aliasPrompt: "install short aliases ({{names}}) next to the adde command? (Y/n)",
+    completionPrompt:
+      "set up shell tab-completion for {{shell}} now? (prints the exact command to run) (Y/n)",
+    completionWhat:
+      "  Tab-completion lets you complete adde commands, project/lane names, and option values.",
+    completionBash:
+      "  Run: adde completion bash > /usr/local/etc/bash_completion.d/adde   (or add 'source <(adde completion bash)' to ~/.bashrc, then open a new shell)",
+    completionZsh:
+      "  Run: adde completion zsh > \"${fpath[1]}/_adde\"   (ensure 'autoload -Uz compinit && compinit' is in ~/.zshrc, then open a new shell)",
     aliasNoBin:
       "could not locate the adde command in PATH — skipping aliases (only available on a global install).",
     aliasCreated: "  ✔ alias created: {{name}} → {{dir}}",

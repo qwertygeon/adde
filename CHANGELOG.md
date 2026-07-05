@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-05
+
 ### Added
 
 - `adde proj ls` / `adde proj rm <proj>` — 프로젝트 단위 명령. `ls` 는 등록된 프로젝트와 레인·실행 수를 표(또는 `--json`)로 보여주고(레인 단위 `status` 와 상보), `rm` 은 프로젝트 디렉터리 전체(lanes.d + state + queue + processing + out)를 삭제한다. 파괴적이라 실행 중 레인이 있으면 거부(`--force` 로 우회)하고, TTY 에선 프로젝트 이름 재입력 확인, 비대화형에선 `--force` 를 요구한다. 삭제 전 launchd 데몬을 unload 해 고아 plist 등록이 남지 않게 한다.

@@ -177,7 +177,7 @@ describe("TelegramSource long-poll (SC-014)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       authorizedIds: [99],
     });
@@ -224,7 +224,7 @@ describe("TelegramSource long-poll (SC-014)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       authorizedIds: [99],
     });
@@ -266,7 +266,7 @@ describe("TelegramSource out→quote-reply (SC-015)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       chatId: 99,
     });
@@ -299,7 +299,7 @@ describe("TelegramSource out→quote-reply (SC-015)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       chatId: 99,
     });
@@ -336,7 +336,7 @@ describe("TelegramSource inline 버튼 (SC-017)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       authorizedIds: [99],
     });
@@ -395,7 +395,7 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       authorizedIds: [99],
     });
@@ -442,7 +442,7 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       authorizedIds: [99],
     });
@@ -481,7 +481,7 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       authorizedIds: [99],
     });
@@ -565,7 +565,7 @@ describe("callBotApi 429 레이트리밋 재시도 (012-P)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       chatId: 99,
     });
@@ -596,7 +596,7 @@ describe("renderOut 4096 초과 분할 전송 (011-A)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       chatId: 99,
     });
@@ -635,7 +635,7 @@ describe("인바운드 인증 거부 (e2e 폴 루프)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       authorizedIds: [99],
     });
@@ -666,7 +666,7 @@ describe("인바운드 인증 거부 (e2e 폴 루프)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       authorizedIds: [99],
     });
@@ -705,7 +705,7 @@ describe("인바운드 인증 거부 (e2e 폴 루프)", () => {
     const source: TelegramSource = createTelegramSource({
       lane: "test-lane",
       proj: "myproj",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       chatId: -100, // 그룹 회신 대상(자기 인증 앵커 아님)
       authorizedIds: [111], // 허가 멤버는 111 뿐

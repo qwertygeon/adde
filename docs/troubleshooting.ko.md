@@ -39,7 +39,7 @@ _[English](troubleshooting.md) | 한국어_
 
 | 증상                                 | 원인                                                                                 | 조치                                                                                                                                                                                                                                  |
 | ------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `doctor` 가 ACP 어댑터 바이너리 FAIL | 엔진 어댑터 미설치                                                                   | `pnpm install`(예: `@zed-industries/claude-code-acp` 설치) 후 재시도                                                                                                                                                                  |
+| `doctor` 가 ACP 어댑터 바이너리 FAIL | 엔진 어댑터 미설치                                                                   | `pnpm install`(예: `@agentclientprotocol/claude-agent-acp` 설치) 후 재시도                                                                                                                                                            |
 | Node 버전 FAIL                       | Node < 22                                                                            | Node 22 이상으로 업그레이드                                                                                                                                                                                                           |
 | `lanes.d 에 conf 없음`               | 레인 미생성                                                                          | `adde lane add <proj> <lane> ...`(또는 `--interactive`·`adde init`)로 생성                                                                                                                                                            |
 | 토큰 FAIL (telegram)                 | `.env` 에 토큰 없음                                                                  | [Telegram 가이드 4단계](telegram.ko.md#4-봇-토큰-저장)로 토큰 저장                                                                                                                                                                    |
@@ -76,7 +76,7 @@ adde restart <proj>                # 데몬 재기동으로 회수
 ## 재부팅 후 복구·orphan 정리
 
 - **재부팅·로그아웃 후 레인이 안 떠 있음**: `adde up` 으로 등록된 데몬은 `KeepAlive`/`RunAtLoad` 로 자동 복구되지만, 실제 상태는 직접 확인하세요 — `adde status <proj>` 가 `running` 이 아니면 `adde doctor <proj>`(등록 상태 포함) 점검 후 `adde up <proj>` 재기동. plist 는 `adde up` 시점의 PATH 를 담으므로, 그 뒤 node/claude 설치 위치를 옮겼다면 `adde restart <proj>` 로 PATH 를 갱신하세요.
-- **orphan 엔진 프로세스**: 비정상 종료 후 `claude-code-acp` 엔진 프로세스가 남을 수 있습니다. `adde down <proj>` 후 `ps aux | grep claude-code-acp` 로 잔존을 확인하고, 남아 있으면 해당 pid 를 종료하세요.
+- **orphan 엔진 프로세스**: 비정상 종료 후 `claude-agent-acp` 엔진 프로세스가 남을 수 있습니다. `adde down <proj>` 후 `ps aux | grep claude-agent-acp` 로 잔존을 확인하고, 남아 있으면 해당 pid 를 종료하세요.
 
 ## 메시지를 보내도 응답이 없음
 

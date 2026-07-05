@@ -54,7 +54,7 @@ export const ko = {
 
 lane add 옵션:
   --source <telegram|markdown>  (기본 telegram)
-  --engine <name>               (기본 claude-code-acp)
+  --engine <name>               (기본 claude-agent-acp)
   --backend <name>              (기본 acp)
   --channel <name>              (기본 source 값)
   --perm-tier <acp|autopass>    (기본 acp — 전 도구 채널 승인 / autopass — denylist 외 자동 허용)
@@ -101,7 +101,7 @@ lane add 옵션:
     signalShutdown: "[adde] {{sig}} 수신 — 레인 종료 중...",
     shutdownError: {
       situation: "종료 처리 중 오류: {{error}}",
-      action: "잔존 엔진 프로세스를 수동 확인/종료하세요(ps | grep claude-code-acp).",
+      action: "잔존 엔진 프로세스를 수동 확인/종료하세요(ps | grep claude-agent-acp).",
     },
     upDone: "[adde] {{proj}} 데몬 등록 완료. 백그라운드에서 레인이 기동됩니다.",
     statusHint: "  상태 확인: adde status {{proj}}",
@@ -184,7 +184,7 @@ lane add 옵션:
     adapter: {
       name: "ACP 어댑터 바이너리",
       missing: "해석된 경로에 파일 없음: {{path}}",
-      hint: "의존성을 설치하세요(pnpm install) — @zed-industries/claude-code-acp 누락.",
+      hint: "의존성을 설치하세요(pnpm install) — @agentclientprotocol/claude-agent-acp 누락.",
     },
     daemonEntry: {
       name: "데몬 진입 파일",

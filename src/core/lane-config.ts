@@ -297,7 +297,7 @@ export async function laneAdd(
   const conf: LaneConf = {
     source: src,
     backend: opts.backend ?? "acp",
-    engine: opts.engine ?? "claude-code-acp",
+    engine: opts.engine ?? "claude-agent-acp",
     channel: opts.channel ?? src,
     perm_tier: permTier,
     acp_version: opts.acp_version ?? "v1",

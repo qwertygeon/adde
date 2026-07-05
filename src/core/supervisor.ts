@@ -38,16 +38,16 @@ import type { LanePaths } from "../shared/paths.js";
 export function resolveAdapterBin(): string {
   const require = createRequire(import.meta.url);
   try {
-    const pkgPath = require.resolve("@zed-industries/claude-code-acp/package.json");
+    const pkgPath = require.resolve("@agentclientprotocol/claude-agent-acp/package.json");
     const dir = pkgPath.slice(0, pkgPath.lastIndexOf("/package.json"));
     const pkg = require(pkgPath) as { bin?: string | Record<string, string> };
-    const binRel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.["claude-code-acp"];
+    const binRel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.["claude-agent-acp"];
     if (binRel) return resolve(dir, binRel);
   } catch {
     // 폴백(.bin shim)으로 진행
   }
   const thisDir = fileURLToPath(new URL(".", import.meta.url));
-  return resolve(thisDir, "../../../node_modules/.bin/claude-code-acp");
+  return resolve(thisDir, "../../../node_modules/.bin/claude-agent-acp");
 }
 
 interface LaneHandle {

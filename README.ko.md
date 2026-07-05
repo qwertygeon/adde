@@ -36,7 +36,7 @@ adde init         # 가이드 설정 (환경 점검 + 짧은 별칭 + 첫 레인
 ## 핵심 설계
 
 - **ACP 우선**: 엔진을 헤드리스 [Agent Client Protocol](https://agentclientprotocol.com) 서브프로세스로 띄우고 ADDE 가 ACP 클라이언트로 구동합니다. 지시·응답·권한·로그·사용량이 단일 이벤트 스트림으로 처리됩니다(터미널 스크래핑 없음).
-- **엔진 독립**: `claude-code-acp`·`codex-acp` 가 같은 프로토콜을 말하므로 단일 백엔드 어댑터가 여러 엔진을 구동합니다.
+- **엔진 독립**: `claude-agent-acp`·`codex-acp` 가 같은 프로토콜을 말하므로 단일 백엔드 어댑터가 여러 엔진을 구동합니다.
 - **레인 격리**: `(source × backend × project)` 단위의 독립 수직 스택. 입력·승인·출력이 레인 안에서 완결됩니다.
 - **fail-closed 권한**: 모든 권한 요청을 채널 승인으로 라우팅하고, 타임아웃·오류 시 기본 deny. 레인별 옵트인 `autopass` 티어(denylist 도구만 확인, 그 외 자동 허용·전량 기록)와, 티어 무관 즉시 거부하는 **하드-거부**(`--safe-defaults` 로 sudo·rm -rf·자격증명 읽기 등 방어심화 기본 차단)도 제공합니다.
 - **i18n(en/ko)**: CLI 출력·채널 메시지가 영어/한국어를 지원합니다. 로케일 자동 감지(`ADDE_LANG` > 시스템 로케일 `LC_ALL`/`LC_MESSAGES`/`LANG` > 기본 en) + 레인별 채널 언어(`lane add --lang`). 상세는 [명령 레퍼런스](docs/commands.ko.md)의 "언어(로케일)".
@@ -67,7 +67,7 @@ adde completion <bash|zsh>   # 셸 자동완성 스크립트 출력
 - 설치: **npm 전역 설치** `npm i -g adde-acp`. 업데이트는 `npm i -g adde-acp@latest` 후 `adde restart <proj>`(`status`/`doctor` 가 새 버전을 안내). 개발·기여는 소스 빌드(`pnpm install && pnpm build`). 상세·권한(EACCES) 안내: [시작하기](docs/getting-started.ko.md#설치).
 - 짧은 별칭 `ad`·`add` 는 자동 설치되지 않습니다 — `adde init` 또는 `adde alias` 로 옵트인 설치합니다(전역 명령명 충돌 회피).
 - TypeScript + Node.js LTS (>=22)
-- **AI 엔진 ACP 어댑터 필수**(예: `@zed-industries/claude-code-acp`) — `adde doctor` 가 사전 점검합니다.
+- **AI 엔진 ACP 어댑터 필수**(예: `@agentclientprotocol/claude-agent-acp`) — `adde doctor` 가 사전 점검합니다.
 - macOS 1차 타깃 — `adde up`/`down`/`restart` 는 macOS launchd LaunchAgent 기반. 재부팅·로그아웃 후 자동 복구. Linux/WSL은 현재 지원 범위 밖.
 
 ## 상태 / 로드맵

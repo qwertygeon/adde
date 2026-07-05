@@ -73,7 +73,7 @@ describe("telegram enqueue 연속 실패 알림 (SC3)", () => {
     const source = createTelegramSource({
       lane: "lane",
       proj: "p",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
       paths,
       chatId: 99,
     });

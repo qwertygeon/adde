@@ -36,7 +36,7 @@ adde init         # guided setup (environment check + short alias + first lane)
 ## Core design
 
 - **ACP-first**: the engine runs as a headless [Agent Client Protocol](https://agentclientprotocol.com) subprocess and ADDE drives it as an ACP client. Instructions, replies, permissions, logs, and usage all flow through a single event stream (no terminal scraping).
-- **Engine-agnostic**: `claude-code-acp` and `codex-acp` speak the same protocol, so a single backend adapter drives multiple engines.
+- **Engine-agnostic**: `claude-agent-acp` and `codex-acp` speak the same protocol, so a single backend adapter drives multiple engines.
 - **Lane isolation**: each `(source × backend × project)` is an independent vertical stack. Input, approvals, and output are self-contained within a lane.
 - **Fail-closed permissions**: every permission request is routed to the channel for approval, defaulting to deny on timeout/error. Per-lane opt-ins are also available: an `autopass` tier (auto-allow everything except the denylist, fully recorded) and a tier-independent **hard-deny** (`--safe-defaults` blocks sudo, rm -rf, credential reads, etc. as defense-in-depth).
 - **i18n (en/ko)**: CLI output and channel messages support English and Korean. Locale is auto-detected (`ADDE_LANG` > system locale `LC_ALL`/`LC_MESSAGES`/`LANG` > default en), with a per-lane channel language (`lane add --lang`). See "Language (locale)" in the [command reference](docs/commands.md).
@@ -67,7 +67,7 @@ For lane configuration details see [Getting started](docs/getting-started.md#lan
 - Install: **global npm install** `npm i -g adde-acp`. Update with `npm i -g adde-acp@latest` then `adde restart <proj>` (`status`/`doctor` notify you of a new version). For development/contribution, build from source (`pnpm install && pnpm build`). Details and permission (EACCES) notes: [Getting started](docs/getting-started.md#install).
 - The short aliases `ad`/`add` are **not** installed automatically — opt in via `adde init` or `adde alias` (avoids clashing with common global command names).
 - TypeScript + Node.js LTS (>=22)
-- **An AI engine ACP adapter is required** (e.g. `@zed-industries/claude-code-acp`) — `adde doctor` checks for it up front.
+- **An AI engine ACP adapter is required** (e.g. `@agentclientprotocol/claude-agent-acp`) — `adde doctor` checks for it up front.
 - macOS is the primary target — `adde up`/`down`/`restart` are built on macOS launchd LaunchAgents, with auto-recovery after reboot/logout. Linux/WSL are out of scope for now.
 
 ## Status / roadmap

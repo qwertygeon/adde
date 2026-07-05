@@ -66,7 +66,7 @@ adde lane add myproj tg-claude --interactive  # 마법사 명시적 강제
 
 처음이라면 `adde init` 온보딩 마법사가 doctor 점검·별칭 설치 제안까지 함께 안내합니다 — [명령 레퍼런스](commands.ko.md#init--온보딩-마법사).
 
-기본값: `--source telegram`, `--backend acp`, `--engine claude-code-acp`. 전체 옵션은 [명령 레퍼런스](commands.ko.md#lane-add-옵션) 또는 `adde lane help`.
+기본값: `--source telegram`, `--backend acp`, `--engine claude-agent-acp`. 전체 옵션은 [명령 레퍼런스](commands.ko.md#lane-add-옵션) 또는 `adde lane help`.
 
 > `--allowlist` 에 넣은 도구는 채널 승인 없이 자동 허용됩니다(트랜스크립트에는 기록). `Bash`·파일 쓰기 같은 광범위 도구는 넣지 마세요(자기승인 위험). 대부분을 자동 허용하는 옵트인 `--perm-tier autopass`, 티어와 무관하게 위험 명령을 즉시 거부하는 `--hard-deny`/`--safe-defaults` 를 포함한 권한 모델 전반은 [권한 가이드](permissions.ko.md)를 참고하세요.
 

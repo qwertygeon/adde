@@ -139,7 +139,7 @@ export async function collectInteractive(
     source = (await ask(t("lane.sourceRetry"), "telegram")).toLowerCase();
   }
   opts.source = source;
-  opts.engine = await ask("engine", "claude-code-acp");
+  opts.engine = await ask("engine", "claude-agent-acp");
   opts.backend = await ask("backend", "acp");
   opts.channel = await ask("channel", source);
   opts.perm_tier = await askUntil(

@@ -8,7 +8,7 @@ export function makeEnvelope(id = "msg-001", text = "테스트", replyMsgId?: st
     lane: "test-lane",
     source: "telegram",
     backend: "acp",
-    engine: "claude-code-acp",
+    engine: "claude-agent-acp",
     project: "myproj",
     ts: new Date().toISOString(),
     text,

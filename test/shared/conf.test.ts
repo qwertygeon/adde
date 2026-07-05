@@ -6,7 +6,7 @@ import { parseLaneConf, serializeLaneConf } from "../../src/shared/conf.js";
 describe("parseLaneConf", () => {
   const minimalConf = `source=telegram
 backend=acp
-engine=claude-code-acp
+engine=claude-agent-acp
 channel=telegram
 `;
 
@@ -14,7 +14,7 @@ channel=telegram
     const result = parseLaneConf(minimalConf);
     expect(result.source).toBe("telegram");
     expect(result.backend).toBe("acp");
-    expect(result.engine).toBe("claude-code-acp");
+    expect(result.engine).toBe("claude-agent-acp");
     expect(result.channel).toBe("telegram");
   });
 
@@ -99,7 +99,7 @@ describe("serializeLaneConf", () => {
 
   it("parse→serialize→parse round-trip 이 동치이다", () => {
     const original = parseLaneConf(
-      "source=markdown\nbackend=acp\nengine=claude-code-acp\nchannel=markdown\n" +
+      "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
         "perm_tier=acp\nacp_version=v1\nallowlist=Read,Grep\ncwd=/abs/p\nroot=/abs/Notes\ninbox=in.md\n",
     );
     const reparsed = parseLaneConf(serializeLaneConf(original));

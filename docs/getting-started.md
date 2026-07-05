@@ -20,7 +20,7 @@ ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) remotely from
 
 - macOS (primary target)
 - Node.js LTS (>=22) — the daemon is launched via launchd, so `node` must be on PATH (`adde up` injects the PATH at launch time into the plist).
-- AI engine ACP adapter — `@zed-industries/claude-code-acp` is bundled with `adde` (no separate install needed).
+- AI engine ACP adapter — `@agentclientprotocol/claude-agent-acp` is bundled with `adde` (no separate install needed).
 - **Claude authentication**: the engine drives Claude Code through the bundled adapter, so **Claude must be authenticated under the same user account** (e.g. logged in via Claude Code, or `ANTHROPIC_API_KEY` set). If unauthenticated, the engine handshake fails and the lane will not start — first confirm that Claude works on its own.
 
 ## Install
@@ -107,7 +107,7 @@ Common keys:
 ```ini
 source=telegram         # telegram | markdown
 backend=acp
-engine=claude-code-acp  # ACP engine launch profile
+engine=claude-agent-acp  # ACP engine launch profile
 channel=telegram        # for gate routing
 perm_tier=acp
 acp_version=v1

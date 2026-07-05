@@ -56,7 +56,7 @@ $ adde init
 adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
 
   ✔ Node 버전: v22.14.0
-  ✔ ACP 어댑터 바이너리: @zed-industries/claude-code-acp 해석됨
+  ✔ ACP 어댑터 바이너리: @agentclientprotocol/claude-agent-acp 해석됨
   ✔ 설정 base 디렉터리: ~/.config/adde
   ✔ 데몬 진입 파일: /opt/homebrew/lib/node_modules/adde/dist/cli/adde.js
 
@@ -67,7 +67,7 @@ adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
 프로젝트 이름 [default]: myproj
 레인 이름 [main]: tg-claude
 source (telegram 또는 markdown) [telegram]: telegram
-engine [claude-code-acp]:
+engine [claude-agent-acp]:
 backend [acp]:
 channel [telegram]:
 perm_tier (acp 또는 autopass) [acp]:
@@ -238,7 +238,7 @@ adde lane help                       # 전체 옵션
 | 옵션                                                 | 기본값                                             | 설명                                                                                                                          |
 | ---------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `--source <telegram\|markdown>`                      | `telegram`                                         | 채널 소스                                                                                                                     |
-| `--engine <name>`                                    | `claude-code-acp`                                  | ACP 엔진 프로필                                                                                                               |
+| `--engine <name>`                                    | `claude-agent-acp`                                 | ACP 엔진 프로필                                                                                                               |
 | `--backend <name>`                                   | `acp`                                              | 백엔드                                                                                                                        |
 | `--channel <name>`                                   | source 값                                          | 게이트 분기                                                                                                                   |
 | `--perm-tier <acp\|autopass>`                        | `acp`                                              | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인)                                                 |
@@ -268,7 +268,7 @@ adde lane help                       # 전체 옵션
 ```text
 $ adde lane add myproj tg-claude
 source (telegram 또는 markdown) [telegram]: telegram
-engine [claude-code-acp]:
+engine [claude-agent-acp]:
 backend [acp]:
 channel [telegram]:
 perm_tier (acp 또는 autopass) [acp]: autopass
@@ -313,7 +313,7 @@ printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude \
 
 > ⚠️ `--perm-tier autopass` 는 denylist 에 없는 **모든 도구(파일 쓰기·Bash 포함)를 채널 확인 없이 자동 허용**하는 옵트인 모드입니다. 확인이 필요한 도구는 `--denylist` 에 두세요. 자동 허용 내역은 transcript 에 기록되고, 기동 시 채널로 경고 배너가 전송됩니다. 기본값(`acp`)의 동작은 변하지 않습니다.
 >
-> allowlist/denylist 매칭은 엔진이 알려주는 원시 도구명(예: `Bash`, `Write`) 기준이며, 도구명을 확인할 수 없는 요청은 자동 허용하지 않고 채널 승인으로 보냅니다(fail-closed). 현재 도구명 제공은 `claude-code-acp` 엔진에서 확인되었습니다 — 도구명을 제공하지 않는 엔진에서는 autopass 여도 모든 요청이 채널 승인을 거칩니다(안전 방향).
+> allowlist/denylist 매칭은 엔진이 알려주는 원시 도구명(예: `Bash`, `Write`) 기준이며, 도구명을 확인할 수 없는 요청은 자동 허용하지 않고 채널 승인으로 보냅니다(fail-closed). 현재 도구명 제공은 `claude-agent-acp` 엔진에서 확인되었습니다 — 도구명을 제공하지 않는 엔진에서는 autopass 여도 모든 요청이 채널 승인을 거칩니다(안전 방향).
 >
 > **denylist 패턴**: `Tool(글롭)` 형식으로 대표 인자를 매칭합니다 — Bash 는 명령 문자열, Read/Write/Edit 는 파일 경로, WebFetch 는 URL. `*` 는 임의 문자열(경로 구분자 포함)이고 전체 일치 기준이라 접두 차단은 `Bash(git push*)`, 포함 차단은 `Bash(*sudo *)` 처럼 씁니다. 인자를 확인할 수 없는 요청·패턴을 지원하지 않는 도구는 도구명만 맞아도 채널 승인으로 갑니다(과매칭=안전 방향). 도구명 비교는 대소문자를 무시합니다. **셸 체이닝**: Bash 는 체이닝·그룹의 하위 명령을 개별 매칭합니다(`;` `&&` `||` `|` `&`·그룹 `(` `)` `{` `}`·`$(…)`·백틱·개행으로 분리, 선행 `VAR=` 대입 제거) — 접두 패턴(`sudo *`)이 `echo x && sudo y`·`(sudo y)` 를 잡습니다. 완전한 셸 파서가 아닌 best-effort 입니다(alias·`eval`·변수 확장 미해석; `bash -c "sudo y"` 같은 래퍼 호출은 못 잡음; 따옴표 안에서도 연산자로 분리하므로 `--safe-defaults` 에서 인용부 인자에 연산자+위험 토큰이 든 정상 명령이 거부될 수 있음) — 확실한 차단이 필요하면 도구 전체(`Bash`)를 지정하세요.
 >
@@ -401,4 +401,4 @@ CLI 출력·채널 메시지는 en/ko 두 언어를 지원합니다.
 2. 다른 터미널에서 `adde down <proj>` 후 `adde status <proj>` 가 `stopped` 인지 확인
 3. macOS 재부팅 후 `adde status <proj>` — 자동 복구 확인
 4. `adde up <proj>` 연속 두 번 실행 — 이중 기동 없음 확인(경고 메시지 출력 후 스킵)
-5. `adde down <proj>` 후 `ps aux | grep claude-code-acp` — orphan 프로세스 없음 확인
+5. `adde down <proj>` 후 `ps aux | grep claude-agent-acp` — orphan 프로세스 없음 확인

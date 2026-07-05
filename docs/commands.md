@@ -56,7 +56,7 @@ $ adde init
 adde setup — environment check, short aliases, and your first lane.
 
   ✔ Node version: v22.14.0
-  ✔ ACP adapter binary: @zed-industries/claude-code-acp resolved
+  ✔ ACP adapter binary: @agentclientprotocol/claude-agent-acp resolved
   ✔ config base directory: ~/.config/adde
   ✔ daemon entry: /opt/homebrew/lib/node_modules/adde/dist/cli/adde.js
 
@@ -67,7 +67,7 @@ install short aliases (ad, add) next to the adde command? (Y/n) [y]: y
 project name [default]: myproj
 lane name [main]: tg-claude
 source (telegram or markdown) [telegram]: telegram
-engine [claude-code-acp]:
+engine [claude-agent-acp]:
 backend [acp]:
 channel [telegram]:
 perm_tier (acp or autopass) [acp]:
@@ -238,7 +238,7 @@ adde lane help                           # all options
 | Option                                               | Default                                                         | Description                                                                                                                                                     |
 | ---------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--source <telegram\|markdown>`                      | `telegram`                                                      | Channel source                                                                                                                                                  |
-| `--engine <name>`                                    | `claude-code-acp`                                               | ACP engine profile                                                                                                                                              |
+| `--engine <name>`                                    | `claude-agent-acp`                                              | ACP engine profile                                                                                                                                              |
 | `--backend <name>`                                   | `acp`                                                           | Backend                                                                                                                                                         |
 | `--channel <name>`                                   | source value                                                    | Gate routing                                                                                                                                                    |
 | `--perm-tier <acp\|autopass>`                        | `acp`                                                           | Permission tier. `acp`=channel-approve every tool / `autopass`=auto-allow outside the denylist (opt-in)                                                         |
@@ -268,7 +268,7 @@ In the wizard, the telegram bot token is prompted **last, with hidden input** (k
 ```text
 $ adde lane add myproj tg-claude
 source (telegram or markdown) [telegram]: telegram
-engine [claude-code-acp]:
+engine [claude-agent-acp]:
 backend [acp]:
 channel [telegram]:
 perm_tier (acp or autopass) [acp]: autopass
@@ -313,7 +313,7 @@ Passing `--token-stdin` (or any field flag) already makes the command non-intera
 
 > ⚠️ `--perm-tier autopass` is an opt-in mode that **auto-allows every tool not in the denylist (including file writes and `Bash`) without channel confirmation**. Put tools that need confirmation in `--denylist`. Auto-allow entries are recorded in the transcript, and a warning banner is sent to the channel at startup. The behavior of the default (`acp`) does not change.
 >
-> allowlist/denylist matching is based on the raw tool name the engine reports (e.g. `Bash`, `Write`); a request whose tool name cannot be determined is not auto-allowed and is sent to channel approval (fail-closed). Tool-name provision is currently confirmed for the `claude-code-acp` engine — with an engine that does not provide tool names, every request goes through channel approval even under autopass (the safe direction).
+> allowlist/denylist matching is based on the raw tool name the engine reports (e.g. `Bash`, `Write`); a request whose tool name cannot be determined is not auto-allowed and is sent to channel approval (fail-closed). Tool-name provision is currently confirmed for the `claude-agent-acp` engine — with an engine that does not provide tool names, every request goes through channel approval even under autopass (the safe direction).
 >
 > **denylist patterns**: `Tool(glob)` format matches the representative argument — Bash is the command string, Read/Write/Edit the file path, WebFetch the URL. `*` is any string (including path separators) and matches against the whole, so a prefix block is `Bash(git push*)` and a contains block is `Bash(*sudo *)`. A request whose argument cannot be determined, or a tool that doesn't support patterns, goes to channel approval even if only the tool name matches (over-matching = the safe direction). Tool-name comparison is case-insensitive. **Shell chaining**: for Bash, each chained/grouped sub-command (split on `;` `&&` `||` `|` `&`, grouping `(` `)` `{` `}`, `$(…)`, backticks, and newline, leading `VAR=` assignments stripped) is matched too, so a prefix pattern (`sudo *`) catches `echo x && sudo y` and `(sudo y)`. Matching is best-effort, not a full shell parser (no alias/`eval`/variable expansion; wrapper invocations like `bash -c "sudo y"` are not caught; operator characters split even inside quotes, so `--safe-defaults` may refuse a benign command whose quoted argument contains an operator plus a danger token) — if a certain block is needed, specify the whole tool (`Bash`).
 >
@@ -401,4 +401,4 @@ The daemon-management features of `adde up`/`down`/`restart` depend on macOS lau
 2. `adde down <proj>` from another terminal, then confirm `adde status <proj>` is `stopped`
 3. After a macOS reboot, `adde status <proj>` — confirm auto-recovery
 4. Run `adde up <proj>` twice in a row — confirm no double start (warning printed, then skipped)
-5. `adde down <proj>` then `ps aux | grep claude-code-acp` — confirm no orphan process
+5. `adde down <proj>` then `ps aux | grep claude-agent-acp` — confirm no orphan process

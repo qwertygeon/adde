@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 const conf = (extra = ""): string =>
-  `source=telegram\nbackend=acp\nengine=claude-code-acp\nchannel=telegram\nperm_tier=acp\nacp_version=v1\n${extra}`;
+  `source=telegram\nbackend=acp\nengine=claude-agent-acp\nchannel=telegram\nperm_tier=acp\nacp_version=v1\n${extra}`;
 
 function writeConf(proj: string, lane: string, text: string): void {
   const lanesDir = path.join(tmpBase, proj, "lanes.d");
@@ -47,7 +47,7 @@ function rt(pid: number, lane: string): RuntimeInfo {
     startedAt: new Date().toISOString(),
     source: "telegram",
     backend: "acp",
-    engine: "claude-code-acp",
+    engine: "claude-agent-acp",
   };
 }
 
@@ -410,7 +410,7 @@ describe("기존 conf·runtime.json 스키마 비침해 (SC-015)", () => {
       startedAt: new Date().toISOString(),
       source: "telegram",
       backend: "acp",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
     };
     await writeRuntime(lp, originalRuntime);
 
@@ -421,7 +421,7 @@ describe("기존 conf·runtime.json 스키마 비침해 (SC-015)", () => {
     expect(row?.sessionId).toBe("orig-session");
     expect(row?.source).toBe("telegram");
     expect(row?.backend).toBe("acp");
-    expect(row?.engine).toBe("claude-code-acp");
+    expect(row?.engine).toBe("claude-agent-acp");
   });
 
   it("lanes.d conf 파일이 runDoctor 후에도 내용 불변", async () => {

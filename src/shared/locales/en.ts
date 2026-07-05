@@ -54,7 +54,7 @@ Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help
 
 lane add options:
   --source <telegram|markdown>  (default telegram)
-  --engine <name>               (default claude-code-acp)
+  --engine <name>               (default claude-agent-acp)
   --backend <name>              (default acp)
   --channel <name>              (default: value of source)
   --perm-tier <acp|autopass>    (default acp — channel approval for every tool / autopass — auto-allow except denylist)
@@ -101,7 +101,7 @@ lane add options:
     signalShutdown: "[adde] received {{sig}} — shutting down lanes...",
     shutdownError: {
       situation: "error during shutdown: {{error}}",
-      action: "Manually check/stop leftover engine processes (ps | grep claude-code-acp).",
+      action: "Manually check/stop leftover engine processes (ps | grep claude-agent-acp).",
     },
     upDone: "[adde] {{proj}} daemon registered. Lanes are starting in the background.",
     statusHint: "  Check status: adde status {{proj}}",
@@ -184,7 +184,7 @@ lane add options:
     adapter: {
       name: "ACP adapter binary",
       missing: "no file at resolved path: {{path}}",
-      hint: "Install dependencies (pnpm install) — @zed-industries/claude-code-acp missing.",
+      hint: "Install dependencies (pnpm install) — @agentclientprotocol/claude-agent-acp missing.",
     },
     daemonEntry: {
       name: "daemon entry",

@@ -66,7 +66,7 @@ adde lane add myproj tg-claude --interactive  # force the wizard explicitly
 
 If this is your first time, the `adde init` onboarding wizard also walks you through the doctor check and offering to install aliases — [command reference](commands.md#init--onboarding-wizard).
 
-Defaults: `--source telegram`, `--backend acp`, `--engine claude-code-acp`. For all options see the [command reference](commands.md#lane-add-options) or `adde lane help`.
+Defaults: `--source telegram`, `--backend acp`, `--engine claude-agent-acp`. For all options see the [command reference](commands.md#lane-add-options) or `adde lane help`.
 
 > Tools in `--allowlist` are auto-allowed without channel approval (still recorded in the transcript). Don't add broad tools like `Bash` or file writes (self-approval risk). For the whole permission model — including the opt-in `--perm-tier autopass` that auto-allows most tools, and `--hard-deny`/`--safe-defaults` that refuse dangerous commands outright regardless of tier — see the [permissions guide](permissions.md).
 

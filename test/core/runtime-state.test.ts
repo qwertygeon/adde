@@ -37,7 +37,7 @@ function info(pid: number): RuntimeInfo {
     startedAt: new Date().toISOString(),
     source: "telegram",
     backend: "acp",
-    engine: "claude-code-acp",
+    engine: "claude-agent-acp",
   };
 }
 

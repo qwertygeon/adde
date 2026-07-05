@@ -64,7 +64,7 @@ describe("laneAdd", () => {
     const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
     expect(conf.source).toBe("telegram");
     expect(conf.backend).toBe("acp");
-    expect(conf.engine).toBe("claude-code-acp");
+    expect(conf.engine).toBe("claude-agent-acp");
     expect(conf.channel).toBe("telegram");
     expect(conf.perm_tier).toBe("acp");
     expect(conf.acp_version).toBe("v1");

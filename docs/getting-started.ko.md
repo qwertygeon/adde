@@ -2,7 +2,7 @@ _[English](getting-started.md) | 한국어_
 
 # 시작하기
 
-ADDE 는 AI CLI 엔진(Claude Code 등)을 채널(마크다운 노트 / Telegram)에서 원격 구동하는 게이트웨이입니다. 이 문서는 설치부터 첫 레인 기동까지를 다룹니다.
+ADDE 는 AI CLI 엔진(Claude Code 등)을 마크다운 노트(또는 Telegram 같은 채팅 채널)에서 구동하는 게이트웨이입니다. 이 문서는 설치부터 첫 레인 기동까지를 다룹니다.
 
 ## 목차
 

@@ -4,7 +4,7 @@ _English | [한국어](markdown.ko.md)_
 
 In button-less environments you drive an AI lane **just by editing markdown note files**. You send instructions with a checkbox in the inbox note, allow/deny permissions with checkboxes in the approval notes, and receive responses in output notes.
 
-This works in any markdown editor, but the **Obsidian + sync (Obsidian Sync / Syncthing)** combination fits best — notes sync to mobile without a server, and you can toggle checkboxes by tapping. This document uses Obsidian as the representative example.
+This works in any markdown editor and stays entirely in local files. To reach the notes from your phone, sync the folder with whatever tool you already use (Obsidian Sync, Syncthing, iCloud, …) — ADDE is sync-tool-agnostic and doesn't care which. The examples below use Obsidian, but nothing here is Obsidian-specific.
 
 ## Table of Contents
 
@@ -174,7 +174,7 @@ One `adde up work` brings up all three lanes at once, each with its own note↔f
 
 ## Sync conflicts and caveats
 
-- **Conflict-file isolation**: `*.sync-conflict*` / `(conflicted copy)` files created by Obsidian Sync / Syncthing are isolated by ADDE into a `.conflicts/` folder and **never executed**.
+- **Conflict-file isolation**: `*.sync-conflict*` / `(conflicted copy)` files — created by whatever sync tool you use (Obsidian Sync, Syncthing, Dropbox, …) — are isolated by ADDE into a `.conflicts/` folder and **never executed**.
 - **Self-write safety**: even when ADDE updates the inbox/approval notes (status markers), no re-send loop occurs (idempotent via markers).
 - **Watch concurrent edits**: if you edit the same line at the exact moment ADDE updates a note, a sync conflict can occur. An active session viewed on one device is recommended.
 

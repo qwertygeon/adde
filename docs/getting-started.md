@@ -2,7 +2,7 @@ _English | [한국어](getting-started.ko.md)_
 
 # Getting started
 
-ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) remotely from a channel (markdown notes / Telegram). This document covers everything from installation to starting your first lane.
+ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) from your markdown notes (or a chat channel like Telegram). This document covers everything from installation to starting your first lane.
 
 ## Table of Contents
 

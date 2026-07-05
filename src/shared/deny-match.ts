@@ -48,19 +48,34 @@ function globMatches(glob: string, value: string): boolean {
   return false;
 }
 
+/** 셸 인터프리터 `-c <payload>` 추출 — 인용 페이로드 안 위험명령이 래퍼 세그먼트 하나에 갇혀 인식기를 우회하던 것 방지. */
+const SHELL_C_PAYLOAD =
+  /\b(?:sh|bash|zsh|dash|ksh|ash)\s+(?:-[A-Za-z]+\s+)*-c\s+(?:'([^']*)'|"([^"]*)"|(\S+))/g;
+
 /**
  * 셸 명령을 제어 연산자(`;` `&&` `||` `|` `&` 개행)와 그룹·명령치환 경계
  * (`(` `)` `{` `}` `$(` 백틱)로 분해해 체이닝·서브셸·그룹의 하위 명령을 개별 후보로 낸다.
  * 각 세그먼트의 선행 환경변수 대입(`FOO=1 sudo …`)은 제거해 실제 실행 명령 토큰이 앞에 오도록 한다.
  * 앵커 글롭이 전체 문자열만 봤을 때 `cd /tmp && sudo rm -rf /`·`(sudo rm -rf /)` 같은
  * 체이닝·서브셸이 위험 패턴을 우회하던 문제를 막는다(과분리=더 많은 후보 대조=안전 방향).
+ * 아울러 `sh -c "…"`/`bash -c '…'` 페이로드를 추가 세그먼트로 재귀 분해(최대 깊이 3)해 셸 중첩 우회를 막는다.
  * best-effort 다 — 따옴표를 인식하지 않으므로 인용부 안 연산자에서도 분리한다(과매칭=안전).
  */
-function shellSegments(command: string): string[] {
+function shellSegments(command: string, depth = 0): string[] {
+  // `$HOME`/`${HOME}` 를 homedir 로 선확장 — 홈 삭제/자격증명 경로를 균일 대조하고,
+  // `${HOME}` 의 중괄호가 브레이스그룹 구분자로 오분리되던 문제도 함께 해소.
+  command = command.replace(/\$\{HOME\}|\$HOME\b/g, () => homedir());
   const out: string[] = [];
   for (const raw of command.split(/(?:&&|\|\||[;&|(){}\n]|`)/)) {
     const seg = raw.replace(/^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "").trim();
     if (seg) out.push(seg);
+  }
+  if (depth < 3) {
+    // matchAll 은 정규식을 복제하므로 재귀 재진입에도 lastIndex 공유 문제가 없다(전역 exec 루프는 무한루프 위험).
+    for (const m of command.matchAll(SHELL_C_PAYLOAD)) {
+      const payload = m[1] ?? m[2] ?? m[3];
+      if (payload) out.push(...shellSegments(payload, depth + 1));
+    }
   }
   return out;
 }
@@ -79,6 +94,9 @@ const WRAPPER_CMDS = new Set([
   "time",
   "stdbuf",
   "setsid",
+  "timeout",
+  "nohup",
+  "xargs",
 ]);
 
 /** 래퍼별 값 소비 옵션(분리형 `-n 10` 의 값 토큰을 함께 건너뛴다). */
@@ -86,6 +104,13 @@ const WRAPPER_VALUE_OPT: Record<string, Set<string>> = {
   nice: new Set(["-n"]),
   ionice: new Set(["-c", "-n", "-p"]),
   env: new Set(["-u"]),
+  timeout: new Set(["-s", "-k", "--signal", "--kill-after"]),
+  xargs: new Set(["-n", "-I", "-P", "-L", "-s", "-d", "-a", "-E", "--replace", "--max-args"]),
+};
+
+/** 래퍼별 명령 앞 위치인자 개수(예: `timeout DURATION cmd` 의 DURATION 1개). */
+const WRAPPER_POSITIONAL_SKIP: Record<string, number> = {
+  timeout: 1,
 };
 
 /** 권한상승 명령 — 경로·래퍼 불문 그 자체가 위험. */
@@ -113,6 +138,15 @@ function commandBasename(tok: string): string {
   return slash >= 0 ? t.slice(slash + 1) : t;
 }
 
+/** 선행 홈 참조(`~`·`$HOME`·`${HOME}`)를 homedir 로 확장(없으면 원본) — `rm -rf $HOME` 등 홈 삭제를 `~` 스코프로 포섭. */
+function expandLeadingHome(p: string): string {
+  if (p === "~" || p.startsWith("~/")) return homedir() + p.slice(1);
+  if (p === "$HOME" || p === "${HOME}") return homedir();
+  if (p.startsWith("$HOME/")) return homedir() + p.slice("$HOME".length);
+  if (p.startsWith("${HOME}/")) return homedir() + p.slice("${HOME}".length);
+  return p;
+}
+
 /**
  * 세그먼트를 정규화해 `{cmd 기본명, args(따옴표 제거)}` 로. 선행 래퍼(env[VAR=/-opt]·command·nice[-n N]·
  * time·exec 등)를 반복 제거해 실제 명령을 head 로 올리고, 경로·따옴표·백슬래시·이중공백을 흡수한다.
@@ -138,6 +172,7 @@ function normalizeCommand(segment: string): { cmd: string; args: string[] } | nu
       }
       break;
     }
+    i += WRAPPER_POSITIONAL_SKIP[head] ?? 0; // `timeout DURATION cmd` 등 명령 앞 위치인자 건너뛰기
     if (i >= toks.length) return null; // 래퍼만 있고 명령 없음
     toks = toks.slice(i);
   }
@@ -219,7 +254,11 @@ function dangerousBashEntry(
   if (rmTargets && rmTargets.length > 0) {
     return (n) => {
       const t = rmRecursiveTargets(n.cmd, n.args);
-      return !!t && t.some((x) => rmTargets.some((g) => globMatches(g, x)));
+      if (!t) return false;
+      return t.some((x) => {
+        const home = expandLeadingHome(x); // `$HOME`/`${HOME}`/`~` → homedir 확장 후에도 대조
+        return rmTargets.some((g) => globMatches(g, x) || globMatches(g, home));
+      });
     };
   }
   if (entry.cmd === "git") {
@@ -266,12 +305,10 @@ function isPathGlob(glob: string): boolean {
   return glob.startsWith("~") || glob.startsWith("/");
 }
 
-/** 후보 경로가 자격증명 글롭 중 하나와 매칭 — 따옴표 제거·`~` 확장·`..` 접기 변형까지 대조. */
+/** 후보 경로가 자격증명 글롭 중 하나와 매칭 — 따옴표 제거·`~`/`$HOME` 확장·`..` 접기 변형까지 대조. */
 function pathMatchesCredential(candidate: string, globs: string[]): boolean {
   const u = unquote(candidate);
-  const variants = new Set<string>([u]);
-  if (u === "~") variants.add(homedir());
-  else if (u.startsWith("~/")) variants.add(homedir() + u.slice(1));
+  const variants = new Set<string>([u, expandLeadingHome(u)]);
   for (const v of [...variants]) variants.add(posix.normalize(v));
   return globs.some((g) => [...variants].some((v) => globMatches(g, v)));
 }
@@ -297,7 +334,11 @@ export function matchesDenylist(
   const credGlobs: string[] = [];
   for (const raw of list) {
     const e = parseDenyEntry(raw.trim());
-    if (e?.glob && CRED_FILE_TOOLS.has(e.tool) && isPathGlob(e.glob)) credGlobs.push(e.glob);
+    if (e?.glob && CRED_FILE_TOOLS.has(e.tool) && isPathGlob(e.glob)) {
+      credGlobs.push(e.glob);
+      // `~/.ssh/**` 은 자식 경로만 매칭 → 디렉터리 자체(`~/.ssh`)도 추가해 통째 exfil(tar/cp -r/zip) 포섭.
+      if (e.glob.endsWith("/**")) credGlobs.push(e.glob.slice(0, -3));
+    }
   }
 
   for (const raw of list) {
@@ -324,8 +365,13 @@ export function matchesDenylist(
       if (typeof cmd === "string") {
         for (const seg of shellSegments(cmd)) {
           const norm = normalizeCommand(seg);
-          if (norm && [norm.cmd, ...norm.args].some((tok) => pathMatchesCredential(tok, credGlobs)))
-            return true;
+          if (!norm) continue;
+          for (const tok of [norm.cmd, ...norm.args]) {
+            // 토큰 자체 + `opt=path` 우변(`dd if=~/.aws/x`·`--file=~/.ssh/x`)을 함께 대조.
+            const eq = tok.indexOf("=");
+            const cands = eq >= 0 ? [tok, tok.slice(eq + 1)] : [tok];
+            if (cands.some((c) => pathMatchesCredential(c, credGlobs))) return true;
+          }
         }
       }
     } else if (CRED_FILE_TOOLS.has(toolName)) {

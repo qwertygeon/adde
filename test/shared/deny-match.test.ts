@@ -219,6 +219,36 @@ describe("정규화 인식기 — 권한상승 doas", () => {
   });
 });
 
+describe("정규화 인식기 — 셸 중첩·추가 래퍼·$HOME (PR#33 리뷰 후속)", () => {
+  const D = [...DEFAULT_AUTOPASS_DENYLIST];
+  const bash = (c: string) => matchesDenylist(D, "Bash", { command: c });
+
+  it("sh -c / bash -c 페이로드 안 위험명령을 재귀 분해해 잡는다", () => {
+    expect(bash('bash -c "rm -rf ~"')).toBe(true);
+    expect(bash("sh -c 'rm -rf /'")).toBe(true);
+    expect(bash('bash -c "git push origin +main"')).toBe(true);
+    expect(bash('sh -c "cat ~/.ssh/id_rsa"')).toBe(true);
+    expect(bash("bash -c 'pnpm test'")).toBe(false); // 무해 페이로드는 통과
+  });
+
+  it("timeout·nohup·xargs 래퍼도 벗겨 실제 명령을 본다", () => {
+    expect(bash("timeout 5 rm -rf /")).toBe(true);
+    expect(bash("timeout -k 5 10 rm -rf /")).toBe(true);
+    expect(bash("nohup rm -rf /")).toBe(true);
+    expect(bash("xargs rm -rf /")).toBe(true);
+    expect(bash("xargs -n 1 rm -rf /")).toBe(true);
+    expect(bash("timeout 5 pnpm test")).toBe(false); // 무해 명령은 통과
+  });
+
+  it("$HOME/${HOME} 홈 삭제를 홈 스코프로 잡는다", () => {
+    expect(bash("rm -rf $HOME")).toBe(true);
+    expect(bash('rm -rf "$HOME"')).toBe(true);
+    expect(bash("rm -rf ${HOME}")).toBe(true);
+    expect(bash("rm -rf $HOME/")).toBe(true);
+    expect(bash("echo $HOME")).toBe(false); // rm 아님
+  });
+});
+
 describe("자격증명 경로 교차 보호 — 파일도구 전반 + Bash args", () => {
   const D = [...DEFAULT_AUTOPASS_DENYLIST];
 
@@ -226,6 +256,21 @@ describe("자격증명 경로 교차 보호 — 파일도구 전반 + Bash args"
     expect(matchesDenylist(D, "Bash", { command: "cat ~/.ssh/id_rsa" })).toBe(true);
     expect(matchesDenylist(D, "Bash", { command: "cp ~/.aws/credentials /tmp/x" })).toBe(true);
     expect(matchesDenylist(D, "Bash", { command: "less ~/.config/gh/hosts.yml" })).toBe(true);
+  });
+
+  it("디렉터리 통째 exfil(tar/cp -r/zip) 도 잡는다 (/** 글롭 자식요구 보완)", () => {
+    expect(matchesDenylist(D, "Bash", { command: "tar czf - ~/.ssh" })).toBe(true);
+    expect(matchesDenylist(D, "Bash", { command: "cp -r ~/.ssh /tmp/x" })).toBe(true);
+    expect(matchesDenylist(D, "Bash", { command: "zip -r out.zip ~/.aws" })).toBe(true);
+  });
+
+  it("opt=path 로 붙은 자격증명 경로도 잡는다", () => {
+    expect(matchesDenylist(D, "Bash", { command: "dd if=~/.aws/credentials of=/tmp/x" })).toBe(
+      true,
+    );
+    expect(matchesDenylist(D, "Bash", { command: "scp --identity=~/.ssh/id_rsa host:" })).toBe(
+      true,
+    );
   });
 
   it("Write/Edit/NotebookEdit 로 자격증명 경로 쓰기도 잡는다 (Read 전용 아님)", () => {

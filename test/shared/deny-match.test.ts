@@ -120,6 +120,42 @@ describe("matchesDenylist — 글롭 의미론 (DEC-001/003)", () => {
   });
 });
 
+describe("재귀 rm 견고 매칭 — 플래그 형태 불문(-r·-R·-fr·-rfv·--recursive), 대상 스코프 유지", () => {
+  const rm = ["Bash(rm -rf /*)", "Bash(rm -rf ~*)", "Bash(rm -rf .*)"];
+
+  it("-f 없는 -r 도 잡는다 (이번 개선의 핵심)", () => {
+    expect(matchesDenylist(rm, "Bash", { command: "rm -r /etc" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -r ~/Documents" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -r .git" })).toBe(true);
+  });
+
+  it("플래그 순서·번들·대문자·--recursive 변형을 잡는다", () => {
+    expect(matchesDenylist(rm, "Bash", { command: "rm -fr /" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -R /var" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -rfv /" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm --recursive /etc" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -rf  /" })).toBe(true); // 이중 공백
+    expect(matchesDenylist(rm, "Bash", { command: 'rm -r "/"' })).toBe(true); // 인용 대상
+  });
+
+  it("체이닝·서브셸의 재귀 rm 도 세그먼트로 잡는다", () => {
+    expect(matchesDenylist(rm, "Bash", { command: "cd /tmp && rm -r /etc" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "(rm -R ~/x)" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "FOO=1 rm -r /var" })).toBe(true);
+  });
+
+  it("스코프 유지 — 비대상(상대경로) 재귀 rm 은 통과, 비재귀 rm 도 통과", () => {
+    // 대상이 / ~ . 이 아니면(상대 하위경로) autopass 허용 유지(자율성).
+    expect(matchesDenylist(rm, "Bash", { command: "rm -rf build" })).toBe(false);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -r node_modules" })).toBe(false);
+    // 재귀 아님(-f 만·단일 파일)은 대상 무관 미매칭.
+    expect(matchesDenylist(rm, "Bash", { command: "rm -f /etc/x" })).toBe(false);
+    expect(matchesDenylist(rm, "Bash", { command: "rm /etc/x" })).toBe(false);
+    // rm 이 실행 토큰이 아니면 미매칭.
+    expect(matchesDenylist(rm, "Bash", { command: "echo rm -r /" })).toBe(false);
+  });
+});
+
 describe("DEFAULT_AUTOPASS_DENYLIST — 내장 기본 denylist", () => {
   it("전 항목이 유효한 형식이다", () => {
     for (const entry of DEFAULT_AUTOPASS_DENYLIST) {

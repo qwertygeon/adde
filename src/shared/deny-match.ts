@@ -64,11 +64,54 @@ function shellSegments(command: string): string[] {
   return out;
 }
 
-/** 셸 명령(command) 전용 매칭 — 전체 문자열 + 각 세그먼트를 글롭에 대조. */
+/** rm 재귀 플래그 — `--recursive`, 또는 r/R 을 포함한 번들 단축플래그(`-r`·`-rf`·`-fr`·`-Rfv` 등, 순서 무관). */
+const RM_RECURSIVE_FLAG = /^--recursive$|^-[A-Za-z]*[rR][A-Za-z]*$/;
+
+/**
+ * 세그먼트가 재귀 rm 이면 삭제 대상(비플래그 인자) 목록을, 아니면 null 을 반환한다.
+ * 플래그 순서·번들·대소문자·`--recursive` 를 형태 불문 인식해, 글롭이 놓치던 우회
+ * (`rm -r`·`rm -fr`·`rm -R`·`rm -rfv`·`rm --recursive`)를 차단한다. 대상 토큰의 감싼
+ * 따옴표는 제거해 `rm -r "/"` 같은 인용 우회도 대조 대상에 포함한다(best-effort).
+ */
+function rmRecursiveTargets(segment: string): string[] | null {
+  const toks = segment.split(/\s+/).filter(Boolean);
+  if (toks[0] !== "rm") return null;
+  let recursive = false;
+  const targets: string[] = [];
+  for (const tok of toks.slice(1)) {
+    if (tok === "--") continue; // 옵션 종료 표식
+    if (tok.startsWith("-") && tok !== "-") {
+      if (RM_RECURSIVE_FLAG.test(tok)) recursive = true;
+      continue; // 그 외 플래그(-f·-i 등)는 무시
+    }
+    targets.push(tok.replace(/^['"]|['"]$/g, ""));
+  }
+  return recursive ? targets : null;
+}
+
+/** 엔트리 글롭이 재귀 rm 패턴(`rm …<재귀플래그>… <target>`)이면 그 대표 target 글롭을, 아니면 null. */
+function rmEntryTargetGlob(glob: string): string | null {
+  const targets = rmRecursiveTargets(glob);
+  return targets && targets.length > 0 ? (targets[0] ?? null) : null;
+}
+
+/**
+ * 셸 명령(command) 전용 매칭 — 전체 문자열 + 각 세그먼트를 글롭에 대조.
+ * 추가로 엔트리가 재귀 rm 패턴이면(`rm -rf /*` 등) 명령의 rm 세그먼트를 플래그 형태 불문으로
+ * 대조해, 리터럴 글롭이 놓치던 `-r`/`-R`/`-fr`/`--recursive`/번들 변형을 같은 target 스코프에서 잡는다.
+ */
 function commandGlobMatch(glob: string, command: string): boolean {
   if (globMatches(glob, command)) return true;
-  for (const seg of shellSegments(command)) {
+  const segments = shellSegments(command);
+  for (const seg of segments) {
     if (globMatches(glob, seg)) return true;
+  }
+  const entryTarget = rmEntryTargetGlob(glob);
+  if (entryTarget !== null) {
+    for (const seg of segments) {
+      const targets = rmRecursiveTargets(seg);
+      if (targets && targets.some((tg) => globMatches(entryTarget, tg))) return true;
+    }
   }
   return false;
 }
@@ -106,12 +149,15 @@ export function matchesDenylist(
 }
 
 /**
- * autopass 내장 기본 denylist — 파괴적 셸 명령(sudo·rm -rf·git 강제 변경)과
+ * autopass 내장 기본 denylist — 파괴적 셸 명령(sudo·재귀 rm·git 강제 변경)과
  * 자격증명 저장소 읽기(ssh·aws·npm·gh·kube·docker·gcloud 토큰/키)를 채널 승인으로 폴백시킨다.
  * git clean -fdx 는 -fd* 글롭이 포섭한다. 셸 체이닝은 matchesDenylist 의 세그먼트 매칭이 포섭한다.
+ * rm 항목은 리터럴이 아니라 재귀 rm 인식기가 해석한다 — 대상(`/`·`~`·`.`)이 같으면 `-r`·`-R`·
+ * `-fr`·`-rfv`·`--recursive`·번들 등 플래그 형태를 불문하고 포섭한다(commandGlobMatch).
  */
 export const DEFAULT_AUTOPASS_DENYLIST: readonly string[] = [
   "Bash(sudo *)",
+  // rm 재귀 삭제 — 아래 3개는 대상 스코프(루트/홈/닷)를 정의하며, 재귀 플래그 형태는 인식기가 불문 처리.
   "Bash(rm -rf /*)",
   "Bash(rm -rf ~*)",
   "Bash(rm -rf .*)",

@@ -102,6 +102,26 @@ describe("adde up — 이미 기동 중 표면화", () => {
     expect(errs.join("")).toContain("engine spawn ENOENT");
   });
 
+  it("이미 기동 중이고 stale(하트비트 끊긴) 레인이 있으면 표면화하고 1 을 반환한다", async () => {
+    daemonRegState.mockResolvedValue({ plistExists: true, launchctlRegistered: true });
+    collectStatus.mockResolvedValue([
+      { lane: "ok", status: "running", error: null },
+      { lane: "hung", status: "stale", error: null },
+    ]);
+    const errs: string[] = [];
+    const spyErr = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errs.push(String(s));
+      return true;
+    });
+    const cap = captureStdout();
+    const code = await run(["up", "demo"]);
+    cap.restore();
+    spyErr.mockRestore();
+    expect(code).toBe(1);
+    expect(errs.join("")).toContain("hung");
+    expect(errs.join("")).toContain("stale");
+  });
+
   it("데드라인까지 아무 레인도 기동 못 하면(전부 stopped) 데몬 부팅 실패로 보고하고 1 을 반환한다", async () => {
     daemonRegState.mockResolvedValue({ plistExists: false, launchctlRegistered: false });
     loadDaemon.mockResolvedValue(undefined);

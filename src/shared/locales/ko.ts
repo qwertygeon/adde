@@ -135,6 +135,8 @@ lane add 옵션:
       "[adde] {{proj}} 는 이미 기동 중입니다 — 레인 {{running}}/{{total}} 실행 중. 새로 기동할 것이 없습니다.",
     alreadyUpHint:
       "  확인: adde status {{proj}} · 설정 변경 반영: adde restart {{proj}} · 종료: adde down {{proj}}",
+    alreadyUpUnhealthy:
+      "[adde] {{proj}} 에 비정상 레인이 있습니다: {{lanes}}\n  ↳ 조치: adde status {{proj}} / adde logs {{proj}} --daemon 으로 확인 후 adde restart {{proj}}.",
     upFailed:
       "[adde] 기동 실패 레인: {{lanes}}\n  ↳ 조치: adde logs {{proj}} <lane> --engine 또는 데몬 로그 adde logs {{proj}} --daemon 으로 확인 후 adde restart {{proj}}.",
     upSummary: "  실행 중 {{running}} · 실패 {{failed}} · 기동 중 {{pending}}",
@@ -212,7 +214,7 @@ lane add 옵션:
     removed: '레인 "{{lane}}" 삭제: {{confPath}}',
     removedPurged: '레인 "{{lane}}" 삭제 + state/queue/out 정리: {{confPath}}',
     purgeRunning:
-      '레인 "{{lane}}" 이 활성 상태입니다 — --purge 전에 먼저 데몬을 내리거나(adde down {{proj}}) --force 로 강제 정리하세요.',
+      '레인 "{{lane}}" 은 안전하게 정리할 수 없습니다(실행 중이거나, 데몬이 살아있는 채로 기동 실패) — --purge 전에 먼저 데몬을 내리거나(adde down {{proj}}) --force 로 강제 정리하세요.',
     purgeNeedForce:
       "확인 없이 --purge 를 거부합니다(봇 토큰 포함 state 삭제) — 터미널에서 확인하거나 --force 를 주세요.",
     purgeConfirm: '--purge 를 확인하려면 레인 이름 "{{lane}}" 을 입력하세요(state/queue/out 삭제)',

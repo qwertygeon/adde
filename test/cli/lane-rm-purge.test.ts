@@ -31,6 +31,9 @@ describe("adde lane rm --purge — 활성 레인 가드", () => {
     spyErr.mockRestore();
     expect(code).toBe(1);
     expect(laneRemove).not.toHaveBeenCalled(); // 삭제 미수행
+    // error-가드가 실제로 발동했음을 purgeRunning 메시지로 확정 — 이 문구가 없으면 non-TTY needForce
+    // 폴백(구코드 경로)과 구분되지 않아 vacuous 해진다(error 가 가드에 없던 구코드는 여기 도달 못 함).
+    expect(errs.join("")).toContain("안전하게 정리할 수 없습니다");
   });
 
   it("--force 면 error 레인이어도 purge 를 진행한다", async () => {

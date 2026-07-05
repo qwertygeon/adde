@@ -134,6 +134,8 @@ lane add options:
       "[adde] {{proj}} is already up — {{running}}/{{total}} lane(s) running. Nothing to start.",
     alreadyUpHint:
       "  View: adde status {{proj}} · apply conf changes: adde restart {{proj}} · stop: adde down {{proj}}",
+    alreadyUpUnhealthy:
+      "[adde] {{proj}} has unhealthy lane(s): {{lanes}}\n  ↳ action: inspect with adde status {{proj}} / adde logs {{proj}} --daemon, then adde restart {{proj}}.",
     upFailed:
       "[adde] lane(s) failed to start: {{lanes}}\n  ↳ action: inspect with adde logs {{proj}} <lane> --engine, or the daemon log with adde logs {{proj}} --daemon; then adde restart {{proj}}.",
     upSummary: "  {{running}} running · {{failed}} failed · {{pending}} still starting",
@@ -212,7 +214,7 @@ lane add options:
     removed: 'lane "{{lane}}" removed: {{confPath}}',
     removedPurged: 'lane "{{lane}}" removed with state/queue/out purged: {{confPath}}',
     purgeRunning:
-      'lane "{{lane}}" is active — stop the daemon first (adde down {{proj}}) before --purge, or pass --force to purge anyway.',
+      'lane "{{lane}}" is not safely purgeable (running, or failed while the daemon may still be up) — stop the daemon first (adde down {{proj}}) before --purge, or pass --force to purge anyway.',
     purgeNeedForce:
       "refusing to --purge without confirmation (it deletes state incl. the bot token) — run it in a terminal to confirm, or pass --force.",
     purgeConfirm: 'type the lane name "{{lane}}" to confirm --purge (deletes its state/queue/out)',

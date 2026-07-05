@@ -247,20 +247,25 @@ export async function run(argv: readonly string[]): Promise<number> {
         const { collectStatus } = await import("../core/diagnostics.js");
         const rows = await collectStatus(proj);
         const running = rows.filter((r) => r.status === "running").length;
-        // 이미 기동 중이어도 실패(error/dead) 레인이 있으면 표면화 — 신규 기동 경로와 종료코드 일치.
-        // 데몬이 이미 상주하므로 freshness 판별은 무의미: 현재 실패 상태 레인을 그대로 보고한다.
-        const failed = rows.filter((r) => r.status === "error" || r.status === "dead");
+        // 이미 기동 중이어도 건강하지 않은 레인(error/dead/stale)이 있으면 표면화하고 종료코드 1.
+        // 데몬이 이미 상주하므로 freshness 판별은 무의미(신규 기동 경로와 달리): 현재 상태를 그대로 보고한다.
+        // stale(하트비트 끊긴 행) 도 포함 — 상주 데몬에서 가장 알려야 할 상태다(status 도 stale 을 경고).
+        const unhealthy = rows.filter(
+          (r) => r.status === "error" || r.status === "dead" || r.status === "stale",
+        );
         process.stdout.write(t("run.alreadyUp", { proj, running, total: rows.length }) + "\n");
-        if (failed.length > 0) {
+        if (unhealthy.length > 0) {
           process.stderr.write(
-            t("run.upFailed", {
-              lanes: failed.map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`).join(", "),
+            t("run.alreadyUpUnhealthy", {
+              lanes: unhealthy
+                .map((r) => `${r.lane} (${r.status}${r.error ? `: ${r.error}` : ""})`)
+                .join(", "),
               proj,
             }) + "\n",
           );
         }
         process.stdout.write(t("run.alreadyUpHint", { proj }) + "\n");
-        return failed.length > 0 ? 1 : 0;
+        return unhealthy.length > 0 ? 1 : 0;
       }
       // 이번 기동 기준시각 — 이후 데몬이 남기는 error/dead 만 "이번 실패"로 판별(stale 레코드 배제).
       const upStart = Date.now();
@@ -270,7 +275,9 @@ export async function run(argv: readonly string[]): Promise<number> {
       // 남길 때까지 짧게 폴링해 성공/실패 레인을 이 터미널에 요약한다(요청: up 에서 즉시 실패 레인 표기).
       const { collectStatus } = await import("../core/diagnostics.js");
       // 폴링 대기 상한(ms). 느린 머신에서 기동이 8s 이상 걸리면 ADDE_UP_POLL_MS 로 늘릴 수 있다.
-      const pollMs = Number(process.env.ADDE_UP_POLL_MS) || 8000;
+      // 양수만 유효 — 0·음수·비수치는 기본 8000(음수를 그대로 쓰면 폴링을 건너뛰어 오탐을 유발).
+      const pollEnv = Number(process.env.ADDE_UP_POLL_MS);
+      const pollMs = Number.isFinite(pollEnv) && pollEnv > 0 ? pollEnv : 8000;
       const summary = await pollUpResult(proj, collectStatus, upStart, pollMs);
       if (summary.failed.length > 0) {
         process.stderr.write(
@@ -282,6 +289,16 @@ export async function run(argv: readonly string[]): Promise<number> {
           }) + "\n",
         );
       }
+      // 데드라인까지 아무 레인도 running/error 를 남기지 않았다(전부 stopped/미확정)면 데몬 프로세스가
+      // 부팅 중 크래시했을 수 있다(launchctl load 는 등록만 성공, 프로세스 크래시는 감지 못 함).
+      // 하드 실패를 성공(exit 0)으로 오인하지 않도록 upSummary("기동 중") 대신 데몬 로그 확인을 안내하고
+      // 비정상 종료한다(요약을 먼저 찍으면 "기동 중 K" 와 "기동된 레인 없음" 이 모순돼 보인다).
+      const bootUnconfirmed =
+        summary.running === 0 && summary.failed.length === 0 && summary.total > 0;
+      if (bootUnconfirmed) {
+        process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
+        return 1;
+      }
       process.stdout.write(
         t("run.upSummary", {
           running: summary.running,
@@ -289,15 +306,6 @@ export async function run(argv: readonly string[]): Promise<number> {
           pending: summary.pending,
         }) + "\n",
       );
-      // 데드라인까지 아무 레인도 running/error 를 남기지 않았다(전부 stopped/미확정)면 데몬 프로세스가
-      // 부팅 중 크래시했을 수 있다(launchctl load 는 등록만 성공, 프로세스 크래시는 감지 못 함).
-      // 하드 실패를 성공(exit 0)으로 오인하지 않도록 데몬 로그 확인을 안내하고 비정상 종료한다.
-      const bootUnconfirmed =
-        summary.running === 0 && summary.failed.length === 0 && summary.total > 0;
-      if (bootUnconfirmed) {
-        process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
-        return 1;
-      }
       process.stdout.write(t("run.statusHint", { proj }) + "\n");
       return summary.failed.length > 0 ? 1 : 0;
     } catch (err) {

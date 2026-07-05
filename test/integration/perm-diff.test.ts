@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -39,7 +39,7 @@ afterEach(() => {
 async function simulatePermWarn(
   addePolicy: AddePolicy,
   engineEffective: EngineEffective | null,
-  fakeSendMessage: ReturnType<typeof vi.fn>,
+  fakeSendMessage: Mock<(msg: unknown) => Promise<unknown>>,
 ): Promise<void> {
   const result = comparePerm(addePolicy, engineEffective);
   if (result.diff && result.warn) {

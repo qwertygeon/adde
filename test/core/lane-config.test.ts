@@ -68,7 +68,6 @@ describe("laneAdd", () => {
     expect(conf.source).toBe("markdown");
     expect(conf.backend).toBe("acp");
     expect(conf.engine).toBe("claude-agent-acp");
-    expect(conf.channel).toBe("markdown");
     expect(conf.perm_tier).toBe("acp");
     expect(conf.acp_version).toBe("v1");
   });
@@ -125,7 +124,6 @@ describe("laneAdd", () => {
     });
     const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
     expect(conf.source).toBe("markdown");
-    expect(conf.channel).toBe("markdown");
     expect(conf.root).toBe("/abs/Notes");
     expect(conf.inbox).toBe("in.md");
   });
@@ -237,6 +235,29 @@ describe("laneRemove", () => {
     for (const d of [paths.stateDir, paths.queueDir, paths.processingDir, paths.outDir]) {
       expect(fs.existsSync(d)).toBe(false);
     }
+  });
+});
+
+describe("laneAdd --force 토큰 덮어쓰기 경고 (B3)", () => {
+  it("--force 로 기존 .env 토큰을 덮어쓰면 경고를 반환한다", async () => {
+    await laneAdd("proj", "tg", { base, source: "telegram", token: "111:AAA" });
+    const res = await laneAdd("proj", "tg", {
+      base,
+      source: "telegram",
+      token: "222:BBB",
+      force: true,
+    });
+    expect(res.warnings.some((w) => w.includes("덮어썼"))).toBe(true);
+  });
+
+  it("--force 여도 기존 토큰이 없으면 덮어쓰기 경고 없음", async () => {
+    const res = await laneAdd("proj", "tg", {
+      base,
+      source: "telegram",
+      token: "222:BBB",
+      force: true,
+    });
+    expect(res.warnings.some((w) => w.includes("덮어썼"))).toBe(false);
   });
 });
 

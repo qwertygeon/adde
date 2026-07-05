@@ -37,8 +37,16 @@ Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help
     restart: "Usage: adde restart <proj>",
     status: "Usage: adde status [<proj>] [--all] [--json]",
     doctor: "Usage: adde doctor [<proj>]",
-    logs: "Usage: adde logs <proj> <lane> [N] [--engine]",
-    sessions: "Usage: adde sessions <proj> <lane>",
+    logs: `Usage: adde logs <proj> <lane> [N] [--engine] [--daemon]
+
+Prints the last N lines (default 50) of a lane's log.
+  (default)    the lane transcript (messages, decisions, notices)
+  --engine     the engine's stderr capture (engine.log) — for engine crashes
+  --daemon     the launchd daemon log for <proj> (startup failures land here; <lane> optional)`,
+    sessions: `Usage: adde sessions <proj> <lane>
+
+Lists the engine sessions recorded for a lane (number, first-prompt excerpt, last activity, id; current marked ◀).
+Read-only — resuming/resetting a session is done from the channel (/resume <n> or the resume checkbox), not the CLI.`,
     completion: `Usage: adde completion <bash|zsh>
 
 Prints a shell completion script to stdout — it does NOT install anything.
@@ -54,8 +62,10 @@ Tip: 'adde init' can walk you through this setup.`,
 
   --force                    skip the confirmation prompt (required in non-interactive shells)`,
     init: "Usage: adde init [<proj>]  (guided setup: doctor + short alias + create a lane; TTY only)",
-    alias:
-      "Usage: adde alias [names...]  (install short aliases next to the adde binary; default: ad add)",
+    alias: `Usage: adde alias [names...]   (default names: ad add)
+
+Installs short aliases (symlinks) next to the adde binary so you can type e.g. \`ad up <proj>\` instead of \`adde up <proj>\`.
+Only works on a global install (needs a writable bin dir next to adde on PATH); if a command with that name already exists it is skipped, not overwritten.`,
     laneAdd: "Usage: adde lane add <proj> <lane> [options]",
     laneLs: "Usage: adde lane ls <proj>",
     laneShow: "Usage: adde lane show <proj> <lane>",
@@ -71,7 +81,6 @@ lane add options:
   --source <markdown|telegram>  (default markdown)
   --engine <name>               (default claude-agent-acp)
   --backend <name>              (default acp)
-  --channel <name>              (default: value of source)
   --perm-tier <acp|autopass>    (default acp — channel approval for every tool / autopass — auto-allow except denylist)
   --acp-version <v>             (default v1)
   --cwd <abs-path>              lane working directory (project mapping)
@@ -125,6 +134,9 @@ lane add options:
       "[adde] {{proj}} is already up — {{running}}/{{total}} lane(s) running. Nothing to start.",
     alreadyUpHint:
       "  View: adde status {{proj}} · apply conf changes: adde restart {{proj}} · stop: adde down {{proj}}",
+    upFailed:
+      "[adde] lane(s) failed to start: {{lanes}}\n  ↳ action: inspect with adde logs {{proj}} <lane> --engine, or the daemon log with adde logs {{proj}} --daemon; then adde restart {{proj}}.",
+    upSummary: "  {{running}} running · {{failed}} failed · {{pending}} still starting",
     statusHint: "  Check status: adde status {{proj}}",
     downDone: "[adde] {{proj}} daemon stopped.",
     restartDone: "[adde] {{proj}} restarted. Lanes are starting in the background.",
@@ -143,6 +155,10 @@ lane add options:
         "warning: lane(s) {{lanes}} terminated abnormally (dead).\n  ↳ action: clean up state with adde down {{proj}}, then restart with adde up {{proj}}.",
       staleWarnSingle:
         "warning: lane(s) {{lanes}} not responding (stale — process alive but heartbeat lost).\n  ↳ action: possible hang. Diagnose with adde logs {{proj}} <lane> --engine, then restart with adde down/up {{proj}}.",
+      errorWarnAggregate:
+        "error: lane(s) failed to start: {{lanes}}.\n  ↳ action: inspect the daemon log (adde logs <proj> --daemon) or engine log (adde logs <proj> <lane> --engine), then adde restart <proj>.",
+      errorWarnSingle:
+        "error: lane(s) failed to start: {{lanes}}.\n  ↳ action: inspect the daemon log (adde logs {{proj}} --daemon) or engine log (adde logs {{proj}} <lane> --engine), then adde restart {{proj}}.",
     },
     doctor: {
       hint: "    ↳ action: {{hint}}",
@@ -153,6 +169,8 @@ lane add options:
       whatTranscript: "transcript",
       notFound:
         "{{what}} not found: {{path}}\n  ↳ action: the lane has not been active or started yet. Check with adde status {{proj}}.",
+      daemonNotFound:
+        "daemon log not found: {{path}}\n  ↳ action: the {{proj}} daemon has not run yet (or logged nothing). Start it with adde up {{proj}}.",
       empty: "({{path}} is empty)",
     },
   },
@@ -191,6 +209,12 @@ lane add options:
     noLanes: "{{proj}}: no lanes",
     removed: 'lane "{{lane}}" removed: {{confPath}}',
     removedPurged: 'lane "{{lane}}" removed with state/queue/out purged: {{confPath}}',
+    purgeRunning:
+      'lane "{{lane}}" is active — stop the daemon first (adde down {{proj}}) before --purge, or pass --force to purge anyway.',
+    purgeNeedForce:
+      "refusing to --purge without confirmation (it deletes state incl. the bot token) — run it in a terminal to confirm, or pass --force.",
+    purgeConfirm: 'type the lane name "{{lane}}" to confirm --purge (deletes its state/queue/out)',
+    purgeAborted: "aborted — the name did not match.",
     tokenWritten: "token written: {{envPath}} (0600)",
     tokenNext: "Next: put the bot token in {{envPath}} as TELEGRAM_BOT_TOKEN=...",
     startHint: "Start: adde up {{proj}}",
@@ -332,6 +356,8 @@ lane add options:
         "[warning] markdown paths overlap (inbox={{inbox}} / approvals={{approvals}} / outbox={{outbox}}) — startup will be refused.\n  ↳ action: separate the approval/output/input paths.",
       tokenFormat:
         "[warning] bot token format looks unexpected (not <digits>:<alphanumerics>).\n  ↳ action: re-check the token issued by BotFather.",
+      tokenOverwritten:
+        "[warning] --force overwrote the existing bot token in {{envFile}} — the previous token is gone.",
       permTierUnknown:
         '[warning] perm_tier "{{tier}}" is not a known value ({{known}}) — behaves like acp.\n  ↳ action: fix perm_tier in the conf if it is a typo.',
       autopassBanner:

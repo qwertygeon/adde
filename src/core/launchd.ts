@@ -69,6 +69,22 @@ export function plistPath(proj: string, deps?: LaunchdDeps): string {
   return join(base, "Library", "LaunchAgents", `${plistLabel(proj)}.plist`);
 }
 
+/**
+ * 데몬 로그 경로 base — launchd StandardOut/ErrorPath 의 접두(`~/Library/Logs/adde/<proj>`).
+ * loadDaemon(plist 기록)과 `adde logs --daemon`(조회)이 같은 경로를 쓰도록 SSOT.
+ */
+export function daemonLogBase(proj: string, deps?: LaunchdDeps): string {
+  assertSafeSegment("proj", proj);
+  const base = deps?.home ?? homedir();
+  return join(base, "Library", "Logs", "adde", proj);
+}
+
+/** 데몬 stdout/stderr 로그 파일 경로. 기동 실패 원인 등 데몬 콘솔 출력이 여기 쌓인다. */
+export function daemonLogPaths(proj: string, deps?: LaunchdDeps): { out: string; err: string } {
+  const b = daemonLogBase(proj, deps);
+  return { out: `${b}.out.log`, err: `${b}.err.log` };
+}
+
 // ── plist XML 렌더 ──────────────────────────────────────────────────────────
 
 export interface RenderPlistOpts {
@@ -199,9 +215,8 @@ export async function loadDaemon(proj: string, deps?: LaunchdDeps): Promise<void
     })();
 
   const targetPlist = plistPath(proj, deps);
-  // 데몬 stdout/stderr 로그 경로: ~/Library/Logs/adde/<proj>
-  const baseHome = deps?.home ?? homedir();
-  const logPath = join(baseHome, "Library", "Logs", "adde", proj);
+  // 데몬 stdout/stderr 로그 경로 base: ~/Library/Logs/adde/<proj> (adde logs --daemon 과 동일 SSOT).
+  const logPath = daemonLogBase(proj, deps);
 
   const plistContent = renderPlist(proj, { nodeBin, addeBin, logPath, pathEnv });
 

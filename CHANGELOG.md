@@ -6,16 +6,26 @@
 
 ### Added
 
-- `adde proj ls` / `adde proj rm <proj>` — 프로젝트 단위 명령. `ls` 는 등록된 프로젝트와 레인·실행 수를 표(또는 `--json`)로 보여주고(레인 단위 `status` 와 상보), `rm` 은 프로젝트 디렉터리 전체(lanes.d + state + queue + processing + out)를 삭제한다. 파괴적이라 실행 중 레인이 있으면 거부(`--force` 로 우회)하고, TTY 에선 프로젝트 이름 재입력 확인, 비대화형에선 `--force` 를 요구한다.
-- `adde lane rm <proj> <lane> --purge` — conf 만 지우던 기존 동작에 더해 해당 레인의 state/queue/processing/out 디렉터리까지 정리하는 옵션(고아 데이터 정리). `--purge` 없으면 종전대로 conf 만 삭제.
-- 대화형 레인 생성(번호 선택·경로 자동완성) — `adde init`·`adde lane add --interactive` 에서 enum 필드(source·perm_tier·file_mode·lang)를 번호(1/2)로 고를 수 있게 하고(값 직접 입력도 계속 허용), cwd/root 등 경로 입력에 Tab 디렉터리 자동완성을 추가.
+- `adde proj ls` / `adde proj rm <proj>` — 프로젝트 단위 명령. `ls` 는 등록된 프로젝트와 레인·실행 수를 표(또는 `--json`)로 보여주고(레인 단위 `status` 와 상보), `rm` 은 프로젝트 디렉터리 전체(lanes.d + state + queue + processing + out)를 삭제한다. 파괴적이라 실행 중 레인이 있으면 거부(`--force` 로 우회)하고, TTY 에선 프로젝트 이름 재입력 확인, 비대화형에선 `--force` 를 요구한다. 삭제 전 launchd 데몬을 unload 해 고아 plist 등록이 남지 않게 한다.
+- `adde lane rm <proj> <lane> --purge` — conf 만 지우던 기존 동작에 더해 해당 레인의 state/queue/processing/out 디렉터리까지 정리하는 옵션(고아 데이터 정리). 파괴적이라 `proj rm` 과 동일하게 실행 중 레인이면 거부(`--force` 우회)하고 TTY 에선 레인 이름 재입력 확인·비대화형에선 `--force` 를 요구한다. `--purge` 없으면 종전대로 conf 만 삭제.
+- `adde logs <proj> --daemon [N]` — launchd 데몬 로그(`~/Library/Logs/adde/<proj>.err.log`) 최근 N줄. 데몬(분리 프로세스)에서 발생한 기동 실패 원인 등이 여기 쌓이는데 기존 `adde logs` 는 레인 transcript/engine 로그만 읽어 볼 수 없던 것을 노출.
+- 대화형 레인 생성(번호 선택·경로 자동완성) — `adde init`·`adde lane add --interactive` 에서 enum 필드(source·perm_tier·file_mode·lang)를 번호(1/2)로 고를 수 있게 하고(값 직접 입력도 계속 허용), cwd/root 등 **경로 필드에만** Tab 디렉터리 자동완성을 적용(enum·확인·가려진 토큰 입력에서는 비활성 — 토큰 버퍼 오염 방지).
 - `adde init` 셸 자동완성 설정 안내 — 별칭 설치 단계에 이어, 감지된 셸(bash/zsh)에 맞는 자동완성 설치 명령을 옵트인으로 안내(셸 rc/fpath 를 대신 수정하지 않고 실행할 명령을 출력). `adde completion` 도움말을 "왜·무엇·어디에·어떻게 결정하는지" 로 상세화하고, 터미널에서 바로 실행 시 설치 힌트를 stderr 로 표시(리다이렉트 시엔 stdout 순수 유지).
 - `adde up` 이미 기동 중 안내 — 데몬이 이미 등록·상주 중일 때 재실행하면 launchctl 재등록 실패(혼란스러운 오류) 대신 "이미 기동 중"(실행 중/전체 레인 수)과 조치 힌트(status/restart/down)를 사용자 터미널에 표면화. 종전엔 중복 기동 가드가 데몬 내부(분리 프로세스) stderr 로만 기록돼 `adde up` 사용자에게 보이지 않던 것을 CLI 단에서 표면화.
 
 ### Changed
 
+- `adde up` 기동 결과 즉시 표기 — 데몬이 각 레인 상태를 runtime.json 에 남길 때까지 짧게 폴링해 **성공/실패 레인을 up 커맨드에서 바로 요약**하고(실패 시 종료코드 1), 레인 기동 실패를 runtime.json 에 `error` 상태로 남겨 `adde status`·`adde doctor` 대신 status 가 `stopped`(미기동)와 구분해 **`error` 로 표시**한다(실패 사유·조치 힌트 포함). 종전엔 기동 실패가 데몬 stderr(어떤 CLI 도 안 읽는 launchd 로그)로만 가고 status 는 stopped 로 보여 진단 불가였다.
+- CLI 방어코드·에러 출력 보강 — `adde status`/`adde doctor` 가 잘못된 `<proj>` 이름에 원시 예외 대신 명령 스코프 친절 메시지를 내고, `adde alias`·`adde lane`·`adde proj` 의 예기치 못한 예외(fs/OS 오류 등)도 스택 대신 친절 메시지로 표면화한다. `sessions`·`alias`·`completion` 도움말을 왜/무엇/어디에로 상세화.
+- 레인 conf 의 사문화된 `channel` 필드 제거 — 소스 스위치를 **`source` 하나로 일원화**. 런타임 라우팅 채널은 종전대로 `source` 에서 유도되며(`conf.channel` 은 어디서도 읽히지 않던 dead 필드였다), `--channel` 플래그·대화형 `channel` 프롬프트·직렬화를 제거했다. conf 파서는 기존 conf 파일의 `channel=` 줄을 미지의 키로 무시하므로 **하위호환**된다.
+
 - ACP 엔진 어댑터 마이그레이션 — deprecated·이름변경된 `@zed-industries/claude-code-acp`(0.16.2)를 후속 `@agentclientprotocol/claude-agent-acp`(0.55.0)로 교체하고 `@agentclientprotocol/sdk` 를 0.14.1 → 1.1.0 으로 승급. 기본 엔진 프로필·바이너리 해석·`--engine` 안내·문서를 새 이름(`claude-agent-acp`)으로 갱신. 권한 게이트 매칭 키(`_meta.claudeCode.toolName`)와 ACP 프로토콜 버전(v1) 유지를 신규 어댑터 소스로 실측 확인했고, requestPermission 의 도구명·인자 추출·결정 배선을 통합 테스트로 회귀 보호. `npm i -g adde-acp` 설치 시 출력되던 `npm warn deprecated` 가 사라짐.
 - 기본 소스 어댑터 `telegram` → **`markdown`** — `--source` 미지정 시(비대화형·대화형 프롬프트 기본값) 생성되는 레인의 기본 소스를 markdown 으로 변경. 마크다운은 봇 토큰 없이 로컬 노트만으로 바로 동작하므로 "설정 없이 되는" 기본에 부합. `--source telegram` 명시는 종전대로 동작. 문서·자동완성·help 의 나열 순서도 markdown 우선으로 정렬. 아울러 오구성 격리 보강 — root/inbox 없는 markdown 레인의 소스 생성 실패가 `adde up` 전체를 중단시키지 않고 **해당 레인만 error 로 격리**하며, `adde doctor` 가 markdown 레인의 root/inbox 누락·부재를 **기동 전에 FAIL 로 검출**한다.
+
+### Fixed
+
+- `adde lane add --force` 가 기존 `.env` 봇 토큰(시크릿)을 덮어쓸 때 경고를 출력 — 이전엔 조용히 파괴됐다.
+- 셸 자동완성 배선 정정 — `--purge` 는 `lane rm`, `--json` 은 `proj ls` 에 맞게 완성되도록 수정(이전엔 `proj rm` 에 무효 `--purge` 가 붙고 `lane rm --purge`·`proj ls --json` 은 완성되지 않았다).
 
 ## [0.1.3] - 2026-07-04
 

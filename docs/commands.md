@@ -67,19 +67,26 @@ install short aliases (ad, add) next to the adde command? (Y/n) [y]: y
 
 project name [default]: myproj
 lane name [main]: tg-claude
-source (markdown or telegram) [markdown]: telegram
+source (enter a number or the value)
+  1) markdown
+  2) telegram [markdown]: 2
 engine [claude-agent-acp]:
 backend [acp]:
-channel [telegram]:
-perm_tier (acp or autopass) [acp]:
+perm_tier (acp = approve each tool in the channel / autopass = auto-allow except denylist)
+  1) acp
+  2) autopass [acp]:
 acp_version [v1]:
 allowlist (comma-separated, empty for none): Read,Grep
 enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (y/N) [y]: y
-lang (channel message locale: en/ko, empty for global):
+lang (channel message locale, empty for global)
+  1) en
+  2) ko:
 cwd (absolute lane working directory, empty to skip): /Users/me/work/my-project
 chat_id (reply target + authorizes that chat for inbound, empty to skip): 12345678
 allow_from (extra authorized sender ids, comma-separated, empty to skip):
-file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable) [private]:
+file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable)
+  1) private
+  2) shared [private]:
 telegram bot token (hidden input, empty to set later): ⟨input hidden⟩
 
 lane "tg-claude" created: ~/.config/adde/myproj/lanes.d/tg-claude.conf
@@ -114,6 +121,7 @@ Starts every `*.conf` lane in `~/.config/adde/<proj>/lanes.d/` as a **macOS laun
 
 - **Terminal-independent**: the daemon keeps running even after you close the terminal.
 - **Auto-recovery**: launchd automatically restarts the daemon after a macOS reboot/logout.
+- **Startup result**: after registering, `adde up` briefly polls each lane's state and prints a summary (`N running · M failed · K still starting`). Any lane that **failed to start** is listed with its reason, and `adde up` exits non-zero — so you learn about failures immediately instead of having to check `adde status`. (The failure is also recorded as `error` state; see `adde logs <proj> --daemon` for the daemon-level cause.)
 - **Already-up notice**: if the daemon is already registered, `adde up` does not re-register (which would fail as "already loaded"). Instead it prints an "already up" line with the running/total lane count and hints (`adde status` to view, `adde restart` to apply conf changes, `adde down` to stop).
 - **Double-start guard**: within the daemon, an already-running lane is skipped with a warning (recorded in the daemon log). Double starts do not happen.
 - **macOS only**: the launchd feature works only on macOS. See [macOS-only features](#macos-only-features) for details.
@@ -146,17 +154,18 @@ adde status [<proj>] [--all] [--json]
 
 Scans each lane in `lanes.d` and determines its status.
 
-| Status    | Meaning                                                                                |
-| --------- | -------------------------------------------------------------------------------------- |
-| `running` | State file exists, the launched process (pid) is alive, and the heartbeat is fresh     |
-| `stale`   | The pid is alive but the heartbeat (state-file mtime) has stopped — **suspected hung** |
-| `dead`    | State file exists but the process is gone — **abnormal exit (crash) residue**          |
-| `stopped` | No state file — normal exit or never started                                           |
+| Status    | Meaning                                                                                                     |
+| --------- | ----------------------------------------------------------------------------------------------------------- |
+| `running` | State file exists, the launched process (pid) is alive, and the heartbeat is fresh                          |
+| `stale`   | The pid is alive but the heartbeat (state-file mtime) has stopped — **suspected hung**                      |
+| `dead`    | State file exists but the process is gone — **abnormal exit (crash) residue**                               |
+| `error`   | The lane **failed to start** (engine spawn/handshake, missing config, …) — the reason is recorded and shown |
+| `stopped` | No state file — normal exit or never started                                                                |
 
 - **With `<proj>`**: prints all lanes of that project (including stopped) in a `LANE · STATUS · PID · UPTIME · SEEN · SOURCE` table.
 - **Without `<proj>`**: aggregates all projects (`~/.config/adde/*/`) and prints **running (non-stopped) lanes** in a `PROJECT · LANE · …` table. If no lanes are running, an informational message.
 - **`--all`** (when `<proj>` is omitted): show all lanes including stopped (`stopped`).
-- If there are `dead`/`stale` lanes, remedy guidance is appended (`SEEN` = time since the last heartbeat).
+- If there are `dead`/`stale`/`error` lanes, remedy guidance is appended (`SEEN` = time since the last heartbeat; for `error`, the start-failure reason and a pointer to `adde logs <proj> --daemon`/`--engine`).
 - Heartbeat: `adde up` periodically refreshes the state-file mtime. Even if the pid is alive, if the refresh stops past a threshold it is judged `stale` (hung).
 - `--json`: an array of lane objects (for monitoring/scripts, including `lastSeenAt`; annotated with `proj` when aggregating).
 - **Update notice**: if a newer version is available on npm, a one-line notice is appended (`npm i -g adde-acp@latest` … then `adde restart`). It uses a 24-hour cache (under the config base), only hits the network in an interactive terminal (TTY), and can be disabled with the `ADDE_NO_UPDATE_CHECK` env var.
@@ -187,15 +196,18 @@ Performs a static check independent of status and reports each item as `PASS` / 
 
 ```bash
 adde logs <proj> <lane> [N] [--engine]
+adde logs <proj> --daemon [N]
 ```
 
 Prints the last `N` lines of that lane's `transcript.log` (ACP session event record) (default 50). If the file doesn't exist, prints an informational message.
 
 - `N`: how many trailing lines to print (default 50).
 - `--engine`: prints `engine.log` (the engine subprocess's captured stderr) instead of the transcript. Use it to see the engine's own diagnostic output (tracing `stale`/startup-failure causes, etc.).
+- `--daemon`: prints the **launchd daemon log** for the project (`~/Library/Logs/adde/<proj>.err.log`) — `<lane>` is not needed. This is where the background daemon's own output (including **startup-failure causes**) lands, which the per-lane transcript/engine logs don't capture.
 
 ```bash
 adde logs myproj tg-claude 100 --engine   # last 100 lines of the engine stderr log
+adde logs myproj --daemon                 # daemon log (why lanes failed to start)
 ```
 
 ## sessions — session list
@@ -233,7 +245,7 @@ adde lane rm <proj> <lane> [--purge]     # delete conf (--purge also removes sta
 adde lane help                           # all options
 ```
 
-By default `lane rm` deletes only the conf and preserves side data (state/queue/out). `--purge` also removes the lane's `state`/`queue`/`processing`/`out` directories (orphan cleanup).
+By default `lane rm` deletes only the conf and preserves side data (state/queue/out). `--purge` also removes the lane's `state`/`queue`/`processing`/`out` directories (orphan cleanup). Because `--purge` destroys state (including the bot-token `.env`), it is guarded like `proj rm`: it **refuses if the lane is active** (stop the daemon first, or `--force`), and on a TTY it asks you to re-type the lane name to confirm (non-interactive requires `--force`). Plain `lane rm` (no `--purge`) has no such guard.
 
 `ls`/`rm` can also be written as `list`/`remove` (same behavior).
 
@@ -244,7 +256,6 @@ By default `lane rm` deletes only the conf and preserves side data (state/queue/
 | `--source <markdown\|telegram>`                      | `markdown`                                                      | Channel source                                                                                                                                                  |
 | `--engine <name>`                                    | `claude-agent-acp`                                              | ACP engine profile                                                                                                                                              |
 | `--backend <name>`                                   | `acp`                                                           | Backend                                                                                                                                                         |
-| `--channel <name>`                                   | source value                                                    | Gate routing                                                                                                                                                    |
 | `--perm-tier <acp\|autopass>`                        | `acp`                                                           | Permission tier. `acp`=channel-approve every tool / `autopass`=auto-allow outside the denylist (opt-in)                                                         |
 | `--acp-version <v>`                                  | `v1`                                                            | ACP version                                                                                                                                                     |
 | `--cwd <abs-path>`                                   | (supervisor cwd)                                                | This lane's AI working folder (project mapping)                                                                                                                 |
@@ -263,7 +274,7 @@ By default `lane rm` deletes only the conf and preserves side data (state/queue/
 | `--interactive`                                      | —                                                               | Force the interactive wizard (TTY only — errors on a non-TTY)                                                                                                   |
 | `--no-interactive`                                   | —                                                               | Force non-interactive (use flags/defaults, no prompts) — for scripts/CI                                                                                         |
 
-**Interactive by default**: on a TTY, `adde lane add <proj> <lane>` with **no field flags** launches the interactive wizard automatically — no `--interactive` needed. It becomes non-interactive when any field flag is given (`--source`, `--engine`, `--backend`, `--channel`, `--perm-tier`, `--acp-version`, `--cwd`, `--allowlist`, `--denylist`, `--hard-deny`, `--safe-defaults`, `--lang`, `--chat-id`, `--allow-from`, `--file-mode`, `--root`, `--inbox`, `--approvals`, `--outbox`, `--token-stdin`), when `--no-interactive` is passed, or when stdin is not a TTY (scripts/CI). `--interactive` force-enables it (and errors on a non-TTY); `--no-interactive` force-disables it. `<proj>` and `<lane>` are always required positional arguments.
+**Interactive by default**: on a TTY, `adde lane add <proj> <lane>` with **no field flags** launches the interactive wizard automatically — no `--interactive` needed. It becomes non-interactive when any field flag is given (`--source`, `--engine`, `--backend`, `--perm-tier`, `--acp-version`, `--cwd`, `--allowlist`, `--denylist`, `--hard-deny`, `--safe-defaults`, `--lang`, `--chat-id`, `--allow-from`, `--file-mode`, `--root`, `--inbox`, `--approvals`, `--outbox`, `--token-stdin`), when `--no-interactive` is passed, or when stdin is not a TTY (scripts/CI). `--interactive` force-enables it (and errors on a non-TTY); `--no-interactive` force-disables it. `<proj>` and `<lane>` are always required positional arguments.
 
 In the wizard, the telegram bot token is prompted **last, with hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to defer it (set it later via `--token-stdin` or by editing `.env`). The wizard also asks whether to enable `--safe-defaults` (the hard-deny danger list, default yes). **Enum fields are shown as a numbered menu** — you can answer with the **number** (`1`, `2`, …) or type the value; `source`, `perm_tier`, `file_mode`, and `lang` work this way. **Path fields (`cwd`, `root`, …) support Tab directory completion.** Numeric fields (`chat_id`, `allow_from`) are validated at entry and re-prompt on bad input. At creation, a missing `cwd`, a missing markdown `root`, or a malformed telegram token is reported as a **warning** but creation still proceeds.
 
@@ -351,7 +362,8 @@ adde proj rm <proj> [--force]   # delete a project: all its lanes + state
 - **`proj ls`** — one row per registered project (a directory under the config base that has a `lanes.d/`) with its lane count and running count. `--json` prints an array for scripts.
 - **`proj rm <proj>`** — deletes the entire project directory (`lanes.d` + `state` + `queue` + `processing` + `out`). Because it is destructive:
   - it **refuses** if the project has running/dead/stale lanes — stop the daemon first (`adde down <proj>`), or pass `--force` to delete anyway;
-  - on a TTY it asks you to **re-type the project name** to confirm; in a non-interactive shell it requires `--force`.
+  - on a TTY it asks you to **re-type the project name** to confirm; in a non-interactive shell it requires `--force`;
+  - it **unloads the launchd daemon** before deleting, so no orphan plist registration is left behind.
 
 ```bash
 adde proj ls                    # PROJECT · LANES · RUNNING table

@@ -51,7 +51,6 @@ export interface LaneAddOptions extends LaneCommandBaseOptions {
   source?: string;
   backend?: string;
   engine?: string;
-  channel?: string;
   perm_tier?: string;
   acp_version?: string;
   allowlist?: string[];
@@ -311,7 +310,6 @@ export async function laneAdd(
     source: src,
     backend: opts.backend ?? "acp",
     engine: opts.engine ?? "claude-agent-acp",
-    channel: opts.channel ?? src,
     perm_tier: permTier,
     acp_version: opts.acp_version ?? "v1",
     allowlist: opts.allowlist ?? [],
@@ -348,15 +346,17 @@ export async function laneAdd(
 
   const result: LaneAddResult = { lane, confPath: paths.confFile, conf, warnings: [] };
 
+  let tokenOverwritten = false;
   if (opts.token !== undefined) {
     const token = opts.token.trim();
     if (!token) throw new LaneConfigError(t("laneConfig.err.tokenEmpty"));
-    if (!opts.force && (await exists(paths.envFile))) {
-      const existing = (await readFile(paths.envFile, "utf8")).trim();
-      if (existing) {
-        throw new LaneConfigError(t("laneConfig.err.envHasToken", { envFile: paths.envFile }));
-      }
+    const envHadToken =
+      (await exists(paths.envFile)) && (await readFile(paths.envFile, "utf8")).trim().length > 0;
+    if (!opts.force && envHadToken) {
+      throw new LaneConfigError(t("laneConfig.err.envHasToken", { envFile: paths.envFile }));
     }
+    // --force 로 기존 토큰을 덮어쓰는 경우 조용히 지나가지 않도록 경고(시크릿 파괴는 되돌릴 수 없음).
+    if (opts.force && envHadToken) tokenOverwritten = true;
     await mkdir(paths.stateDir, { recursive: true });
     // 토큰이 사는 state 디렉터리를 권한 모드대로 잠근다(private=0700). .env 자체도 0600.
     await secureLaneDirs([paths.stateDir], resolveFileMode(conf.file_mode));
@@ -365,6 +365,9 @@ export async function laneAdd(
   }
 
   result.warnings = await collectAddWarnings(conf, opts.token);
+  if (tokenOverwritten) {
+    result.warnings.push(t("laneConfig.warn.tokenOverwritten", { envFile: paths.envFile }));
+  }
 
   return result;
 }

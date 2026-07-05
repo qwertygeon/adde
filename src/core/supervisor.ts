@@ -26,6 +26,7 @@ import { maskSecrets } from "../shared/mask.js";
 import { t, tFor } from "../shared/i18n.js";
 import {
   writeRuntime,
+  writeErrorRuntime,
   removeRuntime,
   touchRuntime,
   readRuntime,
@@ -391,6 +392,17 @@ export async function supervisorUp(
     } catch (err) {
       const reason = errMsg(err);
       console.error(t("log.supervisor.laneStartFail", { lane, reason }));
+      // 실패 상태를 runtime.json 에 남겨 교차 프로세스(adde up·status)가 볼 수 있게 한다 —
+      // 안 남기면 파일 부재라 status 가 stopped(미기동)와 구분 못 한다. 기록 실패는 흡수(보조).
+      await writeErrorRuntime(paths, {
+        lane,
+        source: conf.source || channel,
+        backend: conf.backend || "acp",
+        engine,
+        error: maskSecrets(reason),
+      }).catch((e: unknown) =>
+        console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(e) })),
+      );
       results.push({ lane, status: "error", error: reason });
     }
   }

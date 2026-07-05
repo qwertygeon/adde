@@ -38,8 +38,16 @@ export const ko = {
     restart: "사용법: adde restart <proj>",
     status: "사용법: adde status [<proj>] [--all] [--json]",
     doctor: "사용법: adde doctor [<proj>]",
-    logs: "사용법: adde logs <proj> <lane> [N] [--engine]",
-    sessions: "사용법: adde sessions <proj> <lane>",
+    logs: `사용법: adde logs <proj> <lane> [N] [--engine] [--daemon]
+
+레인 로그의 최근 N줄(기본 50)을 출력합니다.
+  (기본)       레인 transcript(메시지·결정·알림)
+  --engine     엔진 stderr 캡처(engine.log) — 엔진 크래시 진단
+  --daemon     <proj> launchd 데몬 로그(기동 실패 원인이 여기 쌓임; <lane> 불필요)`,
+    sessions: `사용법: adde sessions <proj> <lane>
+
+레인에 기록된 엔진 세션 목록(번호·첫 프롬프트 발췌·마지막 활동·id; 현재 세션 ◀ 표시).
+읽기 전용 — 세션 재개·초기화는 CLI 가 아니라 채널에서 합니다(/resume <n> 또는 resume 체크박스).`,
     completion: `사용법: adde completion <bash|zsh>
 
 셸 자동완성 스크립트를 stdout 으로 출력합니다 — 설치는 하지 않습니다(installer 아님).
@@ -55,7 +63,10 @@ export const ko = {
 
   --force                    확인 프롬프트 건너뛰기(비대화형 셸에선 필수)`,
     init: "사용법: adde init [<proj>]  (가이드 설정: doctor + 짧은 별칭 + 레인 생성; TTY 전용)",
-    alias: "사용법: adde alias [names...]  (adde 실행 파일 옆에 짧은 별칭 설치; 기본: ad add)",
+    alias: `사용법: adde alias [names...]   (기본 이름: ad add)
+
+adde 실행 파일 옆에 짧은 별칭(심링크)을 설치해 \`adde up <proj>\` 대신 \`ad up <proj>\` 로 쓸 수 있게 합니다.
+전역 설치에서만 동작(PATH 의 adde 옆 쓰기 가능한 bin 디렉터리 필요)하며, 동명 명령이 이미 있으면 덮어쓰지 않고 건너뜁니다.`,
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
     laneLs: "사용법: adde lane ls <proj>",
     laneShow: "사용법: adde lane show <proj> <lane>",
@@ -71,7 +82,6 @@ lane add 옵션:
   --source <markdown|telegram>  (기본 markdown)
   --engine <name>               (기본 claude-agent-acp)
   --backend <name>              (기본 acp)
-  --channel <name>              (기본 source 값)
   --perm-tier <acp|autopass>    (기본 acp — 전 도구 채널 승인 / autopass — denylist 외 자동 허용)
   --acp-version <v>             (기본 v1)
   --cwd <abs-path>              레인 작업 폴더(프로젝트 매핑)
@@ -125,6 +135,9 @@ lane add 옵션:
       "[adde] {{proj}} 는 이미 기동 중입니다 — 레인 {{running}}/{{total}} 실행 중. 새로 기동할 것이 없습니다.",
     alreadyUpHint:
       "  확인: adde status {{proj}} · 설정 변경 반영: adde restart {{proj}} · 종료: adde down {{proj}}",
+    upFailed:
+      "[adde] 기동 실패 레인: {{lanes}}\n  ↳ 조치: adde logs {{proj}} <lane> --engine 또는 데몬 로그 adde logs {{proj}} --daemon 으로 확인 후 adde restart {{proj}}.",
+    upSummary: "  실행 중 {{running}} · 실패 {{failed}} · 기동 중 {{pending}}",
     statusHint: "  상태 확인: adde status {{proj}}",
     downDone: "[adde] {{proj}} 데몬 종료 완료.",
     restartDone: "[adde] {{proj}} 재기동 완료. 백그라운드에서 레인이 기동됩니다.",
@@ -143,6 +156,10 @@ lane add 옵션:
         "경고: {{lanes}} 레인이 비정상 종료(dead)했습니다.\n  ↳ 조치: adde down {{proj}} 로 상태를 정리한 뒤 adde up {{proj}} 로 재기동하세요.",
       staleWarnSingle:
         "경고: {{lanes}} 레인이 응답 없음(stale — 프로세스는 살아있으나 하트비트 끊김).\n  ↳ 조치: 행(hang) 가능성. adde logs {{proj}} <lane> --engine 으로 진단 후 adde down/up {{proj}} 로 재기동하세요.",
+      errorWarnAggregate:
+        "오류: 기동 실패 레인: {{lanes}}.\n  ↳ 조치: 데몬 로그(adde logs <proj> --daemon) 또는 엔진 로그(adde logs <proj> <lane> --engine) 확인 후 adde restart <proj>.",
+      errorWarnSingle:
+        "오류: 기동 실패 레인: {{lanes}}.\n  ↳ 조치: 데몬 로그(adde logs {{proj}} --daemon) 또는 엔진 로그(adde logs {{proj}} <lane> --engine) 확인 후 adde restart {{proj}}.",
     },
     doctor: {
       hint: "    ↳ 조치: {{hint}}",
@@ -153,6 +170,8 @@ lane add 옵션:
       whatTranscript: "transcript",
       notFound:
         "{{what}} 없음: {{path}}\n  ↳ 조치: 레인이 아직 활동하지 않았거나 기동되지 않았습니다. adde status {{proj}} 로 상태를 확인하세요.",
+      daemonNotFound:
+        "데몬 로그 없음: {{path}}\n  ↳ 조치: {{proj}} 데몬이 아직 실행되지 않았거나(또는 출력이 없음). adde up {{proj}} 로 기동하세요.",
       empty: "({{path}} 비어있음)",
     },
   },
@@ -190,6 +209,12 @@ lane add 옵션:
     noLanes: "{{proj}}: 레인 없음",
     removed: '레인 "{{lane}}" 삭제: {{confPath}}',
     removedPurged: '레인 "{{lane}}" 삭제 + state/queue/out 정리: {{confPath}}',
+    purgeRunning:
+      '레인 "{{lane}}" 이 활성 상태입니다 — --purge 전에 먼저 데몬을 내리거나(adde down {{proj}}) --force 로 강제 정리하세요.',
+    purgeNeedForce:
+      "확인 없이 --purge 를 거부합니다(봇 토큰 포함 state 삭제) — 터미널에서 확인하거나 --force 를 주세요.",
+    purgeConfirm: '--purge 를 확인하려면 레인 이름 "{{lane}}" 을 입력하세요(state/queue/out 삭제)',
+    purgeAborted: "취소됨 — 이름이 일치하지 않습니다.",
     tokenWritten: "토큰 기록: {{envPath}} (0600)",
     tokenNext: "다음: 봇 토큰을 {{envPath}} 에 TELEGRAM_BOT_TOKEN=... 으로 두세요",
     startHint: "기동: adde up {{proj}}",
@@ -329,6 +354,8 @@ lane add 옵션:
         "[경고] markdown 경로가 겹칩니다(inbox={{inbox}} / approvals={{approvals}} / outbox={{outbox}}) — 기동이 거부됩니다.\n  ↳ 조치: 승인·출력·입력 경로를 서로 분리하세요.",
       tokenFormat:
         "[경고] 봇 토큰 형식이 예상과 다릅니다(<숫자>:<영숫자> 아님).\n  ↳ 조치: BotFather 발급 토큰을 다시 확인하세요.",
+      tokenOverwritten:
+        "[경고] --force 로 {{envFile}} 의 기존 봇 토큰을 덮어썼습니다 — 이전 토큰은 사라졌습니다.",
       permTierUnknown:
         '[경고] perm_tier "{{tier}}" 는 알려진 값({{known}})이 아닙니다 — acp 처럼 동작합니다.\n  ↳ 조치: 오타라면 conf 의 perm_tier 를 수정하세요.',
       autopassBanner:

@@ -35,6 +35,8 @@ export type Ask = (question: string, def?: string) => Promise<string>;
 
 export interface Prompter {
   ask: Ask;
+  /** 경로 입력용 질의 — 이 호출 동안만 Tab 디렉터리/파일 완성을 켠다(cwd/root/inbox 등). */
+  askPath: Ask;
   /** 가려진 입력(에코 억제) — 봇 토큰 등 시크릿 수집용. 기본값 없음. */
   askSecret: (question: string) => Promise<string>;
   close: () => void;
@@ -58,21 +60,35 @@ export function createPrompter(deps: PrompterDeps = {}): Prompter {
       cb();
     },
   });
+  // 경로 완성은 askPath 호출 동안만 켠다 — enum·y/N·확인·시크릿 등 비-경로 프롬프트에서
+  // Tab 이 경로를 삽입해 필드를 오염시키거나(가려진 토큰 입력 포함) 하지 않도록 스코프를 좁힌다.
+  let pathMode = false;
   const rl = readline.createInterface({
     input,
     output: out,
     terminal: true,
-    completer: pathCompleter,
+    completer: (line: string): [string[], string] => (pathMode ? pathCompleter(line) : [[], line]),
   });
 
-  const ask: Ask = async (question, def) => {
-    const a = (await rl.question(`${question}${def ? ` [${def}]` : ""}: `)).trim();
+  const question = async (q: string, def?: string): Promise<string> => {
+    const a = (await rl.question(`${q}${def ? ` [${def}]` : ""}: `)).trim();
     return a || (def ?? "");
   };
 
-  const askSecret = async (question: string): Promise<string> => {
-    // 프롬프트는 뮤트 전에 출력하고, 입력 구간만 뮤트해 에코를 억제.
-    sink.write(`${question}: `);
+  const ask: Ask = (q, def) => question(q, def);
+
+  const askPath: Ask = async (q, def) => {
+    pathMode = true;
+    try {
+      return await question(q, def);
+    } finally {
+      pathMode = false;
+    }
+  };
+
+  const askSecret = async (q: string): Promise<string> => {
+    // 프롬프트는 뮤트 전에 출력하고, 입력 구간만 뮤트해 에코를 억제. pathMode 는 false 라 완성 비활성.
+    sink.write(`${q}: `);
     muted = true;
     try {
       const a = await rl.question("");
@@ -83,5 +99,5 @@ export function createPrompter(deps: PrompterDeps = {}): Prompter {
     }
   };
 
-  return { ask, askSecret, close: () => rl.close() };
+  return { ask, askPath, askSecret, close: () => rl.close() };
 }

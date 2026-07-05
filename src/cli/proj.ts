@@ -6,6 +6,7 @@
 import { projRemove, LaneConfigError } from "../core/lane-config.js";
 import { listRegisteredProjects, collectStatus } from "../core/diagnostics.js";
 import { buildProjUsage, unknownProjSub, cmdError } from "../core/messages.js";
+import { errMsg } from "../shared/errors.js";
 import { t } from "../shared/i18n.js";
 import { createPrompter } from "./prompt.js";
 
@@ -85,6 +86,15 @@ async function handleProjRemove(rest: readonly string[]): Promise<number> {
     }
   }
 
+  // 삭제 전 launchd 등록 해제 — 안 하면 plist 가 남아 고아 등록(없는 폴더로 KeepAlive 재기동 반복).
+  // macOS 에서만 데몬이 존재하며 unloadDaemon 은 멱등(미등록·plist 부재 흡수).
+  if (process.platform === "darwin") {
+    const { unloadDaemon } = await import("../core/launchd.js");
+    await unloadDaemon(proj).catch(() => {
+      // 등록 해제 실패는 흡수 — 디렉터리 삭제는 계속 진행(고아 plist 는 adde down 으로 정리 가능).
+    });
+  }
+
   const result = await projRemove(proj);
   process.stdout.write(t("proj.removed", { proj: result.proj, path: result.path }) + "\n");
   return 0;
@@ -119,10 +129,10 @@ export async function runProj(argv: readonly string[]): Promise<number> {
         return 1;
     }
   } catch (err) {
-    if (err instanceof LaneConfigError) {
-      process.stderr.write(cmdError("proj", err.message) + "\n");
-      return 1;
-    }
-    throw err;
+    // LaneConfigError(검증 실패)든 예기치 못한 예외든 원시 스택 대신 명령 스코프 메시지로 표면화.
+    process.stderr.write(
+      cmdError("proj", err instanceof LaneConfigError ? err.message : errMsg(err)) + "\n",
+    );
+    return 1;
   }
 }

@@ -11,7 +11,9 @@ import {
   parseCsv,
 } from "../core/lane-config.js";
 import type { LaneAddOptions } from "../core/lane-config.js";
-import { USAGE, buildLaneUsage, laneError, unknownLaneSub } from "../core/messages.js";
+import { collectStatus } from "../core/diagnostics.js";
+import { USAGE, buildLaneUsage, cmdError, laneError, unknownLaneSub } from "../core/messages.js";
+import { errMsg } from "../shared/errors.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
 import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
@@ -56,7 +58,6 @@ const ADD_VALUE_KEYS = new Set([
   "source",
   "engine",
   "backend",
-  "channel",
   "perm-tier",
   "acp-version",
   "cwd",
@@ -149,6 +150,7 @@ async function askEnum(
 export async function collectInteractive(
   ask: Ask,
   askSecret?: (question: string) => Promise<string>,
+  askPath: Ask = ask,
 ): Promise<LaneAddOptions> {
   const opts: LaneAddOptions = {};
   const isNumericId = (v: string): boolean => /^-?\d+$/.test(v);
@@ -161,7 +163,6 @@ export async function collectInteractive(
   opts.source = source;
   opts.engine = await ask("engine", "claude-agent-acp");
   opts.backend = await ask("backend", "acp");
-  opts.channel = await ask("channel", source);
   opts.perm_tier = await askEnum(ask, t("lane.prompt.permTier"), ["acp", "autopass"], "acp");
   opts.acp_version = await ask("acp_version", "v1");
 
@@ -178,7 +179,7 @@ export async function collectInteractive(
   const lang = await askEnum(ask, t("lane.prompt.lang"), ["en", "ko"], "", { allowEmpty: true });
   if (lang) opts.lang = lang;
 
-  const cwd = await ask(t("lane.prompt.cwd"), "");
+  const cwd = await askPath(t("lane.prompt.cwd"), "");
   if (cwd) opts.cwd = cwd;
 
   if (source === "telegram") {
@@ -199,13 +200,13 @@ export async function collectInteractive(
     );
     if (allowFrom) opts.allow_from = allowFrom;
   } else {
-    const root = await ask(t("lane.prompt.root"), "");
+    const root = await askPath(t("lane.prompt.root"), "");
     if (root) opts.root = root;
-    const inbox = await ask(t("lane.prompt.inbox"), "inbox.md");
+    const inbox = await askPath(t("lane.prompt.inbox"), "inbox.md");
     if (inbox) opts.inbox = inbox;
-    const approvals = await ask(t("lane.prompt.approvals"), "");
+    const approvals = await askPath(t("lane.prompt.approvals"), "");
     if (approvals) opts.approvals = approvals;
-    const outbox = await ask(t("lane.prompt.outbox"), "");
+    const outbox = await askPath(t("lane.prompt.outbox"), "");
     if (outbox) opts.outbox = outbox;
   }
 
@@ -244,7 +245,7 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     }
     const prompter = createPrompter();
     try {
-      opts = await collectInteractive(prompter.ask, prompter.askSecret);
+      opts = await collectInteractive(prompter.ask, prompter.askSecret, prompter.askPath);
     } finally {
       prompter.close();
     }
@@ -257,8 +258,6 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     if (engine !== undefined) opts.engine = engine;
     const backend = flagStr(flags, "backend");
     if (backend !== undefined) opts.backend = backend;
-    const channel = flagStr(flags, "channel");
-    if (channel !== undefined) opts.channel = channel;
     const permTier = flagStr(flags, "perm-tier");
     if (permTier !== undefined) opts.perm_tier = permTier;
     const acpVersion = flagStr(flags, "acp-version");
@@ -346,6 +345,35 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
     return 1;
   }
   const purge = flags["purge"] === true;
+  const force = flags["force"] === true;
+
+  // --purge 는 state(.env 토큰 포함)/queue/out 을 지우는 파괴적 동작 — proj rm 과 동일한 가드.
+  // 평범한 rm(conf 만 삭제)은 재생성 가능·저위험이라 가드 없이 진행한다.
+  if (purge && !force) {
+    // 실행 중(또는 크래시 잔존)인 레인의 state/queue 를 지우면 데몬 동작을 깬다 — 거부.
+    const row = (await collectStatus(proj)).find((r) => r.lane === lane);
+    if (row && (row.status === "running" || row.status === "dead" || row.status === "stale")) {
+      process.stderr.write(laneError(t("lane.purgeRunning", { proj, lane })) + "\n");
+      return 1;
+    }
+    // 확인 — TTY 면 레인 이름 재입력, 비-TTY 면 --force 요구.
+    if (!process.stdin.isTTY) {
+      process.stderr.write(laneError(t("lane.purgeNeedForce")) + "\n");
+      return 1;
+    }
+    const prompter = createPrompter();
+    let typed: string;
+    try {
+      typed = await prompter.ask(t("lane.purgeConfirm", { lane }), "");
+    } finally {
+      prompter.close();
+    }
+    if (typed.trim() !== lane) {
+      process.stdout.write(t("lane.purgeAborted") + "\n");
+      return 1;
+    }
+  }
+
   const { confPath, purged } = await laneRemove(proj, lane, { purge });
   process.stdout.write(
     (purged ? t("lane.removedPurged", { lane, confPath }) : t("lane.removed", { lane, confPath })) +
@@ -388,10 +416,13 @@ export async function runLane(argv: readonly string[]): Promise<number> {
         return 1;
     }
   } catch (err) {
+    // LaneConfigError 는 검증 실패(친절 메시지) — 그 외 예기치 못한 예외도 원시 스택 대신
+    // 명령 스코프 메시지로 표면화(방어코드: 어떤 경로든 사용자에게 actionable 하게).
     if (err instanceof LaneConfigError) {
       process.stderr.write(laneError(err.message) + "\n");
-      return 1;
+    } else {
+      process.stderr.write(cmdError("lane", errMsg(err)) + "\n");
     }
-    throw err;
+    return 1;
   }
 }

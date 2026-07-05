@@ -83,6 +83,41 @@ async function runDaemonForeground(proj: string): Promise<number> {
   return 0; // 도달하지 않음
 }
 
+interface UpLaneRow {
+  lane: string;
+  status: string;
+  error: string | null;
+}
+
+/**
+ * `adde up` 기동 결과 요약 — 데몬(분리 프로세스)이 각 레인 상태를 runtime.json 에 남길 때까지
+ * 짧게 폴링한 뒤 집계한다. 아직 손대지 않은 레인은 stopped 로 보이므로 전부 확정(또는 타임아웃)될
+ * 때까지 대기한다. 반환: running 수·실패 레인(사유)·pending(타임아웃까지 미확정) 수·총 수.
+ */
+async function pollUpResult(
+  proj: string,
+  collectStatus: (p: string) => Promise<UpLaneRow[]>,
+): Promise<{
+  running: number;
+  failed: { lane: string; error: string | null }[];
+  pending: number;
+  total: number;
+}> {
+  const deadlineMs = 8000;
+  const start = Date.now();
+  let rows = await collectStatus(proj);
+  while (Date.now() - start < deadlineMs && rows.some((r) => r.status === "stopped")) {
+    await new Promise((r) => setTimeout(r, 300));
+    rows = await collectStatus(proj);
+  }
+  const running = rows.filter((r) => r.status === "running").length;
+  const failed = rows
+    .filter((r) => r.status === "error" || r.status === "dead")
+    .map((r) => ({ lane: r.lane, error: r.error }));
+  const pending = rows.filter((r) => r.status === "stopped").length;
+  return { running, failed, pending, total: rows.length };
+}
+
 /**
  * CLI 진입 로직. adde / add 양쪽 진입점이 공유한다.
  * @returns 프로세스 종료 코드.
@@ -205,8 +240,29 @@ export async function run(argv: readonly string[]): Promise<number> {
       }
       await loadDaemon(proj);
       process.stdout.write(t("run.upDone", { proj }) + "\n");
+      // 기동 결과를 바로 표면화 — 데몬(분리 프로세스)이 각 레인의 running/error 를 runtime.json 에
+      // 남길 때까지 짧게 폴링해 성공/실패 레인을 이 터미널에 요약한다(요청: up 에서 즉시 실패 레인 표기).
+      const { collectStatus } = await import("../core/diagnostics.js");
+      const summary = await pollUpResult(proj, collectStatus);
+      if (summary.failed.length > 0) {
+        process.stderr.write(
+          t("run.upFailed", {
+            lanes: summary.failed
+              .map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`)
+              .join(", "),
+            proj,
+          }) + "\n",
+        );
+      }
+      process.stdout.write(
+        t("run.upSummary", {
+          running: summary.running,
+          failed: summary.failed.length,
+          pending: summary.pending,
+        }) + "\n",
+      );
       process.stdout.write(t("run.statusHint", { proj }) + "\n");
-      return 0;
+      return summary.failed.length > 0 ? 1 : 0;
     } catch (err) {
       process.stderr.write(cmdError("up", errMsg(err)) + "\n");
       return 1;

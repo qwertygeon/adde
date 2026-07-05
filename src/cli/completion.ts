@@ -10,7 +10,9 @@ import {
   visibleCommands,
   LANE_ADD_FLAGS,
   LANE_SUBS,
+  LANE_RM_FLAGS,
   PROJ_SUBS,
+  PROJ_LS_FLAGS,
   PROJ_RM_FLAGS,
   FLAG_VALUES,
   DIR_FLAGS,
@@ -83,7 +85,9 @@ function bashScript(): string {
   const commands = commandNames();
   const globals = GLOBAL_FLAGS.join(" ");
   const laneSubs = LANE_SUBS.join(" ");
+  const laneRmFlags = LANE_RM_FLAGS.join(" ");
   const projSubs = PROJ_SUBS.join(" ");
+  const projLsFlags = PROJ_LS_FLAGS.join(" ");
   const projRmFlags = PROJ_RM_FLAGS.join(" ");
   const laneAddFlags = LANE_ADD_FLAGS.join(" ");
   const aliasSuggest = RECOMMENDED_ALIASES.join(" ");
@@ -126,15 +130,20 @@ ${bashFlagValueCases()}
           ;;
         ls)
           if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") ); return; fi ;;
-        show|rm)
+        show)
           if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") ); return; fi
           if [ "$cword" -eq 4 ]; then COMPREPLY=( $(compgen -W "$(_adde_lanes "\${COMP_WORDS[3]}")" -- "$cur") ); return; fi ;;
+        rm)
+          if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") ); return; fi
+          if [ "$cword" -eq 4 ]; then COMPREPLY=( $(compgen -W "$(_adde_lanes "\${COMP_WORDS[3]}") ${laneRmFlags}" -- "$cur") ); return; fi
+          COMPREPLY=( $(compgen -W "${laneRmFlags}" -- "$cur") ); return;;
       esac
       return;;
     proj)
       if [ "$cword" -eq 2 ]; then COMPREPLY=( $(compgen -W "${projSubs}" -- "$cur") ); return; fi
       local psub="\${COMP_WORDS[2]}"
       case "$psub" in
+        ls) COMPREPLY=( $(compgen -W "${projLsFlags}" -- "$cur") ); return;;
         rm)
           if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects) ${projRmFlags}" -- "$cur") ); return; fi
           COMPREPLY=( $(compgen -W "${projRmFlags}" -- "$cur") ); return;;
@@ -186,7 +195,9 @@ function zshScript(): string {
     .map((c) => `'${c.name}:${c.desc ?? c.name}'`)
     .join(" ");
   const laneSubs = LANE_SUBS.join(" ");
+  const laneRmFlags = LANE_RM_FLAGS.join(" ");
   const projSubs = PROJ_SUBS.join(" ");
+  const projLsFlags = PROJ_LS_FLAGS.join(" ");
   const projRmFlags = PROJ_RM_FLAGS.join(" ");
   const laneAddFlags = LANE_ADD_FLAGS.join(" ");
   const aliasSuggest = RECOMMENDED_ALIASES.join(" ");
@@ -229,14 +240,19 @@ ${zshFlagValueCases()}
           _values 'option' ${laneAddFlags} ;;
         ls)
           if (( CURRENT == 4 )); then _adde_projects; return; fi ;;
-        show|rm)
+        show)
           if (( CURRENT == 4 )); then _adde_projects; return; fi
           if (( CURRENT == 5 )); then _adde_lanes "\${words[4]}"; return; fi ;;
+        rm)
+          if (( CURRENT == 4 )); then _adde_projects; return; fi
+          if (( CURRENT == 5 )); then _adde_lanes "\${words[4]}"; return; fi
+          _values 'option' ${laneRmFlags} ;;
       esac
       ;;
     proj)
       if (( CURRENT == 3 )); then _values 'proj subcommand' ${projSubs}; return; fi
       case "\${words[3]}" in
+        ls) _values 'option' ${projLsFlags} ;;
         rm)
           if (( CURRENT == 4 )); then _adde_projects; return; fi
           _values 'option' ${projRmFlags} ;;

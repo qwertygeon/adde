@@ -108,7 +108,6 @@ TTY 에서 `adde lane add <proj> <lane>` 를 **필드 플래그 없이** 실행�
 source=markdown         # markdown | telegram
 backend=acp
 engine=claude-agent-acp  # ACP 엔진 기동 프로필
-channel=markdown        # 게이트 분기용
 perm_tier=acp
 acp_version=v1
 cwd=/abs/project/dir     # 이 레인 AI 의 작업 폴더(프로젝트 폴더 매핑)

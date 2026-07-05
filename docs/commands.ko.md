@@ -67,19 +67,26 @@ adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
 
 프로젝트 이름 [default]: myproj
 레인 이름 [main]: tg-claude
-source (markdown 또는 telegram) [markdown]: telegram
+source (번호 또는 값 입력)
+  1) markdown
+  2) telegram [markdown]: 2
 engine [claude-agent-acp]:
 backend [acp]:
-channel [telegram]:
-perm_tier (acp 또는 autopass) [acp]:
+perm_tier (acp = 도구마다 채널 승인 / autopass = denylist 외 자동 허용)
+  1) acp
+  2) autopass [acp]:
 acp_version [v1]:
 allowlist (콤마 구분, 없으면 비움): Read,Grep
 방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N) [y]: y
-lang (채널 메시지 로케일: en/ko, 전역은 비움):
+lang (채널 메시지 로케일, 전역은 비움)
+  1) en
+  2) ko:
 cwd (레인 작업 폴더 절대경로, 없으면 비움): /Users/me/work/my-project
 chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움): 12345678
 allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움):
-file_mode (private=소유자 전용 0700 / shared=umask 기본 유지, 통상 타 사용자 열람) [private]:
+file_mode (private=소유자 전용 0700 / shared=umask 기본 유지, 통상 타 사용자 열람)
+  1) private
+  2) shared [private]:
 telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입력 숨김⟩
 
 레인 "tg-claude" 생성: ~/.config/adde/myproj/lanes.d/tg-claude.conf
@@ -89,7 +96,7 @@ telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입
 기동: adde up myproj
 ```
 
-빈 응답은 표시된 기본값(`[…]`)을 채택합니다. `engine`·`backend`·`channel`·`acp_version` 프롬프트는 로케일과 무관하게 영문으로 표시됩니다. 토큰을 비워 두면 마지막 두 줄이 `토큰 기록` 대신 `다음: 봇 토큰을 …/.env 에 TELEGRAM_BOT_TOKEN=... 으로 두세요` 안내가 됩니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`/`approvals`/`outbox` 로 바뀝니다.
+빈 응답은 표시된 기본값(`[…]`)을 채택합니다. `engine`·`backend`·`acp_version` 프롬프트는 로케일과 무관하게 영문으로 표시됩니다. 토큰을 비워 두면 마지막 두 줄이 `토큰 기록` 대신 `다음: 봇 토큰을 …/.env 에 TELEGRAM_BOT_TOKEN=... 으로 두세요` 안내가 됩니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`/`approvals`/`outbox` 로 바뀝니다.
 
 ## alias — 단축 별칭 설치
 
@@ -114,6 +121,7 @@ adde up <proj>
 
 - **터미널 독립**: 터미널을 닫아도 데몬이 계속 동작합니다.
 - **자동 복구**: macOS 재부팅·로그아웃 후에도 launchd가 자동으로 데몬을 재기동합니다.
+- **기동 결과 표기**: 등록 후 `adde up` 이 각 레인 상태를 잠깐 폴링해 요약을 출력합니다(`실행 중 N · 실패 M · 기동 중 K`). **기동 실패한 레인**은 사유와 함께 나열하고 `adde up` 이 비정상 종료코드로 끝나, `adde status` 를 따로 확인하지 않아도 실패를 바로 알 수 있습니다(실패는 `error` 상태로도 기록 — 데몬 레벨 원인은 `adde logs <proj> --daemon`).
 - **이미 기동 중 안내**: 데몬이 이미 등록돼 있으면 `adde up` 은 재등록(=already loaded 실패)하지 않고, 실행 중/전체 레인 수와 함께 "이미 기동 중" 을 안내합니다(확인 `adde status`, 설정 반영 `adde restart`, 종료 `adde down`).
 - **중복 기동 가드**: 데몬 내부에서 이미 실행 중인 레인은 경고와 함께 스킵합니다(데몬 로그에 기록). 이중 기동은 발생하지 않습니다.
 - **macOS 전용**: launchd 기능은 macOS에서만 동작합니다. 상세는 [macOS 전용 기능](#macos-전용-기능)을 참조하세요.
@@ -146,17 +154,18 @@ adde status [<proj>] [--all] [--json]
 
 `lanes.d` 의 각 레인을 스캔해 상태를 판정합니다.
 
-| 상태      | 의미                                                                   |
-| --------- | ---------------------------------------------------------------------- |
-| `running` | 상태 파일이 있고 기동 프로세스(pid)가 살아있으며 하트비트가 신선함     |
-| `stale`   | pid 는 살아있으나 하트비트(상태 파일 mtime)가 끊김 — **행(hung) 의심** |
-| `dead`    | 상태 파일이 있으나 프로세스가 없음 — **비정상 종료(크래시) 잔존**      |
-| `stopped` | 상태 파일 없음 — 정상 종료 또는 미기동                                 |
+| 상태      | 의미                                                                       |
+| --------- | -------------------------------------------------------------------------- |
+| `running` | 상태 파일이 있고 기동 프로세스(pid)가 살아있으며 하트비트가 신선함         |
+| `stale`   | pid 는 살아있으나 하트비트(상태 파일 mtime)가 끊김 — **행(hung) 의심**     |
+| `dead`    | 상태 파일이 있으나 프로세스가 없음 — **비정상 종료(크래시) 잔존**          |
+| `error`   | 레인 **기동 실패**(엔진 spawn/handshake·설정 누락 등) — 사유가 기록·표시됨 |
+| `stopped` | 상태 파일 없음 — 정상 종료 또는 미기동                                     |
 
 - **`<proj>` 지정**: 해당 프로젝트의 모든 레인(정지 포함)을 `LANE · STATUS · PID · UPTIME · SEEN · SOURCE` 표로 출력.
 - **`<proj>` 생략**: 전 프로젝트(`~/.config/adde/*/`)를 집계해 **실행 중(정지 제외) 레인**을 `PROJECT · LANE · …` 표로 출력. 실행 중 레인이 없으면 안내 메시지.
 - **`--all`**(`<proj>` 생략 시): 정지(`stopped`) 포함 전 레인을 표시.
-- `dead`·`stale` 레인이 있으면 조치 안내를 덧붙입니다(`SEEN` = 마지막 하트비트 경과).
+- `dead`·`stale`·`error` 레인이 있으면 조치 안내를 덧붙입니다(`SEEN` = 마지막 하트비트 경과; `error` 는 기동 실패 사유와 `adde logs <proj> --daemon`/`--engine` 포인터).
 - 하트비트: `adde up` 이 주기적으로 상태 파일 mtime 을 갱신합니다. pid 가 살아있어도 갱신이 임계 시간 멈추면 `stale`(행) 로 판정합니다.
 - `--json`: 레인 객체 배열(모니터링/스크립트용, `lastSeenAt` 포함; 집계 시 `proj` 부기).
 - **업데이트 안내**: npm 에 새 버전이 있으면 안내 한 줄(`npm i -g adde-acp@latest` … 후 `adde restart`)을 덧붙입니다. 24시간 캐시(설정 base 하위)를 쓰며, 대화형 터미널(TTY)에서만 네트워크를 조회하고, `ADDE_NO_UPDATE_CHECK` 환경변수로 끌 수 있습니다.
@@ -187,15 +196,18 @@ adde doctor [<proj>]
 
 ```bash
 adde logs <proj> <lane> [N] [--engine]
+adde logs <proj> --daemon [N]
 ```
 
 해당 레인의 `transcript.log`(ACP 세션 이벤트 기록) 최근 `N` 줄을 출력합니다(기본 50). 파일이 없으면 안내를 출력합니다.
 
 - `N`: 출력할 마지막 줄 수(기본 50).
 - `--engine`: transcript 대신 `engine.log`(엔진 서브프로세스 stderr 캡처)를 출력합니다. 엔진 자체의 진단 출력을 볼 때 사용합니다(`stale`/기동 실패 원인 추적 등).
+- `--daemon`: 프로젝트의 **launchd 데몬 로그**(`~/Library/Logs/adde/<proj>.err.log`)를 출력합니다(`<lane>` 불필요). 데몬(분리 프로세스)의 출력, 특히 **기동 실패 원인**이 여기 쌓이며, 레인 transcript/engine 로그로는 볼 수 없습니다.
 
 ```bash
 adde logs myproj tg-claude 100 --engine   # 엔진 stderr 로그 마지막 100줄
+adde logs myproj --daemon                 # 데몬 로그(레인 기동 실패 원인)
 ```
 
 ## sessions — 세션 목록
@@ -235,7 +247,7 @@ adde lane help                       # 전체 옵션
 
 `ls`/`rm` 은 각각 `list`/`remove` 로도 쓸 수 있습니다(동일 동작).
 
-`lane rm` 은 기본적으로 conf 만 지우고 부수 데이터(state/queue/out)는 보존합니다. `--purge` 를 주면 해당 레인의 `state`/`queue`/`processing`/`out` 디렉터리까지 삭제합니다(고아 데이터 정리).
+`lane rm` 은 기본적으로 conf 만 지우고 부수 데이터(state/queue/out)는 보존합니다. `--purge` 를 주면 해당 레인의 `state`/`queue`/`processing`/`out` 디렉터리까지 삭제합니다(고아 데이터 정리). `--purge` 는 state(봇 토큰 `.env` 포함)를 파괴하므로 `proj rm` 과 동일하게 가드됩니다 — **활성 레인이면 거부**(먼저 데몬을 내리거나 `--force`)하고, TTY 에선 레인 이름 재입력으로 확인(비대화형은 `--force` 필요). `--purge` 없는 일반 `lane rm` 에는 이 가드가 없습니다.
 
 ### lane add 옵션
 
@@ -244,7 +256,6 @@ adde lane help                       # 전체 옵션
 | `--source <markdown\|telegram>`                      | `markdown`                                         | 채널 소스                                                                                                                     |
 | `--engine <name>`                                    | `claude-agent-acp`                                 | ACP 엔진 프로필                                                                                                               |
 | `--backend <name>`                                   | `acp`                                              | 백엔드                                                                                                                        |
-| `--channel <name>`                                   | source 값                                          | 게이트 분기                                                                                                                   |
 | `--perm-tier <acp\|autopass>`                        | `acp`                                              | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인)                                                 |
 | `--acp-version <v>`                                  | `v1`                                               | ACP 버전                                                                                                                      |
 | `--cwd <abs-path>`                                   | (supervisor cwd)                                   | 이 레인 AI 의 작업 폴더(프로젝트 매핑)                                                                                        |
@@ -263,7 +274,7 @@ adde lane help                       # 전체 옵션
 | `--interactive`                                      | —                                                  | 대화형 마법사 강제(TTY 전용 — 비TTY 에서는 오류)                                                                              |
 | `--no-interactive`                                   | —                                                  | 비대화형 강제(플래그·기본값 사용, 프롬프트 없음) — 스크립트·CI 용                                                             |
 
-**기본 대화형**: TTY 에서 `adde lane add <proj> <lane>` 를 **필드 플래그 없이** 실행하면 대화형 마법사가 자동으로 뜹니다 — `--interactive` 불요. 필드 플래그(`--source`·`--engine`·`--backend`·`--channel`·`--perm-tier`·`--acp-version`·`--cwd`·`--allowlist`·`--denylist`·`--hard-deny`·`--safe-defaults`·`--lang`·`--chat-id`·`--allow-from`·`--file-mode`·`--root`·`--inbox`·`--approvals`·`--outbox`·`--token-stdin`) 중 하나라도 주거나, `--no-interactive` 를 주거나, stdin 이 TTY 가 아니면(스크립트·CI) 비대화형이 됩니다. `--interactive` 는 대화형을 강제하고(비TTY 에서는 오류), `--no-interactive` 는 비대화형을 강제합니다. `<proj>`·`<lane>` 은 항상 필수 위치 인자입니다.
+**기본 대화형**: TTY 에서 `adde lane add <proj> <lane>` 를 **필드 플래그 없이** 실행하면 대화형 마법사가 자동으로 뜹니다 — `--interactive` 불요. 필드 플래그(`--source`·`--engine`·`--backend`·`--perm-tier`·`--acp-version`·`--cwd`·`--allowlist`·`--denylist`·`--hard-deny`·`--safe-defaults`·`--lang`·`--chat-id`·`--allow-from`·`--file-mode`·`--root`·`--inbox`·`--approvals`·`--outbox`·`--token-stdin`) 중 하나라도 주거나, `--no-interactive` 를 주거나, stdin 이 TTY 가 아니면(스크립트·CI) 비대화형이 됩니다. `--interactive` 는 대화형을 강제하고(비TTY 에서는 오류), `--no-interactive` 는 비대화형을 강제합니다. `<proj>`·`<lane>` 은 항상 필수 위치 인자입니다.
 
 마법사에서 telegram 봇 토큰은 **마지막에 가려진 입력**(키 입력 비에코)으로 받아 `.env`(0600)에 기록하며, 비워 두면 나중으로 미룹니다(`--token-stdin` 또는 `.env` 직접 편집). 마법사는 `--safe-defaults`(hard-deny 위험 목록) 활성화 여부도 묻습니다(기본 예). **enum 필드는 번호 메뉴로 표시**되어 **번호**(`1`·`2`…)로 답하거나 값을 직접 입력할 수 있습니다 — `source`·`perm_tier`·`file_mode`·`lang` 이 그렇습니다. **경로 필드(`cwd`·`root` 등)는 Tab 디렉터리 자동완성**을 지원합니다. 숫자 필드(`chat_id`·`allow_from`)는 입력 시점에 검증되어 잘못되면 재질의합니다. 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
 
@@ -300,7 +311,7 @@ telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입
 기동: adde up myproj
 ```
 
-(`denylist` 프롬프트는 `perm_tier=autopass` 일 때만 나옵니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`(기본 `inbox.md`)/`approvals`/`outbox` 로 바뀝니다. `source`·`engine`·`backend`·`channel`·`perm_tier`·`acp_version` 프롬프트는 로케일과 무관하게 영문입니다.)
+(`denylist` 프롬프트는 `perm_tier=autopass` 일 때만 나옵니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`(기본 `inbox.md`)/`approvals`/`outbox` 로 바뀝니다. `engine`·`backend`·`acp_version` 프롬프트는 로케일과 무관하게 영문입니다.)
 
 **예시: 스크립트** (비대화형, 모든 값을 플래그로, 토큰은 stdin 으로 — 프롬프트 없음):
 
@@ -351,7 +362,8 @@ adde proj rm <proj> [--force]   # 프로젝트 삭제: 모든 레인 + state
 - **`proj ls`** — 등록된 프로젝트(설정 base 아래 `lanes.d/` 를 가진 디렉터리)마다 한 행으로 레인 수·실행 수를 출력. `--json` 은 스크립트용 배열.
 - **`proj rm <proj>`** — 프로젝트 디렉터리 전체(`lanes.d` + `state` + `queue` + `processing` + `out`)를 삭제합니다. 파괴적이므로:
   - 실행 중/dead/stale 레인이 있으면 **거부**합니다 — 먼저 데몬을 내리거나(`adde down <proj>`) `--force` 로 강제 삭제;
-  - TTY 에선 **프로젝트 이름 재입력**으로 확인하고, 비대화형 셸에선 `--force` 가 필요합니다.
+  - TTY 에선 **프로젝트 이름 재입력**으로 확인하고, 비대화형 셸에선 `--force` 가 필요합니다;
+  - 삭제 전 **launchd 데몬을 unload** 해 고아 plist 등록이 남지 않게 합니다.
 
 ```bash
 adde proj ls                    # PROJECT · LANES · RUNNING 표

@@ -108,7 +108,6 @@ Common keys:
 source=markdown         # markdown | telegram
 backend=acp
 engine=claude-agent-acp  # ACP engine launch profile
-channel=markdown        # for gate routing
 perm_tier=acp
 acp_version=v1
 cwd=/abs/project/dir     # this lane's AI working folder (project-folder mapping)

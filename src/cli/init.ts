@@ -11,7 +11,8 @@ import { runDoctor } from "../core/diagnostics.js";
 import { laneAdd, LaneConfigError } from "../core/lane-config.js";
 import { collectInteractive } from "./lane.js";
 import { createPrompter } from "./prompt.js";
-import { laneError } from "../core/messages.js";
+import { cmdError, laneError } from "../core/messages.js";
+import { errMsg } from "../shared/errors.js";
 import { RECOMMENDED_ALIASES, setupAliases, resolveAliasDeps } from "./alias.js";
 import type { AliasSetupResult } from "./alias.js";
 
@@ -101,7 +102,7 @@ export async function runInit(argv: readonly string[]): Promise<number> {
     let lane = await ask(t("init.lanePrompt"), "main");
     while (!NAME_RE.test(lane)) lane = await ask(t("init.laneRetry"), "main");
 
-    const opts = await collectInteractive(ask, prompter.askSecret);
+    const opts = await collectInteractive(ask, prompter.askSecret, prompter.askPath);
     const result = await laneAdd(proj, lane, opts);
     for (const w of result.warnings) process.stdout.write(w + "\n");
     process.stdout.write(
@@ -132,16 +133,22 @@ export async function runInit(argv: readonly string[]): Promise<number> {
 
 /** `adde alias [names...]` — 짧은 별칭만 설치(기본 ad·add). 비대화형. */
 export async function runAlias(argv: readonly string[]): Promise<number> {
-  const names = argv.filter((a) => !a.startsWith("--"));
-  const chosen = names.length > 0 ? names : [...RECOMMENDED_ALIASES];
-  const deps = await resolveAliasDeps();
-  if (!deps) {
-    process.stderr.write(t("init.aliasNoBin") + "\n");
+  try {
+    const names = argv.filter((a) => !a.startsWith("--"));
+    const chosen = names.length > 0 ? names : [...RECOMMENDED_ALIASES];
+    const deps = await resolveAliasDeps();
+    if (!deps) {
+      process.stderr.write(t("init.aliasNoBin") + "\n");
+      return 1;
+    }
+    const result = await setupAliases(chosen, deps);
+    printAliasResult(result, deps.binDir);
+    // 아무것도 설치/기존확인되지 않고 전부 실패면 비정상 종료(충돌 등).
+    const progressed = result.created.length > 0 || result.alreadyLinked.length > 0;
+    return progressed || result.skipped.length === 0 ? 0 : 1;
+  } catch (err) {
+    // resolveAliasDeps/setupAliases 의 예기치 못한 fs·OS 오류(EACCES 등)를 원시 스택 대신 친절 메시지로.
+    process.stderr.write(cmdError("alias", errMsg(err)) + "\n");
     return 1;
   }
-  const result = await setupAliases(chosen, deps);
-  printAliasResult(result, deps.binDir);
-  // 아무것도 설치/기존확인되지 않고 전부 실패면 비정상 종료(충돌 등).
-  const progressed = result.created.length > 0 || result.alreadyLinked.length > 0;
-  return progressed || result.skipped.length === 0 ? 0 : 1;
 }

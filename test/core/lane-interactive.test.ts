@@ -57,7 +57,6 @@ describe("collectInteractive (007 SC1)", () => {
 
     expect(opts.source).toBe("telegram");
     expect(opts.engine).toBe("claude-agent-acp"); // 빈 입력 → 기본값
-    expect(opts.channel).toBe("telegram"); // 기본값 = source
     expect(opts.chat_id).toBe("12345");
     expect(opts.allowlist).toEqual(["Read", "Bash"]);
     expect(opts.root).toBeUndefined();
@@ -75,7 +74,6 @@ describe("collectInteractive (007 SC1)", () => {
     const opts = await collectInteractive(ask);
 
     expect(opts.source).toBe("markdown");
-    expect(opts.channel).toBe("markdown");
     expect(opts.root).toBe("/vault");
     expect(opts.inbox).toBe("inbox.md"); // 기본값
     expect(opts.chat_id).toBeUndefined();

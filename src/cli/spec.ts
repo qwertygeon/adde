@@ -47,7 +47,6 @@ export const LANE_ADD_FLAGS = [
   "--source",
   "--engine",
   "--backend",
-  "--channel",
   "--perm-tier",
   "--acp-version",
   "--cwd",
@@ -75,8 +74,14 @@ export const LANE_SUBS = ["add", "ls", "show", "rm", "help"] as const;
 /** proj 하위 명령 — ls(프로젝트 목록)·rm(프로젝트 삭제). */
 export const PROJ_SUBS = ["ls", "rm", "help"] as const;
 
-/** `proj rm` 옵션 플래그(자동완성·힌트용). */
-export const PROJ_RM_FLAGS = ["--force", "--purge"] as const;
+/** `proj ls` 옵션 플래그(자동완성·힌트용). */
+export const PROJ_LS_FLAGS = ["--json"] as const;
+
+/** `proj rm` 옵션 플래그(자동완성·힌트용) — 확인 생략. */
+export const PROJ_RM_FLAGS = ["--force"] as const;
+
+/** `lane rm` 옵션 플래그(자동완성·힌트용) — 부수 데이터 정리·확인 생략. */
+export const LANE_RM_FLAGS = ["--purge", "--force"] as const;
 
 /** 최상위 명령 SSOT. hidden 명령은 도움말·자동완성에서 제외. */
 export const COMMAND_SPECS: readonly CommandSpec[] = [
@@ -86,7 +91,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: "restart", args: "<proj>", flags: [], positional: ["proj"], desc: "restart the daemon", usageKey: "usage.restart" }, // prettier-ignore
   { name: "status", args: "[<proj>]", flags: ["--all", "--json"], positional: ["proj"], desc: "lane status", usageKey: "usage.status" }, // prettier-ignore
   { name: "doctor", args: "[<proj>]", flags: [], positional: ["proj"], desc: "environment checks", usageKey: "usage.doctor" }, // prettier-ignore
-  { name: "logs", args: "<proj> <lane> [N]", flags: ["--engine"], positional: ["proj", "lane"], desc: "lane logs", usageKey: "usage.logs" }, // prettier-ignore
+  { name: "logs", args: "<proj> <lane> [N]", flags: ["--engine", "--daemon"], positional: ["proj", "lane"], desc: "lane logs", usageKey: "usage.logs" }, // prettier-ignore
   { name: "sessions", args: "<proj> <lane>", flags: [], positional: ["proj", "lane"], desc: "engine sessions", usageKey: "usage.sessions" }, // prettier-ignore
   { name: "lane", args: "<add|ls|show|rm>", flags: [], subs: LANE_SUBS, desc: "manage lane configs", usageKey: "usage.lane" }, // prettier-ignore
   { name: "proj", args: "<ls|rm>", flags: [], subs: PROJ_SUBS, desc: "list/delete projects", usageKey: "usage.proj" }, // prettier-ignore

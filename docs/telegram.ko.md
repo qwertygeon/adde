@@ -136,4 +136,8 @@ adde logs myproj tg-claude   # 최근 활동(transcript)
 
 `lanes.d/` 에 conf 를 여러 개 두면 `adde up` 한 번으로 모두 기동됩니다. 레인마다 다른 `--cwd`·`--chat-id` 를 지정해 여러 봇/프로젝트를 동시에 운용할 수 있습니다. 개념·폴더 매핑 상세는 [시작하기](getting-started.ko.md#프로젝트-폴더-매핑)를 참고하세요.
 
+## 운영자 책임
+
+Telegram 봇을 운영하면 사용자가 봇 운영자이자 AI 엔진 제공자의 이용자가 됩니다. 일부 의무는 상위 서비스에서 옵니다 — 본인 외 접근 가능하면 봇이 AI 임을 고지하고, 인바운드 allowlist 를 좁게 유지하며, 타인이 보낸 메시지를 적법하게 취급하세요. 상세는 [SECURITY.md → 운영자 책임](../SECURITY.md#your-responsibilities-as-an-operator)을 참고하세요.
+
 문제가 생기면 [트러블슈팅](troubleshooting.ko.md)을 참고하세요.

@@ -136,4 +136,8 @@ adde logs myproj tg-claude   # recent activity (transcript)
 
 Keep several confs in `lanes.d/` and one `adde up` starts them all. Assign a different `--cwd`/`--chat-id` per lane to run several bots/projects at once. For concepts and folder-mapping details see [Getting started](getting-started.md#project-folder-mapping).
 
+## Operator responsibilities
+
+Running a Telegram bot makes **you** the bot operator and a user of the AI engine's provider. Some obligations come from those upstream services — disclose that the bot is an AI if others can reach it, keep the inbound allowlist tight, and handle other people's messages lawfully. See [SECURITY.md → Your responsibilities as an operator](../SECURITY.md#your-responsibilities-as-an-operator).
+
 If something goes wrong, see [troubleshooting](troubleshooting.md).

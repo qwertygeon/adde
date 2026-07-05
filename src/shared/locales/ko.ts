@@ -53,7 +53,7 @@ export const ko = {
   adde lane rm <proj> <lane>           레인 conf 삭제
 
 lane add 옵션:
-  --source <telegram|markdown>  (기본 telegram)
+  --source <markdown|telegram>  (기본 markdown)
   --engine <name>               (기본 claude-agent-acp)
   --backend <name>              (기본 acp)
   --channel <name>              (기본 source 값)
@@ -96,7 +96,7 @@ lane add 옵션:
     noLanes: {
       situation: "기동할 레인이 없습니다 — {{proj}} 에 레인 설정(conf)이 없습니다",
       action:
-        "adde lane add {{proj}} <lane> --source telegram (또는 markdown) 으로 레인을 먼저 만드세요. 옵션은 adde lane help.",
+        "adde lane add {{proj}} <lane> --source markdown (또는 telegram) 으로 레인을 먼저 만드세요. 옵션은 adde lane help.",
     },
     signalShutdown: "[adde] {{sig}} 수신 — 레인 종료 중...",
     shutdownError: {
@@ -137,7 +137,7 @@ lane add 옵션:
   },
   lane: {
     valueRequired: "--{{key}} 에 값이 필요합니다",
-    sourceRetry: "  telegram 또는 markdown 중 하나를 입력하세요",
+    sourceRetry: "  markdown 또는 telegram 중 하나를 입력하세요",
     retry: {
       permTier: "  perm_tier — acp 또는 autopass 를 입력하세요",
       fileMode: "  file_mode — private 또는 shared 를 입력하세요",
@@ -146,7 +146,7 @@ lane add 옵션:
       allowFrom: "  allow_from — 콤마 구분 숫자 id 를 입력하세요(없으면 비움)",
     },
     prompt: {
-      source: "source (telegram 또는 markdown)",
+      source: "source (markdown 또는 telegram)",
       permTier: "perm_tier (acp 또는 autopass)",
       allowlist: "allowlist (콤마 구분, 없으면 비움)",
       denylist: "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
@@ -167,7 +167,7 @@ lane add 옵션:
     ttyOnly: {
       situation: "--interactive 는 대화형 터미널(TTY)에서만 동작합니다",
       action:
-        "플래그로 지정하세요(예: adde lane add <proj> <lane> --source telegram). 옵션 목록은 adde lane help.",
+        "플래그로 지정하세요(예: adde lane add <proj> <lane> --source markdown). 옵션 목록은 adde lane help.",
     },
     created: '레인 "{{lane}}" 생성: {{confPath}}',
     noLanes: "{{proj}}: 레인 없음",
@@ -219,7 +219,7 @@ lane add 옵션:
     },
     source: {
       unsupported: '미지원 source: "{{source}}"',
-      hint: "conf 의 source 를 telegram 또는 markdown 으로 설정하세요.",
+      hint: "conf 의 source 를 markdown 또는 telegram 으로 설정하세요.",
     },
     cwd: {
       hint: "conf 의 cwd 를 존재하는 작업 폴더로 수정하세요.",
@@ -229,6 +229,16 @@ lane add 옵션:
       present: ".env 에 TELEGRAM_BOT_TOKEN 존재",
       missing: "토큰 없음: {{path}}",
       hint: "봇 토큰을 기록하세요: {{path}} 에 TELEGRAM_BOT_TOKEN=... (또는 lane add --token-stdin).",
+    },
+    markdown: {
+      name: "{{lane}}: 마크다운 경로",
+      ok: "root/inbox 설정됨",
+      rootMissing: "markdown 레인에 root 가 없습니다 — 레인 기동에 실패합니다",
+      rootMissingHint: "conf 에 root 를 설정하세요 (lane add --root <vault 절대경로>).",
+      rootNotFound: "markdown root 경로가 없습니다: {{path}}",
+      rootNotFoundHint: "경로를 생성하거나 conf 의 root 를 고치세요.",
+      inboxMissing: "markdown 레인에 inbox 노트가 없습니다 — 레인 기동에 실패합니다",
+      inboxMissingHint: "conf 에 inbox 를 설정하세요 (lane add --inbox <root 상대 노트경로>).",
     },
     perms: {
       name: "{{lane}}: 파일 권한",

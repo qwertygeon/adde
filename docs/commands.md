@@ -66,7 +66,7 @@ install short aliases (ad, add) next to the adde command? (Y/n) [y]: y
 
 project name [default]: myproj
 lane name [main]: tg-claude
-source (telegram or markdown) [telegram]: telegram
+source (markdown or telegram) [markdown]: telegram
 engine [claude-agent-acp]:
 backend [acp]:
 channel [telegram]:
@@ -208,15 +208,15 @@ Prints the lane's engine session ledger — number, first-prompt excerpt, **last
 
 Resetting, compacting, and resuming a conversation session is instructed **from the channel**, not the CLI (it respects the in-progress turn, is processed serially in the message queue, and the result is announced as a channel response).
 
-| Action                      | Telegram (exact match)         | Markdown (dedicated checkbox label) | Result                                                                          |
-| --------------------------- | ------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------- |
-| Start a new session (reset) | `/clear`                       | `- [x] 🧹 clear`                    | Restart the engine as a new session — clears prior conversation context         |
-| Compact context             | `/compact`                     | `- [x] compact`                     | Run the engine's compact command (conversation kept, context condensed)         |
-| Session list                | `/resume`                      | `- [x] resume`                      | Respond with a recent-session list (number, excerpt, last conversation time)    |
-| Resume a session            | `/resume <number\|session-id>` | `- [x] resume <number\|session-id>` | Return to that session (falls back to a new session with a notice if not found) |
+| Action                      | Markdown (dedicated checkbox label) | Telegram (exact match)         | Result                                                                          |
+| --------------------------- | ----------------------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
+| Start a new session (reset) | `- [x] 🧹 clear`                    | `/clear`                       | Restart the engine as a new session — clears prior conversation context         |
+| Compact context             | `- [x] compact`                     | `/compact`                     | Run the engine's compact command (conversation kept, context condensed)         |
+| Session list                | `- [x] resume`                      | `/resume`                      | Respond with a recent-session list (number, excerpt, last conversation time)    |
+| Resume a session            | `- [x] resume <number\|session-id>` | `/resume <number\|session-id>` | Return to that session (falls back to a new session with a notice if not found) |
 
-- Telegram interprets it as control only when the whole message **exactly matches** a command — a `/clear` inside a sentence is passed through as an ordinary prompt. In group chats the bot-mention suffix (`/clear@botname`, `/compact@botname`, `/resume@botname <number>`) is allowed.
 - Markdown labels use the same contract as send: exact label match (leading emoji allowed), runs on check, and after processing the line terminates as `✅ sent [[...]]` with the result note linked.
+- Telegram interprets it as control only when the whole message **exactly matches** a command — a `/clear` inside a sentence is passed through as an ordinary prompt. In group chats the bot-mention suffix (`/clear@botname`, `/compact@botname`, `/resume@botname <number>`) is allowed.
 - A lane restart (`adde restart`) also starts a new session (no auto-resume — to continue, restart then pick with `/resume`).
 
 ## lane — lane configuration
@@ -237,7 +237,7 @@ adde lane help                           # all options
 
 | Option                                               | Default                                                         | Description                                                                                                                                                     |
 | ---------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--source <telegram\|markdown>`                      | `telegram`                                                      | Channel source                                                                                                                                                  |
+| `--source <markdown\|telegram>`                      | `markdown`                                                      | Channel source                                                                                                                                                  |
 | `--engine <name>`                                    | `claude-agent-acp`                                              | ACP engine profile                                                                                                                                              |
 | `--backend <name>`                                   | `acp`                                                           | Backend                                                                                                                                                         |
 | `--channel <name>`                                   | source value                                                    | Gate routing                                                                                                                                                    |
@@ -261,13 +261,13 @@ adde lane help                           # all options
 
 **Interactive by default**: on a TTY, `adde lane add <proj> <lane>` with **no field flags** launches the interactive wizard automatically — no `--interactive` needed. It becomes non-interactive when any field flag is given (`--source`, `--engine`, `--backend`, `--channel`, `--perm-tier`, `--acp-version`, `--cwd`, `--allowlist`, `--denylist`, `--hard-deny`, `--safe-defaults`, `--lang`, `--chat-id`, `--allow-from`, `--file-mode`, `--root`, `--inbox`, `--approvals`, `--outbox`, `--token-stdin`), when `--no-interactive` is passed, or when stdin is not a TTY (scripts/CI). `--interactive` force-enables it (and errors on a non-TTY); `--no-interactive` force-disables it. `<proj>` and `<lane>` are always required positional arguments.
 
-In the wizard, the telegram bot token is prompted **last, with hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to defer it (set it later via `--token-stdin` or by editing `.env`). The wizard also asks whether to enable `--safe-defaults` (the hard-deny danger list, default yes). Enum/numeric fields are validated at entry and re-prompt on bad input — `perm_tier` (acp|autopass), `file_mode` (private|shared), `lang` (en|ko or empty), `chat_id` (numeric or empty), `allow_from` (comma-separated numeric or empty), and `source` (telegram|markdown). At creation, a missing `cwd`, a missing markdown `root`, or a malformed telegram token is reported as a **warning** but creation still proceeds.
+In the wizard, the telegram bot token is prompted **last, with hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to defer it (set it later via `--token-stdin` or by editing `.env`). The wizard also asks whether to enable `--safe-defaults` (the hard-deny danger list, default yes). Enum/numeric fields are validated at entry and re-prompt on bad input — `perm_tier` (acp|autopass), `file_mode` (private|shared), `lang` (en|ko or empty), `chat_id` (numeric or empty), `allow_from` (comma-separated numeric or empty), and `source` (markdown|telegram). At creation, a missing `cwd`, a missing markdown `root`, or a malformed telegram token is reported as a **warning** but creation still proceeds.
 
 **Example: interactive** (auto-launched on a TTY — the field prompts follow the required `<proj> <lane>`):
 
 ```text
 $ adde lane add myproj tg-claude
-source (telegram or markdown) [telegram]: telegram
+source (markdown or telegram) [markdown]: telegram
 engine [claude-agent-acp]:
 backend [acp]:
 channel [telegram]:
@@ -346,7 +346,7 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 - **Top-level commands + global flags** — `up`/`down`/…/`lane`/`completion`, and `-h`/`--help`/`-v`/`--version`. In zsh each command shows a short description next to it.
 - **Subcommands and fixed values** — `lane add|ls|show|rm|help`, `completion bash|zsh`, the alias-name suggestions after `alias`, `status --all/--json`, `logs --engine`, and the `lane add` option flags.
 - **Dynamic project/lane names** — scanned live from `${ADDE_HOME:-~/.config/adde}` (no `adde` process is spawned): a project name at the first position of `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` and `lane ls|show|rm|add` (e.g. `adde up <TAB>`, `adde status <TAB>`), and a lane name at the next position (e.g. `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
-- **Enum flag values** — after `--source` (telegram|markdown), `--perm-tier` (acp|autopass), `--file-mode` (private|shared), `--lang` (en|ko).
+- **Enum flag values** — after `--source` (markdown|telegram), `--perm-tier` (acp|autopass), `--file-mode` (private|shared), `--lang` (en|ko).
 - **Directory paths** — after `--cwd` and `--root`.
 
 An unsupported shell gives an error + exit code 1.

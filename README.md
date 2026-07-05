@@ -4,9 +4,14 @@
 
 _English | [한국어](README.ko.md)_
 
-> ⚠️ **Status: early development.** ACP backend + Telegram/Markdown source adapters work (a PoC vertical slice). The API may change.
+[![npm](https://img.shields.io/npm/v/adde-acp)](https://www.npmjs.com/package/adde-acp)
+[![CI](https://github.com/qwertygeon/adde/actions/workflows/ci.yml/badge.svg)](https://github.com/qwertygeon/adde/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/adde-acp)](https://nodejs.org)
+[![license: MIT](https://img.shields.io/npm/l/adde-acp)](LICENSE)
 
-ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely from a **channel** (Telegram / Markdown notes such as Obsidian; Discord on hold). The AI does the development work while you instruct, approve, and observe from chat.
+> ⚠️ **Status: early development.** ACP backend + Markdown/Telegram source adapters work (a PoC vertical slice). The API may change.
+
+ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely from a **channel** (Markdown notes such as Obsidian / Telegram; Discord on hold). The AI does the development work while you instruct, approve, and observe from chat.
 
 ## When to use it
 
@@ -15,6 +20,10 @@ ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely
 - When you want a **human approval gate** (fail-closed by default) on every tool execution.
 
 > ⚠️ **Data-flow warning**: your instructions, code, and the AI's replies pass through the AI engine provider (ACP → Claude/Codex, etc.) and the channel infrastructure (Telegram). With the Markdown source, approval/output notes are **replicated by your syncing vault** (Obsidian Sync, iCloud, etc.) — for sensitive projects, read [Markdown guide — exposure of sensitive data](docs/markdown.md#syncing-vaults-and-exposure-of-sensitive-data) first.
+>
+> ℹ️ **Unofficial tool.** ADDE is an unofficial, third-party tool not built or endorsed by Anthropic or any engine/channel provider. "Claude" and "Claude Code" are trademarks of Anthropic; other engine and platform names are trademarks of their respective owners. This project is not affiliated with any of them.
+>
+> 📜 **Your use is subject to upstream terms.** Driving an AI engine sends your content to that engine's provider (e.g. the Anthropic API for Claude), so your use is governed by your own plan terms and usage policies; running a Telegram bot also makes you a bot operator (disclose that it is an AI if others can reach it). See [SECURITY.md → Your responsibilities as an operator](SECURITY.md#your-responsibilities-as-an-operator).
 
 ## Quick start
 
@@ -28,8 +37,8 @@ adde init         # guided setup (environment check + short alias + first lane)
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install, lane config, startup, status/diagnostics, project-folder mapping
-- [Telegram guide](docs/telegram.md) — bot creation, token, step-by-step startup
 - [Markdown guide](docs/markdown.md) — drive the AI from notes (e.g. Obsidian): instructions, replies, approvals
+- [Telegram guide](docs/telegram.md) — bot creation, token, step-by-step startup
 - [Permissions guide](docs/permissions.md) — the gate, tiers (acp/autopass), allowlist/denylist, hard-deny, recommended settings
 - [Command reference](docs/commands.md) · [Troubleshooting](docs/troubleshooting.md)
 
@@ -78,10 +87,11 @@ For lane configuration details see [Getting started](docs/getting-started.md#lan
 - [~] MVP: `markdown | telegram → claude(ACP)` vertical slice (source adapters + per-lane project-folder mapping working)
 - [ ] Codex backend · Discord (on hold) · non-ACP CLI scraping (on hold)
 
-## License / security
+## License / security / meta
 
 - License: [MIT](LICENSE)
 - Report security vulnerabilities: [SECURITY.md](SECURITY.md)
+- Project meta: [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ---
 

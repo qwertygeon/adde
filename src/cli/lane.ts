@@ -134,9 +134,9 @@ export async function collectInteractive(
     return ids.length > 0 && ids.every(isNumericId);
   };
 
-  let source = (await ask(t("lane.prompt.source"), "telegram")).toLowerCase();
+  let source = (await ask(t("lane.prompt.source"), "markdown")).toLowerCase();
   while (source !== "telegram" && source !== "markdown") {
-    source = (await ask(t("lane.sourceRetry"), "telegram")).toLowerCase();
+    source = (await ask(t("lane.sourceRetry"), "markdown")).toLowerCase();
   }
   opts.source = source;
   opts.engine = await ask("engine", "claude-agent-acp");

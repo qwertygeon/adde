@@ -53,7 +53,7 @@ Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help
   adde lane rm <proj> <lane>              delete a lane conf
 
 lane add options:
-  --source <telegram|markdown>  (default telegram)
+  --source <markdown|telegram>  (default markdown)
   --engine <name>               (default claude-agent-acp)
   --backend <name>              (default acp)
   --channel <name>              (default: value of source)
@@ -96,7 +96,7 @@ lane add options:
     noLanes: {
       situation: "no lanes to start — {{proj}} has no lane conf",
       action:
-        "Create a lane first: adde lane add {{proj}} <lane> --source telegram (or markdown). See adde lane help for options.",
+        "Create a lane first: adde lane add {{proj}} <lane> --source markdown (or telegram). See adde lane help for options.",
     },
     signalShutdown: "[adde] received {{sig}} — shutting down lanes...",
     shutdownError: {
@@ -137,7 +137,7 @@ lane add options:
   },
   lane: {
     valueRequired: "--{{key}} requires a value",
-    sourceRetry: "  enter one of telegram or markdown",
+    sourceRetry: "  enter one of markdown or telegram",
     retry: {
       permTier: "  perm_tier — enter acp or autopass",
       fileMode: "  file_mode — enter private or shared",
@@ -146,7 +146,7 @@ lane add options:
       allowFrom: "  allow_from — enter comma-separated numeric ids (or leave empty)",
     },
     prompt: {
-      source: "source (telegram or markdown)",
+      source: "source (markdown or telegram)",
       permTier: "perm_tier (acp or autopass)",
       allowlist: "allowlist (comma-separated, empty for none)",
       denylist: "denylist (tools/patterns that fall back to channel approval, comma-separated)",
@@ -167,7 +167,7 @@ lane add options:
     ttyOnly: {
       situation: "--interactive only works in an interactive terminal (TTY)",
       action:
-        "Specify flags instead (e.g. adde lane add <proj> <lane> --source telegram). See adde lane help for the option list.",
+        "Specify flags instead (e.g. adde lane add <proj> <lane> --source markdown). See adde lane help for the option list.",
     },
     created: 'lane "{{lane}}" created: {{confPath}}',
     noLanes: "{{proj}}: no lanes",
@@ -219,7 +219,7 @@ lane add options:
     },
     source: {
       unsupported: 'unsupported source: "{{source}}"',
-      hint: "Set source in the conf to telegram or markdown.",
+      hint: "Set source in the conf to markdown or telegram.",
     },
     cwd: {
       hint: "Fix cwd in the conf to an existing working directory.",
@@ -229,6 +229,16 @@ lane add options:
       present: "TELEGRAM_BOT_TOKEN present in .env",
       missing: "token missing: {{path}}",
       hint: "Write the bot token: TELEGRAM_BOT_TOKEN=... in {{path}} (or lane add --token-stdin).",
+    },
+    markdown: {
+      name: "{{lane}}: markdown paths",
+      ok: "root/inbox configured",
+      rootMissing: "markdown lane has no root — the lane will fail to start",
+      rootMissingHint: "Set root in the conf (lane add --root <absolute vault path>).",
+      rootNotFound: "markdown root path does not exist: {{path}}",
+      rootNotFoundHint: "Create the path or fix root in the conf.",
+      inboxMissing: "markdown lane has no inbox note — the lane will fail to start",
+      inboxMissingHint: "Set inbox in the conf (lane add --inbox <relative note path>).",
     },
     perms: {
       name: "{{lane}}: file permissions",

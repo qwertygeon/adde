@@ -260,41 +260,43 @@ export async function supervisorUp(
     );
     const onInbound = () => injector.notify();
 
-    if (conf.source === "markdown") {
-      source = createMarkdownSource({ lane, proj, engine, paths, conf, onInbound });
-    } else {
-      const chatId =
-        conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
-      // 인바운드/콜백 허용 발신자 = allow_from ∪ (개인 chat 인 chatId). 비면 어댑터가 fail-closed.
-      // 음수 chatId(그룹)는 인증 앵커 아님 — 멤버는 allow_from 으로만 인증(어댑터 병합 규칙과 동일).
-      const authorizedIds: number[] = [];
-      const selfAuth = selfAuthorizedChatId(chatId);
-      if (selfAuth !== undefined) authorizedIds.push(selfAuth);
-      for (const raw of conf.allow_from ? parseCsv(conf.allow_from) : []) {
-        const n = Number(raw);
-        if (!Number.isNaN(n)) authorizedIds.push(n);
-      }
-      source = createTelegramSource({
-        lane,
-        proj,
-        engine,
-        paths,
-        chatId,
-        authorizedIds,
-        onInbound,
-        lang: conf.lang,
-      });
-    }
-
-    source.onDecision((reqId, decision) => {
-      const resolve = pendingDecisions.get(reqId);
-      if (resolve) {
-        pendingDecisions.delete(reqId);
-        resolve(decision);
-      }
-    });
-
     try {
+      // 소스 생성을 try 안에서 — createMarkdownSource 등이 오구성(markdown root/inbox 누락)에
+      // 던지면 이 레인만 status:"error" 로 격리하고 나머지 레인·up 은 계속한다(전체 크래시 방지).
+      if (conf.source === "markdown") {
+        source = createMarkdownSource({ lane, proj, engine, paths, conf, onInbound });
+      } else {
+        const chatId =
+          conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
+        // 인바운드/콜백 허용 발신자 = allow_from ∪ (개인 chat 인 chatId). 비면 어댑터가 fail-closed.
+        // 음수 chatId(그룹)는 인증 앵커 아님 — 멤버는 allow_from 으로만 인증(어댑터 병합 규칙과 동일).
+        const authorizedIds: number[] = [];
+        const selfAuth = selfAuthorizedChatId(chatId);
+        if (selfAuth !== undefined) authorizedIds.push(selfAuth);
+        for (const raw of conf.allow_from ? parseCsv(conf.allow_from) : []) {
+          const n = Number(raw);
+          if (!Number.isNaN(n)) authorizedIds.push(n);
+        }
+        source = createTelegramSource({
+          lane,
+          proj,
+          engine,
+          paths,
+          chatId,
+          authorizedIds,
+          onInbound,
+          lang: conf.lang,
+        });
+      }
+
+      source.onDecision((reqId, decision) => {
+        const resolve = pendingDecisions.get(reqId);
+        if (resolve) {
+          pendingDecisions.delete(reqId);
+          resolve(decision);
+        }
+      });
+
       // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
       const { sessionId } = await backend.launch(lane);
 

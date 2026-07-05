@@ -1,7 +1,7 @@
 /**
  * 레인 .conf 파싱 (INI 형식).
- * 계약 03 §7: source/backend/engine/channel/perm_tier/acp_version/allowlist/denylist.
- * 누락 필드 기본값 적용, 알 수 없는 키 무시(forward-compat).
+ * 계약 03 §7: source/backend/engine/perm_tier/acp_version/allowlist/denylist.
+ * 누락 필드 기본값 적용, 알 수 없는 키 무시(forward-compat — 구 conf 의 channel= 도 무시).
  * cwd: 레인별 엔진 작업 폴더(프로젝트 폴더 매핑). 미지정 시 슈퍼바이저 실행 cwd.
  * markdown 전용: root/inbox/approvals/outbox. chat_id: telegram 회신 대상.
  */
@@ -10,7 +10,6 @@ export interface LaneConf {
   source: string;
   backend: string;
   engine: string;
-  channel: string;
   perm_tier: string;
   acp_version: string;
   allowlist: string[];
@@ -72,7 +71,6 @@ export function parseLaneConf(text: string): LaneConf {
     source: conf["source"] ?? "",
     backend: conf["backend"] ?? "",
     engine: conf["engine"] ?? "",
-    channel: conf["channel"] ?? "",
     perm_tier: conf["perm_tier"] ?? "acp",
     acp_version: conf["acp_version"] ?? "v1",
     allowlist: parseToolList(conf["allowlist"] ?? ""),
@@ -114,7 +112,6 @@ export function serializeLaneConf(conf: LaneConf): string {
     `source=${conf.source}`,
     `backend=${conf.backend}`,
     `engine=${conf.engine}`,
-    `channel=${conf.channel}`,
     `perm_tier=${conf.perm_tier}`,
     `acp_version=${conf.acp_version}`,
   ];

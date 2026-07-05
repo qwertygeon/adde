@@ -39,7 +39,6 @@ _[English](markdown.md) | 한국어_
 source=markdown
 backend=acp
 engine=claude-agent-acp
-channel=markdown
 perm_tier=acp
 acp_version=v1
 

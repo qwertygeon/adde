@@ -15,7 +15,6 @@ channel=telegram
     expect(result.source).toBe("telegram");
     expect(result.backend).toBe("acp");
     expect(result.engine).toBe("claude-agent-acp");
-    expect(result.channel).toBe("telegram");
   });
 
   it("acp_version 기본값이 v1 이다", () => {
@@ -76,13 +75,17 @@ channel=telegram
 
 describe("serializeLaneConf", () => {
   it("필수 키를 모두 출력한다", () => {
-    const text = serializeLaneConf(parseLaneConf("source=telegram\nchannel=telegram\n"));
+    const text = serializeLaneConf(parseLaneConf("source=telegram\n"));
     expect(text).toContain("source=telegram");
     expect(text).toContain("backend=");
     expect(text).toContain("engine=");
-    expect(text).toContain("channel=telegram");
     expect(text).toContain("perm_tier=acp");
     expect(text).toContain("acp_version=v1");
+  });
+
+  it("구 conf 의 channel= 는 무시하고 재직렬화 시 출력하지 않는다(사문화 필드 제거)", () => {
+    const text = serializeLaneConf(parseLaneConf("source=telegram\nchannel=telegram\n"));
+    expect(text).not.toContain("channel=");
   });
 
   it("빈 allowlist 는 출력하지 않는다", () => {

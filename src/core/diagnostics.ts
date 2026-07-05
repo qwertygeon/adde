@@ -40,6 +40,8 @@ export interface LaneStatusRow {
   uptimeMs: number | null;
   /** 마지막 하트비트 시각(runtime.json mtime) ISO. 파일 없거나 stat 실패 시 null. */
   lastSeenAt: string | null;
+  /** status==="error" 일 때 기동 실패 사유(그 외 null). */
+  error: string | null;
 }
 
 /**
@@ -80,6 +82,7 @@ export async function collectStatus(
           ? Math.max(0, Date.now() - Date.parse(info.startedAt))
           : null,
       lastSeenAt: mtimeMs !== undefined ? new Date(mtimeMs).toISOString() : null,
+      error: info?.error ?? null,
     });
   }
   return rows;

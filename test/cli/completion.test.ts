@@ -35,6 +35,10 @@ describe("completionScript", () => {
     const zsh = completionScript("zsh") as string;
     expect(zsh).toContain("_adde_projects");
     expect(zsh).toContain("_files -/");
+    // proj 서브커맨드 배선(ls/rm) — rm 뒤 프로젝트 이름 완성.
+    expect(bash).toContain("proj)");
+    expect(bash).toContain("ls rm help");
+    expect(zsh).toContain("'proj subcommand'");
   });
 
   it("zsh 스크립트는 compdef 헤더와 등록(ad·add)·명령 설명을 포함한다", () => {

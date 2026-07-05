@@ -61,6 +61,16 @@ export function buildLaneUsage(): string {
   return t("usage.lane");
 }
 
+/** `adde proj` 그룹 도움말. */
+export function buildProjUsage(): string {
+  return t("usage.proj");
+}
+
+/** 알 수 없는 proj 서브커맨드 안내(+ 사용법). */
+export function unknownProjSub(sub: string): string {
+  return `${t("cli.unknownSub", { sub })}\n\n${buildProjUsage()}`;
+}
+
 /** 최상위 명령 오류 — `[adde <cmd>] 오류: <detail>`. */
 export function cmdError(cmd: string, detail: string): string {
   return t("cli.cmdError", { cmd, detail });

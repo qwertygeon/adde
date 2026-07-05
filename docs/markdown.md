@@ -39,7 +39,6 @@ A lane is one config file = one lane. Write it in `~/.config/adde/<proj>/lanes.d
 source=markdown
 backend=acp
 engine=claude-agent-acp
-channel=markdown
 perm_tier=acp
 acp_version=v1
 

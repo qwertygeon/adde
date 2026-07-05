@@ -83,6 +83,54 @@ async function runDaemonForeground(proj: string): Promise<number> {
   return 0; // 도달하지 않음
 }
 
+interface UpLaneRow {
+  lane: string;
+  status: string;
+  error: string | null;
+  startedAt: string | null;
+}
+
+/**
+ * `adde up` 기동 결과 요약 — 데몬(분리 프로세스)이 각 레인 상태를 runtime.json 에 남길 때까지
+ * 짧게 폴링한 뒤 집계한다. 아직 손대지 않은 레인은 stopped 로 보이므로 전부 확정(또는 타임아웃)될
+ * 때까지 대기한다.
+ *
+ * sinceMs = 이번 up 시작 시각. **이전 기동에서 남은 stale error/dead 레코드**(down 은 실패 레인
+ * runtime.json 을 정리하지 않는다)를 이번 실패로 오인하지 않도록, startedAt 이 sinceMs 이후인
+ * error/dead 만 "이번 기동 실패"로 센다. stale(오래된) error/dead 는 미확정(pending)으로 보고 계속
+ * 대기 — 새 데몬의 중복기동 가드가 dead-pid 레코드를 정리하고 재기동하면 running 으로 수렴한다.
+ * 반환: running 수·이번 실패 레인(사유)·pending(미확정) 수·총 수.
+ */
+async function pollUpResult(
+  proj: string,
+  collectStatus: (p: string) => Promise<UpLaneRow[]>,
+  sinceMs: number,
+): Promise<{
+  running: number;
+  failed: { lane: string; error: string | null }[];
+  pending: number;
+  total: number;
+}> {
+  const deadlineMs = 8000;
+  const start = Date.now();
+  const freshFail = (r: UpLaneRow): boolean =>
+    (r.status === "error" || r.status === "dead") &&
+    r.startedAt != null &&
+    Date.parse(r.startedAt) >= sinceMs;
+  // 미확정 = stopped(아직 미기동) 또는 stale error/dead(이전 기동 잔존, 새 데몬이 정리 중).
+  const unresolved = (r: UpLaneRow): boolean =>
+    r.status === "stopped" || ((r.status === "error" || r.status === "dead") && !freshFail(r));
+  let rows = await collectStatus(proj);
+  while (Date.now() - start < deadlineMs && rows.some(unresolved)) {
+    await new Promise((r) => setTimeout(r, 300));
+    rows = await collectStatus(proj);
+  }
+  const running = rows.filter((r) => r.status === "running").length;
+  const failed = rows.filter(freshFail).map((r) => ({ lane: r.lane, error: r.error }));
+  const pending = rows.filter(unresolved).length;
+  return { running, failed, pending, total: rows.length };
+}
+
 /**
  * CLI 진입 로직. adde / add 양쪽 진입점이 공유한다.
  * @returns 프로세스 종료 코드.
@@ -121,6 +169,10 @@ export async function run(argv: readonly string[]): Promise<number> {
       return 1;
     }
     process.stdout.write(script);
+    // stdout 이 터미널이면(리다이렉트 아님) 설치 힌트를 stderr 로 — 파이프/리다이렉트 시엔 stdout 은 순수 스크립트 유지.
+    if (process.stdout.isTTY) {
+      process.stderr.write("\n" + t("completion.installHint", { shell }) + "\n");
+    }
     return 0;
   }
 
@@ -137,6 +189,11 @@ export async function run(argv: readonly string[]): Promise<number> {
   if (first === "lane") {
     const { runLane } = await import("./lane.js");
     return runLane(argv.slice(1));
+  }
+
+  if (first === "proj") {
+    const { runProj } = await import("./proj.js");
+    return runProj(argv.slice(1));
   }
 
   if (first === "status") {
@@ -182,11 +239,45 @@ export async function run(argv: readonly string[]): Promise<number> {
       return 1;
     }
     try {
-      const { loadDaemon } = await import("../core/launchd.js");
+      const { loadDaemon, daemonRegState } = await import("../core/launchd.js");
+      // 이미 등록·상주 중이면 launchctl load 는 "already loaded" 로 실패한다 — 혼란스러운
+      // 오류 대신 "이미 기동 중"을 명시 안내한다(실행 중 레인 수를 runtime.json 에서 읽어 표면화).
+      const reg = await daemonRegState(proj);
+      if (reg.launchctlRegistered) {
+        const { collectStatus } = await import("../core/diagnostics.js");
+        const rows = await collectStatus(proj);
+        const running = rows.filter((r) => r.status === "running").length;
+        process.stdout.write(t("run.alreadyUp", { proj, running, total: rows.length }) + "\n");
+        process.stdout.write(t("run.alreadyUpHint", { proj }) + "\n");
+        return 0;
+      }
+      // 이번 기동 기준시각 — 이후 데몬이 남기는 error/dead 만 "이번 실패"로 판별(stale 레코드 배제).
+      const upStart = Date.now();
       await loadDaemon(proj);
       process.stdout.write(t("run.upDone", { proj }) + "\n");
+      // 기동 결과를 바로 표면화 — 데몬(분리 프로세스)이 각 레인의 running/error 를 runtime.json 에
+      // 남길 때까지 짧게 폴링해 성공/실패 레인을 이 터미널에 요약한다(요청: up 에서 즉시 실패 레인 표기).
+      const { collectStatus } = await import("../core/diagnostics.js");
+      const summary = await pollUpResult(proj, collectStatus, upStart);
+      if (summary.failed.length > 0) {
+        process.stderr.write(
+          t("run.upFailed", {
+            lanes: summary.failed
+              .map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`)
+              .join(", "),
+            proj,
+          }) + "\n",
+        );
+      }
+      process.stdout.write(
+        t("run.upSummary", {
+          running: summary.running,
+          failed: summary.failed.length,
+          pending: summary.pending,
+        }) + "\n",
+      );
       process.stdout.write(t("run.statusHint", { proj }) + "\n");
-      return 0;
+      return summary.failed.length > 0 ? 1 : 0;
     } catch (err) {
       process.stderr.write(cmdError("up", errMsg(err)) + "\n");
       return 1;

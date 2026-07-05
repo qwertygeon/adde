@@ -7,8 +7,10 @@ import {
   laneList,
   laneShow,
   laneRemove,
+  projRemove,
   LaneConfigError,
 } from "../../src/core/lane-config.js";
+import { lanePaths } from "../../src/shared/paths.js";
 import { parseLaneConf } from "../../src/shared/conf.js";
 
 // adde lane <add|ls|show|rm> 코어 — conf 생성/조회/삭제, 검증, 원자적 쓰기
@@ -66,7 +68,6 @@ describe("laneAdd", () => {
     expect(conf.source).toBe("markdown");
     expect(conf.backend).toBe("acp");
     expect(conf.engine).toBe("claude-agent-acp");
-    expect(conf.channel).toBe("markdown");
     expect(conf.perm_tier).toBe("acp");
     expect(conf.acp_version).toBe("v1");
   });
@@ -123,7 +124,6 @@ describe("laneAdd", () => {
     });
     const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
     expect(conf.source).toBe("markdown");
-    expect(conf.channel).toBe("markdown");
     expect(conf.root).toBe("/abs/Notes");
     expect(conf.inbox).toBe("in.md");
   });
@@ -210,6 +210,70 @@ describe("laneRemove", () => {
 
   it("없는 레인 삭제는 에러", async () => {
     await expect(laneRemove("proj", "nope", { base })).rejects.toThrow(LaneConfigError);
+  });
+
+  it("기본 삭제는 conf 만 지우고 state 는 보존한다", async () => {
+    const add = await laneAdd("proj", "tg", { base });
+    const paths = lanePaths(base, "proj", "tg");
+    fs.mkdirSync(paths.stateDir, { recursive: true });
+    fs.writeFileSync(paths.runtimeJson, "{}");
+    const res = await laneRemove("proj", "tg", { base });
+    expect(res.purged).toBe(false);
+    expect(fs.existsSync(add.confPath)).toBe(false);
+    expect(fs.existsSync(paths.stateDir)).toBe(true); // 부수 데이터 보존
+  });
+
+  it("--purge 는 state/queue/processing/out 부수 데이터까지 지운다", async () => {
+    await laneAdd("proj", "tg", { base });
+    const paths = lanePaths(base, "proj", "tg");
+    for (const d of [paths.stateDir, paths.queueDir, paths.processingDir, paths.outDir]) {
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, "marker"), "x");
+    }
+    const res = await laneRemove("proj", "tg", { base, purge: true });
+    expect(res.purged).toBe(true);
+    for (const d of [paths.stateDir, paths.queueDir, paths.processingDir, paths.outDir]) {
+      expect(fs.existsSync(d)).toBe(false);
+    }
+  });
+});
+
+describe("laneAdd --force 토큰 덮어쓰기 경고 (B3)", () => {
+  it("--force 로 기존 .env 토큰을 덮어쓰면 경고를 반환한다", async () => {
+    await laneAdd("proj", "tg", { base, source: "telegram", token: "111:AAA" });
+    const res = await laneAdd("proj", "tg", {
+      base,
+      source: "telegram",
+      token: "222:BBB",
+      force: true,
+    });
+    expect(res.warnings.some((w) => w.includes("덮어썼"))).toBe(true);
+  });
+
+  it("--force 여도 기존 토큰이 없으면 덮어쓰기 경고 없음", async () => {
+    const res = await laneAdd("proj", "tg", {
+      base,
+      source: "telegram",
+      token: "222:BBB",
+      force: true,
+    });
+    expect(res.warnings.some((w) => w.includes("덮어썼"))).toBe(false);
+  });
+});
+
+describe("projRemove", () => {
+  it("프로젝트 디렉터리 전체(lanes.d + state)를 삭제한다", async () => {
+    await laneAdd("proj", "a", { base });
+    await laneAdd("proj", "b", { base });
+    const projDir = path.join(base, "proj");
+    expect(fs.existsSync(projDir)).toBe(true);
+    const res = await projRemove("proj", { base });
+    expect(res.proj).toBe("proj");
+    expect(fs.existsSync(projDir)).toBe(false);
+  });
+
+  it("없는 프로젝트 삭제는 에러", async () => {
+    await expect(projRemove("ghost", { base })).rejects.toThrow(LaneConfigError);
   });
 });
 

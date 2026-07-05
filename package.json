@@ -1,6 +1,6 @@
 {
   "name": "adde-acp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "AI Driven Development Engine — an ACP-based gateway that drives AI CLI engines remotely from chat channels (Telegram/Markdown)",
   "type": "module",
   "repository": {
@@ -55,8 +55,8 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.14.1",
-    "@zed-industries/claude-code-acp": "0.16.2",
+    "@agentclientprotocol/claude-agent-acp": "0.55.0",
+    "@agentclientprotocol/sdk": "1.1.0",
     "i18next": "^26.3.4"
   }
 }

@@ -61,7 +61,7 @@ const TOOL_NAME_MAP_MAX = 512;
 /**
  * tool_call 세션 업데이트에서 원시 도구명을 기록한다.
  * requestPermission 의 toolCall.title 은 인자 포함 표시 문자열(예: Bash → "`rm -rf build/`")이라
- * allowlist/denylist 매칭 키로 쓸 수 없다 — claude-code-acp 는 원시 도구명을
+ * allowlist/denylist 매칭 키로 쓸 수 없다 — claude-agent-acp 는 원시 도구명을
  * tool_call 업데이트의 _meta.claudeCode.toolName 으로만 노출한다.
  */
 export function recordToolName(map: Map<string, string>, update: SessionEvent): void {
@@ -154,6 +154,30 @@ export function resolvePermDecision(
   const via = decideAutoAllow(policy, toolName, rawInput);
   if (via) return { kind: "auto", via };
   return { kind: "ask" };
+}
+
+/**
+ * requestPermission params 에서 표시 제목·매칭용 원시 도구명·rawInput 을 추출하고 게이트 결정을 낸다.
+ * launch 클로저에서 분리 — ACP 페이로드 필드 경로(toolCall.title·toolCall.rawInput)와 도구명 해석
+ * (tool_call _meta 채집 맵)이 resolvePermDecision 으로 올바로 이어지는지 통합 단위 테스트로 회귀 보호한다.
+ * 어댑터 교체 시 payload 형태 회귀(예: title 을 매칭 키로 오용·rawInput 필드 경로 변경)를 잡는다.
+ */
+export function extractPermDecision(
+  params: RequestPermissionRequest,
+  toolNames: Map<string, string>,
+  policy: AddePolicy | undefined,
+): {
+  toolTitle: string;
+  rawToolName: string | undefined;
+  rawInput: unknown;
+  decision: PermDecision;
+} {
+  const toolCall = params.toolCall as unknown as Record<string, unknown>;
+  const toolTitle = params.toolCall.title ?? "unknown";
+  const rawToolName = resolveToolName(toolNames, toolCall);
+  const rawInput = toolCall["rawInput"];
+  const decision = resolvePermDecision(policy, rawToolName, rawInput);
+  return { toolTitle, rawToolName, rawInput, decision };
 }
 
 /** launch 옵션 — resumeSessionId 지정 시 새 세션 대신 해당 세션 복귀(session/load)를 시도한다. */
@@ -372,19 +396,14 @@ export class AcpBackendImpl implements AcpBackend {
         async requestPermission(
           params: RequestPermissionRequest,
         ): Promise<RequestPermissionResponse> {
-          // 표시용 제목(인자 포함) — 채널 프롬프트에 노출. 매칭 키가 아니다(인자 포함 문자열이라 도구명과 불일치).
-          const toolTitle = params.toolCall.title ?? "unknown";
-          // 매칭용 원시 도구명 — tool_call 업데이트 채집 맵에서 해석. 미해석 시 자동 허용 안 함(fail-closed).
-          const rawToolName = resolveToolName(
+          // 표시 제목(인자 포함, 채널 노출·매칭 키 아님)·매칭용 원시 도구명(채집 맵 해석, 미해석 시 fail-closed)·
+          // rawInput 추출 + 게이트 결정을 extractPermDecision 로 분리(F4 통합 단위 테스트 보호).
+          // 결정은 resolvePermDecision 단일 출처(hard-deny → 자동허용 → 채널 승인 순서, 보안 핵심)를 따른다.
+          const { toolTitle, rawToolName, decision } = extractPermDecision(
+            params,
             toolNames,
-            params.toolCall as unknown as Record<string, unknown>,
+            addePolicy,
           );
-
-          const rawInput = (params.toolCall as unknown as Record<string, unknown>)["rawInput"];
-
-          // 권한 결정은 resolvePermDecision 단일 출처를 통해 내린다 — hard-deny → 자동허용 → 채널 승인
-          // 순서가 그 안에 고정돼 있어(보안 핵심) 순서 회귀를 단위 테스트로 잡는다.
-          const decision = resolvePermDecision(addePolicy, rawToolName, rawInput);
 
           // 방어심화 하드-거부 — 매칭 도구는 티어 무관하게 즉시 거부(채널 승인 프롬프트도 없음).
           // acp 티어의 실수 승인 방지. 도구명 미해석 시엔 hard_deny 아님 → 아래 자동허용도 fail-closed.

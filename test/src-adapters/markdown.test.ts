@@ -265,7 +265,6 @@ describe("createMarkdownSource (통합)", () => {
       source: "markdown",
       backend: "acp",
       engine: "claude",
-      channel: "markdown",
       perm_tier: "acp",
       acp_version: "v1",
       allowlist: [],

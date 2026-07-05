@@ -22,8 +22,10 @@ export const ko = {
   lane add <proj> <lane>   레인 conf 생성
   lane ls <proj>           레인 목록
   lane show <proj> <lane>  레인 conf 출력
-  lane rm <proj> <lane>    레인 conf 삭제
-  completion <bash|zsh>    셸 자동완성 스크립트 출력
+  lane rm <proj> <lane>    레인 conf 삭제 (--purge 시 state/queue/out 도 삭제)
+  proj ls                  등록된 프로젝트 목록(레인·실행 수 포함)
+  proj rm <proj>           프로젝트 삭제(모든 레인 + state; 확인 후 삭제)
+  completion <bash|zsh>    셸 자동완성 스크립트 출력(명령·프로젝트/레인 Tab 완성; 설정은 'adde completion --help')
   alias [names...]         짧은 별칭 설치(기본 ad, add) — adde 실행 파일 옆에
 
 옵션:
@@ -36,11 +38,35 @@ export const ko = {
     restart: "사용법: adde restart <proj>",
     status: "사용법: adde status [<proj>] [--all] [--json]",
     doctor: "사용법: adde doctor [<proj>]",
-    logs: "사용법: adde logs <proj> <lane> [N] [--engine]",
-    sessions: "사용법: adde sessions <proj> <lane>",
-    completion: "사용법: adde completion <bash|zsh>  (셸 자동완성 스크립트 출력)",
+    logs: `사용법: adde logs <proj> <lane> [N] [--engine] [--daemon]
+
+레인 로그의 최근 N줄(기본 50)을 출력합니다.
+  (기본)       레인 transcript(메시지·결정·알림)
+  --engine     엔진 stderr 캡처(engine.log) — 엔진 크래시 진단
+  --daemon     <proj> launchd 데몬 로그(기동 실패 원인이 여기 쌓임; <lane> 불필요)`,
+    sessions: `사용법: adde sessions <proj> <lane>
+
+레인에 기록된 엔진 세션 목록(번호·첫 프롬프트 발췌·마지막 활동·id; 현재 세션 ◀ 표시).
+읽기 전용 — 세션 재개·초기화는 CLI 가 아니라 채널에서 합니다(/resume <n> 또는 resume 체크박스).`,
+    completion: `사용법: adde completion <bash|zsh>
+
+셸 자동완성 스크립트를 stdout 으로 출력합니다 — 설치는 하지 않습니다(installer 아님).
+왜: adde 명령·프로젝트/레인 이름·옵션 값을 Tab 으로 완성할 수 있게 합니다.
+무엇: 셸용 스크립트이며, 셸의 자동완성 디렉터리로 직접 리다이렉트해 넣습니다.
+어디에/어떻게 결정 (본인 셸 확인: echo $SHELL):
+  bash → adde completion bash > /usr/local/etc/bash_completion.d/adde   (또는 ~/.bashrc 에 'source <(adde completion bash)' 추가)
+  zsh  → adde completion zsh  > "\${fpath[1]}/_adde"                     (그 뒤 compinit; ~/.zshrc 에 'autoload -Uz compinit && compinit' 필요)
+팁: 'adde init' 이 이 설정을 단계별로 안내합니다.`,
+    proj: `사용법:
+  adde proj ls               등록된 프로젝트 목록(레인·실행 수 포함)
+  adde proj rm <proj>        프로젝트 삭제 — 모든 레인과 state 를 제거
+
+  --force                    확인 프롬프트 건너뛰기(비대화형 셸에선 필수)`,
     init: "사용법: adde init [<proj>]  (가이드 설정: doctor + 짧은 별칭 + 레인 생성; TTY 전용)",
-    alias: "사용법: adde alias [names...]  (adde 실행 파일 옆에 짧은 별칭 설치; 기본: ad add)",
+    alias: `사용법: adde alias [names...]   (기본 이름: ad add)
+
+adde 실행 파일 옆에 짧은 별칭(심링크)을 설치해 \`adde up <proj>\` 대신 \`ad up <proj>\` 로 쓸 수 있게 합니다.
+전역 설치에서만 동작(PATH 의 adde 옆 쓰기 가능한 bin 디렉터리 필요)하며, 동명 명령이 이미 있으면 덮어쓰지 않고 건너뜁니다.`,
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
     laneLs: "사용법: adde lane ls <proj>",
     laneShow: "사용법: adde lane show <proj> <lane>",
@@ -50,13 +76,12 @@ export const ko = {
   adde lane add <proj> <lane> [옵션]   레인 conf 생성
   adde lane ls <proj>                  레인 목록
   adde lane show <proj> <lane>         레인 conf 출력
-  adde lane rm <proj> <lane>           레인 conf 삭제
+  adde lane rm <proj> <lane> [--purge] 레인 conf 삭제 (--purge 시 state/queue/out 데이터도 삭제)
 
 lane add 옵션:
-  --source <telegram|markdown>  (기본 telegram)
-  --engine <name>               (기본 claude-code-acp)
+  --source <markdown|telegram>  (기본 markdown)
+  --engine <name>               (기본 claude-agent-acp)
   --backend <name>              (기본 acp)
-  --channel <name>              (기본 source 값)
   --perm-tier <acp|autopass>    (기본 acp — 전 도구 채널 승인 / autopass — denylist 외 자동 허용)
   --acp-version <v>             (기본 v1)
   --cwd <abs-path>              레인 작업 폴더(프로젝트 매핑)
@@ -85,6 +110,8 @@ lane add 옵션:
   },
   completion: {
     unknownShell: '미지원 셸 "{{shell}}" — {{supported}} 중 하나',
+    installHint:
+      "↳ 이것은 자동완성 스크립트 출력이며 installer 가 아닙니다. 사용하려면 {{shell}} 자동완성 디렉터리로 리다이렉트하세요(스크립트 상단 주석 참조). 정확한 경로는 'adde completion {{shell}} --help'.",
   },
   run: {
     laneStartFailed: {
@@ -96,14 +123,25 @@ lane add 옵션:
     noLanes: {
       situation: "기동할 레인이 없습니다 — {{proj}} 에 레인 설정(conf)이 없습니다",
       action:
-        "adde lane add {{proj}} <lane> --source telegram (또는 markdown) 으로 레인을 먼저 만드세요. 옵션은 adde lane help.",
+        "adde lane add {{proj}} <lane> --source markdown (또는 telegram) 으로 레인을 먼저 만드세요. 옵션은 adde lane help.",
     },
     signalShutdown: "[adde] {{sig}} 수신 — 레인 종료 중...",
     shutdownError: {
       situation: "종료 처리 중 오류: {{error}}",
-      action: "잔존 엔진 프로세스를 수동 확인/종료하세요(ps | grep claude-code-acp).",
+      action: "잔존 엔진 프로세스를 수동 확인/종료하세요(ps | grep claude-agent-acp).",
     },
     upDone: "[adde] {{proj}} 데몬 등록 완료. 백그라운드에서 레인이 기동됩니다.",
+    alreadyUp:
+      "[adde] {{proj}} 는 이미 기동 중입니다 — 레인 {{running}}/{{total}} 실행 중. 새로 기동할 것이 없습니다.",
+    alreadyUpHint:
+      "  확인: adde status {{proj}} · 설정 변경 반영: adde restart {{proj}} · 종료: adde down {{proj}}",
+    alreadyUpUnhealthy:
+      "[adde] {{proj}} 에 비정상 레인이 있습니다: {{lanes}}\n  ↳ 조치: adde status {{proj}} / adde logs {{proj}} --daemon 으로 확인 후 adde restart {{proj}}.",
+    upFailed:
+      "[adde] 기동 실패 레인: {{lanes}}\n  ↳ 조치: adde logs {{proj}} <lane> --engine 또는 데몬 로그 adde logs {{proj}} --daemon 으로 확인 후 adde restart {{proj}}.",
+    upSummary: "  실행 중 {{running}} · 실패 {{failed}} · 기동 중 {{pending}}",
+    upInconclusive:
+      "[adde] 대기 시간 내에 기동된 레인이 없습니다 — 데몬이 부팅에 실패했을 수 있습니다.\n  ↳ 조치: adde logs {{proj}} --daemon 으로 데몬 로그를 확인한 뒤 adde restart {{proj}}.",
     statusHint: "  상태 확인: adde status {{proj}}",
     downDone: "[adde] {{proj}} 데몬 종료 완료.",
     restartDone: "[adde] {{proj}} 재기동 완료. 백그라운드에서 레인이 기동됩니다.",
@@ -122,6 +160,10 @@ lane add 옵션:
         "경고: {{lanes}} 레인이 비정상 종료(dead)했습니다.\n  ↳ 조치: adde down {{proj}} 로 상태를 정리한 뒤 adde up {{proj}} 로 재기동하세요.",
       staleWarnSingle:
         "경고: {{lanes}} 레인이 응답 없음(stale — 프로세스는 살아있으나 하트비트 끊김).\n  ↳ 조치: 행(hang) 가능성. adde logs {{proj}} <lane> --engine 으로 진단 후 adde down/up {{proj}} 로 재기동하세요.",
+      errorWarnAggregate:
+        "오류: 기동 실패 레인: {{lanes}}.\n  ↳ 조치: 데몬 로그(adde logs <proj> --daemon) 또는 엔진 로그(adde logs <proj> <lane> --engine) 확인 후 adde restart <proj>.",
+      errorWarnSingle:
+        "오류: 기동 실패 레인: {{lanes}}.\n  ↳ 조치: 데몬 로그(adde logs {{proj}} --daemon) 또는 엔진 로그(adde logs {{proj}} <lane> --engine) 확인 후 adde restart {{proj}}.",
     },
     doctor: {
       hint: "    ↳ 조치: {{hint}}",
@@ -132,27 +174,25 @@ lane add 옵션:
       whatTranscript: "transcript",
       notFound:
         "{{what}} 없음: {{path}}\n  ↳ 조치: 레인이 아직 활동하지 않았거나 기동되지 않았습니다. adde status {{proj}} 로 상태를 확인하세요.",
+      daemonNotFound:
+        "데몬 로그 없음: {{path}}\n  ↳ 조치: {{proj}} 데몬이 아직 실행되지 않았거나(또는 출력이 없음). adde up {{proj}} 로 기동하세요.",
       empty: "({{path}} 비어있음)",
     },
   },
   lane: {
     valueRequired: "--{{key}} 에 값이 필요합니다",
-    sourceRetry: "  telegram 또는 markdown 중 하나를 입력하세요",
     retry: {
-      permTier: "  perm_tier — acp 또는 autopass 를 입력하세요",
-      fileMode: "  file_mode — private 또는 shared 를 입력하세요",
-      lang: "  lang — en 또는 ko 를 입력하세요(전역은 비움)",
       chatId: "  chat_id — 숫자 id 를 입력하세요(없으면 비움)",
       allowFrom: "  allow_from — 콤마 구분 숫자 id 를 입력하세요(없으면 비움)",
     },
     prompt: {
-      source: "source (telegram 또는 markdown)",
-      permTier: "perm_tier (acp 또는 autopass)",
+      source: "source (번호 또는 값 입력)",
+      permTier: "perm_tier (acp = 도구마다 채널 승인 / autopass = denylist 외 자동 허용)",
       allowlist: "allowlist (콤마 구분, 없으면 비움)",
       denylist: "denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분)",
       safeDefaults:
         "방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N)",
-      lang: "lang (채널 메시지 로케일: en/ko, 전역은 비움)",
+      lang: "lang (채널 메시지 로케일, 전역은 비움)",
       token: "telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움)",
       cwd: "cwd (레인 작업 폴더 절대경로, 없으면 비움)",
       chatId: "chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움)",
@@ -167,14 +207,33 @@ lane add 옵션:
     ttyOnly: {
       situation: "--interactive 는 대화형 터미널(TTY)에서만 동작합니다",
       action:
-        "플래그로 지정하세요(예: adde lane add <proj> <lane> --source telegram). 옵션 목록은 adde lane help.",
+        "플래그로 지정하세요(예: adde lane add <proj> <lane> --source markdown). 옵션 목록은 adde lane help.",
     },
     created: '레인 "{{lane}}" 생성: {{confPath}}',
     noLanes: "{{proj}}: 레인 없음",
     removed: '레인 "{{lane}}" 삭제: {{confPath}}',
+    removedPurged: '레인 "{{lane}}" 삭제 + state/queue/out 정리: {{confPath}}',
+    purgeRunning:
+      '레인 "{{lane}}" 은 안전하게 정리할 수 없습니다(실행 중이거나, 데몬이 살아있는 채로 기동 실패) — --purge 전에 먼저 데몬을 내리거나(adde down {{proj}}) --force 로 강제 정리하세요.',
+    purgeNeedForce:
+      "확인 없이 --purge 를 거부합니다(봇 토큰 포함 state 삭제) — 터미널에서 확인하거나 --force 를 주세요.",
+    purgeConfirm: '--purge 를 확인하려면 레인 이름 "{{lane}}" 을 입력하세요(state/queue/out 삭제)',
+    purgeAborted: "취소됨 — 이름이 일치하지 않습니다.",
     tokenWritten: "토큰 기록: {{envPath}} (0600)",
     tokenNext: "다음: 봇 토큰을 {{envPath}} 에 TELEGRAM_BOT_TOKEN=... 으로 두세요",
     startHint: "기동: adde up {{proj}}",
+  },
+  proj: {
+    none: "등록된 프로젝트 없음 (adde lane add <proj> <lane> 로 생성).",
+    removed: '프로젝트 "{{proj}}" 삭제됨: {{path}}',
+    notFound: '프로젝트 "{{proj}}" 없음 ({{path}})',
+    running:
+      '프로젝트 "{{proj}}" 에 활성 레인이 있습니다: {{lanes}} — 먼저 데몬을 내리세요(adde down {{proj}}), 또는 --force 로 강제 삭제.',
+    needForce:
+      "확인 없이 삭제를 거부합니다 — 터미널에서 실행해 대화형으로 확인하거나 --force 를 주세요.",
+    confirmPrompt:
+      '삭제를 확인하려면 프로젝트 이름 "{{proj}}" 을 입력하세요(모든 레인과 state 제거)',
+    aborted: "취소됨 — 이름이 일치하지 않습니다.",
   },
   doctor: {
     node: {
@@ -184,7 +243,7 @@ lane add 옵션:
     adapter: {
       name: "ACP 어댑터 바이너리",
       missing: "해석된 경로에 파일 없음: {{path}}",
-      hint: "의존성을 설치하세요(pnpm install) — @zed-industries/claude-code-acp 누락.",
+      hint: "의존성을 설치하세요(pnpm install) — @agentclientprotocol/claude-agent-acp 누락.",
     },
     daemonEntry: {
       name: "데몬 진입 파일",
@@ -219,7 +278,7 @@ lane add 옵션:
     },
     source: {
       unsupported: '미지원 source: "{{source}}"',
-      hint: "conf 의 source 를 telegram 또는 markdown 으로 설정하세요.",
+      hint: "conf 의 source 를 markdown 또는 telegram 으로 설정하세요.",
     },
     cwd: {
       hint: "conf 의 cwd 를 존재하는 작업 폴더로 수정하세요.",
@@ -229,6 +288,16 @@ lane add 옵션:
       present: ".env 에 TELEGRAM_BOT_TOKEN 존재",
       missing: "토큰 없음: {{path}}",
       hint: "봇 토큰을 기록하세요: {{path}} 에 TELEGRAM_BOT_TOKEN=... (또는 lane add --token-stdin).",
+    },
+    markdown: {
+      name: "{{lane}}: 마크다운 경로",
+      ok: "root/inbox 설정됨",
+      rootMissing: "markdown 레인에 root 가 없습니다 — 레인 기동에 실패합니다",
+      rootMissingHint: "conf 에 root 를 설정하세요 (lane add --root <vault 절대경로>).",
+      rootNotFound: "markdown root 경로가 없습니다: {{path}}",
+      rootNotFoundHint: "경로를 생성하거나 conf 의 root 를 고치세요.",
+      inboxMissing: "markdown 레인에 inbox 노트가 없습니다 — 레인 기동에 실패합니다",
+      inboxMissingHint: "conf 에 inbox 를 설정하세요 (lane add --inbox <root 상대 노트경로>).",
     },
     perms: {
       name: "{{lane}}: 파일 권한",
@@ -259,6 +328,12 @@ lane add 옵션:
     doctorWarn:
       "위에 FAIL 항목이 있습니다. 계속 진행할 수 있으나 데몬 기동(adde up) 전에 해결하세요.",
     aliasPrompt: "짧은 별칭({{names}})을 adde 명령 옆에 설치할까요? (Y/n)",
+    completionPrompt: "{{shell}} 셸 탭 자동완성을 지금 설정할까요? (실행할 명령을 출력) (Y/n)",
+    completionWhat: "  탭 자동완성으로 adde 명령·프로젝트/레인 이름·옵션 값을 완성할 수 있습니다.",
+    completionBash:
+      "  실행: adde completion bash > /usr/local/etc/bash_completion.d/adde   (또는 ~/.bashrc 에 'source <(adde completion bash)' 추가 후 새 셸)",
+    completionZsh:
+      "  실행: adde completion zsh > \"${fpath[1]}/_adde\"   (~/.zshrc 에 'autoload -Uz compinit && compinit' 확인 후 새 셸)",
     aliasNoBin:
       "PATH 에서 adde 명령을 찾지 못했습니다 — 별칭 설치를 건너뜁니다(전역 설치에서만 가능).",
     aliasCreated: "  ✔ 별칭 생성: {{name}} → {{dir}}",
@@ -283,6 +358,8 @@ lane add 옵션:
         "[경고] markdown 경로가 겹칩니다(inbox={{inbox}} / approvals={{approvals}} / outbox={{outbox}}) — 기동이 거부됩니다.\n  ↳ 조치: 승인·출력·입력 경로를 서로 분리하세요.",
       tokenFormat:
         "[경고] 봇 토큰 형식이 예상과 다릅니다(<숫자>:<영숫자> 아님).\n  ↳ 조치: BotFather 발급 토큰을 다시 확인하세요.",
+      tokenOverwritten:
+        "[경고] --force 로 {{envFile}} 의 기존 봇 토큰을 덮어썼습니다 — 이전 토큰은 사라졌습니다.",
       permTierUnknown:
         '[경고] perm_tier "{{tier}}" 는 알려진 값({{known}})이 아닙니다 — acp 처럼 동작합니다.\n  ↳ 조치: 오타라면 conf 의 perm_tier 를 수정하세요.',
       autopassBanner:

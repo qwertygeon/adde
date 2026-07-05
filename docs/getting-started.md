@@ -2,7 +2,7 @@ _English | [한국어](getting-started.ko.md)_
 
 # Getting started
 
-ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) remotely from a channel (Telegram / markdown notes). This document covers everything from installation to starting your first lane.
+ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) remotely from a channel (markdown notes / Telegram). This document covers everything from installation to starting your first lane.
 
 ## Table of Contents
 
@@ -20,7 +20,7 @@ ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) remotely from
 
 - macOS (primary target)
 - Node.js LTS (>=22) — the daemon is launched via launchd, so `node` must be on PATH (`adde up` injects the PATH at launch time into the plist).
-- AI engine ACP adapter — `@zed-industries/claude-code-acp` is bundled with `adde` (no separate install needed).
+- AI engine ACP adapter — `@agentclientprotocol/claude-agent-acp` is bundled with `adde` (no separate install needed).
 - **Claude authentication**: the engine drives Claude Code through the bundled adapter, so **Claude must be authenticated under the same user account** (e.g. logged in via Claude Code, or `ANTHROPIC_API_KEY` set). If unauthenticated, the engine handshake fails and the lane will not start — first confirm that Claude works on its own.
 
 ## Install
@@ -55,7 +55,7 @@ adde restart <proj>        # apply the new version to running lanes (restart req
 ## Core concepts
 
 - **Lane**: an independent vertical stack per `(channel source × backend × project folder)`. Input, approval, and output are all self-contained within the lane.
-- **Source**: the channel that receives instructions. `telegram` (bot long-poll) or `markdown` (note-file watching, e.g. Obsidian).
+- **Source**: the channel that receives instructions. `markdown` (note-file watching, e.g. Obsidian) or `telegram` (bot long-poll).
 - **Backend**: the AI-engine driving layer. Currently `acp` (Agent Client Protocol).
 - **Gate**: routes every permission request to channel approval. Defaults to deny on timeout (default 10 minutes) or error (fail-closed). Tune approval frequency with tiers (`acp` default / `autopass` opt-in), allowlist, denylist, and hard-deny — for concepts and recommended settings, see the [permissions guide](permissions.md).
 
@@ -78,14 +78,14 @@ It first runs the global `doctor` and shows the results → asks whether to inst
 The `adde lane` subcommands create, list, and delete the conf file for you (direct editing also works).
 
 ```bash
+# create a markdown (note) lane (markdown is the default source)
+adde lane add myproj md-claude --root /abs/Notes --inbox inbox.md
+
 # create a telegram lane (working folder, auto-allowed tools, reply target)
-adde lane add myproj tg-claude --cwd /abs/project --allowlist Read,Grep --chat-id 12345
+adde lane add myproj tg-claude --source telegram --cwd /abs/project --allowlist Read,Grep --chat-id 12345
 
 # read the telegram bot token from stdin and write it to state/<lane>/.env (0600)
-printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude --token-stdin
-
-# create a markdown (note) lane
-adde lane add myproj md-claude --source markdown --root /abs/Notes --inbox inbox.md
+printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude --source telegram --token-stdin
 
 adde lane ls myproj                # list lanes
 adde lane show myproj tg-claude    # print conf
@@ -105,10 +105,9 @@ On a TTY, `adde lane add <proj> <lane>` with **no field flags** launches the int
 Common keys:
 
 ```ini
-source=telegram         # telegram | markdown
+source=markdown         # markdown | telegram
 backend=acp
-engine=claude-code-acp  # ACP engine launch profile
-channel=telegram        # for gate routing
+engine=claude-agent-acp  # ACP engine launch profile
 perm_tier=acp
 acp_version=v1
 cwd=/abs/project/dir     # this lane's AI working folder (project-folder mapping)
@@ -117,8 +116,8 @@ allowlist=Read,Grep      # optional: reduce approval frequency (gate stays on)
 
 Per-channel extra keys:
 
-- **telegram**: `chat_id=<reply target>` (setting it also **auto-allows inbound from that chat**). The bot token goes not in the conf but in `~/.config/adde/<proj>/state/<lane>/.env` as `TELEGRAM_BOT_TOKEN=...` (never in arguments or logs). Inbound is processed only from allowed senders (`chat_id` ∪ `allow_from`); with none set, all inbound is denied (fail-closed) — authentication details: [telegram.md](telegram.md).
 - **markdown**: `root=<absolute path, e.g. Obsidian vault>`, `inbox=<relative to root>`, and optionally `approvals=` / `outbox=`. → [markdown guide](markdown.md).
+- **telegram**: `chat_id=<reply target>` (setting it also **auto-allows inbound from that chat**). The bot token goes not in the conf but in `~/.config/adde/<proj>/state/<lane>/.env` as `TELEGRAM_BOT_TOKEN=...` (never in arguments or logs). Inbound is processed only from allowed senders (`chat_id` ∪ `allow_from`); with none set, all inbound is denied (fail-closed) — authentication details: [telegram.md](telegram.md).
 
 ## Start / stop
 
@@ -158,8 +157,8 @@ npm uninstall -g adde-acp  # 2) remove the global package
 
 ## Next steps
 
-- Drive it with a Telegram bot: [telegram.md](telegram.md)
 - Note-based driving with markdown notes (e.g. Obsidian): [markdown.md](markdown.md)
+- Drive it with a Telegram bot: [telegram.md](telegram.md)
 - Understand the permission gate and tiers: [permissions.md](permissions.md)
 - Full command set: [commands.md](commands.md)
 - Troubleshooting: [troubleshooting.md](troubleshooting.md)

@@ -25,14 +25,48 @@ export interface RuntimeInfo {
   source: string;
   backend: string;
   engine: string;
+  /**
+   * 기동 실패 표식 — supervisorUp 이 레인 launch 에 실패하면 "error" 로 기록한다.
+   * 정상 기동 시 미기재(undefined). livenessOf 가 이 값을 최우선으로 error 로 보고해,
+   * status 가 "stopped"(미기동)와 "error"(기동 시도 실패)를 구분할 수 있게 한다.
+   */
+  status?: "error";
+  /** status==="error" 일 때 실패 사유(요약, 마스킹된 메시지). */
+  error?: string;
 }
 
-/** 레인 라이브니스 — 파일/pid/하트비트 조합으로 판정. stale=pid 는 살아있으나 하트비트가 끊긴 행 상태. */
-export type Liveness = "running" | "stale" | "dead" | "stopped";
+/**
+ * 레인 라이브니스 — 파일/pid/하트비트 조합으로 판정.
+ * error=기동 시도가 실패로 기록됨 / stale=pid 는 살아있으나 하트비트가 끊긴 행 상태.
+ */
+export type Liveness = "running" | "stale" | "dead" | "stopped" | "error";
 
 /** runtime.json 을 원자적으로(tmp→rename) 기록. stateDir 부재 시 생성. */
 export async function writeRuntime(paths: LanePaths, info: RuntimeInfo): Promise<void> {
   await atomicWrite(paths.runtimeJson, JSON.stringify(info, null, 2) + "\n");
+}
+
+/**
+ * 기동 실패를 runtime.json 에 기록한다(status:"error" + 사유).
+ * 교차 프로세스(adde up·status)가 실패를 볼 수 있게 하는 유일한 신호 — 안 남기면 파일 부재로
+ * stopped(미기동)와 구분되지 않는다. startedAt 은 기록 시각.
+ */
+export async function writeErrorRuntime(
+  paths: LanePaths,
+  info: { lane: string; source: string; backend: string; engine: string; error: string },
+): Promise<void> {
+  await writeRuntime(paths, {
+    v: 1,
+    pid: process.pid,
+    lane: info.lane,
+    sessionId: "",
+    startedAt: new Date().toISOString(),
+    source: info.source,
+    backend: info.backend,
+    engine: info.engine,
+    status: "error",
+    error: info.error,
+  });
 }
 
 /**
@@ -106,6 +140,7 @@ export interface LivenessOptions {
  */
 export function livenessOf(info: RuntimeInfo | null, opts: LivenessOptions = {}): Liveness {
   if (!info) return "stopped";
+  if (info.status === "error") return "error";
   if (!isPidAlive(info.pid)) return "dead";
   const { mtimeMs, now = Date.now() } = opts;
   if (mtimeMs !== undefined && now - mtimeMs > HEARTBEAT_STALE_MS) return "stale";

@@ -12,7 +12,7 @@ let tmpBase: string;
 
 const minimalConf = `source=telegram
 backend=acp
-engine=claude-code-acp
+engine=claude-agent-acp
 channel=telegram
 perm_tier=acp
 acp_version=v1

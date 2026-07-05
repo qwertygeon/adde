@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   writeRuntime,
+  writeErrorRuntime,
   readRuntime,
   removeRuntime,
   touchRuntime,
@@ -37,7 +38,7 @@ function info(pid: number): RuntimeInfo {
     startedAt: new Date().toISOString(),
     source: "telegram",
     backend: "acp",
-    engine: "claude-code-acp",
+    engine: "claude-agent-acp",
   };
 }
 
@@ -100,6 +101,33 @@ describe("라이브니스 판정 (SC2)", () => {
     const old = now - (HEARTBEAT_STALE_MS + 1000);
     expect(livenessOf(info(process.pid), { mtimeMs: fresh, now })).toBe("running");
     expect(livenessOf(info(process.pid), { mtimeMs: old, now })).toBe("stale");
+  });
+
+  it("livenessOf: status=error 는 pid 생존과 무관하게 error (기동 실패 표식 최우선)", () => {
+    const errored: RuntimeInfo = {
+      ...info(process.pid),
+      sessionId: "",
+      status: "error",
+      error: "spawn ENOENT",
+    };
+    expect(livenessOf(errored)).toBe("error");
+    // 신선한 하트비트가 있어도 error 가 우선.
+    expect(livenessOf(errored, { mtimeMs: Date.now(), now: Date.now() })).toBe("error");
+  });
+
+  it("writeErrorRuntime → readRuntime 은 status=error·사유를 보존한다", async () => {
+    const paths = lanePaths(tmpBase, "proj", "telegram-claude");
+    await writeErrorRuntime(paths, {
+      lane: "telegram-claude",
+      source: "markdown",
+      backend: "acp",
+      engine: "claude-agent-acp",
+      error: "root missing",
+    });
+    const back = await readRuntime(paths);
+    expect(back?.status).toBe("error");
+    expect(back?.error).toBe("root missing");
+    expect(livenessOf(back)).toBe("error");
   });
 
   it("livenessOf: mtime 미주입이면 stale 판정 안 함(pid-only running)", () => {

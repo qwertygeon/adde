@@ -26,7 +26,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const CONF = `source=telegram\nbackend=acp\nengine=claude-code-acp\nchannel=telegram\nperm_tier=acp\nacp_version=v1\n`;
+const CONF = `source=telegram\nbackend=acp\nengine=claude-agent-acp\nchannel=telegram\nperm_tier=acp\nacp_version=v1\n`;
 
 function writeConf(proj: string, lane: string): void {
   const dir = path.join(tmpBase, proj, "lanes.d");
@@ -43,7 +43,7 @@ function rt(pid: number, lane: string): RuntimeInfo {
     startedAt: new Date().toISOString(),
     source: "telegram",
     backend: "acp",
-    engine: "claude-code-acp",
+    engine: "claude-agent-acp",
   };
 }
 

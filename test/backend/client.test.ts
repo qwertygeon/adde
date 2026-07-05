@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import {
   shouldAutoAllow,
   shouldAutopass,
   decideAutoAllow,
   isHardDenied,
   resolvePermDecision,
+  extractPermDecision,
   recordToolName,
   resolveToolName,
 } from "../../src/backend/acp/client.js";
@@ -54,7 +56,7 @@ describe("shouldAutopass (005 autopass)", () => {
 });
 
 // DEC-006: 매칭 키는 toolCall.title 이 아니라 원시 도구명이다.
-// 실제 claude-code-acp quirk 재현: requestPermission.toolCall = {toolCallId, rawInput, title} 뿐이고
+// 실제 claude-agent-acp quirk 재현: requestPermission.toolCall = {toolCallId, rawInput, title} 뿐이고
 // title 은 인자 포함 표시 문자열(Bash → "`rm -rf build/`", Write → "Write /abs/path") —
 // 원시 도구명은 tool_call 세션 업데이트의 _meta.claudeCode.toolName 으로만 온다.
 describe("도구명 채집·해석·자동 허용 판정 (DEC-006)", () => {
@@ -233,5 +235,110 @@ describe("decideAutoAllow — denylist 패턴 (006)", () => {
     expect(decideAutoAllow(policy, "Read", undefined)).toBeNull();
     // denylist 에 없는 도구는 인자 무관 자동 허용
     expect(decideAutoAllow(policy, "Write", undefined)).toBe("autopass");
+  });
+});
+
+// F4/F8: requestPermission 배선 통합 — launch 클로저에서 분리한 extractPermDecision 을
+// 실제 어댑터(claude-agent-acp) payload 형태로 검증한다. 단위 함수 조합만으론 못 잡는
+// "필드 경로 배선"(toolCall.title 은 표시용·매칭 키 아님 / toolCall.rawInput 은 denylist 인자 매칭 /
+// 도구명은 tool_call _meta.claudeCode.toolName 채집)이 게이트 결정으로 올바로 이어지는지 회귀 보호.
+describe("extractPermDecision — requestPermission 배선 통합 (F4)", () => {
+  /** 실제 requestPermission params 형태(sessionId·toolCall·options)로 조립. */
+  function permParams(toolCall: Record<string, unknown>): RequestPermissionRequest {
+    return {
+      sessionId: "s1",
+      toolCall,
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "reject", name: "Reject", kind: "reject_once" },
+      ],
+    } as unknown as RequestPermissionRequest;
+  }
+
+  it("tool_call 채집 → title 아닌 원시 도구명·rawInput 추출 후 결정까지 통합", () => {
+    const toolNames = new Map<string, string>();
+    // 신규 어댑터 tool_call 업데이트 형태(_meta.claudeCode.toolName)로 도구명 채집
+    recordToolName(toolNames, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "`sudo rm -rf /`",
+      _meta: { claudeCode: { toolName: "Bash" } },
+    });
+    // requestPermission 은 인자 포함 title + rawInput 만 담아 온다
+    const params = permParams({
+      toolCallId: "t1",
+      title: "`sudo rm -rf /`",
+      rawInput: { command: "sudo rm -rf /" },
+    });
+    const r = extractPermDecision(params, toolNames, {
+      perm_tier: "autopass",
+      denylist: ["Bash(sudo *)"],
+    });
+    expect(r.rawToolName).toBe("Bash"); // title 이 아니라 채집 도구명
+    expect(r.rawInput).toEqual({ command: "sudo rm -rf /" }); // rawInput 필드 경로 배선
+    expect(r.decision).toEqual({ kind: "ask" }); // denylist 매칭(rawInput 경유) → 채널 승인 폴백
+  });
+
+  it("title 은 매칭 키가 아니다 — 무서운 title 이어도 도구명(Read)으로 판정", () => {
+    const toolNames = new Map<string, string>();
+    recordToolName(toolNames, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t2",
+      _meta: { claudeCode: { toolName: "Read" } },
+    });
+    const params = permParams({
+      toolCallId: "t2",
+      title: "`sudo rm`",
+      rawInput: { file_path: "/x" },
+    });
+    const r = extractPermDecision(params, toolNames, {
+      perm_tier: "autopass",
+      denylist: ["Bash(sudo *)"],
+    });
+    expect(r.rawToolName).toBe("Read");
+    expect(r.decision).toEqual({ kind: "auto", via: "autopass" }); // Read 는 denylist 밖 → 자동 허용
+  });
+
+  it("hard_deny 는 rawInput(체이닝 명령) 경유로 티어 무관 즉시 거부", () => {
+    const toolNames = new Map<string, string>();
+    recordToolName(toolNames, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t3",
+      _meta: { claudeCode: { toolName: "Bash" } },
+    });
+    const params = permParams({
+      toolCallId: "t3",
+      title: "`cd /tmp && sudo reboot`",
+      rawInput: { command: "cd /tmp && sudo reboot" },
+    });
+    const r = extractPermDecision(params, toolNames, {
+      perm_tier: "acp",
+      hard_deny: ["Bash(sudo *)"],
+    });
+    expect(r.decision).toEqual({ kind: "hard_deny" });
+  });
+
+  it("도구명 미해석(채집 맵·_meta 부재) → ask (fail-closed)", () => {
+    const params = permParams({ toolCallId: "unknown", title: "Write /etc/x", rawInput: {} });
+    const r = extractPermDecision(params, new Map(), {
+      perm_tier: "autopass",
+      allowlist: ["Write"],
+      denylist: [],
+    });
+    expect(r.rawToolName).toBeUndefined();
+    expect(r.decision).toEqual({ kind: "ask" });
+  });
+
+  it("title 부재 시 표시 제목은 'unknown', allowlist 도구는 자동 허용", () => {
+    const toolNames = new Map<string, string>();
+    recordToolName(toolNames, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t4",
+      _meta: { claudeCode: { toolName: "Read" } },
+    });
+    const params = permParams({ toolCallId: "t4", rawInput: { file_path: "/x" } });
+    const r = extractPermDecision(params, toolNames, { perm_tier: "acp", allowlist: ["Read"] });
+    expect(r.toolTitle).toBe("unknown");
+    expect(r.decision).toEqual({ kind: "auto", via: "allowlist" });
   });
 });

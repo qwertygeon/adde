@@ -6,7 +6,7 @@ import { parseLaneConf, serializeLaneConf } from "../../src/shared/conf.js";
 describe("parseLaneConf", () => {
   const minimalConf = `source=telegram
 backend=acp
-engine=claude-code-acp
+engine=claude-agent-acp
 channel=telegram
 `;
 
@@ -14,8 +14,7 @@ channel=telegram
     const result = parseLaneConf(minimalConf);
     expect(result.source).toBe("telegram");
     expect(result.backend).toBe("acp");
-    expect(result.engine).toBe("claude-code-acp");
-    expect(result.channel).toBe("telegram");
+    expect(result.engine).toBe("claude-agent-acp");
   });
 
   it("acp_version 기본값이 v1 이다", () => {
@@ -76,13 +75,17 @@ channel=telegram
 
 describe("serializeLaneConf", () => {
   it("필수 키를 모두 출력한다", () => {
-    const text = serializeLaneConf(parseLaneConf("source=telegram\nchannel=telegram\n"));
+    const text = serializeLaneConf(parseLaneConf("source=telegram\n"));
     expect(text).toContain("source=telegram");
     expect(text).toContain("backend=");
     expect(text).toContain("engine=");
-    expect(text).toContain("channel=telegram");
     expect(text).toContain("perm_tier=acp");
     expect(text).toContain("acp_version=v1");
+  });
+
+  it("구 conf 의 channel= 는 무시하고 재직렬화 시 출력하지 않는다(사문화 필드 제거)", () => {
+    const text = serializeLaneConf(parseLaneConf("source=telegram\nchannel=telegram\n"));
+    expect(text).not.toContain("channel=");
   });
 
   it("빈 allowlist 는 출력하지 않는다", () => {
@@ -99,7 +102,7 @@ describe("serializeLaneConf", () => {
 
   it("parse→serialize→parse round-trip 이 동치이다", () => {
     const original = parseLaneConf(
-      "source=markdown\nbackend=acp\nengine=claude-code-acp\nchannel=markdown\n" +
+      "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
         "perm_tier=acp\nacp_version=v1\nallowlist=Read,Grep\ncwd=/abs/p\nroot=/abs/Notes\ninbox=in.md\n",
     );
     const reparsed = parseLaneConf(serializeLaneConf(original));

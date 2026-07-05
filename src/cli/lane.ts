@@ -11,7 +11,9 @@ import {
   parseCsv,
 } from "../core/lane-config.js";
 import type { LaneAddOptions } from "../core/lane-config.js";
-import { USAGE, buildLaneUsage, laneError, unknownLaneSub } from "../core/messages.js";
+import { collectStatus } from "../core/diagnostics.js";
+import { USAGE, buildLaneUsage, cmdError, laneError, unknownLaneSub } from "../core/messages.js";
+import { errMsg } from "../shared/errors.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
 import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
@@ -56,7 +58,6 @@ const ADD_VALUE_KEYS = new Set([
   "source",
   "engine",
   "backend",
-  "channel",
   "perm-tier",
   "acp-version",
   "cwd",
@@ -104,7 +105,7 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** 유효한 응답이 나올 때까지 재질의한다(enum·숫자 필드 입력 시점 검증). */
+/** 유효한 응답이 나올 때까지 재질의한다(숫자·CSV 필드 입력 시점 검증). */
 async function askUntil(
   ask: Ask,
   question: string,
@@ -118,6 +119,29 @@ async function askUntil(
 }
 
 /**
+ * enum 필드를 번호(1/2/…) 또는 값 문자열로 선택한다. 유효할 때까지 재질의하고 정규화된 값을 반환.
+ * 번호는 options 순서(1-기반)에 매핑한다. allowEmpty 면 빈 입력을 ""(전역/기본 위임)로 허용.
+ * 직접 타이핑 없이 번호로 고를 수 있게 하는 대화형 편의 — 라벨 아래 번호 메뉴를 함께 출력한다.
+ */
+async function askEnum(
+  ask: Ask,
+  label: string,
+  options: readonly string[],
+  def: string,
+  opts: { allowEmpty?: boolean } = {},
+): Promise<string> {
+  const menu = options.map((o, i) => `  ${i + 1}) ${o}`).join("\n");
+  const question = `${label}\n${menu}`;
+  for (;;) {
+    const raw = (await ask(question, def)).trim().toLowerCase();
+    if (opts.allowEmpty && raw === "") return "";
+    if (options.includes(raw)) return raw;
+    const n = Number(raw);
+    if (Number.isInteger(n) && n >= 1 && n <= options.length) return options[n - 1] as string;
+  }
+}
+
+/**
  * 소스별 필드를 순차 질의해 LaneAddOptions 를 구성한다(대화형 default).
  * enum·숫자 필드는 입력 시점에 검증·재질의한다. askSecret 이 주어지면 telegram 봇 토큰을
  * 가려진 입력으로 수집한다(없거나 빈 입력이면 생성 후 .env/--token-stdin 안내로 위임).
@@ -126,6 +150,7 @@ async function askUntil(
 export async function collectInteractive(
   ask: Ask,
   askSecret?: (question: string) => Promise<string>,
+  askPath: Ask = ask,
 ): Promise<LaneAddOptions> {
   const opts: LaneAddOptions = {};
   const isNumericId = (v: string): boolean => /^-?\d+$/.test(v);
@@ -134,21 +159,11 @@ export async function collectInteractive(
     return ids.length > 0 && ids.every(isNumericId);
   };
 
-  let source = (await ask(t("lane.prompt.source"), "telegram")).toLowerCase();
-  while (source !== "telegram" && source !== "markdown") {
-    source = (await ask(t("lane.sourceRetry"), "telegram")).toLowerCase();
-  }
+  const source = await askEnum(ask, t("lane.prompt.source"), ["markdown", "telegram"], "markdown");
   opts.source = source;
-  opts.engine = await ask("engine", "claude-code-acp");
+  opts.engine = await ask("engine", "claude-agent-acp");
   opts.backend = await ask("backend", "acp");
-  opts.channel = await ask("channel", source);
-  opts.perm_tier = await askUntil(
-    ask,
-    t("lane.prompt.permTier"),
-    "acp",
-    (v) => v === "acp" || v === "autopass",
-    t("lane.retry.permTier"),
-  );
+  opts.perm_tier = await askEnum(ask, t("lane.prompt.permTier"), ["acp", "autopass"], "acp");
   opts.acp_version = await ask("acp_version", "v1");
 
   const allow = await ask(t("lane.prompt.allowlist"), "");
@@ -161,16 +176,10 @@ export async function collectInteractive(
   const safeDefaults = (await ask(t("lane.prompt.safeDefaults"), "y")).toLowerCase();
   if (safeDefaults === "y" || safeDefaults === "yes") opts.safe_defaults = true;
 
-  const lang = await askUntil(
-    ask,
-    t("lane.prompt.lang"),
-    "",
-    (v) => v === "" || v === "en" || v === "ko",
-    t("lane.retry.lang"),
-  );
+  const lang = await askEnum(ask, t("lane.prompt.lang"), ["en", "ko"], "", { allowEmpty: true });
   if (lang) opts.lang = lang;
 
-  const cwd = await ask(t("lane.prompt.cwd"), "");
+  const cwd = await askPath(t("lane.prompt.cwd"), "");
   if (cwd) opts.cwd = cwd;
 
   if (source === "telegram") {
@@ -191,23 +200,17 @@ export async function collectInteractive(
     );
     if (allowFrom) opts.allow_from = allowFrom;
   } else {
-    const root = await ask(t("lane.prompt.root"), "");
+    const root = await askPath(t("lane.prompt.root"), "");
     if (root) opts.root = root;
-    const inbox = await ask(t("lane.prompt.inbox"), "inbox.md");
+    const inbox = await askPath(t("lane.prompt.inbox"), "inbox.md");
     if (inbox) opts.inbox = inbox;
-    const approvals = await ask(t("lane.prompt.approvals"), "");
+    const approvals = await askPath(t("lane.prompt.approvals"), "");
     if (approvals) opts.approvals = approvals;
-    const outbox = await ask(t("lane.prompt.outbox"), "");
+    const outbox = await askPath(t("lane.prompt.outbox"), "");
     if (outbox) opts.outbox = outbox;
   }
 
-  const fileMode = await askUntil(
-    ask,
-    t("lane.prompt.fileMode"),
-    "private",
-    (v) => v === "private" || v === "shared",
-    t("lane.retry.fileMode"),
-  );
+  const fileMode = await askEnum(ask, t("lane.prompt.fileMode"), ["private", "shared"], "private");
   if (fileMode && fileMode !== "private") opts.file_mode = fileMode;
 
   // 봇 토큰(telegram) — 가려진 입력. 빈 입력이면 생성 후 안내로 위임(시크릿 비노출).
@@ -242,7 +245,7 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     }
     const prompter = createPrompter();
     try {
-      opts = await collectInteractive(prompter.ask, prompter.askSecret);
+      opts = await collectInteractive(prompter.ask, prompter.askSecret, prompter.askPath);
     } finally {
       prompter.close();
     }
@@ -255,8 +258,6 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     if (engine !== undefined) opts.engine = engine;
     const backend = flagStr(flags, "backend");
     if (backend !== undefined) opts.backend = backend;
-    const channel = flagStr(flags, "channel");
-    if (channel !== undefined) opts.channel = channel;
     const permTier = flagStr(flags, "perm-tier");
     if (permTier !== undefined) opts.perm_tier = permTier;
     const acpVersion = flagStr(flags, "acp-version");
@@ -337,14 +338,56 @@ async function handleShow(rest: readonly string[]): Promise<number> {
 }
 
 async function handleRemove(rest: readonly string[]): Promise<number> {
-  const { positional } = parseArgs(rest, new Set());
+  const { positional, flags } = parseArgs(rest, new Set());
   const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneRm + "\n");
     return 1;
   }
-  const { confPath } = await laneRemove(proj, lane);
-  process.stdout.write(t("lane.removed", { lane, confPath }) + "\n");
+  const purge = flags["purge"] === true;
+  const force = flags["force"] === true;
+
+  // --purge 는 state(.env 토큰 포함)/queue/out 을 지우는 파괴적 동작 — proj rm 과 동일한 가드.
+  // 평범한 rm(conf 만 삭제)은 재생성 가능·저위험이라 가드 없이 진행한다.
+  if (purge && !force) {
+    // 실행 중(또는 크래시·기동실패 잔존)인 레인의 state/queue 를 지우면 데몬 동작을 깬다 — 거부.
+    // error 도 포함: lane rm --purge 는 (proj rm 과 달리) 데몬을 내리지 않으므로, 데몬(KeepAlive)이
+    // 살아있는 채로 특정 레인만 error 이면 살아있는 데몬 pid 하에서 state/토큰을 지우게 된다 → --force 요구.
+    // (proj rm 은 삭제 전 unloadDaemon 하므로 error 를 가드에 넣지 않아도 안전 — 두 가드가 error 에서 갈리는 이유.)
+    const row = (await collectStatus(proj)).find((r) => r.lane === lane);
+    if (
+      row &&
+      (row.status === "running" ||
+        row.status === "dead" ||
+        row.status === "stale" ||
+        row.status === "error")
+    ) {
+      process.stderr.write(laneError(t("lane.purgeRunning", { proj, lane })) + "\n");
+      return 1;
+    }
+    // 확인 — TTY 면 레인 이름 재입력, 비-TTY 면 --force 요구.
+    if (!process.stdin.isTTY) {
+      process.stderr.write(laneError(t("lane.purgeNeedForce")) + "\n");
+      return 1;
+    }
+    const prompter = createPrompter();
+    let typed: string;
+    try {
+      typed = await prompter.ask(t("lane.purgeConfirm", { lane }), "");
+    } finally {
+      prompter.close();
+    }
+    if (typed.trim() !== lane) {
+      process.stdout.write(t("lane.purgeAborted") + "\n");
+      return 1;
+    }
+  }
+
+  const { confPath, purged } = await laneRemove(proj, lane, { purge });
+  process.stdout.write(
+    (purged ? t("lane.removedPurged", { lane, confPath }) : t("lane.removed", { lane, confPath })) +
+      "\n",
+  );
   return 0;
 }
 
@@ -382,10 +425,13 @@ export async function runLane(argv: readonly string[]): Promise<number> {
         return 1;
     }
   } catch (err) {
+    // LaneConfigError 는 검증 실패(친절 메시지) — 그 외 예기치 못한 예외도 원시 스택 대신
+    // 명령 스코프 메시지로 표면화(방어코드: 어떤 경로든 사용자에게 actionable 하게).
     if (err instanceof LaneConfigError) {
       process.stderr.write(laneError(err.message) + "\n");
-      return 1;
+    } else {
+      process.stderr.write(cmdError("lane", errMsg(err)) + "\n");
     }
-    throw err;
+    return 1;
   }
 }

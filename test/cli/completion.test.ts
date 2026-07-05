@@ -26,8 +26,8 @@ describe("completionScript", () => {
     // 동적 이름: base 스캔 헬퍼
     expect(bash).toContain("_adde_projects");
     expect(bash).toContain("_adde_lanes");
-    // enum 값: --source telegram|markdown, --perm-tier acp|autopass
-    expect(bash).toContain("telegram markdown");
+    // enum 값: --source markdown|telegram, --perm-tier acp|autopass
+    expect(bash).toContain("markdown telegram");
     expect(bash).toContain("acp autopass");
     // 디렉터리 플래그
     expect(bash).toContain("--cwd|--root");
@@ -35,6 +35,10 @@ describe("completionScript", () => {
     const zsh = completionScript("zsh") as string;
     expect(zsh).toContain("_adde_projects");
     expect(zsh).toContain("_files -/");
+    // proj 서브커맨드 배선(ls/rm) — rm 뒤 프로젝트 이름 완성.
+    expect(bash).toContain("proj)");
+    expect(bash).toContain("ls rm help");
+    expect(zsh).toContain("'proj subcommand'");
   });
 
   it("zsh 스크립트는 compdef 헤더와 등록(ad·add)·명령 설명을 포함한다", () => {

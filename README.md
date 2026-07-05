@@ -4,9 +4,14 @@
 
 _English | [한국어](README.ko.md)_
 
-> ⚠️ **Status: early development.** ACP backend + Telegram/Markdown source adapters work (a PoC vertical slice). The API may change.
+[![npm](https://img.shields.io/npm/v/adde-acp)](https://www.npmjs.com/package/adde-acp)
+[![CI](https://github.com/qwertygeon/adde/actions/workflows/ci.yml/badge.svg)](https://github.com/qwertygeon/adde/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/adde-acp)](https://nodejs.org)
+[![license: MIT](https://img.shields.io/npm/l/adde-acp)](LICENSE)
 
-ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely from a **channel** (Telegram / Markdown notes such as Obsidian; Discord on hold). The AI does the development work while you instruct, approve, and observe from chat.
+> ⚠️ **Status: early development.** ACP backend + Markdown/Telegram source adapters work (a PoC vertical slice). The API may change.
+
+ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely from a **channel** (Markdown notes such as Obsidian / Telegram; Discord on hold). The AI does the development work while you instruct, approve, and observe from chat.
 
 ## When to use it
 
@@ -15,6 +20,10 @@ ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely
 - When you want a **human approval gate** (fail-closed by default) on every tool execution.
 
 > ⚠️ **Data-flow warning**: your instructions, code, and the AI's replies pass through the AI engine provider (ACP → Claude/Codex, etc.) and the channel infrastructure (Telegram). With the Markdown source, approval/output notes are **replicated by your syncing vault** (Obsidian Sync, iCloud, etc.) — for sensitive projects, read [Markdown guide — exposure of sensitive data](docs/markdown.md#syncing-vaults-and-exposure-of-sensitive-data) first.
+>
+> ℹ️ **Unofficial tool.** ADDE is an unofficial, third-party tool not built or endorsed by Anthropic or any engine/channel provider. "Claude" and "Claude Code" are trademarks of Anthropic; other engine and platform names are trademarks of their respective owners. This project is not affiliated with any of them.
+>
+> 📜 **Your use is subject to upstream terms.** Driving an AI engine sends your content to that engine's provider (e.g. the Anthropic API for Claude), so your use is governed by your own plan terms and usage policies; running a Telegram bot also makes you a bot operator (disclose that it is an AI if others can reach it). See [SECURITY.md → Your responsibilities as an operator](SECURITY.md#your-responsibilities-as-an-operator).
 
 ## Quick start
 
@@ -28,15 +37,15 @@ adde init         # guided setup (environment check + short alias + first lane)
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install, lane config, startup, status/diagnostics, project-folder mapping
-- [Telegram guide](docs/telegram.md) — bot creation, token, step-by-step startup
 - [Markdown guide](docs/markdown.md) — drive the AI from notes (e.g. Obsidian): instructions, replies, approvals
+- [Telegram guide](docs/telegram.md) — bot creation, token, step-by-step startup
 - [Permissions guide](docs/permissions.md) — the gate, tiers (acp/autopass), allowlist/denylist, hard-deny, recommended settings
 - [Command reference](docs/commands.md) · [Troubleshooting](docs/troubleshooting.md)
 
 ## Core design
 
 - **ACP-first**: the engine runs as a headless [Agent Client Protocol](https://agentclientprotocol.com) subprocess and ADDE drives it as an ACP client. Instructions, replies, permissions, logs, and usage all flow through a single event stream (no terminal scraping).
-- **Engine-agnostic**: `claude-code-acp` and `codex-acp` speak the same protocol, so a single backend adapter drives multiple engines.
+- **Engine-agnostic**: `claude-agent-acp` and `codex-acp` speak the same protocol, so a single backend adapter drives multiple engines.
 - **Lane isolation**: each `(source × backend × project)` is an independent vertical stack. Input, approvals, and output are self-contained within a lane.
 - **Fail-closed permissions**: every permission request is routed to the channel for approval, defaulting to deny on timeout/error. Per-lane opt-ins are also available: an `autopass` tier (auto-allow everything except the denylist, fully recorded) and a tier-independent **hard-deny** (`--safe-defaults` blocks sudo, rm -rf, credential reads, etc. as defense-in-depth).
 - **i18n (en/ko)**: CLI output and channel messages support English and Korean. Locale is auto-detected (`ADDE_LANG` > system locale `LC_ALL`/`LC_MESSAGES`/`LANG` > default en), with a per-lane channel language (`lane add --lang`). See "Language (locale)" in the [command reference](docs/commands.md).
@@ -67,7 +76,7 @@ For lane configuration details see [Getting started](docs/getting-started.md#lan
 - Install: **global npm install** `npm i -g adde-acp`. Update with `npm i -g adde-acp@latest` then `adde restart <proj>` (`status`/`doctor` notify you of a new version). For development/contribution, build from source (`pnpm install && pnpm build`). Details and permission (EACCES) notes: [Getting started](docs/getting-started.md#install).
 - The short aliases `ad`/`add` are **not** installed automatically — opt in via `adde init` or `adde alias` (avoids clashing with common global command names).
 - TypeScript + Node.js LTS (>=22)
-- **An AI engine ACP adapter is required** (e.g. `@zed-industries/claude-code-acp`) — `adde doctor` checks for it up front.
+- **An AI engine ACP adapter is required** (e.g. `@agentclientprotocol/claude-agent-acp`) — `adde doctor` checks for it up front.
 - macOS is the primary target — `adde up`/`down`/`restart` are built on macOS launchd LaunchAgents, with auto-recovery after reboot/logout. Linux/WSL are out of scope for now.
 
 ## Status / roadmap
@@ -78,10 +87,11 @@ For lane configuration details see [Getting started](docs/getting-started.md#lan
 - [~] MVP: `markdown | telegram → claude(ACP)` vertical slice (source adapters + per-lane project-folder mapping working)
 - [ ] Codex backend · Discord (on hold) · non-ACP CLI scraping (on hold)
 
-## License / security
+## License / security / meta
 
 - License: [MIT](LICENSE)
 - Report security vulnerabilities: [SECURITY.md](SECURITY.md)
+- Project meta: [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ---
 

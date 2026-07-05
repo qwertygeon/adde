@@ -9,7 +9,7 @@ const validEnvelope = {
   lane: "test-lane",
   source: "telegram" as const,
   backend: "acp" as const,
-  engine: "claude-code-acp",
+  engine: "claude-agent-acp",
   project: "myproject",
   ts: "2026-06-25T23:00:00.000Z",
   text: "안녕하세요",

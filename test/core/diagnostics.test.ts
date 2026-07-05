@@ -30,7 +30,10 @@ afterEach(() => {
 });
 
 const conf = (extra = ""): string =>
-  `source=telegram\nbackend=acp\nengine=claude-code-acp\nchannel=telegram\nperm_tier=acp\nacp_version=v1\n${extra}`;
+  `source=telegram\nbackend=acp\nengine=claude-agent-acp\nchannel=telegram\nperm_tier=acp\nacp_version=v1\n${extra}`;
+
+const mdConf = (extra = ""): string =>
+  `source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\nperm_tier=acp\nacp_version=v1\n${extra}`;
 
 function writeConf(proj: string, lane: string, text: string): void {
   const lanesDir = path.join(tmpBase, proj, "lanes.d");
@@ -47,7 +50,7 @@ function rt(pid: number, lane: string): RuntimeInfo {
     startedAt: new Date().toISOString(),
     source: "telegram",
     backend: "acp",
-    engine: "claude-code-acp",
+    engine: "claude-agent-acp",
   };
 }
 
@@ -186,6 +189,30 @@ describe("runDoctor (SC3)", () => {
     const checks = await runDoctor("p", { base: tmpBase });
     const cwd = checks.find((c) => c.name.endsWith("cwd"));
     expect(cwd?.level).toBe("FAIL");
+  });
+
+  it("root 없는 markdown 레인은 마크다운 경로 FAIL (기동 실패 예방)", async () => {
+    writeConf("p", "md-claude", mdConf());
+    const checks = await runDoctor("p", { base: tmpBase });
+    const md = checks.find((c) => c.name.endsWith("마크다운 경로"));
+    expect(md?.level).toBe("FAIL");
+    expect(md?.hint).toBeTruthy();
+  });
+
+  it("root(존재)+inbox 지정 markdown 레인은 마크다운 경로 PASS", async () => {
+    const rootDir = path.join(tmpBase, "vault");
+    fs.mkdirSync(rootDir, { recursive: true });
+    writeConf("p", "md-ok", mdConf(`root=${rootDir}\ninbox=inbox.md\n`));
+    const checks = await runDoctor("p", { base: tmpBase });
+    const md = checks.find((c) => c.name.endsWith("마크다운 경로"));
+    expect(md?.level).toBe("PASS");
+  });
+
+  it("존재하지 않는 root 의 markdown 레인은 마크다운 경로 FAIL", async () => {
+    writeConf("p", "md-noroot", mdConf(`root=${path.join(tmpBase, "no-vault")}\ninbox=inbox.md\n`));
+    const checks = await runDoctor("p", { base: tmpBase });
+    const md = checks.find((c) => c.name.endsWith("마크다운 경로"));
+    expect(md?.level).toBe("FAIL");
   });
 
   it("그룹/기타 읽기 가능한 .env 는 파일 권한 WARN (토큰 노출)", async () => {
@@ -410,7 +437,7 @@ describe("기존 conf·runtime.json 스키마 비침해 (SC-015)", () => {
       startedAt: new Date().toISOString(),
       source: "telegram",
       backend: "acp",
-      engine: "claude-code-acp",
+      engine: "claude-agent-acp",
     };
     await writeRuntime(lp, originalRuntime);
 
@@ -421,7 +448,7 @@ describe("기존 conf·runtime.json 스키마 비침해 (SC-015)", () => {
     expect(row?.sessionId).toBe("orig-session");
     expect(row?.source).toBe("telegram");
     expect(row?.backend).toBe("acp");
-    expect(row?.engine).toBe("claude-code-acp");
+    expect(row?.engine).toBe("claude-agent-acp");
   });
 
   it("lanes.d conf 파일이 runDoctor 후에도 내용 불변", async () => {

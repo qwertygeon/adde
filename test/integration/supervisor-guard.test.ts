@@ -35,7 +35,7 @@ afterEach(async () => {
 
 const minimalConf = `source=telegram
 backend=acp
-engine=claude-code-acp
+engine=claude-agent-acp
 channel=telegram
 perm_tier=acp
 acp_version=v1
@@ -67,7 +67,7 @@ function makeRuntimeInfo(pid: number, lane: string): RuntimeInfo {
     startedAt: new Date().toISOString(),
     source: "telegram",
     backend: "acp",
-    engine: "claude-code-acp",
+    engine: "claude-agent-acp",
   };
 }
 

@@ -66,7 +66,7 @@ adde lane add myproj tg-claude --interactive  # 마법사 명시적 강제
 
 처음이라면 `adde init` 온보딩 마법사가 doctor 점검·별칭 설치 제안까지 함께 안내합니다 — [명령 레퍼런스](commands.ko.md#init--온보딩-마법사).
 
-기본값: `--source telegram`, `--backend acp`, `--engine claude-code-acp`. 전체 옵션은 [명령 레퍼런스](commands.ko.md#lane-add-옵션) 또는 `adde lane help`.
+기본값: `--source telegram`, `--backend acp`, `--engine claude-agent-acp`. 전체 옵션은 [명령 레퍼런스](commands.ko.md#lane-add-옵션) 또는 `adde lane help`.
 
 > `--allowlist` 에 넣은 도구는 채널 승인 없이 자동 허용됩니다(트랜스크립트에는 기록). `Bash`·파일 쓰기 같은 광범위 도구는 넣지 마세요(자기승인 위험). 대부분을 자동 허용하는 옵트인 `--perm-tier autopass`, 티어와 무관하게 위험 명령을 즉시 거부하는 `--hard-deny`/`--safe-defaults` 를 포함한 권한 모델 전반은 [권한 가이드](permissions.ko.md)를 참고하세요.
 
@@ -135,5 +135,9 @@ adde logs myproj tg-claude   # 최근 활동(transcript)
 ## 여러 프로젝트 매핑
 
 `lanes.d/` 에 conf 를 여러 개 두면 `adde up` 한 번으로 모두 기동됩니다. 레인마다 다른 `--cwd`·`--chat-id` 를 지정해 여러 봇/프로젝트를 동시에 운용할 수 있습니다. 개념·폴더 매핑 상세는 [시작하기](getting-started.ko.md#프로젝트-폴더-매핑)를 참고하세요.
+
+## 운영자 책임
+
+Telegram 봇을 운영하면 사용자가 봇 운영자이자 AI 엔진 제공자의 이용자가 됩니다. 일부 의무는 상위 서비스에서 옵니다 — 본인 외 접근 가능하면 봇이 AI 임을 고지하고, 인바운드 allowlist 를 좁게 유지하며, 타인이 보낸 메시지를 적법하게 취급하세요. 상세는 [SECURITY.md → 운영자 책임](../SECURITY.md#your-responsibilities-as-an-operator)을 참고하세요.
 
 문제가 생기면 [트러블슈팅](troubleshooting.ko.md)을 참고하세요.

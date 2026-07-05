@@ -56,8 +56,7 @@ describe("collectInteractive (007 SC1)", () => {
     const opts = await collectInteractive(ask);
 
     expect(opts.source).toBe("telegram");
-    expect(opts.engine).toBe("claude-code-acp"); // 빈 입력 → 기본값
-    expect(opts.channel).toBe("telegram"); // 기본값 = source
+    expect(opts.engine).toBe("claude-agent-acp"); // 빈 입력 → 기본값
     expect(opts.chat_id).toBe("12345");
     expect(opts.allowlist).toEqual(["Read", "Bash"]);
     expect(opts.root).toBeUndefined();
@@ -67,25 +66,31 @@ describe("collectInteractive (007 SC1)", () => {
     );
   });
 
-  it("markdown: root/inbox 등 markdown 필드를 묻고 chat_id 는 안 묻는다", async () => {
+  it("markdown: 번호(1)로 source 선택, root/inbox 등 markdown 필드를 묻고 chat_id 는 안 묻는다", async () => {
     const { ask, questions } = scriptedAsk({
-      "source (telegram": "markdown",
+      source: "1", // 번호 선택 → 첫 옵션(markdown)
       "root (markdown": "/vault",
     });
     const opts = await collectInteractive(ask);
 
     expect(opts.source).toBe("markdown");
-    expect(opts.channel).toBe("markdown");
     expect(opts.root).toBe("/vault");
     expect(opts.inbox).toBe("inbox.md"); // 기본값
     expect(opts.chat_id).toBeUndefined();
     expect(questions.some((q) => q.includes("chat_id"))).toBe(false);
   });
 
+  it("번호 선택: source=2→telegram, perm_tier=2→autopass 로 매핑한다", async () => {
+    const { ask } = scriptedAsk({ source: "2", perm_tier: "2" });
+    const opts = await collectInteractive(ask);
+    expect(opts.source).toBe("telegram");
+    expect(opts.perm_tier).toBe("autopass");
+  });
+
   it("잘못된 source 는 유효값이 올 때까지 재질의한다", async () => {
     let calls = 0;
     const ask: Ask = async (q, def) => {
-      if (q.includes("source") || q.includes("telegram 또는 markdown")) {
+      if (q.includes("source") || (q.includes("markdown") && q.includes("telegram"))) {
         calls++;
         return calls < 2 ? "bogus" : "telegram";
       }

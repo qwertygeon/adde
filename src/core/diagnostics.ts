@@ -40,6 +40,8 @@ export interface LaneStatusRow {
   uptimeMs: number | null;
   /** 마지막 하트비트 시각(runtime.json mtime) ISO. 파일 없거나 stat 실패 시 null. */
   lastSeenAt: string | null;
+  /** status==="error" 일 때 기동 실패 사유(그 외 null). */
+  error: string | null;
 }
 
 /**
@@ -80,6 +82,7 @@ export async function collectStatus(
           ? Math.max(0, Date.now() - Date.parse(info.startedAt))
           : null,
       lastSeenAt: mtimeMs !== undefined ? new Date(mtimeMs).toISOString() : null,
+      error: info?.error ?? null,
     });
   }
   return rows;
@@ -347,6 +350,36 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
               hint: t("doctor.token.hint", { path: paths.envFile }),
             },
       );
+    }
+
+    // 마크다운 경로(markdown 한정) — root/inbox 누락은 기동 실패로 이어진다(laneAdd 는 경고만 하고
+    // 레인을 생성하므로, up 전에 doctor 가 검출해 조치를 안내한다). resolvePaths 필수 키와 동일 기준.
+    if (conf.source === "markdown") {
+      const mdName = t("doctor.markdown.name", { lane });
+      if (!conf.root) {
+        checks.push({
+          name: mdName,
+          level: "FAIL",
+          detail: t("doctor.markdown.rootMissing"),
+          hint: t("doctor.markdown.rootMissingHint"),
+        });
+      } else if (!(await pathExists(expandTilde(conf.root)))) {
+        checks.push({
+          name: mdName,
+          level: "FAIL",
+          detail: t("doctor.markdown.rootNotFound", { path: expandTilde(conf.root) }),
+          hint: t("doctor.markdown.rootNotFoundHint"),
+        });
+      } else if (!conf.inbox) {
+        checks.push({
+          name: mdName,
+          level: "FAIL",
+          detail: t("doctor.markdown.inboxMissing"),
+          hint: t("doctor.markdown.inboxMissingHint"),
+        });
+      } else {
+        checks.push({ name: mdName, level: "PASS", detail: t("doctor.markdown.ok") });
+      }
     }
 
     // 파일 권한 감사 — 시크릿(.env)·private 모드 상태 디렉터리가 그룹/기타에 노출됐는지.

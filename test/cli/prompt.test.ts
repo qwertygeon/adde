@@ -36,11 +36,11 @@ describe("createPrompter.askSecret (시크릿 비노출)", () => {
     const { output } = captureSink();
     const p = createPrompter({ input, output });
 
-    const aP = p.ask("engine", "claude-code-acp");
+    const aP = p.ask("engine", "claude-agent-acp");
     input.write("\n"); // 빈 입력 → 기본값
     const val = await aP;
     p.close();
 
-    expect(val).toBe("claude-code-acp");
+    expect(val).toBe("claude-agent-acp");
   });
 });

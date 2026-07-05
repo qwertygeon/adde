@@ -26,6 +26,7 @@ import { maskSecrets } from "../shared/mask.js";
 import { t, tFor } from "../shared/i18n.js";
 import {
   writeRuntime,
+  writeErrorRuntime,
   removeRuntime,
   touchRuntime,
   readRuntime,
@@ -38,16 +39,16 @@ import type { LanePaths } from "../shared/paths.js";
 export function resolveAdapterBin(): string {
   const require = createRequire(import.meta.url);
   try {
-    const pkgPath = require.resolve("@zed-industries/claude-code-acp/package.json");
+    const pkgPath = require.resolve("@agentclientprotocol/claude-agent-acp/package.json");
     const dir = pkgPath.slice(0, pkgPath.lastIndexOf("/package.json"));
     const pkg = require(pkgPath) as { bin?: string | Record<string, string> };
-    const binRel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.["claude-code-acp"];
+    const binRel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.["claude-agent-acp"];
     if (binRel) return resolve(dir, binRel);
   } catch {
     // 폴백(.bin shim)으로 진행
   }
   const thisDir = fileURLToPath(new URL(".", import.meta.url));
-  return resolve(thisDir, "../../../node_modules/.bin/claude-code-acp");
+  return resolve(thisDir, "../../../node_modules/.bin/claude-agent-acp");
 }
 
 interface LaneHandle {
@@ -179,9 +180,11 @@ export async function supervisorUp(
     );
 
     // 중복 기동 가드 — backend 생성 전 runtime.json + pid 생존 확인.
+    // status:"error" 레코드는 이전 기동 실패 잔존(down 이 정리하지 않음) — pid 는 죽은 이전 데몬이거나
+    // 재사용됐을 수 있으므로 신뢰하지 않고 항상 정리 후 재기동한다(pid 재사용 오탐 방지).
     const existingRuntime = await readRuntime(paths);
     if (existingRuntime !== null) {
-      if (isPidAlive(existingRuntime.pid)) {
+      if (existingRuntime.status !== "error" && isPidAlive(existingRuntime.pid)) {
         // 이미 running — 경고+스킵.
         process.stderr.write(
           t("supervisor.alreadyRunning", { lane, pid: existingRuntime.pid, proj }) + "\n",
@@ -189,7 +192,7 @@ export async function supervisorUp(
         results.push({ lane, status: "running" });
         continue;
       } else {
-        // dead 레인 — 크래시 잔존 runtime.json 정리 후 정상 기동.
+        // dead 레인 또는 이전 error 잔존 — runtime.json 정리 후 정상 기동.
         // 자식 pid 는 runtime.json 에 미기록(스키마 한계) — removeRuntime 으로 파일만 정리.
         await removeRuntime(paths).catch((err: unknown) =>
           console.warn(t("log.supervisor.deadCleanupFail", { lane, error: errMsg(err) })),
@@ -260,41 +263,43 @@ export async function supervisorUp(
     );
     const onInbound = () => injector.notify();
 
-    if (conf.source === "markdown") {
-      source = createMarkdownSource({ lane, proj, engine, paths, conf, onInbound });
-    } else {
-      const chatId =
-        conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
-      // 인바운드/콜백 허용 발신자 = allow_from ∪ (개인 chat 인 chatId). 비면 어댑터가 fail-closed.
-      // 음수 chatId(그룹)는 인증 앵커 아님 — 멤버는 allow_from 으로만 인증(어댑터 병합 규칙과 동일).
-      const authorizedIds: number[] = [];
-      const selfAuth = selfAuthorizedChatId(chatId);
-      if (selfAuth !== undefined) authorizedIds.push(selfAuth);
-      for (const raw of conf.allow_from ? parseCsv(conf.allow_from) : []) {
-        const n = Number(raw);
-        if (!Number.isNaN(n)) authorizedIds.push(n);
-      }
-      source = createTelegramSource({
-        lane,
-        proj,
-        engine,
-        paths,
-        chatId,
-        authorizedIds,
-        onInbound,
-        lang: conf.lang,
-      });
-    }
-
-    source.onDecision((reqId, decision) => {
-      const resolve = pendingDecisions.get(reqId);
-      if (resolve) {
-        pendingDecisions.delete(reqId);
-        resolve(decision);
-      }
-    });
-
     try {
+      // 소스 생성을 try 안에서 — createMarkdownSource 등이 오구성(markdown root/inbox 누락)에
+      // 던지면 이 레인만 status:"error" 로 격리하고 나머지 레인·up 은 계속한다(전체 크래시 방지).
+      if (conf.source === "markdown") {
+        source = createMarkdownSource({ lane, proj, engine, paths, conf, onInbound });
+      } else {
+        const chatId =
+          conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
+        // 인바운드/콜백 허용 발신자 = allow_from ∪ (개인 chat 인 chatId). 비면 어댑터가 fail-closed.
+        // 음수 chatId(그룹)는 인증 앵커 아님 — 멤버는 allow_from 으로만 인증(어댑터 병합 규칙과 동일).
+        const authorizedIds: number[] = [];
+        const selfAuth = selfAuthorizedChatId(chatId);
+        if (selfAuth !== undefined) authorizedIds.push(selfAuth);
+        for (const raw of conf.allow_from ? parseCsv(conf.allow_from) : []) {
+          const n = Number(raw);
+          if (!Number.isNaN(n)) authorizedIds.push(n);
+        }
+        source = createTelegramSource({
+          lane,
+          proj,
+          engine,
+          paths,
+          chatId,
+          authorizedIds,
+          onInbound,
+          lang: conf.lang,
+        });
+      }
+
+      source.onDecision((reqId, decision) => {
+        const resolve = pendingDecisions.get(reqId);
+        if (resolve) {
+          pendingDecisions.delete(reqId);
+          resolve(decision);
+        }
+      });
+
       // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
       const { sessionId } = await backend.launch(lane);
 
@@ -389,6 +394,17 @@ export async function supervisorUp(
     } catch (err) {
       const reason = errMsg(err);
       console.error(t("log.supervisor.laneStartFail", { lane, reason }));
+      // 실패 상태를 runtime.json 에 남겨 교차 프로세스(adde up·status)가 볼 수 있게 한다 —
+      // 안 남기면 파일 부재라 status 가 stopped(미기동)와 구분 못 한다. 기록 실패는 흡수(보조).
+      await writeErrorRuntime(paths, {
+        lane,
+        source: conf.source || channel,
+        backend: conf.backend || "acp",
+        engine,
+        error: maskSecrets(reason),
+      }).catch((e: unknown) =>
+        console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(e) })),
+      );
       results.push({ lane, status: "error", error: reason });
     }
   }

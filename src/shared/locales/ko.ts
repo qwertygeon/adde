@@ -230,6 +230,16 @@ lane add 옵션:
       missing: "토큰 없음: {{path}}",
       hint: "봇 토큰을 기록하세요: {{path}} 에 TELEGRAM_BOT_TOKEN=... (또는 lane add --token-stdin).",
     },
+    markdown: {
+      name: "{{lane}}: 마크다운 경로",
+      ok: "root/inbox 설정됨",
+      rootMissing: "markdown 레인에 root 가 없습니다 — 레인 기동에 실패합니다",
+      rootMissingHint: "conf 에 root 를 설정하세요 (lane add --root <vault 절대경로>).",
+      rootNotFound: "markdown root 경로가 없습니다: {{path}}",
+      rootNotFoundHint: "경로를 생성하거나 conf 의 root 를 고치세요.",
+      inboxMissing: "markdown 레인에 inbox 노트가 없습니다 — 레인 기동에 실패합니다",
+      inboxMissingHint: "conf 에 inbox 를 설정하세요 (lane add --inbox <root 상대 노트경로>).",
+    },
     perms: {
       name: "{{lane}}: 파일 권한",
       ok: "state 디렉터리/.env 권한이 제한적입니다",

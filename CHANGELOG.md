@@ -7,7 +7,7 @@
 ### Changed
 
 - ACP 엔진 어댑터 마이그레이션 — deprecated·이름변경된 `@zed-industries/claude-code-acp`(0.16.2)를 후속 `@agentclientprotocol/claude-agent-acp`(0.55.0)로 교체하고 `@agentclientprotocol/sdk` 를 0.14.1 → 1.1.0 으로 승급. 기본 엔진 프로필·바이너리 해석·`--engine` 안내·문서를 새 이름(`claude-agent-acp`)으로 갱신. 권한 게이트 매칭 키(`_meta.claudeCode.toolName`)와 ACP 프로토콜 버전(v1) 유지를 신규 어댑터 소스로 실측 확인했고, requestPermission 의 도구명·인자 추출·결정 배선을 통합 테스트로 회귀 보호. `npm i -g adde-acp` 설치 시 출력되던 `npm warn deprecated` 가 사라짐.
-- 기본 소스 어댑터 `telegram` → **`markdown`** — `--source` 미지정 시(비대화형·대화형 프롬프트 기본값) 생성되는 레인의 기본 소스를 markdown 으로 변경. 마크다운은 봇 토큰 없이 로컬 노트만으로 바로 동작하므로 "설정 없이 되는" 기본에 부합. `--source telegram` 명시는 종전대로 동작. 문서·자동완성·help 의 나열 순서도 markdown 우선으로 정렬.
+- 기본 소스 어댑터 `telegram` → **`markdown`** — `--source` 미지정 시(비대화형·대화형 프롬프트 기본값) 생성되는 레인의 기본 소스를 markdown 으로 변경. 마크다운은 봇 토큰 없이 로컬 노트만으로 바로 동작하므로 "설정 없이 되는" 기본에 부합. `--source telegram` 명시는 종전대로 동작. 문서·자동완성·help 의 나열 순서도 markdown 우선으로 정렬. 아울러 오구성 격리 보강 — root/inbox 없는 markdown 레인의 소스 생성 실패가 `adde up` 전체를 중단시키지 않고 **해당 레인만 error 로 격리**하며, `adde doctor` 가 markdown 레인의 root/inbox 누락·부재를 **기동 전에 FAIL 로 검출**한다.
 
 ## [0.1.3] - 2026-07-04
 

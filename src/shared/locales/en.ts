@@ -230,6 +230,16 @@ lane add options:
       missing: "token missing: {{path}}",
       hint: "Write the bot token: TELEGRAM_BOT_TOKEN=... in {{path}} (or lane add --token-stdin).",
     },
+    markdown: {
+      name: "{{lane}}: markdown paths",
+      ok: "root/inbox configured",
+      rootMissing: "markdown lane has no root — the lane will fail to start",
+      rootMissingHint: "Set root in the conf (lane add --root <absolute vault path>).",
+      rootNotFound: "markdown root path does not exist: {{path}}",
+      rootNotFoundHint: "Create the path or fix root in the conf.",
+      inboxMissing: "markdown lane has no inbox note — the lane will fail to start",
+      inboxMissingHint: "Set inbox in the conf (lane add --inbox <relative note path>).",
+    },
     perms: {
       name: "{{lane}}: file permissions",
       ok: "state dir/.env permissions look restrictive",

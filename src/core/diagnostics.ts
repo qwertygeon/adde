@@ -349,6 +349,36 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
       );
     }
 
+    // 마크다운 경로(markdown 한정) — root/inbox 누락은 기동 실패로 이어진다(laneAdd 는 경고만 하고
+    // 레인을 생성하므로, up 전에 doctor 가 검출해 조치를 안내한다). resolvePaths 필수 키와 동일 기준.
+    if (conf.source === "markdown") {
+      const mdName = t("doctor.markdown.name", { lane });
+      if (!conf.root) {
+        checks.push({
+          name: mdName,
+          level: "FAIL",
+          detail: t("doctor.markdown.rootMissing"),
+          hint: t("doctor.markdown.rootMissingHint"),
+        });
+      } else if (!(await pathExists(expandTilde(conf.root)))) {
+        checks.push({
+          name: mdName,
+          level: "FAIL",
+          detail: t("doctor.markdown.rootNotFound", { path: expandTilde(conf.root) }),
+          hint: t("doctor.markdown.rootNotFoundHint"),
+        });
+      } else if (!conf.inbox) {
+        checks.push({
+          name: mdName,
+          level: "FAIL",
+          detail: t("doctor.markdown.inboxMissing"),
+          hint: t("doctor.markdown.inboxMissingHint"),
+        });
+      } else {
+        checks.push({ name: mdName, level: "PASS", detail: t("doctor.markdown.ok") });
+      }
+    }
+
     // 파일 권한 감사 — 시크릿(.env)·private 모드 상태 디렉터리가 그룹/기타에 노출됐는지.
     // .env 는 토큰을 담으므로 모드와 무관하게 그룹/기타 접근을 경고한다. state 디렉터리는
     // file_mode=private 일 때만 0700 을 기대(shared 는 느슨한 권한이 의도된 선택이라 통과).

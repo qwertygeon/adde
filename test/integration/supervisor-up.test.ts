@@ -124,6 +124,30 @@ describe("supervisorUp 기동 실패 안내 (FR-8)", () => {
     expect(result.lanes[0]?.status).toBe("error");
     expect(result.lanes[0]?.error).toContain("엔진 spawn 실패");
   });
+
+  it("root 없는 markdown 레인은 소스 생성 throw 를 status=error 로 격리하고 다른 레인은 기동한다", async () => {
+    // 기본 소스 markdown 전환 회귀 가드 — createMarkdownSource(root/inbox 누락)의 throw 가
+    // per-lane try 밖에서 나면 up 전체가 크래시했다. 이제 그 레인만 error 로 격리돼야 한다.
+    const mdNoRoot = `source=markdown
+backend=acp
+engine=claude-agent-acp
+channel=markdown
+perm_tier=acp
+acp_version=v1
+`;
+    const { base } = setupProject("mixproj", {
+      "md-broken": mdNoRoot,
+      "telegram-claude": minimalConf,
+    });
+    const result = await runUp("mixproj", { base, acpFactory: makeFakeAcpFactory() });
+
+    const md = result.lanes.find((l) => l.lane === "md-broken");
+    const tg = result.lanes.find((l) => l.lane === "telegram-claude");
+    expect(md?.status).toBe("error");
+    expect(md?.error).toMatch(/root/i);
+    // 다른 정상 레인은 기동 — up 전체가 무너지지 않음
+    expect(tg?.status).toBe("running");
+  });
 });
 
 describe("supervisorUp (SC-001 레인 기동)", () => {

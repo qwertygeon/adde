@@ -53,10 +53,15 @@ describe("adde up — 이미 기동 중 표면화", () => {
   it("기동 실패 레인이 있으면 up 이 바로 실패 레인을 표기하고 1 을 반환한다 (B1)", async () => {
     daemonRegState.mockResolvedValue({ plistExists: false, launchctlRegistered: false });
     loadDaemon.mockResolvedValue(undefined);
-    // 데몬이 남긴 error runtime.json 을 status 가 error 로 보고하는 상황.
+    // 데몬이 남긴 error runtime.json 을 status 가 error 로 보고하는 상황(이번 기동 = startedAt 미래).
     collectStatus.mockResolvedValue([
-      { lane: "ok", status: "running", error: null },
-      { lane: "bad", status: "error", error: "engine spawn ENOENT" },
+      { lane: "ok", status: "running", error: null, startedAt: "2099-01-01T00:00:00Z" },
+      {
+        lane: "bad",
+        status: "error",
+        error: "engine spawn ENOENT",
+        startedAt: "2099-01-01T00:00:00Z",
+      },
     ]);
     const errs: string[] = [];
     const spyErr = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
@@ -70,5 +75,31 @@ describe("adde up — 이미 기동 중 표면화", () => {
     expect(code).toBe(1);
     expect(errs.join("")).toContain("bad");
     expect(errs.join("")).toContain("engine spawn ENOENT");
+  });
+
+  it("이전 기동의 stale error 레코드는 실패로 오인하지 않고 running 으로 수렴한다 (리뷰 회귀)", async () => {
+    daemonRegState.mockResolvedValue({ plistExists: false, launchctlRegistered: false });
+    loadDaemon.mockResolvedValue(undefined);
+    let call = 0;
+    // 1회차: 이전 기동에서 남은 stale error(과거 startedAt — down 이 실패 레인 runtime 을 안 지움).
+    // 2회차: 새 데몬이 dead-pid 레코드를 정리·재기동해 running 으로 수렴.
+    collectStatus.mockImplementation(async () => {
+      call++;
+      return call === 1
+        ? [
+            {
+              lane: "main",
+              status: "error",
+              error: "old failure",
+              startedAt: "2000-01-01T00:00:00Z",
+            },
+          ]
+        : [{ lane: "main", status: "running", error: null, startedAt: "2099-01-01T00:00:00Z" }];
+    });
+    const cap = captureStdout();
+    const code = await run(["up", "demo"]);
+    cap.restore();
+    expect(code).toBe(0); // stale error 를 이번 기동 실패로 세지 않음
+    expect(call).toBeGreaterThanOrEqual(2); // 미확정(stale)이라 최소 1회 재폴링
   });
 });

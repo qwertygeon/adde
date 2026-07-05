@@ -307,8 +307,9 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
       process.stderr.write(USAGE.logs + "\n");
       return 1;
     }
-    const dRaw = positional[1];
-    const dn = dRaw !== undefined && /^\d+$/.test(dRaw) ? Number(dRaw) : 50;
+    // N 은 proj 뒤 첫 숫자 위치인자 — `logs proj --daemon 100` / `logs proj lane --daemon 100` 모두 수용.
+    const dRaw = positional.slice(1).find((p) => /^\d+$/.test(p));
+    const dn = dRaw !== undefined ? Number(dRaw) : 50;
     return runDaemonLogs(proj, dn);
   }
 

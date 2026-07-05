@@ -87,16 +87,24 @@ interface UpLaneRow {
   lane: string;
   status: string;
   error: string | null;
+  startedAt: string | null;
 }
 
 /**
  * `adde up` 기동 결과 요약 — 데몬(분리 프로세스)이 각 레인 상태를 runtime.json 에 남길 때까지
  * 짧게 폴링한 뒤 집계한다. 아직 손대지 않은 레인은 stopped 로 보이므로 전부 확정(또는 타임아웃)될
- * 때까지 대기한다. 반환: running 수·실패 레인(사유)·pending(타임아웃까지 미확정) 수·총 수.
+ * 때까지 대기한다.
+ *
+ * sinceMs = 이번 up 시작 시각. **이전 기동에서 남은 stale error/dead 레코드**(down 은 실패 레인
+ * runtime.json 을 정리하지 않는다)를 이번 실패로 오인하지 않도록, startedAt 이 sinceMs 이후인
+ * error/dead 만 "이번 기동 실패"로 센다. stale(오래된) error/dead 는 미확정(pending)으로 보고 계속
+ * 대기 — 새 데몬의 중복기동 가드가 dead-pid 레코드를 정리하고 재기동하면 running 으로 수렴한다.
+ * 반환: running 수·이번 실패 레인(사유)·pending(미확정) 수·총 수.
  */
 async function pollUpResult(
   proj: string,
   collectStatus: (p: string) => Promise<UpLaneRow[]>,
+  sinceMs: number,
 ): Promise<{
   running: number;
   failed: { lane: string; error: string | null }[];
@@ -105,16 +113,21 @@ async function pollUpResult(
 }> {
   const deadlineMs = 8000;
   const start = Date.now();
+  const freshFail = (r: UpLaneRow): boolean =>
+    (r.status === "error" || r.status === "dead") &&
+    r.startedAt != null &&
+    Date.parse(r.startedAt) >= sinceMs;
+  // 미확정 = stopped(아직 미기동) 또는 stale error/dead(이전 기동 잔존, 새 데몬이 정리 중).
+  const unresolved = (r: UpLaneRow): boolean =>
+    r.status === "stopped" || ((r.status === "error" || r.status === "dead") && !freshFail(r));
   let rows = await collectStatus(proj);
-  while (Date.now() - start < deadlineMs && rows.some((r) => r.status === "stopped")) {
+  while (Date.now() - start < deadlineMs && rows.some(unresolved)) {
     await new Promise((r) => setTimeout(r, 300));
     rows = await collectStatus(proj);
   }
   const running = rows.filter((r) => r.status === "running").length;
-  const failed = rows
-    .filter((r) => r.status === "error" || r.status === "dead")
-    .map((r) => ({ lane: r.lane, error: r.error }));
-  const pending = rows.filter((r) => r.status === "stopped").length;
+  const failed = rows.filter(freshFail).map((r) => ({ lane: r.lane, error: r.error }));
+  const pending = rows.filter(unresolved).length;
   return { running, failed, pending, total: rows.length };
 }
 
@@ -238,12 +251,14 @@ export async function run(argv: readonly string[]): Promise<number> {
         process.stdout.write(t("run.alreadyUpHint", { proj }) + "\n");
         return 0;
       }
+      // 이번 기동 기준시각 — 이후 데몬이 남기는 error/dead 만 "이번 실패"로 판별(stale 레코드 배제).
+      const upStart = Date.now();
       await loadDaemon(proj);
       process.stdout.write(t("run.upDone", { proj }) + "\n");
       // 기동 결과를 바로 표면화 — 데몬(분리 프로세스)이 각 레인의 running/error 를 runtime.json 에
       // 남길 때까지 짧게 폴링해 성공/실패 레인을 이 터미널에 요약한다(요청: up 에서 즉시 실패 레인 표기).
       const { collectStatus } = await import("../core/diagnostics.js");
-      const summary = await pollUpResult(proj, collectStatus);
+      const summary = await pollUpResult(proj, collectStatus, upStart);
       if (summary.failed.length > 0) {
         process.stderr.write(
           t("run.upFailed", {

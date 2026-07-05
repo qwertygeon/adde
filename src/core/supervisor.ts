@@ -180,9 +180,11 @@ export async function supervisorUp(
     );
 
     // 중복 기동 가드 — backend 생성 전 runtime.json + pid 생존 확인.
+    // status:"error" 레코드는 이전 기동 실패 잔존(down 이 정리하지 않음) — pid 는 죽은 이전 데몬이거나
+    // 재사용됐을 수 있으므로 신뢰하지 않고 항상 정리 후 재기동한다(pid 재사용 오탐 방지).
     const existingRuntime = await readRuntime(paths);
     if (existingRuntime !== null) {
-      if (isPidAlive(existingRuntime.pid)) {
+      if (existingRuntime.status !== "error" && isPidAlive(existingRuntime.pid)) {
         // 이미 running — 경고+스킵.
         process.stderr.write(
           t("supervisor.alreadyRunning", { lane, pid: existingRuntime.pid, proj }) + "\n",
@@ -190,7 +192,7 @@ export async function supervisorUp(
         results.push({ lane, status: "running" });
         continue;
       } else {
-        // dead 레인 — 크래시 잔존 runtime.json 정리 후 정상 기동.
+        // dead 레인 또는 이전 error 잔존 — runtime.json 정리 후 정상 기동.
         // 자식 pid 는 runtime.json 에 미기록(스키마 한계) — removeRuntime 으로 파일만 정리.
         await removeRuntime(paths).catch((err: unknown) =>
           console.warn(t("log.supervisor.deadCleanupFail", { lane, error: errMsg(err) })),

@@ -8,7 +8,20 @@ import { listRegisteredProjects, collectStatus } from "../core/diagnostics.js";
 import { buildProjUsage, unknownProjSub, cmdError } from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
 import { t } from "../shared/i18n.js";
+import { defaultBase, assertSafeSegment } from "../shared/paths.js";
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import { createPrompter } from "./prompt.js";
+
+/** 경로 존재 여부(throw 없이). */
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface ProjRow {
   proj: string;
@@ -51,6 +64,15 @@ async function handleProjRemove(rest: readonly string[]): Promise<number> {
   const proj = rest.find((a) => !a.startsWith("--"));
   if (!proj) {
     process.stderr.write(buildProjUsage() + "\n");
+    return 1;
+  }
+
+  // 존재 확인을 프롬프트보다 먼저 — 없는 프로젝트에 이름 재입력을 요구하는 혼란 방지.
+  // 이름 형식은 assertSafeSegment 로 먼저 검증(경로 탈출 차단; 잘못된 이름은 throw → runProj 가 처리).
+  assertSafeSegment("proj", proj);
+  const projDir = join(defaultBase(), proj);
+  if (!(await pathExists(projDir))) {
+    process.stderr.write(cmdError("proj", t("proj.notFound", { proj, path: projDir })) + "\n");
     return 1;
   }
 

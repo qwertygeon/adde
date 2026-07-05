@@ -13,6 +13,7 @@ import { lanePaths, defaultBase, expandTilde, isSafeSegment } from "../shared/pa
 import { parseLaneConf } from "../shared/conf.js";
 import { daemonRegState, daemonEntryPath } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
+import { SOURCE_IDS } from "../src-adapters/index.js";
 
 export interface DiagBaseOptions {
   /** 설정 base 경로(테스트 override). 미지정 시 $ADDE_HOME 또는 ~/.config/adde. */
@@ -301,8 +302,8 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
     }
     const conf = parseLaneConf(confText);
 
-    // source 유효성
-    if (conf.source === "telegram" || conf.source === "markdown") {
+    // source 유효성 — 등록된 소스(SOURCE_REGISTRY)만 PASS. 미등록은 FAIL(supervisor fail-closed 와 동일 기준).
+    if (SOURCE_IDS.includes(conf.source)) {
       checks.push({ name: `${lane}: source`, level: "PASS", detail: conf.source });
     } else {
       checks.push({

@@ -16,8 +16,9 @@ import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
 import { formatException } from "../shared/notify.js";
-import type { Source, DecisionCallback } from "./source.js";
+import type { Source, DecisionCallback, SourceContext } from "./source.js";
 import { ENQUEUE_FAIL_THRESHOLD } from "./source.js";
+import type { LaneConf } from "../shared/conf.js";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const POLL_TIMEOUT_SECS = 30;
@@ -192,6 +193,48 @@ export function isAuthorizedSender(
  */
 export function selfAuthorizedChatId(chatId: number | undefined): number | undefined {
   return chatId !== undefined && chatId > 0 ? chatId : undefined;
+}
+
+/**
+ * conf 에서 telegram 회신 대상·인증셋을 조립(순수) — supervisor 인라인에서 어댑터로 이관.
+ * chatId = 파싱 가능한 chat_id. authorizedIds = allow_from ∪ (개인 chat 인 chatId).
+ * 비면 fail-closed(어댑터가 전 인바운드/콜백 거부). allow_from 파싱 = 트림·빈값 제거·NaN 제외.
+ */
+export function resolveTelegramAuth(conf: LaneConf): {
+  chatId: number | undefined;
+  authorizedIds: number[];
+} {
+  const chatId =
+    conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
+  const authorizedIds: number[] = [];
+  const selfAuth = selfAuthorizedChatId(chatId);
+  if (selfAuth !== undefined) authorizedIds.push(selfAuth);
+  const rawList = conf.allow_from
+    ? conf.allow_from
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+    : [];
+  for (const raw of rawList) {
+    const n = Number(raw);
+    if (!Number.isNaN(n)) authorizedIds.push(n);
+  }
+  return { chatId, authorizedIds };
+}
+
+/** 레지스트리용 어댑터 — SourceContext 에서 telegram 설정·인증셋을 self-resolve 해 생성. */
+export function createTelegramSourceFromContext(ctx: SourceContext): Source {
+  const { chatId, authorizedIds } = resolveTelegramAuth(ctx.conf);
+  return createTelegramSource({
+    lane: ctx.lane,
+    proj: ctx.proj,
+    engine: ctx.engine,
+    paths: ctx.paths,
+    chatId,
+    authorizedIds,
+    onInbound: ctx.onInbound,
+    lang: ctx.conf.lang,
+  });
 }
 
 export function createTelegramSource(cfg: TelegramConfig): TelegramSource {

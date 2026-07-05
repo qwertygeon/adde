@@ -215,8 +215,8 @@ interface LaneConfig {
   channelWarn?: (msg: string) => void;
   /** 레인별 엔진 작업 폴더(프로젝트 폴더 매핑). 미지정 시 process.cwd(). */
   cwd?: string | undefined;
-  /** 권한 정규화 시 채널 표기. 미지정 시 telegram. */
-  channel?: "telegram" | "markdown" | undefined;
+  /** 권한 정규화 시 채널 표기(= 소스 id). 미지정 시 telegram 폴백(직접 백엔드 사용·테스트용). */
+  channel?: string | undefined;
   /** 채널 메시지 로케일(LaneConf.lang). 미지정 시 전역 로케일. */
   lang?: string | undefined;
 }

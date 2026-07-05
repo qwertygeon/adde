@@ -434,6 +434,10 @@ lane add 옵션:
     upStarted: "{{proj}}: {{count}}개 레인 기동",
     upSkipped: "{{count}}개 이미 실행 중(스킵)",
     downStopped: "{{proj}}: {{count}}개 레인 종료",
+    source: {
+      unknown:
+        '알 수 없는 소스 "{{source}}" — 등록되지 않은 소스입니다. lanes.d/<lane>.conf 의 source= 를 수정하세요(지원 소스는 adde doctor 참조).',
+    },
   },
   launchd: {
     macOnly: {

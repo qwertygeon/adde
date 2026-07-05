@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { isAuthorizedSender, selfAuthorizedChatId } from "../../src/src-adapters/telegram.js";
+import {
+  isAuthorizedSender,
+  selfAuthorizedChatId,
+  resolveTelegramAuth,
+} from "../../src/src-adapters/telegram.js";
+import type { LaneConf } from "../../src/shared/conf.js";
+
+/** 테스트용 최소 LaneConf — telegram 인증 관련 필드만 지정. */
+function conf(partial: Partial<LaneConf>): LaneConf {
+  return {
+    source: "telegram",
+    backend: "acp",
+    engine: "claude-agent-acp",
+    perm_tier: "acp",
+    acp_version: "v1",
+    allowlist: [],
+    denylist: [],
+    hard_deny: [],
+    ...partial,
+  };
+}
 
 // 인바운드/콜백 발신자 인증(순수) — 허용 집합이 비면 fail-closed(전부 거부),
 // 후보 id(chat.id/from.id) 중 하나라도 집합에 있으면 허용.
@@ -58,5 +78,50 @@ describe("selfAuthorizedChatId (개인 chat 만 자기 인증)", () => {
     authorized.add(111);
     expect(isAuthorizedSender(authorized, [groupId, 111])).toBe(true);
     expect(isAuthorizedSender(authorized, [groupId, 999])).toBe(false);
+  });
+});
+
+// conf(chat_id ∪ allow_from) → 회신 대상·인증셋 조립. supervisor 인라인에서 telegram 어댑터로
+// 이관된 로직(B3) — fail-closed·개인/그룹 chat 구분·CSV 파싱 불변식을 직접 잠근다.
+describe("resolveTelegramAuth (conf → 인증셋 조립)", () => {
+  it("chat_id·allow_from 모두 없으면 fail-closed (chatId undefined, authorizedIds 빔)", () => {
+    const r = resolveTelegramAuth(conf({}));
+    expect(r.chatId).toBeUndefined();
+    expect(r.authorizedIds).toEqual([]);
+  });
+
+  it("개인 chat_id(양수)는 회신 대상이자 자기 인증 앵커로 포함된다", () => {
+    const r = resolveTelegramAuth(conf({ chat_id: "12345" }));
+    expect(r.chatId).toBe(12345);
+    expect(r.authorizedIds).toContain(12345);
+  });
+
+  it("그룹 chat_id(음수)는 회신 대상이지만 인증 앵커에서 제외된다 (blanket 허용 방지)", () => {
+    const r = resolveTelegramAuth(conf({ chat_id: "-1001234567890" }));
+    expect(r.chatId).toBe(-1001234567890);
+    expect(r.authorizedIds).toEqual([]); // 자기 인증 미포함 → allow_from 없으면 fail-closed
+  });
+
+  it("allow_from CSV 는 트림·빈값·NaN 제외로 파싱된다", () => {
+    const r = resolveTelegramAuth(conf({ allow_from: " 111 , 222 ,, x , 333 " }));
+    expect(r.authorizedIds).toEqual([111, 222, 333]);
+  });
+
+  it("개인 chat_id + allow_from 는 합쳐진다 (chat_id 앵커 + 멤버들)", () => {
+    const r = resolveTelegramAuth(conf({ chat_id: "500", allow_from: "111,222" }));
+    expect(r.chatId).toBe(500);
+    expect(r.authorizedIds).toEqual([500, 111, 222]);
+  });
+
+  it("그룹 chat_id + allow_from 는 멤버만 인증(그룹 앵커 없음)", () => {
+    const r = resolveTelegramAuth(conf({ chat_id: "-100", allow_from: "111" }));
+    expect(r.chatId).toBe(-100);
+    expect(r.authorizedIds).toEqual([111]);
+  });
+
+  it("비수치 chat_id 는 undefined 로 처리(회신 비활성)", () => {
+    const r = resolveTelegramAuth(conf({ chat_id: "notanumber" }));
+    expect(r.chatId).toBeUndefined();
+    expect(r.authorizedIds).toEqual([]);
   });
 });

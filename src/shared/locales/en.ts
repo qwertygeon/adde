@@ -439,6 +439,10 @@ lane add options:
     upStarted: "{{proj}}: {{count}} lane(s) started",
     upSkipped: "{{count}} already running (skipped)",
     downStopped: "{{proj}}: {{count}} lane(s) stopped",
+    source: {
+      unknown:
+        'unknown source "{{source}}" — not a registered source. Fix source= in lanes.d/<lane>.conf (see adde doctor for supported sources).',
+    },
   },
   launchd: {
     macOnly: {

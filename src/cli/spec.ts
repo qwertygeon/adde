@@ -30,6 +30,8 @@ export interface CommandSpec {
 
 /** 값이 열거형인 플래그 — 자동완성이 플래그 뒤에서 이 값들을 완성한다. */
 export const FLAG_VALUES: Record<string, readonly string[]> = {
+  // 완성 스크립트 생성 전용 경량 미러 — 소스 SoT 는 src-adapters SOURCE_REGISTRY.
+  // (spec 는 CLI 진입점이 eager import 하므로 어댑터를 import 하지 않는다 — startup 비용 회피.)
   "--source": ["markdown", "telegram"],
   "--perm-tier": ["acp", "autopass"],
   "--file-mode": ["private", "shared"],

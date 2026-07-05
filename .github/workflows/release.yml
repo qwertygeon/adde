@@ -29,7 +29,9 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24 # OIDC Trusted Publishing 하한(npm ≥ 11.5.1 · Node ≥ 22.14) 충족
-          cache: pnpm
+          # 발행 워크플로에서는 의존성 캐시 비활성(캐시 포이즈닝으로 OIDC 토큰 노출 방지 — setup-node OIDC 권장).
+          # cache: pnpm 제거 + package-manager-cache: false (packageManager 필드로 켜지는 자동 캐시까지 차단).
+          package-manager-cache: false
           registry-url: https://registry.npmjs.org # 발행 대상 레지스트리(OIDC 발행에도 필요)
 
       - run: pnpm install --frozen-lockfile

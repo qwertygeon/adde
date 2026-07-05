@@ -66,7 +66,7 @@ adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
 
 프로젝트 이름 [default]: myproj
 레인 이름 [main]: tg-claude
-source (telegram 또는 markdown) [telegram]: telegram
+source (markdown 또는 telegram) [markdown]: telegram
 engine [claude-agent-acp]:
 backend [acp]:
 channel [telegram]:
@@ -208,15 +208,15 @@ adde sessions <proj> <lane>
 
 대화 세션의 초기화·압축·재개는 CLI 가 아니라 **채널에서** 지시합니다(진행 중인 턴을 존중해 메시지 큐에 직렬로 처리되고, 결과가 채널 응답으로 통지됩니다).
 
-| 동작                 | Telegram (정확 일치)     | 마크다운 (전용 체크박스 라벨) | 결과                                              |
-| -------------------- | ------------------------ | ----------------------------- | ------------------------------------------------- |
-| 새 세션 시작(초기화) | `/clear`                 | `- [x] 🧹 clear`              | 엔진을 새 세션으로 재기동 — 이전 대화 맥락 소거   |
-| 컨텍스트 압축        | `/compact`               | `- [x] compact`               | 엔진의 압축 명령 실행(대화는 유지, 컨텍스트 축약) |
-| 세션 목록            | `/resume`                | `- [x] resume`                | 최근 세션 목록(번호·발췌·마지막 대화 시각) 응답   |
-| 세션 재개            | `/resume <번호\|세션id>` | `- [x] resume <번호\|세션id>` | 해당 세션으로 복귀(찾지 못하면 새 세션 폴백 통지) |
+| 동작                 | 마크다운 (전용 체크박스 라벨) | Telegram (정확 일치)     | 결과                                              |
+| -------------------- | ----------------------------- | ------------------------ | ------------------------------------------------- |
+| 새 세션 시작(초기화) | `- [x] 🧹 clear`              | `/clear`                 | 엔진을 새 세션으로 재기동 — 이전 대화 맥락 소거   |
+| 컨텍스트 압축        | `- [x] compact`               | `/compact`               | 엔진의 압축 명령 실행(대화는 유지, 컨텍스트 축약) |
+| 세션 목록            | `- [x] resume`                | `/resume`                | 최근 세션 목록(번호·발췌·마지막 대화 시각) 응답   |
+| 세션 재개            | `- [x] resume <번호\|세션id>` | `/resume <번호\|세션id>` | 해당 세션으로 복귀(찾지 못하면 새 세션 폴백 통지) |
 
-- Telegram 은 메시지 전체가 명령과 **정확히 일치**할 때만 제어로 해석합니다 — 문장 속 `/clear` 는 일반 프롬프트로 전달됩니다. 그룹 채팅의 봇멘션 접미(`/clear@봇이름`·`/compact@봇이름`·`/resume@봇이름 <번호>`)는 허용합니다.
 - 마크다운 라벨은 send 와 같은 계약입니다: 라벨 정확 일치(앞 이모지 허용), 체크 시 실행, 처리 후 해당 줄이 `✅ sent [[...]]` 로 종단되고 결과 노트가 링크됩니다.
+- Telegram 은 메시지 전체가 명령과 **정확히 일치**할 때만 제어로 해석합니다 — 문장 속 `/clear` 는 일반 프롬프트로 전달됩니다. 그룹 채팅의 봇멘션 접미(`/clear@봇이름`·`/compact@봇이름`·`/resume@봇이름 <번호>`)는 허용합니다.
 - 레인 재기동(`adde restart`)도 새 세션으로 시작합니다(자동 재개 없음 — 이어가려면 재기동 후 `/resume` 으로 선택 복귀).
 
 ## lane — 레인 설정
@@ -237,7 +237,7 @@ adde lane help                       # 전체 옵션
 
 | 옵션                                                 | 기본값                                             | 설명                                                                                                                          |
 | ---------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `--source <telegram\|markdown>`                      | `telegram`                                         | 채널 소스                                                                                                                     |
+| `--source <markdown\|telegram>`                      | `markdown`                                         | 채널 소스                                                                                                                     |
 | `--engine <name>`                                    | `claude-agent-acp`                                 | ACP 엔진 프로필                                                                                                               |
 | `--backend <name>`                                   | `acp`                                              | 백엔드                                                                                                                        |
 | `--channel <name>`                                   | source 값                                          | 게이트 분기                                                                                                                   |
@@ -261,13 +261,13 @@ adde lane help                       # 전체 옵션
 
 **기본 대화형**: TTY 에서 `adde lane add <proj> <lane>` 를 **필드 플래그 없이** 실행하면 대화형 마법사가 자동으로 뜹니다 — `--interactive` 불요. 필드 플래그(`--source`·`--engine`·`--backend`·`--channel`·`--perm-tier`·`--acp-version`·`--cwd`·`--allowlist`·`--denylist`·`--hard-deny`·`--safe-defaults`·`--lang`·`--chat-id`·`--allow-from`·`--file-mode`·`--root`·`--inbox`·`--approvals`·`--outbox`·`--token-stdin`) 중 하나라도 주거나, `--no-interactive` 를 주거나, stdin 이 TTY 가 아니면(스크립트·CI) 비대화형이 됩니다. `--interactive` 는 대화형을 강제하고(비TTY 에서는 오류), `--no-interactive` 는 비대화형을 강제합니다. `<proj>`·`<lane>` 은 항상 필수 위치 인자입니다.
 
-마법사에서 telegram 봇 토큰은 **마지막에 가려진 입력**(키 입력 비에코)으로 받아 `.env`(0600)에 기록하며, 비워 두면 나중으로 미룹니다(`--token-stdin` 또는 `.env` 직접 편집). 마법사는 `--safe-defaults`(hard-deny 위험 목록) 활성화 여부도 묻습니다(기본 예). enum·숫자 필드는 입력 시점에 검증되어 잘못되면 재질의합니다 — `perm_tier`(acp|autopass)·`file_mode`(private|shared)·`lang`(en|ko 또는 빈값)·`chat_id`(숫자 또는 빈값)·`allow_from`(콤마 구분 숫자 또는 빈값)·`source`(telegram|markdown). 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
+마법사에서 telegram 봇 토큰은 **마지막에 가려진 입력**(키 입력 비에코)으로 받아 `.env`(0600)에 기록하며, 비워 두면 나중으로 미룹니다(`--token-stdin` 또는 `.env` 직접 편집). 마법사는 `--safe-defaults`(hard-deny 위험 목록) 활성화 여부도 묻습니다(기본 예). enum·숫자 필드는 입력 시점에 검증되어 잘못되면 재질의합니다 — `perm_tier`(acp|autopass)·`file_mode`(private|shared)·`lang`(en|ko 또는 빈값)·`chat_id`(숫자 또는 빈값)·`allow_from`(콤마 구분 숫자 또는 빈값)·`source`(markdown|telegram). 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
 
 **예시: 대화형** (TTY 에서 자동 실행 — 필수 `<proj> <lane>` 뒤로 필드 프롬프트가 이어짐):
 
 ```text
 $ adde lane add myproj tg-claude
-source (telegram 또는 markdown) [telegram]: telegram
+source (markdown 또는 telegram) [markdown]: telegram
 engine [claude-agent-acp]:
 backend [acp]:
 channel [telegram]:
@@ -346,7 +346,7 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 - **최상위 명령 + 전역 플래그** — `up`/`down`/…/`lane`/`completion`, `-h`/`--help`/`-v`/`--version`. zsh 는 각 명령 옆에 짧은 설명을 표시합니다.
 - **하위 명령·고정 값** — `lane add|ls|show|rm|help`, `completion bash|zsh`, `alias` 뒤 별칭 이름 제안, `status --all/--json`, `logs --engine`, `lane add` 옵션 플래그.
 - **동적 프로젝트/레인 이름** — `${ADDE_HOME:-~/.config/adde}` 를 셸에서 직접 스캔합니다(`adde` 프로세스 미스폰): `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` 와 `lane ls|show|rm|add` 의 첫 위치에서 프로젝트 이름(예: `adde up <TAB>`, `adde status <TAB>`), 다음 위치에서 레인 이름(예: `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
-- **enum 플래그 값** — `--source`(telegram|markdown), `--perm-tier`(acp|autopass), `--file-mode`(private|shared), `--lang`(en|ko) 뒤.
+- **enum 플래그 값** — `--source`(markdown|telegram), `--perm-tier`(acp|autopass), `--file-mode`(private|shared), `--lang`(en|ko) 뒤.
 - **디렉터리 경로** — `--cwd`·`--root` 뒤.
 
 미지원 셸은 오류 + 종료 코드 1.

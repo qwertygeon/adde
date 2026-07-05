@@ -26,8 +26,8 @@ describe("completionScript", () => {
     // 동적 이름: base 스캔 헬퍼
     expect(bash).toContain("_adde_projects");
     expect(bash).toContain("_adde_lanes");
-    // enum 값: --source telegram|markdown, --perm-tier acp|autopass
-    expect(bash).toContain("telegram markdown");
+    // enum 값: --source markdown|telegram, --perm-tier acp|autopass
+    expect(bash).toContain("markdown telegram");
     expect(bash).toContain("acp autopass");
     // 디렉터리 플래그
     expect(bash).toContain("--cwd|--root");

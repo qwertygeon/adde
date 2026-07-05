@@ -30,7 +30,7 @@ export interface CommandSpec {
 
 /** 값이 열거형인 플래그 — 자동완성이 플래그 뒤에서 이 값들을 완성한다. */
 export const FLAG_VALUES: Record<string, readonly string[]> = {
-  "--source": ["telegram", "markdown"],
+  "--source": ["markdown", "telegram"],
   "--perm-tier": ["acp", "autopass"],
   "--file-mode": ["private", "shared"],
   "--lang": ["en", "ko"],

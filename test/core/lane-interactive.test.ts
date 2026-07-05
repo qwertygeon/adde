@@ -85,7 +85,7 @@ describe("collectInteractive (007 SC1)", () => {
   it("잘못된 source 는 유효값이 올 때까지 재질의한다", async () => {
     let calls = 0;
     const ask: Ask = async (q, def) => {
-      if (q.includes("source") || q.includes("telegram 또는 markdown")) {
+      if (q.includes("source") || (q.includes("markdown") && q.includes("telegram"))) {
         calls++;
         return calls < 2 ? "bogus" : "telegram";
       }

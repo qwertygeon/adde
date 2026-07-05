@@ -9,9 +9,9 @@ _[English](README.md) | 한국어_
 [![node](https://img.shields.io/node/v/adde-acp)](https://nodejs.org)
 [![license: MIT](https://img.shields.io/npm/l/adde-acp)](LICENSE)
 
-> ⚠️ **상태: 초기 개발.** ACP 백엔드 + Telegram/마크다운 소스 어댑터 동작(PoC 수직 슬라이스). API 변동 가능.
+> ⚠️ **상태: 초기 개발.** ACP 백엔드 + 마크다운/Telegram 소스 어댑터 동작(PoC 수직 슬라이스). API 변동 가능.
 
-ADDE 는 **AI CLI**(Claude Code / Codex 등)를 **채널**(Telegram / 마크다운 노트(예: Obsidian); Discord 보류)에서 원격 구동하는 게이트웨이입니다. AI 가 개발 작업을 수행하고, 사람은 채팅으로 지시·승인·관찰합니다.
+ADDE 는 **AI CLI**(Claude Code / Codex 등)를 **채널**(마크다운 노트(예: Obsidian) / Telegram; Discord 보류)에서 원격 구동하는 게이트웨이입니다. AI 가 개발 작업을 수행하고, 사람은 채팅으로 지시·승인·관찰합니다.
 
 ## 이럴 때 씁니다
 
@@ -37,8 +37,8 @@ adde init         # 가이드 설정 (환경 점검 + 짧은 별칭 + 첫 레인
 ## 사용자 문서
 
 - [시작하기](docs/getting-started.ko.md) — 설치·레인 설정·기동·상태/진단·프로젝트 폴더 매핑
-- [Telegram 가이드](docs/telegram.ko.md) — 봇 생성·토큰·기동 단계별
 - [마크다운 가이드](docs/markdown.ko.md) — 노트(예: Obsidian)로 AI 구동하기(지시·응답·권한 승인 단계별)
+- [Telegram 가이드](docs/telegram.ko.md) — 봇 생성·토큰·기동 단계별
 - [권한 가이드](docs/permissions.ko.md) — 게이트·티어(acp/autopass)·allowlist/denylist·하드-거부·권장 설정
 - [명령 레퍼런스](docs/commands.ko.md) · [트러블슈팅](docs/troubleshooting.ko.md)
 

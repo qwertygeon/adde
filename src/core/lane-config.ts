@@ -34,7 +34,7 @@ export const KNOWN_FILE_MODES = ["private", "shared"] as const;
 /** 구현된 perm_tier 값. 오타 시 acp 처럼 동작(안전 방향)하지만 의도와 다르므로 생성 시 경고. */
 export const KNOWN_PERM_TIERS = ["acp", "autopass"] as const;
 
-const SUPPORTED_SOURCES = ["telegram", "markdown"] as const;
+const SUPPORTED_SOURCES = ["markdown", "telegram"] as const;
 type SupportedSource = (typeof SUPPORTED_SOURCES)[number];
 
 /** 검증 실패를 식별하기 위한 전용 에러(흡수 금지 — 호출자가 메시지를 사용자에게 전달). */
@@ -240,7 +240,7 @@ export async function laneAdd(
   assertName("proj", proj);
   assertName("lane", lane);
 
-  const source = (opts.source ?? "telegram") as string;
+  const source = (opts.source ?? "markdown") as string;
   if (!(SUPPORTED_SOURCES as readonly string[]).includes(source)) {
     throw new LaneConfigError(
       t("laneConfig.err.badSource", { source, supported: SUPPORTED_SOURCES.join(" | ") }),

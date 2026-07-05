@@ -9,9 +9,9 @@ _English | [한국어](README.ko.md)_
 [![node](https://img.shields.io/node/v/adde-acp)](https://nodejs.org)
 [![license: MIT](https://img.shields.io/npm/l/adde-acp)](LICENSE)
 
-> ⚠️ **Status: early development.** ACP backend + Telegram/Markdown source adapters work (a PoC vertical slice). The API may change.
+> ⚠️ **Status: early development.** ACP backend + Markdown/Telegram source adapters work (a PoC vertical slice). The API may change.
 
-ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely from a **channel** (Telegram / Markdown notes such as Obsidian; Discord on hold). The AI does the development work while you instruct, approve, and observe from chat.
+ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely from a **channel** (Markdown notes such as Obsidian / Telegram; Discord on hold). The AI does the development work while you instruct, approve, and observe from chat.
 
 ## When to use it
 
@@ -37,8 +37,8 @@ adde init         # guided setup (environment check + short alias + first lane)
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install, lane config, startup, status/diagnostics, project-folder mapping
-- [Telegram guide](docs/telegram.md) — bot creation, token, step-by-step startup
 - [Markdown guide](docs/markdown.md) — drive the AI from notes (e.g. Obsidian): instructions, replies, approvals
+- [Telegram guide](docs/telegram.md) — bot creation, token, step-by-step startup
 - [Permissions guide](docs/permissions.md) — the gate, tiers (acp/autopass), allowlist/denylist, hard-deny, recommended settings
 - [Command reference](docs/commands.md) · [Troubleshooting](docs/troubleshooting.md)
 

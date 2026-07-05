@@ -2,7 +2,7 @@ name: Release
 
 # main 에 package.json 변경이 push 되면 게이트 재실행 후 v{version} 태그·GitHub Release·npm 발행.
 # 버전 SoT 는 package.json.version 단일. 버전이 안 바뀐 package.json 변경은 태그·발행 멱등 가드가 no-op 처리.
-# 서버측 자동화(github.token / NPM_TOKEN). 로컬 git/gh 변경은 사용자 확인과 별개 경로.
+# 서버측 자동화(github.token / npm OIDC Trusted Publishing). 로컬 git/gh 변경은 사용자 확인과 별개 경로.
 on:
   push:
     branches: [main]
@@ -10,11 +10,15 @@ on:
       - package.json
 
 permissions:
-  contents: write
+  contents: write # 태그·GitHub Release 생성
+  id-token: write # npm OIDC Trusted Publishing 토큰 발급(토큰리스 발행·provenance)
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    # npm_release Environment 게이트 — 발행 전 required reviewers 수동 승인.
+    # npm 신뢰발행자의 Environment name 도 npm_release 로 등록해야 OIDC 클레임이 일치한다.
+    environment: npm_release
     steps:
       - uses: actions/checkout@v7
         with:
@@ -26,7 +30,7 @@ jobs:
         with:
           node-version: 24 # OIDC Trusted Publishing 하한(npm ≥ 11.5.1 · Node ≥ 22.14) 충족
           cache: pnpm
-          registry-url: https://registry.npmjs.org # ~/.npmrc 에 NODE_AUTH_TOKEN 참조 기록(npm publish 인증)
+          registry-url: https://registry.npmjs.org # 발행 대상 레지스트리(OIDC 발행에도 필요)
 
       - run: pnpm install --frozen-lockfile
 
@@ -60,12 +64,13 @@ jobs:
           gh release create "$TAG" --title "$TAG" --notes "${NOTES:-Release $TAG}"
 
       # npm 발행 — prepack(pnpm run build)이 dist/ 를 생성한 뒤 발행한다.
-      # 인증: GitHub Secret NPM_TOKEN(Granular Access Token, 2FA bypass). 최초 발행 부트스트랩용.
-      # (장기적으로는 OIDC Trusted Publishing 로 전환 — 토큰 없이 provenance 자동. 최초 발행 후 npmjs 에 신뢰발행자 등록.)
+      # 인증: OIDC Trusted Publishing(토큰리스). npmjs 의 adde-acp 패키지 설정에 신뢰발행자
+      # (repo qwertygeon/adde · workflow release.yml)를 등록해 두면 id-token 으로 자동 인증되고
+      # provenance 가 자동 첨부된다(NPM_TOKEN 불요). 요건 npm ≥ 11.5.1 · Node ≥ 22.14 는 Node 24 로 충족.
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          # OIDC Trusted Publishing 은 npm ≥ 11.5.1 필요 — Node 24 번들 npm 이 그 미만일 수 있어 명시 승급.
+          npm install -g npm@latest
           VERSION="${{ steps.ver.outputs.version }}"
           if npm view "adde-acp@${VERSION}" version >/dev/null 2>&1; then
             echo "adde-acp@${VERSION} already published; skipping."

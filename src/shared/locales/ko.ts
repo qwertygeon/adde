@@ -138,6 +138,8 @@ lane add 옵션:
     upFailed:
       "[adde] 기동 실패 레인: {{lanes}}\n  ↳ 조치: adde logs {{proj}} <lane> --engine 또는 데몬 로그 adde logs {{proj}} --daemon 으로 확인 후 adde restart {{proj}}.",
     upSummary: "  실행 중 {{running}} · 실패 {{failed}} · 기동 중 {{pending}}",
+    upInconclusive:
+      "[adde] 대기 시간 내에 기동된 레인이 없습니다 — 데몬이 부팅에 실패했을 수 있습니다.\n  ↳ 조치: adde logs {{proj}} --daemon 으로 데몬 로그를 확인한 뒤 adde restart {{proj}}.",
     statusHint: "  상태 확인: adde status {{proj}}",
     downDone: "[adde] {{proj}} 데몬 종료 완료.",
     restartDone: "[adde] {{proj}} 재기동 완료. 백그라운드에서 레인이 기동됩니다.",

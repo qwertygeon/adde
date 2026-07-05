@@ -350,9 +350,17 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
   // --purge 는 state(.env 토큰 포함)/queue/out 을 지우는 파괴적 동작 — proj rm 과 동일한 가드.
   // 평범한 rm(conf 만 삭제)은 재생성 가능·저위험이라 가드 없이 진행한다.
   if (purge && !force) {
-    // 실행 중(또는 크래시 잔존)인 레인의 state/queue 를 지우면 데몬 동작을 깬다 — 거부.
+    // 실행 중(또는 크래시·기동실패 잔존)인 레인의 state/queue 를 지우면 데몬 동작을 깬다 — 거부.
+    // error 도 포함: 데몬(KeepAlive)이 살아있는 채로 특정 레인만 기동 실패한 경우 runtime.json 에
+    // 살아있는 데몬 pid 가 남으므로, state/토큰 삭제는 --force 를 요구한다(proj rm 과 동일 가드 표면).
     const row = (await collectStatus(proj)).find((r) => r.lane === lane);
-    if (row && (row.status === "running" || row.status === "dead" || row.status === "stale")) {
+    if (
+      row &&
+      (row.status === "running" ||
+        row.status === "dead" ||
+        row.status === "stale" ||
+        row.status === "error")
+    ) {
       process.stderr.write(laneError(t("lane.purgeRunning", { proj, lane })) + "\n");
       return 1;
     }

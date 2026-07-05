@@ -137,6 +137,8 @@ lane add options:
     upFailed:
       "[adde] lane(s) failed to start: {{lanes}}\n  ↳ action: inspect with adde logs {{proj}} <lane> --engine, or the daemon log with adde logs {{proj}} --daemon; then adde restart {{proj}}.",
     upSummary: "  {{running}} running · {{failed}} failed · {{pending}} still starting",
+    upInconclusive:
+      "[adde] no lane came up within the wait window — the daemon may have failed to boot.\n  ↳ action: check the daemon log with adde logs {{proj}} --daemon, then adde restart {{proj}}.",
     statusHint: "  Check status: adde status {{proj}}",
     downDone: "[adde] {{proj}} daemon stopped.",
     restartDone: "[adde] {{proj}} restarted. Lanes are starting in the background.",

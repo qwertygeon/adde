@@ -27,9 +27,12 @@ function captureStdout(): { out: () => string; restore: () => void } {
 describe("adde up — 이미 기동 중 표면화", () => {
   afterEach(() => vi.clearAllMocks());
 
-  it("데몬이 등록돼 있으면 loadDaemon 없이 실행 중 안내 후 0", async () => {
+  it("데몬이 등록돼 있고 실패 레인이 없으면 loadDaemon 없이 실행 중 안내 후 0", async () => {
     daemonRegState.mockResolvedValue({ plistExists: true, launchctlRegistered: true });
-    collectStatus.mockResolvedValue([{ status: "running" }, { status: "dead" }]);
+    collectStatus.mockResolvedValue([
+      { lane: "a", status: "running", error: null },
+      { lane: "b", status: "stopped", error: null },
+    ]);
     const cap = captureStdout();
     const code = await run(["up", "demo"]);
     cap.restore();
@@ -37,6 +40,28 @@ describe("adde up — 이미 기동 중 표면화", () => {
     expect(loadDaemon).not.toHaveBeenCalled();
     expect(cap.out()).toContain("이미 기동");
     expect(cap.out()).toContain("1/2"); // running/total
+  });
+
+  it("이미 기동 중이어도 실패(error/dead) 레인이 있으면 표면화하고 1 을 반환한다", async () => {
+    daemonRegState.mockResolvedValue({ plistExists: true, launchctlRegistered: true });
+    collectStatus.mockResolvedValue([
+      { lane: "ok", status: "running", error: null },
+      { lane: "bad", status: "error", error: "engine spawn ENOENT" },
+    ]);
+    const errs: string[] = [];
+    const spyErr = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errs.push(String(s));
+      return true;
+    });
+    const cap = captureStdout();
+    const code = await run(["up", "demo"]);
+    cap.restore();
+    spyErr.mockRestore();
+    expect(code).toBe(1);
+    expect(loadDaemon).not.toHaveBeenCalled();
+    expect(cap.out()).toContain("이미 기동");
+    expect(errs.join("")).toContain("bad");
+    expect(errs.join("")).toContain("engine spawn ENOENT");
   });
 
   it("데몬 미등록이면 loadDaemon 을 호출하고 전 레인 성공 시 0", async () => {
@@ -75,6 +100,28 @@ describe("adde up — 이미 기동 중 표면화", () => {
     expect(code).toBe(1);
     expect(errs.join("")).toContain("bad");
     expect(errs.join("")).toContain("engine spawn ENOENT");
+  });
+
+  it("데드라인까지 아무 레인도 기동 못 하면(전부 stopped) 데몬 부팅 실패로 보고하고 1 을 반환한다", async () => {
+    daemonRegState.mockResolvedValue({ plistExists: false, launchctlRegistered: false });
+    loadDaemon.mockResolvedValue(undefined);
+    // 데몬이 부팅 중 크래시 → runtime.json 을 아무도 못 남김 → 전 레인 stopped 로 미확정 유지.
+    collectStatus.mockResolvedValue([{ lane: "main", status: "stopped", error: null }]);
+    const prev = process.env.ADDE_UP_POLL_MS;
+    process.env.ADDE_UP_POLL_MS = "150"; // 폴링 상한 단축(테스트 속도)
+    const errs: string[] = [];
+    const spyErr = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errs.push(String(s));
+      return true;
+    });
+    const cap = captureStdout();
+    const code = await run(["up", "demo"]);
+    cap.restore();
+    spyErr.mockRestore();
+    if (prev === undefined) delete process.env.ADDE_UP_POLL_MS;
+    else process.env.ADDE_UP_POLL_MS = prev;
+    expect(code).toBe(1);
+    expect(errs.join("")).toContain("부팅"); // upInconclusive 안내(ko)
   });
 
   it("이전 기동의 stale error 레코드는 실패로 오인하지 않고 running 으로 수렴한다 (리뷰 회귀)", async () => {

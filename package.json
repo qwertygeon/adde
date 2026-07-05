@@ -1,7 +1,7 @@
 {
   "name": "adde-acp",
   "version": "0.1.4",
-  "description": "AI Driven Development Engine — an ACP-based gateway that drives AI CLI engines remotely from chat channels (Telegram/Markdown)",
+  "description": "AI Driven Development Engine — an ACP-based gateway that drives AI CLI engines from your Markdown notes (or a chat channel like Telegram)",
   "type": "module",
   "repository": {
     "type": "git",
@@ -13,6 +13,8 @@
     "acp",
     "agent-client-protocol",
     "claude-code",
+    "markdown",
+    "notes",
     "telegram",
     "cli",
     "ai",

@@ -4,6 +4,7 @@
  * 매칭으로 간주한다(fail-closed — 과매칭은 "물어봄"일 뿐 위험하지 않다).
  */
 import { homedir } from "node:os";
+import { posix } from "node:path";
 
 /** 도구별 대표 인자 필드. 매핑 없는 도구에 패턴을 걸면 도구명 일치만으로 매칭. */
 const PRIMARY_ARG_FIELD: Record<string, string> = {
@@ -67,38 +68,172 @@ function shellSegments(command: string): string[] {
 /** rm 재귀 플래그 — `--recursive`, 또는 r/R 을 포함한 번들 단축플래그(`-r`·`-rf`·`-fr`·`-Rfv` 등, 순서 무관). */
 const RM_RECURSIVE_FLAG = /^--recursive$|^-[A-Za-z]*[rR][A-Za-z]*$/;
 
+/** 명령 래퍼 — 뒤 명령의 기본명을 바꾸지 않는 선행 래퍼. 벗겨서 실제 명령을 head 로 올린다. */
+const WRAPPER_CMDS = new Set([
+  "env",
+  "command",
+  "builtin",
+  "exec",
+  "nice",
+  "ionice",
+  "time",
+  "stdbuf",
+  "setsid",
+]);
+
+/** 래퍼별 값 소비 옵션(분리형 `-n 10` 의 값 토큰을 함께 건너뛴다). */
+const WRAPPER_VALUE_OPT: Record<string, Set<string>> = {
+  nice: new Set(["-n"]),
+  ionice: new Set(["-c", "-n", "-p"]),
+  env: new Set(["-u"]),
+};
+
+/** 권한상승 명령 — 경로·래퍼 불문 그 자체가 위험. */
+const PRIV_ESC_CMDS = new Set(["sudo", "doas"]);
+
+/** git 값 소비 전역 옵션 — 서브커맨드 탐색 시 값 토큰 1개를 함께 건너뛴다. */
+const GIT_GLOBAL_VALUE_OPT = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+]);
+
+/** 감싼 따옴표·선행 백슬래시(alias 회피 `\rm`) 제거. */
+function unquote(tok: string): string {
+  return tok.replace(/^\\+/, "").replace(/^['"]/, "").replace(/['"]$/, "");
+}
+
+/** 명령 토큰 → 기본명(`/bin/rm`→`rm`, `"rm"`→`rm`, `\rm`→`rm`). */
+function commandBasename(tok: string): string {
+  const t = unquote(tok);
+  const slash = t.lastIndexOf("/");
+  return slash >= 0 ? t.slice(slash + 1) : t;
+}
+
 /**
- * 세그먼트가 재귀 rm 이면 삭제 대상(비플래그 인자) 목록을, 아니면 null 을 반환한다.
- * 플래그 순서·번들·대소문자·`--recursive` 를 형태 불문 인식해, 글롭이 놓치던 우회
- * (`rm -r`·`rm -fr`·`rm -R`·`rm -rfv`·`rm --recursive`)를 차단한다. 대상 토큰의 감싼
- * 따옴표는 제거해 `rm -r "/"` 같은 인용 우회도 대조 대상에 포함한다(best-effort).
+ * 세그먼트를 정규화해 `{cmd 기본명, args(따옴표 제거)}` 로. 선행 래퍼(env[VAR=/-opt]·command·nice[-n N]·
+ * time·exec 등)를 반복 제거해 실제 명령을 head 로 올리고, 경로·따옴표·백슬래시·이중공백을 흡수한다.
+ * 리터럴 글롭이 놓치던 절대경로/래퍼/공백 우회(`/bin/rm`·`env rm`·`git  push`)를 인식기 앞단에서 정규화.
+ * best-effort — 미지의 래퍼 옵션값은 정밀 처리하지 않는다(오분류 시 리터럴 글롭 매칭이 폴백).
  */
-function rmRecursiveTargets(segment: string): string[] | null {
-  const toks = segment.split(/\s+/).filter(Boolean);
-  if (toks[0] !== "rm") return null;
+function normalizeCommand(segment: string): { cmd: string; args: string[] } | null {
+  let toks = segment.split(/\s+/).filter(Boolean);
+  if (toks.length === 0) return null;
+  for (;;) {
+    const head = commandBasename(toks[0] as string);
+    if (!WRAPPER_CMDS.has(head)) break;
+    let i = 1;
+    while (i < toks.length) {
+      const t = toks[i] as string;
+      if (head === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) {
+        i += 1;
+        continue;
+      }
+      if (t.startsWith("-")) {
+        i += WRAPPER_VALUE_OPT[head]?.has(t) ? 2 : 1;
+        continue;
+      }
+      break;
+    }
+    if (i >= toks.length) return null; // 래퍼만 있고 명령 없음
+    toks = toks.slice(i);
+  }
+  return { cmd: commandBasename(toks[0] as string), args: toks.slice(1).map(unquote) };
+}
+
+/**
+ * 정규화된 명령이 재귀 rm 이면 삭제 대상(비플래그 인자) 목록을, 아니면 null.
+ * 플래그 순서·번들·대소문자·`--recursive` 불문(`rm -r`·`-fr`·`-R`·`-rfv`·`--recursive`).
+ */
+function rmRecursiveTargets(cmd: string, args: string[]): string[] | null {
+  if (cmd !== "rm") return null;
   let recursive = false;
   const targets: string[] = [];
-  for (const tok of toks.slice(1)) {
+  for (const tok of args) {
     if (tok === "--") continue; // 옵션 종료 표식
     if (tok.startsWith("-") && tok !== "-") {
       if (RM_RECURSIVE_FLAG.test(tok)) recursive = true;
       continue; // 그 외 플래그(-f·-i 등)는 무시
     }
-    targets.push(tok.replace(/^['"]|['"]$/g, ""));
+    targets.push(tok);
   }
   return recursive ? targets : null;
 }
 
-/** 엔트리 글롭이 재귀 rm 패턴(`rm …<재귀플래그>… <target>`)이면 그 대표 target 글롭을, 아니면 null. */
-function rmEntryTargetGlob(glob: string): string | null {
-  const targets = rmRecursiveTargets(glob);
-  return targets && targets.length > 0 ? (targets[0] ?? null) : null;
+/** git 전역 옵션(`-C <dir>`·`-c k=v`·`--git-dir=…` 등)을 건너뛴 서브커맨드와 그 뒤 인자. 없으면 null. */
+function gitSubcommand(args: string[]): { sub: string; rest: string[] } | null {
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i] as string;
+    if (!a.startsWith("-")) break; // 서브커맨드
+    if (a.includes("="))
+      i += 1; // `--git-dir=…`(값 포함)
+    else if (GIT_GLOBAL_VALUE_OPT.has(a))
+      i += 2; // `-C <dir>`(값 분리)
+    else i += 1; // 그 외 무값 전역 옵션(`-p` 등)
+  }
+  return i < args.length ? { sub: args[i] as string, rest: args.slice(i + 1) } : null;
+}
+
+/** 강제 플래그 — `--force`/`--force-with-lease`·`-f`·`f` 포함 번들 단축플래그. */
+function hasForceFlag(args: string[]): boolean {
+  return args.some(
+    (a) =>
+      a === "--force" ||
+      a === "--force-with-lease" ||
+      a.startsWith("--force-with-lease=") ||
+      (a.startsWith("-") && !a.startsWith("--") && a.includes("f")),
+  );
 }
 
 /**
- * 셸 명령(command) 전용 매칭 — 전체 문자열 + 각 세그먼트를 글롭에 대조.
- * 추가로 엔트리가 재귀 rm 패턴이면(`rm -rf /*` 등) 명령의 rm 세그먼트를 플래그 형태 불문으로
- * 대조해, 리터럴 글롭이 놓치던 `-r`/`-R`/`-fr`/`--recursive`/번들 변형을 같은 target 스코프에서 잡는다.
+ * 정규화된 git 명령이 지정 서브커맨드에서 위험한지 — push 강제(force 플래그 또는 `+refspec`)·
+ * reset `--hard`·clean 강제. 전역 옵션(`-C` 등)은 gitSubcommand 이 이미 건너뛴다.
+ */
+function isGitDangerous(cmd: string, args: string[], sub: string): boolean {
+  if (cmd !== "git") return false;
+  const s = gitSubcommand(args);
+  if (!s || s.sub !== sub) return false;
+  if (sub === "push") {
+    return hasForceFlag(s.rest) || s.rest.some((a) => a.startsWith("+") && !a.startsWith("-"));
+  }
+  if (sub === "reset") return s.rest.includes("--hard");
+  if (sub === "clean") return hasForceFlag(s.rest);
+  return false;
+}
+
+/**
+ * Bash 엔트리 글롭이 알려진 위험 명령 패턴이면, 정규화된 세그먼트를 형태 불문 대조하는 술어를 반환(옵션1).
+ * 엔트리가 스위치 — rm 재귀(+대상 스코프)·git 서브커맨드·권한상승 종류를 엔트리에서 읽어 인식기를 활성화한다.
+ * 알려진 패턴이 아니면 null → 리터럴 글롭 매칭에 맡긴다(사용자 커스텀 경로 등).
+ */
+function dangerousBashEntry(
+  glob: string,
+): ((n: { cmd: string; args: string[] }) => boolean) | null {
+  const entry = normalizeCommand(glob);
+  if (!entry) return null;
+  const rmTargets = rmRecursiveTargets(entry.cmd, entry.args);
+  if (rmTargets && rmTargets.length > 0) {
+    return (n) => {
+      const t = rmRecursiveTargets(n.cmd, n.args);
+      return !!t && t.some((x) => rmTargets.some((g) => globMatches(g, x)));
+    };
+  }
+  if (entry.cmd === "git") {
+    const es = gitSubcommand(entry.args);
+    if (es) return (n) => isGitDangerous(n.cmd, n.args, es.sub);
+  }
+  if (PRIV_ESC_CMDS.has(entry.cmd)) return (n) => n.cmd === entry.cmd;
+  return null;
+}
+
+/**
+ * 셸 명령(command) 전용 매칭 — 전체 문자열 + 각 세그먼트 리터럴 글롭 대조에 더해,
+ * 엔트리가 알려진 위험 명령(rm 재귀·git 강제/reset --hard/clean·sudo/doas)이면 정규화 인식기로
+ * 형태 불문(플래그 순서·번들·롱숏·절대경로·래퍼·이중공백·`+refspec`·전역옵션) 대조한다.
  */
 function commandGlobMatch(glob: string, command: string): boolean {
   if (globMatches(glob, command)) return true;
@@ -106,14 +241,39 @@ function commandGlobMatch(glob: string, command: string): boolean {
   for (const seg of segments) {
     if (globMatches(glob, seg)) return true;
   }
-  const entryTarget = rmEntryTargetGlob(glob);
-  if (entryTarget !== null) {
+  const recognizer = dangerousBashEntry(glob);
+  if (recognizer) {
     for (const seg of segments) {
-      const targets = rmRecursiveTargets(seg);
-      if (targets && targets.some((tg) => globMatches(entryTarget, tg))) return true;
+      const norm = normalizeCommand(seg);
+      if (norm && recognizer(norm)) return true;
     }
   }
   return false;
+}
+
+/** 자격증명 경로 교차 보호 대상 파일 도구. */
+const CRED_FILE_TOOLS = new Set([
+  "Read",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookRead",
+  "NotebookEdit",
+]);
+
+/** 경로형 글롭(선행 `~`·`/`) — 자격증명 교차 보호 대상 후보. */
+function isPathGlob(glob: string): boolean {
+  return glob.startsWith("~") || glob.startsWith("/");
+}
+
+/** 후보 경로가 자격증명 글롭 중 하나와 매칭 — 따옴표 제거·`~` 확장·`..` 접기 변형까지 대조. */
+function pathMatchesCredential(candidate: string, globs: string[]): boolean {
+  const u = unquote(candidate);
+  const variants = new Set<string>([u]);
+  if (u === "~") variants.add(homedir());
+  else if (u.startsWith("~/")) variants.add(homedir() + u.slice(1));
+  for (const v of [...variants]) variants.add(posix.normalize(v));
+  return globs.some((g) => [...variants].some((v) => globMatches(g, v)));
 }
 
 /**
@@ -126,7 +286,21 @@ export function matchesDenylist(
   toolName: string,
   rawInput: unknown,
 ): boolean {
-  for (const raw of denylist ?? []) {
+  const list = denylist ?? [];
+  const asArg = (field: string): unknown =>
+    rawInput && typeof rawInput === "object"
+      ? (rawInput as Record<string, unknown>)[field]
+      : undefined;
+
+  // 자격증명 경로 교차 보호 준비 — 파일도구 엔트리의 경로 글롭을 모아, 엔트리 도구와 무관하게
+  // 파일도구 전반(Write/Edit/…)과 Bash args 에서 보호한다(리터럴 엔트리는 단일 도구만 봤음).
+  const credGlobs: string[] = [];
+  for (const raw of list) {
+    const e = parseDenyEntry(raw.trim());
+    if (e?.glob && CRED_FILE_TOOLS.has(e.tool) && isPathGlob(e.glob)) credGlobs.push(e.glob);
+  }
+
+  for (const raw of list) {
     const entry = parseDenyEntry(raw.trim());
     if (!entry) return true;
     // 도구명은 대소문자 무시 비교 — 오타(bash)로 매칭이 스킵되면 자동 허용(위험 방향)으로 새므로
@@ -135,28 +309,49 @@ export function matchesDenylist(
     if (entry.glob === undefined) return true;
     const field = PRIMARY_ARG_FIELD[toolName];
     if (!field) return true;
-    const arg =
-      rawInput && typeof rawInput === "object"
-        ? (rawInput as Record<string, unknown>)[field]
-        : undefined;
+    const arg = asArg(field);
     if (typeof arg !== "string") return true;
     // Bash 명령(command)은 세그먼트 분해 매칭 — 체이닝·선행대입 우회 차단. 경로·URL 은 전체 문자열.
     const hit =
       field === "command" ? commandGlobMatch(entry.glob, arg) : globMatches(entry.glob, arg);
     if (hit) return true;
   }
+
+  // 자격증명 경로 교차 보호 — 위 루프(엔트리 도구 == 호출 도구)를 넘어, 같은 경로를 다른 파일도구·Bash 에서도 차단.
+  if (credGlobs.length > 0) {
+    if (toolName === "Bash") {
+      const cmd = asArg("command");
+      if (typeof cmd === "string") {
+        for (const seg of shellSegments(cmd)) {
+          const norm = normalizeCommand(seg);
+          if (norm && [norm.cmd, ...norm.args].some((tok) => pathMatchesCredential(tok, credGlobs)))
+            return true;
+        }
+      }
+    } else if (CRED_FILE_TOOLS.has(toolName)) {
+      const field = PRIMARY_ARG_FIELD[toolName];
+      const arg = field ? asArg(field) : undefined;
+      if (typeof arg === "string" && pathMatchesCredential(arg, credGlobs)) return true;
+    }
+  }
+
   return false;
 }
 
 /**
- * autopass 내장 기본 denylist — 파괴적 셸 명령(sudo·재귀 rm·git 강제 변경)과
- * 자격증명 저장소 읽기(ssh·aws·npm·gh·kube·docker·gcloud 토큰/키)를 채널 승인으로 폴백시킨다.
- * git clean -fdx 는 -fd* 글롭이 포섭한다. 셸 체이닝은 matchesDenylist 의 세그먼트 매칭이 포섭한다.
- * rm 항목은 리터럴이 아니라 재귀 rm 인식기가 해석한다 — 대상(`/`·`~`·`.`)이 같으면 `-r`·`-R`·
- * `-fr`·`-rfv`·`--recursive`·번들 등 플래그 형태를 불문하고 포섭한다(commandGlobMatch).
+ * autopass 내장 기본 denylist — 파괴적 셸 명령(권한상승·재귀 rm·git 강제 변경)과
+ * 자격증명 저장소 접근(ssh·aws·npm·gh·kube·docker·gcloud 토큰/키)을 채널 승인으로 폴백시킨다.
+ *
+ * 아래 Bash 엔트리는 리터럴 글롭이 아니라 **정규화 인식기의 스위치**다(옵션1) — 엔트리에서 명령·
+ * 서브커맨드·대상 스코프를 읽어, 실제 명령을 정규화(경로/래퍼/따옴표/이중공백 흡수)한 뒤 형태 불문 대조한다:
+ *   rm      → 재귀 플래그(-r·-R·-fr·-rfv·--recursive·번들) + 대상 스코프(/·~·.)
+ *   git     → 전역옵션(-C 등) 건너뛴 서브커맨드 기준 — push 강제(--force/-f/+refspec)·reset --hard·clean 강제(-f)
+ *   sudo/doas → 명령 기본명(경로·래퍼 불문)
+ * 자격증명 Read 경로는 matchesDenylist 의 교차 보호로 Write/Edit/NotebookEdit 및 Bash args(cat/cp 등)까지 포섭한다.
  */
 export const DEFAULT_AUTOPASS_DENYLIST: readonly string[] = [
   "Bash(sudo *)",
+  "Bash(doas *)",
   // rm 재귀 삭제 — 아래 3개는 대상 스코프(루트/홈/닷)를 정의하며, 재귀 플래그 형태는 인식기가 불문 처리.
   "Bash(rm -rf /*)",
   "Bash(rm -rf ~*)",

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Docs
+
+- 마크다운 노트 우선 정체성 정렬 — `package.json` 설명문·keywords(`markdown`/`notes` 추가), README 미션 문장을 "마크다운 노트에서 AI 구동(로컬 파일 — 채팅은 부가)" 으로 조정. 마크다운 가이드의 동기화 프레이밍을 특정 도구(Obsidian) 격상에서 **도구 중립("어떤 동기화 도구를 쓰든 안전")·로컬 노트 우선**으로 정렬(Obsidian 은 예시로 강등). getting-started 미션 문장도 동일 정렬.
+
 ### Changed
 
 - **[BREAKING] 레인 conf 어댑터 키 네임스페이스화** — 어댑터 전용 키를 `<source>.<field>` 로 네임스페이스한다: `root`/`inbox`/`approvals`/`outbox` → `markdown.root`/`markdown.inbox`/`markdown.approvals`/`markdown.outbox`, `chat_id`/`allow_from` → `telegram.chat_id`/`telegram.allow_from`. 공통 키(source·backend·engine·cwd·lang·file_mode·allow/deny리스트)는 최상위 유지. **구 평면 키는 폐기(back-compat read 없음)** — 파서가 무시하므로 값이 반영되지 않는다. `adde doctor` 가 구 키를 `conf format` FAIL 로 감지해 마이그레이션을 안내하고, `adde up` 기동 시에도 경고를 남긴다.

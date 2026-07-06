@@ -357,11 +357,11 @@ describe("formatPermId (F11 per-call 고유 승인키)", () => {
     expect(formatPermId(s, 1)).toBe("sess-abc-1");
   });
 
-  it("결과 charset 은 [A-Za-z0-9_-] 이고 deny: 접두 포함 64바이트 예산 내다", () => {
-    // 긴/적대적 sessionId 여도 프리픽스 12자 절단 → 예산 보장.
+  it("결과 charset 은 [A-Za-z0-9_-] 이고 allow: 접두 포함 64바이트 예산 내다", () => {
+    // 긴/적대적 sessionId 여도 프리픽스 12자 절단 → 예산 보장. telegram 최장 접두 allow:(6B) 기준.
     const id = formatPermId("x".repeat(200), 999999);
     expect(id).toMatch(SAFE);
-    expect(Buffer.byteLength(`deny:${id}`, "utf8")).toBeLessThanOrEqual(64);
+    expect(Buffer.byteLength(`allow:${id}`, "utf8")).toBeLessThanOrEqual(64);
   });
 
   it("sessionId 의 비안전 문자는 _ 로 새니타이즈하고 앞 12자로 절단한다", () => {

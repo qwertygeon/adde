@@ -235,7 +235,8 @@ interface LaneState {
 
 /**
  * 승인 상관키 포맷(F11) — `<세션프리픽스>-<seq>`. 프리픽스는 sessionId 를 [A-Za-z0-9_-] 로
- * 새니타이즈 후 앞 12자(재기동마다 새 sessionId → 디스크 잔존 승인파일과 크로스-프로세스 충돌 방지),
+ * 새니타이즈 후 앞 12자 — 재기동 시 엔진이 새 sessionId 를 발급한다는 전제 하에(ACP 계약) 디스크
+ * 잔존 승인파일과의 크로스-프로세스 충돌을 막는다(새 프로세스는 seq 를 0 부터 재시작하므로).
  * seq 는 인스턴스 단조 카운터(프로세스 내 유일). 결과 charset 은 telegram callback_data(≤64B)·
  * markdown 파일명·envelope msg-id 정규식(`^[A-Za-z0-9_:-]+$`)에 모두 안전하다. seq 주입으로 순수·결정론.
  */

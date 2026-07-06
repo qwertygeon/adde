@@ -144,6 +144,35 @@ describe("SC-005: out 존재 id dedup — inject 미호출", () => {
   });
 });
 
+describe("M5: processing 정리(성공·dedup 후 processing/<id>.msg 제거)", () => {
+  it("정상 처리 완료 후 processing/<id>.msg 를 제거한다(out durable → 잉여)", async () => {
+    const backend = makeBackend();
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+
+    await enqueue(paths, makeEnvelope("m5-ok"));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "m5-ok.out")));
+
+    // out 은 남고(dedup 앵커), processing 잉여 파일은 제거되어 재기동 재스캔 대상이 아니다.
+    expect(fs.existsSync(path.join(paths.outDir, "m5-ok.out"))).toBe(true);
+    expect(fs.existsSync(path.join(paths.processingDir, "m5-ok.msg"))).toBe(false);
+  });
+
+  it("재기동 스캔에서 이미 done 인 processing 잔존분을 정리한다(dedup 유지, inject 미호출)", async () => {
+    const backend = makeBackend();
+    // 크래시로 남은 done 상태(out 있음 + processing 잔존) 모사.
+    const env = makeEnvelope("m5-done");
+    fs.writeFileSync(path.join(paths.processingDir, "m5-done.msg"), JSON.stringify(env));
+    fs.writeFileSync(path.join(paths.outDir, "m5-done.out"), "이미 처리됨");
+
+    const injector: Injector = createInjector(paths, "test-lane", backend);
+    await injector.start();
+
+    expect(backend.inject).not.toHaveBeenCalled(); // dedup 유지
+    expect(fs.existsSync(path.join(paths.processingDir, "m5-done.msg"))).toBe(false); // 잉여 정리
+  });
+});
+
 describe("SC-003: 크래시 후 processing 잔존 파일 재처리", () => {
   it("processing 에 있고 out 에 없으면 재처리(inject 호출)", async () => {
     const backend = makeBackend();
@@ -392,6 +421,11 @@ describe("FR-1: render 실패 시 재전송 (.sent 마커)", () => {
 
     expect(render).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(path.join(paths.outDir, "s-ok.sent"))).toBe(true);
+    // hot-path 는 hint(메모리 텍스트·sidecar)를 넘겨 어댑터가 디스크 재read 를 생략한다(M7).
+    expect(render).toHaveBeenCalledWith(
+      "s-ok",
+      expect.objectContaining({ text: expect.any(String) }),
+    );
 
     // 추가 notify 사이클에도 재전송하지 않는다(.sent 존재 → flushUnsent 대상 아님).
     injector.notify();
@@ -429,7 +463,8 @@ describe("FR-1: render 실패 시 재전송 (.sent 마커)", () => {
     await injector.start();
     await waitFor(() => fs.existsSync(path.join(paths.outDir, "orphan.sent")));
 
-    expect(render).toHaveBeenCalledWith("orphan");
+    // 크래시 flush 경로는 hint 없이 호출 → 어댑터가 디스크에서 읽는다(M7 재read 생략은 hot-path 만).
+    expect(render).toHaveBeenCalledWith("orphan", undefined);
     // 재주입(엔진 재실행)은 하지 않는다 — 전송만 복구.
     expect(backend.inject).not.toHaveBeenCalled();
   });

@@ -579,6 +579,7 @@ lane add options:
       inboxError: "[markdown] inbox processing error: {{error}}",
       approvalsError: "[markdown] approvals processing error: {{error}}",
       pollError: "[markdown] polling error: {{error}}",
+      decidedMoveError: "[markdown] failed to archive decided approval {{file}}: {{error}}",
     },
     transcript: {
       auditAppendFail:

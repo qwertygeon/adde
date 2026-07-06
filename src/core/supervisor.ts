@@ -253,7 +253,7 @@ export async function supervisorUp(
       paths,
       lane,
       backend,
-      (id) => source.renderOut(id),
+      (id, hint) => source.renderOut(id, hint),
       (id, detail) =>
         // 채널 egress 는 마스킹 일관 적용 — 엔진 예외 메시지에 시크릿이 섞일 수 있다
         // (.failed/콘솔 등 로컬 경로는 기존대로 원문 유지).

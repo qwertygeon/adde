@@ -254,6 +254,54 @@ describe("supervisorUp source 분기 (markdown)", () => {
     expect(result.lanes).toHaveLength(1);
     expect(result.lanes[0]?.status).toBe("running");
   });
+
+  it("전체 턴 관통 — inbox send → inject → out 노트 렌더 (renderOut 배선 e2e, M7 hint 경로)", async () => {
+    const rootDir = path.join(tmpBase, "NotesTurn");
+    fs.mkdirSync(rootDir, { recursive: true });
+    const conf =
+      "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
+      `perm_tier=acp\nacp_version=v1\nmarkdown.root=${rootDir}\nmarkdown.inbox=inbox.md\n`;
+    const { base } = setupProject("turnproj", { "md-turn": conf });
+
+    // 응답 청크를 emit 하는 fake — inject 시 구독자에게 "pong" 전달 후 resolve(turn 종료).
+    const acpFactory = vi.fn().mockImplementation(() => {
+      let subscriber: ((e: unknown) => void) | null = null;
+      return {
+        caps: () => FAKE_ACP_CAPS,
+        launch: vi.fn().mockResolvedValue({ sessionId: "turn-001" }),
+        subscribe: vi.fn().mockImplementation((_lane: string, cb: (e: unknown) => void) => {
+          subscriber = cb;
+        }),
+        inject: vi.fn().mockImplementation(async () => {
+          subscriber?.({
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "pong" },
+          });
+        }),
+        onPermissionRequest: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    // inbox 에 send 트리거 → 어댑터가 감시·enqueue → injector inject → writeOut → renderOut(out 노트).
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "안녕\n- [x] send\n");
+    const result = await runUp("turnproj", { base, acpFactory });
+    expect(result.lanes[0]?.status).toBe("running");
+
+    // 렌더된 out 노트(outbox=inbox 형제 out/)가 응답을 담으면 renderOut 이 전 경로로 배선된 것.
+    const outDir = path.join(rootDir, "out");
+    const deadline = Date.now() + 3000;
+    let notes: string[] = [];
+    while (Date.now() < deadline) {
+      notes = fs.existsSync(outDir)
+        ? fs.readdirSync(outDir).filter((f) => f.endsWith(".md") && !f.startsWith("_"))
+        : [];
+      if (notes.length > 0) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(notes.length).toBeGreaterThan(0);
+    expect(fs.readFileSync(path.join(outDir, notes[0]!), "utf8")).toContain("pong");
+  });
 });
 
 describe("supervisorUp autopass 기동 배너 (005)", () => {

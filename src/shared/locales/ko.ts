@@ -563,6 +563,7 @@ lane add 옵션:
       inboxError: "[markdown] inbox 처리 오류: {{error}}",
       approvalsError: "[markdown] approvals 처리 오류: {{error}}",
       pollError: "[markdown] 폴링 오류: {{error}}",
+      decidedMoveError: "[markdown] 결정완료 승인 아카이브 실패 {{file}}: {{error}}",
     },
     transcript: {
       auditAppendFail:

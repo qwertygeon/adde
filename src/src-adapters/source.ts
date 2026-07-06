@@ -6,6 +6,7 @@
 import type { PermRequest } from "../gate/gate.js";
 import type { LanePaths } from "../shared/paths.js";
 import type { LaneConf } from "../shared/conf.js";
+import type { RenderHint } from "../core/queue.js";
 
 export type Decision = "allow" | "deny";
 export type DecisionCallback = (reqId: string, decision: Decision) => void;
@@ -43,10 +44,11 @@ export interface Source {
   /** 사용자 결정 수신 콜백 등록(telegram=callback_query, markdown=승인 노트 편집 감지). */
   onDecision(cb: DecisionCallback): void;
   /**
-   * out/<id>.out (+ sidecar) 를 읽어 채널로 렌더한다(telegram=sendMessage, markdown=출력 노트).
-   * in-process 호출(injector 가 writeOut 직후) — out/ fs.watch 를 대체.
+   * out/<id>.out (+ sidecar) 를 채널로 렌더한다(telegram=sendMessage, markdown=출력 노트).
+   * in-process 호출(injector 가 writeOut 직후) — out/ fs.watch 를 대체. hint 가 있으면 방금
+   * 메모리에서 쓴 텍스트·sidecar 를 써서 디스크 재read 를 생략하고, 없으면(크래시 flush) 디스크에서 읽는다.
    */
-  renderOut(id: string): Promise<void>;
+  renderOut(id: string, hint?: RenderHint): Promise<void>;
   /**
    * 운영 알림(권한 설정 차이 경고·autopass 기동 배너 등)을 채널에 표면화한다
    * (telegram=메시지, markdown=알림 노트). 보조 신호 — 실패는 throw, 호출자가 로그 후 흡수.

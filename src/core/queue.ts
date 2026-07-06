@@ -4,7 +4,7 @@
  * queue→processing→out 상태 전이는 원자적 rename.
  */
 import { t } from "../shared/i18n.js";
-import { mkdir, rename, readdir, access, readFile } from "node:fs/promises";
+import { mkdir, rename, readdir, access, readFile, unlink } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { atomicWrite } from "../shared/fs-atomic.js";
 import { errMsg, errCode } from "../shared/errors.js";
@@ -188,6 +188,15 @@ export interface OutSidecar {
 }
 
 /**
+ * renderOut 힌트(M7) — injector 가 방금 메모리에서 out 에 쓴 텍스트·sidecar 를 그대로 넘겨
+ * 어댑터의 디스크 재read 를 생략한다. 부재(크래시 복구 flush 경로 등)면 어댑터가 디스크에서 읽는다.
+ */
+export interface RenderHint {
+  text: string;
+  sidecar: OutSidecar | null;
+}
+
+/**
  * 처리 결과를 out 디렉토리에 atomic rename 으로 기록.
  * <id>.out (텍스트) + <id>.out.json (sidecar).
  */
@@ -253,6 +262,16 @@ export async function writeFailed(paths: LanePaths, id: string, reason: string):
 /** processing/<id>.msg 경로를 직접 반환 (재처리 복원 등에 사용). */
 export function processingFilePath(paths: LanePaths, id: string): string {
   return join(paths.processingDir, processingFileName(id));
+}
+
+/**
+ * 처리 완료(out/<id>.out 기록) 후 잉여가 된 processing/<id>.msg 를 제거(M5) — dedup 앵커는 out/ 이므로
+ * (hasId/isDone 이 out 으로 판정) 이 삭제는 재기동 dedup 을 깨지 않고 processing/ 무한 증가만 막는다.
+ * out 이 기록되기 *전* 실패 경로에서는 호출하지 않는다(at-least-once 재처리 보존 — writeFailed 주석).
+ * 부재(이미 없음)는 무시.
+ */
+export async function clearProcessing(paths: LanePaths, id: string): Promise<void> {
+  await unlink(processingFilePath(paths, id)).catch(() => {});
 }
 
 /** out/<id>.out.json sidecar 읽기. */

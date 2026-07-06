@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
 import { enqueue, readSidecar } from "../core/queue.js";
+import type { RenderHint } from "../core/queue.js";
 import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
@@ -494,22 +495,21 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   }
 
   /** out/<id>.out (+ sidecar) → quote-reply 전송. injector 가 writeOut 직후 in-process 호출. */
-  async function renderOut(id: string): Promise<void> {
+  async function renderOut(id: string, hint?: RenderHint): Promise<void> {
     const defaultChatId = cfg.chatId ?? 0;
     if (!defaultChatId) return; // 회신 대상 미지정 시 렌더 생략
 
-    const outPath = join(cfg.paths.outDir, `${id}.out`);
-
+    // hint(injector 메모리) 있으면 디스크 재read 생략(M7). 없으면(크래시 flush) 디스크에서 읽는다.
     // sidecar 읽기는 queue.readSidecar 로 일원화(부재·파손 → null = reply_to 없이 전송).
     let replyTo: number | undefined;
-    const sidecar = await readSidecar(cfg.paths, id);
+    const sidecar = hint ? hint.sidecar : await readSidecar(cfg.paths, id);
     if (sidecar?.reply_ref?.channel_msg_id) {
       // 비숫자 channel_msg_id 가드 — NaN 이면 reply_to_message_id 생략(전송 파라미터 오염 방지).
       const parsed = parseInt(sidecar.reply_ref.channel_msg_id, 10);
       if (!Number.isNaN(parsed)) replyTo = parsed;
     }
 
-    const text = await readFile(outPath, "utf8");
+    const text = hint ? hint.text : await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
     await sendReply(defaultChatId, text, replyTo);
   }
 

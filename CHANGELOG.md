@@ -18,6 +18,12 @@
 
 ### Changed
 
+- 24시간 상주 I/O 효율화(markdown 어댑터·injector) — 유휴/메시지당 비용이 누적 이력에 비례해 증가하던 낭비를 제거한다.
+  - **미전송 재전송 추적을 in-memory 로 전환**: 매 턴 `out/` 전체를 `readdir` 하던 O(총 이력) 스캔을 제거하고, 기동 시 1회만 스캔해 시드한 뒤 메모리 집합으로 추적한다.
+  - **처리 완료 `processing/<id>.msg` 정리**: `out/` 기록(중복 방지 앵커) 후 잉여가 된 processing 파일을 제거해 무한 증가를 막는다(중복 제거 불변식 보존 — 재확인은 `out/` 기준).
+  - **결정완료 승인 파일을 `approvals/.decided/` 로 이관**: 폴·스캔이 미결정(pending) 파일만 훑도록 해, 누적 승인 수에 비례하던 매 틱 `stat` 비용을 없앤다(pending 은 절대 이동하지 않음 — 게이트 무결성 불변, 종단 판정은 파일 marker 기준이라 재기동에도 안전).
+  - **폴 백스톱 적응형·`.unref()`**: 고정 2초 폴을 무변경 지속 시 최대 10초까지 늘어나는 적응형으로 바꾸고(변경 감지 시 즉시 복귀) 타이머를 `unref` 해 유휴 wakeup 을 줄인다.
+  - **읽기·렌더 중복 I/O 제거**: 안정화 읽기를 stat 비교 기반으로(정지 파일은 2회 read·지연 없이 즉시), 응답 렌더는 방금 메모리에서 쓴 텍스트·sidecar 를 재사용(디스크 재read 생략, 크래시 복구 경로는 종전대로 디스크 read).
 - **[BREAKING] 레인 conf 어댑터 키 네임스페이스화** — 어댑터 전용 키를 `<source>.<field>` 로 네임스페이스한다: `root`/`inbox`/`approvals`/`outbox` → `markdown.root`/`markdown.inbox`/`markdown.approvals`/`markdown.outbox`, `chat_id`/`allow_from` → `telegram.chat_id`/`telegram.allow_from`. 공통 키(source·backend·engine·cwd·lang·file_mode·allow/deny리스트)는 최상위 유지. **구 평면 키는 폐기(back-compat read 없음)** — 파서가 무시하므로 값이 반영되지 않는다. `adde doctor` 가 구 키를 `conf format` FAIL 로 감지해 마이그레이션을 안내하고, `adde up` 기동 시에도 경고를 남긴다.
   - **마이그레이션**: 기존 레인 conf 의 위 키에 `markdown.`/`telegram.` 접두어를 붙이거나, `adde lane rm` 후 `adde lane add` 로 재생성한다(CLI 플래그 `--root`·`--chat-id`·`--allow-from` 등은 불변).
   - **근거**: 어댑터별 설정을 타입·구조로 격리해 새 소스 어댑터를 충돌 없이 확장 가능하게 한다.

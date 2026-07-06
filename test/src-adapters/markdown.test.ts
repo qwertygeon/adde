@@ -497,8 +497,75 @@ describe("createMarkdownSource (통합)", () => {
     await waitFor(() => decisions.includes("req-allow:allow"));
     expect(decisions).toContain("req-allow:allow");
 
-    // 해당 요청 파일이 종단 재작성됨
-    await waitFor(() => fs.readFileSync(reqFile, "utf8").includes("status=allow"));
+    // 종단(allow)된 파일은 .decided/ 로 이관되고 top-level 에선 사라진다(M6 — pending 만 스캔).
+    const decidedFile = path.join(rootDir, "approvals", ".decided", "req-allow.md");
+    await waitFor(() => fs.existsSync(decidedFile));
+    expect(fs.readFileSync(decidedFile, "utf8")).toContain("status=allow");
+    expect(fs.existsSync(reqFile)).toBe(false);
+  });
+
+  it("deny 체크 종단분도 .decided/ 로 이관된다 (M6)", async () => {
+    const reqFile = path.join(rootDir, "approvals", "req-deny.md");
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
+    source = makeSource();
+    source.start();
+    const decisions: string[] = [];
+    source.onDecision((reqId, decision) => decisions.push(`${reqId}:${decision}`));
+
+    const req: PermRequest = {
+      v: 1,
+      id: "req-deny",
+      lane: "L",
+      channel: "markdown",
+      tool: "Bash",
+      detail: "ls",
+      cwd: "/proj",
+      ts: "2026-06-28T00:00:00Z",
+    };
+    await source.requestPermission(req);
+    await waitFor(
+      () => fs.existsSync(reqFile) && fs.readFileSync(reqFile, "utf8").includes("req-deny"),
+    );
+    const cur = fs.readFileSync(reqFile, "utf8");
+    fs.writeFileSync(reqFile, cur.replace("- [ ] deny", "- [x] deny"));
+
+    await waitFor(() => decisions.includes("req-deny:deny"));
+    const decidedFile = path.join(rootDir, "approvals", ".decided", "req-deny.md");
+    await waitFor(() => fs.existsSync(decidedFile));
+    expect(fs.readFileSync(decidedFile, "utf8")).toContain("status=deny");
+    expect(fs.existsSync(reqFile)).toBe(false);
+  });
+
+  it("pending 은 top-level 유지, 종단 잔존분은 스캔서 .decided/ 로 이관 (M6 게이트 무결성·재기동 멱등)", async () => {
+    const approvals = path.join(rootDir, "approvals");
+    fs.mkdirSync(approvals, { recursive: true });
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
+    const mkReq = (id: string): PermRequest => ({
+      v: 1,
+      id,
+      lane: "L",
+      channel: "markdown",
+      tool: "Bash",
+      detail: "ls",
+      cwd: "/proj",
+      ts: "2026-06-28T00:00:00Z",
+    });
+    // 종단(allow) 잔존 파일 — 크래시로 이동 못한 상태 모사(marker 만 종단, 결정 콜백 없음).
+    const terminal = renderApprovalBlock(mkReq("req-term")).replace(
+      "status=pending",
+      "status=allow",
+    );
+    fs.writeFileSync(path.join(approvals, "req-term.md"), terminal);
+    // pending 파일 — 사용자 미결정(절대 이동 금지).
+    fs.writeFileSync(path.join(approvals, "req-pend.md"), renderApprovalBlock(mkReq("req-pend")));
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => fs.existsSync(path.join(approvals, ".decided", "req-term.md")));
+    expect(fs.existsSync(path.join(approvals, "req-term.md"))).toBe(false); // 종단분 이동됨
+    expect(fs.existsSync(path.join(approvals, "req-pend.md"))).toBe(true); // pending 유지(무결성)
+    expect(fs.existsSync(path.join(approvals, ".decided", "req-pend.md"))).toBe(false);
   });
 
   it("경로 탈출 req.id 는 fail-closed throw — approvals 밖 쓰기 차단(방어심화)", async () => {

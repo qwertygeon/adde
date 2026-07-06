@@ -17,6 +17,7 @@ import { isPathInside, normCasePath, pathsOverlap } from "../shared/paths.js";
 import { atomicWrite as atomicWriteFile } from "../shared/fs-atomic.js";
 import type { LaneConf } from "../shared/conf.js";
 import { enqueue, hasId, readSidecar } from "../core/queue.js";
+import type { RenderHint } from "../core/queue.js";
 import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
@@ -27,8 +28,14 @@ import { formatException } from "../shared/notify.js";
 import type { NotifyT } from "../shared/notify.js";
 
 const DEBOUNCE_MS = 150;
-/** fs.watch 가 놓친 편집을 보정하는 저빈도 폴링 주기(B2 백스톱). */
+/**
+ * fs.watch 가 놓친 편집을 보정하는 폴링 백스톱(B2) — 적응형. 활동 직후엔 base(빠른 반응),
+ * 무변경이 이어지면 max 까지 확장해 24h 유휴 시 wakeup 을 줄인다(변경 감지 시 base 복귀).
+ */
 const POLL_INTERVAL_MS = 2_000;
+const POLL_MAX_INTERVAL_MS = 10_000;
+/** 폴 간격 확장 트리거 — 이만큼 연속 무변경이면 다음 간격을 2배(최대 POLL_MAX)로. */
+const POLL_IDLE_STEPS = 3;
 /** 내용 안정화 재확인 간격(B1) — 동기 중 잘린 파일 읽기 방지. */
 const READ_SETTLE_MS = 50;
 
@@ -341,6 +348,9 @@ function resolvePaths(conf: LaneConf): {
 export function createMarkdownSource(cfg: SourceContext): Source {
   const tl = tFor(cfg.conf.lang);
   const { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir } = resolvePaths(cfg.conf);
+  // 결정완료(allow/deny) 승인 파일을 이관하는 아카이브 서브디렉터리(M6). pending 만 top-level 에
+  // 남겨 폴 dirSig·handleApprovals 스캔을 O(pending) 로 유지(누적 승인수 A 에 비례하지 않게).
+  const decidedDir = join(approvalsDir, ".decided");
   // 옵트인 게이트 타임아웃(초→ms) — 승인 블록 기한 표기·어댑터 로컬 타이머를 게이트와 동일 기준으로 맞춘다.
   const gateTimeoutMs =
     cfg.conf.gate_timeout_sec !== undefined
@@ -354,9 +364,11 @@ export function createMarkdownSource(cfg: SourceContext): Source {
   const lastSelfWrite = new Map<string, string>();
   // 폴링 백스톱(B2): 파일별 마지막 관측 시그니처(mtimeMs:size)와 인터벌·in-flight 추적.
   const lastFileSig = new Map<string, string>();
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pollBusy = false;
   let pollOp: Promise<void> = Promise.resolve();
+  let pollDelay = POLL_INTERVAL_MS; // 현재 적응형 폴 간격(무변경 누적 시 확장).
+  let pollIdleTicks = 0; // 연속 무변경 폴 횟수.
   let inboxBusy = false;
   let running = false;
   // enqueue 연속 실패 추적 — 임계 도달 시 outbox 알림 1회, 성공 시 리셋.
@@ -419,16 +431,27 @@ export function createMarkdownSource(cfg: SourceContext): Source {
   }
 
   /**
-   * 내용 안정화 후 읽기(B1) — 짧은 간격 2회 read 가 동일할 때만 반환. 동기 중 절반만
-   * 기록된 파일을 읽어 잘린 메시지를 보내는 것을 막는다. 변경 진행 중이면 null(다음
-   * watch/폴 이벤트가 안정된 상태로 재시도). atomic-rename 저장은 즉시 안정이라 지연 없음.
+   * 내용 안정화 후 읽기(B1) — 동기 중 절반만 기록된 파일을 읽어 잘린 메시지를 보내는 것을 막는다.
+   * 빠른 경로: read 전후 시그니처(mtime:size)가 같으면 읽는 동안 변경이 없었다는 뜻이라 즉시 반환
+   * (정지 파일·atomic-rename 저장 = 대부분의 경우 → 지연·중복 read 없음). read 중 시그니처가
+   * 바뀌었으면(쓰기 진행 중) 종전의 간격 2회 read 로 안정 재확인. 벽시계 대신 stat 비교라 클록 스큐
+   * 영향이 없다. truncate·비원자 rewrite 는 크기·mtime 변경으로 fallback 에 잡힌다(동기도구는 atomic
+   * rename 또는 truncate 저장이 일반적). 잔여: 동일 크기 in-place overwrite + coarse-mtime FS 의 드문
+   * 조합은 fast-path 가 못 잡을 수 있으나, macOS(APFS, ns mtime)에선 무해하고 동기도구 저장 방식상 실무 위험 미미.
+   * 변경이 계속되면 null(다음 이벤트 재시도).
    */
   async function readStable(filePath: string): Promise<string | null> {
-    const first = await readMaybe(filePath);
-    if (first === null) return null;
+    const sigBefore = await fileSig(filePath);
+    if (sigBefore === null) return null;
+    const content = await readMaybe(filePath);
+    if (content === null) return null;
+    const sigAfter = await fileSig(filePath);
+    if (sigAfter === sigBefore) return content; // read 동안 변경 없음 → 안정 스냅샷
+
+    // 쓰기 진행 중 — settle 후 재확인(잘린 내용 방지).
     await new Promise((r) => setTimeout(r, READ_SETTLE_MS));
     const second = await readMaybe(filePath);
-    if (second === null || second !== first) return null;
+    if (second === null || second !== content) return null;
     return second;
   }
 
@@ -550,6 +573,32 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     }
   }
 
+  /** 승인 파일 marker 의 종단 상태(allow/deny) — pending·부재는 null. 이동 판정의 SoT(파일 기반). */
+  function approvalTerminalStatus(content: string): "allow" | "deny" | null {
+    const m = PERM_MARKER.exec(content);
+    if (!m) return null;
+    const status = m[2];
+    return status === "allow" || status === "deny" ? status : null;
+  }
+
+  /**
+   * 종단(allow/deny) 승인 파일을 .decided/ 로 이동(M6). 종단 판정은 파일 marker(위) 기반이라
+   * permTimers(비영속, 재기동 시 빔) 에 의존하지 않는다 — 재기동 후 잔존 종단 파일도 안전히 정리.
+   * pending 파일은 절대 호출되지 않는다(게이트 무결성). 이동 실패는 보조(정리)라 로그 후 흡수.
+   */
+  async function moveToDecided(fn: string): Promise<void> {
+    const src = join(approvalsDir, fn);
+    try {
+      await mkdir(decidedDir, { recursive: true });
+      await rename(src, join(decidedDir, fn));
+      lastSelfWrite.delete(src);
+    } catch (err) {
+      console.error(t("log.markdown.decidedMoveError", { file: fn, error: errMsg(err) }));
+      // 재시도 가능하게 echo 가드 해제 — 안 그러면 다음 스캔이 동일 content 로 skip 해 이동이 방치된다.
+      lastSelfWrite.delete(src);
+    }
+  }
+
   async function handleApprovals(): Promise<void> {
     await withApprovalsLock(async () => {
       let entries: string[];
@@ -559,6 +608,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
         return; // 디렉터리 부재 — 아직 요청 없음
       }
       for (const fn of entries) {
+        if (fn === ".decided") continue; // 종단 아카이브 — 스캔 제외
         if (!fn.endsWith(".md")) continue;
         if (isConflictFile(fn)) {
           await quarantine(fn, approvalsDir);
@@ -579,6 +629,9 @@ export function createMarkdownSource(cfg: SourceContext): Source {
           for (const cb of decisionHandlers) cb(d.reqId, d.decision);
         }
         if (parsed.changed) await atomicWrite(file, parsed.newContent);
+        // 종단분은 .decided/ 로 이관 — 이번 패스에서 결정됐든(changed) 재기동 잔존 종단분이든 멱등 정리.
+        const finalContent = parsed.changed ? parsed.newContent : content;
+        if (approvalTerminalStatus(finalContent) !== null) await moveToDecided(fn);
       }
     });
   }
@@ -614,10 +667,11 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     );
   }
 
-  async function renderOut(id: string): Promise<void> {
-    const text = await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
+  async function renderOut(id: string, hint?: RenderHint): Promise<void> {
+    // hint(injector 메모리) 있으면 디스크 재read 생략(M7). 없으면(크래시 flush) 디스크에서 읽는다.
+    const text = hint ? hint.text : await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
     // sidecar 읽기는 queue.readSidecar 로 일원화(부재·파손 → null = 메타 없이 진행).
-    const sidecar = await readSidecar(cfg.paths, id);
+    const sidecar = hint ? hint.sidecar : await readSidecar(cfg.paths, id);
     // 파일명 스탬프는 전송 시각(origin_ts) 유래 — 재렌더에도 결정론적.
     // origin_ts 부재(구버전 sidecar)는 종전 `<id>.md` 유지.
     const stamp = sidecar?.origin_ts ? stampFromIso(sidecar.origin_ts) : null;
@@ -717,26 +771,33 @@ export function createMarkdownSource(cfg: SourceContext): Source {
    * 폴링 백스톱 1회(B2): inbox 파일·approvals 디렉터리 시그니처 변화 시 watch 와 동일한 debounce
    * 핸들러 트리거. watch 가 놓친 이벤트를 보정. 핸들러의 self-write·busy 가드가 중복을 멱등 흡수.
    */
-  async function pollOnce(): Promise<void> {
-    if (!running || pollBusy) return;
+  /** 폴 1회 — 변화(재트리거 또는 충돌 격리) 감지 시 true 반환(적응형 간격 리셋 신호). */
+  async function pollOnce(): Promise<boolean> {
+    if (!running || pollBusy) return false;
     pollBusy = true;
+    let changed = false;
     try {
       const inboxSig = await fileSig(inboxPath);
       if (inboxSig !== null && lastFileSig.get(inboxPath) !== inboxSig) {
         lastFileSig.set(inboxPath, inboxSig);
         debounce(inboxPath, runInbox);
+        changed = true;
       }
       const apprSig = await dirSig(approvalsDir);
       if (apprSig !== null && lastFileSig.get(approvalsDir) !== apprSig) {
         lastFileSig.set(approvalsDir, apprSig);
         debounce(approvalsDir, runApprovals);
+        changed = true;
       }
       // 충돌 파일 격리 백스톱: inbox 파일 시그니처·approvals 시그니처는 "충돌 파일 생성" 을
       // 포착하지 못하므로(watch 가 생성 이벤트를 놓치면 영구 방치) 인박스 디렉터리를 직접 스캔.
       try {
         const entries = await readdir(dirname(inboxPath));
         for (const fn of entries) {
-          if (isConflictFile(fn)) await quarantine(fn, dirname(inboxPath));
+          if (isConflictFile(fn)) {
+            await quarantine(fn, dirname(inboxPath));
+            changed = true;
+          }
         }
       } catch {
         // 디렉터리 부재 — 다음 폴에서 재시도
@@ -744,6 +805,31 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     } finally {
       pollBusy = false;
     }
+    return changed;
+  }
+
+  /**
+   * 적응형 폴 스케줄러 — 무변경이 POLL_IDLE_STEPS 회 이어질 때마다 간격을 2배(최대 POLL_MAX)로
+   * 확장하고, 변경 감지 시 base 로 즉시 복귀한다. setInterval 대신 self-reschedule 로 간격을 가변화.
+   */
+  function schedulePoll(): void {
+    pollTimer = setTimeout(() => {
+      pollOp = pollOnce()
+        .then((changed) => {
+          if (changed) {
+            pollDelay = POLL_INTERVAL_MS;
+            pollIdleTicks = 0;
+          } else if (++pollIdleTicks >= POLL_IDLE_STEPS) {
+            pollIdleTicks = 0;
+            pollDelay = Math.min(pollDelay * 2, POLL_MAX_INTERVAL_MS);
+          }
+        })
+        .catch((err: unknown) => console.error(t("log.markdown.pollError", { error: errMsg(err) })))
+        .finally(() => {
+          if (running) schedulePoll();
+        });
+    }, pollDelay);
+    pollTimer.unref(); // 폴 백스톱이 이벤트 루프를 살려두지 않도록(heartbeat 와 동일).
   }
 
   function start(): void {
@@ -833,17 +919,15 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     // 폴링 백스톱(B2): watch 가 이벤트를 놓쳐도 주기적으로 보정. inbox baseline seed 후 인터벌 시작.
     // approvals 는 디렉터리라 첫 폴에서 시그니처를 seed(첫 폴 1회 스캔은 멱등이라 무해).
     seedSig(inboxPath);
-    pollTimer = setInterval(() => {
-      pollOp = pollOnce().catch((err: unknown) =>
-        console.error(t("log.markdown.pollError", { error: errMsg(err) })),
-      );
-    }, POLL_INTERVAL_MS);
+    pollDelay = POLL_INTERVAL_MS;
+    pollIdleTicks = 0;
+    schedulePoll();
   }
 
   async function stop(): Promise<void> {
     running = false;
     if (pollTimer) {
-      clearInterval(pollTimer);
+      clearTimeout(pollTimer);
       pollTimer = null;
     }
     for (const w of watchers) w.close();
@@ -890,10 +974,13 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       void withApprovalsLock(async () => {
         const file = approvalFile(req.id);
         const content = await readMaybe(file);
-        if (content === null) return;
+        if (content === null) return; // 이미 사용자 결정으로 .decided/ 이동됨(handleApprovals)
         const parsed = finalizeApprovalDeny(content, req.id, "timeout");
         if (parsed.changed) await atomicWrite(file, parsed.newContent);
-      });
+        await moveToDecided(`${req.id}.md`); // 종단(deny) → 아카이브 이관(M6)
+      }).catch((err: unknown) =>
+        console.error(t("log.markdown.approvalsError", { error: errMsg(err) })),
+      );
       for (const cb of decisionHandlers) cb(req.id, "deny");
     }, gateTimeoutMs);
     permTimers.set(req.id, timer);

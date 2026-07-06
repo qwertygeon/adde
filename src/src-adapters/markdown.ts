@@ -217,9 +217,10 @@ export function renderApprovalBlock(
   req: PermRequest,
   tl: NotifyT = t,
   now: Date = new Date(),
+  timeoutMs: number = DEFAULT_GATE_TIMEOUT_MS,
 ): string {
   const detail = req.detail.replace(/\s+/g, " ").trim();
-  const deadline = new Date(now.getTime() + DEFAULT_GATE_TIMEOUT_MS);
+  const deadline = new Date(now.getTime() + timeoutMs);
   return [
     `### ⏳ req ${req.id} · ${req.tool}`,
     `> ${detail}  (cwd: ${req.cwd})`,
@@ -340,6 +341,11 @@ function resolvePaths(conf: LaneConf): {
 export function createMarkdownSource(cfg: SourceContext): Source {
   const tl = tFor(cfg.conf.lang);
   const { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir } = resolvePaths(cfg.conf);
+  // 옵트인 게이트 타임아웃(초→ms) — 승인 블록 기한 표기·어댑터 로컬 타이머를 게이트와 동일 기준으로 맞춘다.
+  const gateTimeoutMs =
+    cfg.conf.gate_timeout_sec !== undefined
+      ? cfg.conf.gate_timeout_sec * 1000
+      : DEFAULT_GATE_TIMEOUT_MS;
 
   const decisionHandlers: DecisionCallback[] = [];
   const watchers: FSWatcher[] = [];
@@ -856,8 +862,9 @@ export function createMarkdownSource(cfg: SourceContext): Source {
   }
 
   /**
-   * 요청당 승인 파일 경로(D). reqId 는 엔진이 통제하는 sessionId 이므로(client.ts) 경로 탈출 차단:
-   * 승인 파일은 approvalsDir 의 *직속 자식* 이어야 한다 — `..`·`/` 등이 섞이면 fail-closed throw
+   * 요청당 승인 파일 경로(D). reqId 는 ADDE 가 [A-Za-z0-9_-] charset 으로 생성하는 per-call
+   * 고유키(client.ts mintPermId)지만, 경로 탈출은 방어심화로 항상 차단한다: 승인 파일은
+   * approvalsDir 의 *직속 자식* 이어야 하며 `..`·`/` 등이 섞이면 fail-closed throw
    * (게이트가 sendPermPrompt throw 를 deny 로 처리). AI 가 승인 노트를 임의 경로에 위조하는 것을 막는다.
    */
   function approvalFile(reqId: string): string {
@@ -871,7 +878,10 @@ export function createMarkdownSource(cfg: SourceContext): Source {
   async function requestPermission(req: PermRequest): Promise<void> {
     // 요청당 파일(D, 백로그 B3) — 단일 파일 append 대신 격리해 동시 편집 충돌면 축소.
     await withApprovalsLock(async () => {
-      await atomicWrite(approvalFile(req.id), renderApprovalBlock(req, tl));
+      await atomicWrite(
+        approvalFile(req.id),
+        renderApprovalBlock(req, tl, new Date(), gateTimeoutMs),
+      );
     });
 
     // 어댑터-로컬 타임아웃 — 무응답 시 해당 요청 파일을 deny 로 종단(게이트도 독립 deny).
@@ -885,7 +895,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
         if (parsed.changed) await atomicWrite(file, parsed.newContent);
       });
       for (const cb of decisionHandlers) cb(req.id, "deny");
-    }, DEFAULT_GATE_TIMEOUT_MS);
+    }, gateTimeoutMs);
     permTimers.set(req.id, timer);
   }
 

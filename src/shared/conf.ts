@@ -52,6 +52,11 @@ export interface LaneConf {
    * 미지정 시 private(secure-by-default).
    */
   file_mode?: string;
+  /**
+   * 게이트 승인 대기 타임아웃(초, 옵트인). 미지정 시 기본 600초(DEFAULT_GATE_TIMEOUT_MS).
+   * 초과 시 fail-closed deny. 사람 승인 레인은 길게, 자동화 레인은 짧게 조정 가능.
+   */
+  gate_timeout_sec?: number;
   /** markdown 어댑터 전용 설정(`markdown.*` 키). 관련 키가 없으면 undefined. */
   markdown?: MarkdownLaneConf;
   /** telegram 어댑터 전용 설정(`telegram.*` 키). 관련 키가 없으면 undefined. */
@@ -126,6 +131,13 @@ export function parseLaneConf(text: string): LaneConf {
     }
   }
 
+  // 수치 optional — 양의 정수만 채택(무효/0/음수는 무시 → 소비측 기본값).
+  const gateTimeoutSec = conf["gate_timeout_sec"];
+  if (gateTimeoutSec !== undefined && gateTimeoutSec.length > 0) {
+    const n = Number.parseInt(gateTimeoutSec, 10);
+    if (Number.isFinite(n) && n > 0) result.gate_timeout_sec = n;
+  }
+
   // 어댑터 네임스페이스(`<ns>.<field>`) — 필드가 하나라도 있으면 서브객체 생성.
   for (const [ns, fields] of Object.entries(NAMESPACE_FIELDS)) {
     const sub: Record<string, string> = {};
@@ -170,6 +182,7 @@ export function serializeLaneConf(conf: LaneConf): string {
     const value = conf[key];
     if (value !== undefined && value.length > 0) lines.push(`${key}=${value}`);
   }
+  if (conf.gate_timeout_sec !== undefined) lines.push(`gate_timeout_sec=${conf.gate_timeout_sec}`);
   for (const [ns, fields] of Object.entries(NAMESPACE_FIELDS)) {
     const sub = (conf as unknown as Record<string, unknown>)[ns] as
       Record<string, string> | undefined;

@@ -9,6 +9,8 @@ import {
   extractPermDecision,
   recordToolName,
   resolveToolName,
+  formatPermId,
+  AcpBackendImpl,
 } from "../../src/backend/acp/client.js";
 
 // A2/DEC-002: allowlist auto-allow 판정
@@ -340,5 +342,52 @@ describe("extractPermDecision — requestPermission 배선 통합 (F4)", () => {
     const r = extractPermDecision(params, toolNames, { perm_tier: "acp", allowlist: ["Read"] });
     expect(r.toolTitle).toBe("unknown");
     expect(r.decision).toEqual({ kind: "auto", via: "allowlist" });
+  });
+});
+
+// F11: 승인 상관키는 per-call 고유여야 한다. sessionId 를 그대로 쓰면 세션 내 전 요청이
+// 같은 키를 공유 → 스테일 버튼·병렬 호출이 서로의 대기자·승인파일을 오귀속/덮어쓴다.
+describe("formatPermId (F11 per-call 고유 승인키)", () => {
+  const SAFE = /^[A-Za-z0-9_-]+$/;
+
+  it("같은 세션의 연속 seq 는 서로 다른 키를 만든다 (오귀속 방지 핵심)", () => {
+    const s = "sess-abc";
+    expect(formatPermId(s, 0)).not.toBe(formatPermId(s, 1));
+    expect(formatPermId(s, 0)).toBe("sess-abc-0");
+    expect(formatPermId(s, 1)).toBe("sess-abc-1");
+  });
+
+  it("결과 charset 은 [A-Za-z0-9_-] 이고 deny: 접두 포함 64바이트 예산 내다", () => {
+    // 긴/적대적 sessionId 여도 프리픽스 12자 절단 → 예산 보장.
+    const id = formatPermId("x".repeat(200), 999999);
+    expect(id).toMatch(SAFE);
+    expect(Buffer.byteLength(`deny:${id}`, "utf8")).toBeLessThanOrEqual(64);
+  });
+
+  it("sessionId 의 비안전 문자는 _ 로 새니타이즈하고 앞 12자로 절단한다", () => {
+    // "a/b:c d.e#f/gh/ij/kl" → 새니타이즈 "a_b_c_d_e_f_gh_ij_kl" → 앞 12자 "a_b_c_d_e_f_"
+    const id = formatPermId("a/b:c d.e#f/gh/ij/kl", 3);
+    expect(id).toMatch(SAFE);
+    expect(id).toBe("a_b_c_d_e_f_-3");
+  });
+
+  it("빈 sessionId 는 기본 프리픽스 s 로 대체한다", () => {
+    expect(formatPermId("", 0)).toBe("s-0");
+  });
+
+  it("동일 (sessionId, seq) 는 결정론적으로 같은 키다 (테스트 재현성)", () => {
+    expect(formatPermId("sess", 7)).toBe(formatPermId("sess", 7));
+  });
+
+  // 카운터가 인스턴스 필드라 같은 impl 의 연속 발급이 단조 증가한다. relaunch/reset 은 같은
+  // AcpBackendImpl 을 재사용하므로(client.ts), 이 단조성이 곧 재기동을 넘는 키 유일성 보장이다.
+  it("mintPermId 는 인스턴스에서 단조 증가하는 고유키를 발급한다 (재기동 넘어 유지)", () => {
+    const backend = new AcpBackendImpl("/nonexistent-bin");
+    const mint = (backend as unknown as { mintPermId(s: string): string }).mintPermId.bind(backend);
+    const first = mint("sess-x");
+    const second = mint("sess-x");
+    expect(first).toBe("sess-x-0");
+    expect(second).toBe("sess-x-1");
+    expect(first).not.toBe(second);
   });
 });

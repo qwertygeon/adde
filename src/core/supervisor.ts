@@ -311,7 +311,14 @@ export async function supervisorUp(
         };
 
         try {
-          return await gateRequestDecision(req, { sendPermPrompt, waitForDecision });
+          return await gateRequestDecision(req, {
+            sendPermPrompt,
+            waitForDecision,
+            // 옵트인 conf 재정의(초→ms). 미지정 시 게이트 기본(600초) 사용.
+            ...(conf.gate_timeout_sec !== undefined
+              ? { timeoutMs: conf.gate_timeout_sec * 1000 }
+              : {}),
+          });
         } finally {
           // 모든 종결 경로(timeout·전송오류·정상결정)에서 대기자 정리 — timeout 시 영구 잔존 누수 제거.
           // 늦게 도착한 콜백은 빈 맵에서 no-op(무해).

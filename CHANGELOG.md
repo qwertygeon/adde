@@ -8,6 +8,14 @@
 
 - 마크다운 노트 우선 정체성 정렬 — `package.json` 설명문·keywords(`markdown`/`notes` 추가), README 미션 문장을 "마크다운 노트에서 AI 구동(로컬 파일 — 채팅은 부가)" 으로 조정. 마크다운 가이드의 동기화 프레이밍을 특정 도구(Obsidian) 격상에서 **도구 중립("어떤 동기화 도구를 쓰든 안전")·로컬 노트 우선**으로 정렬(Obsidian 은 예시로 강등). getting-started 미션 문장도 동일 정렬.
 
+### Added
+
+- 레인 conf `gate_timeout_sec` — 권한 승인 대기 타임아웃(초)을 레인별로 재정의하는 옵트인 키. 미지정 시 기본 600초(동작 불변). 사람 승인 레인은 길게, 자동화 레인은 짧게 조정 가능. 게이트·markdown 승인 블록 기한·어댑터 로컬 타임아웃이 동일 값으로 정렬된다. (종전 "conf 재정의 가능" 문서화가 실제로는 미배선이던 dead config 를 해소.)
+
+### Fixed
+
+- 권한 게이트 타임아웃 타이머가 결정 승리(사용자 allow/deny)·전송 오류 종결 경로에서 `clearTimeout` 되지 않아, 결정 후에도 최대 `gate_timeout_sec`(기본 10분)만큼 타이머가 상주하던 누수를 제거. 24시간 상주 시 요청마다 누적되던 상주 타이머를 종결 즉시 정리한다.
+
 ### Changed
 
 - **[BREAKING] 레인 conf 어댑터 키 네임스페이스화** — 어댑터 전용 키를 `<source>.<field>` 로 네임스페이스한다: `root`/`inbox`/`approvals`/`outbox` → `markdown.root`/`markdown.inbox`/`markdown.approvals`/`markdown.outbox`, `chat_id`/`allow_from` → `telegram.chat_id`/`telegram.allow_from`. 공통 키(source·backend·engine·cwd·lang·file_mode·allow/deny리스트)는 최상위 유지. **구 평면 키는 폐기(back-compat read 없음)** — 파서가 무시하므로 값이 반영되지 않는다. `adde doctor` 가 구 키를 `conf format` FAIL 로 감지해 마이그레이션을 안내하고, `adde up` 기동 시에도 경고를 남긴다.
@@ -17,6 +25,7 @@
 
 ### Security
 
+- 권한 승인 상관키를 세션 id 에서 **요청당 고유키**(`<세션프리픽스>-<인스턴스 카운터>`, charset `[A-Za-z0-9_-]`)로 교체 — 세션 내 전 권한요청이 같은 상관키(sessionId)를 공유해 ⓐ 타임아웃된 이전 요청의 스테일 버튼이 지금 대기 중인 다른 요청을 승인시키고 ⓑ 병렬 tool 호출이 supervisor 대기자 맵·markdown 승인파일을 상호 덮어쓰던 **게이트 오귀속(fail-safe 아님)** 을 차단한다. telegram callback_data(≤64B)·markdown 파일명·envelope msg-id 정규식 모두에 안전한 문자집합. markdown 승인파일 경로가드는 방어심화로 유지.
 - autopass/safe_defaults 권한 게이트를 **정규화 기반 인식기**로 견고화 — 리터럴 글롭이 플래그 순서·번들·롱숏·절대경로·래퍼·이중공백·셸 중첩으로 우회되던 공백을 일괄 차단한다. 명령을 정규화(경로 `/bin/rm`→`rm`·래퍼 `env`/`nice`/`command`/`time`/`timeout`/`nohup`/`xargs`/`\` 벗김·따옴표·이중공백 흡수·`$HOME`/`${HOME}`→홈 확장·`sh -c`/`bash -c` 페이로드 재귀 분해)한 뒤 형태 불문으로 대조:
   - **rm**: 재귀 플래그(`-r`·`-R`·`-fr`·`-rfv`·`--recursive`·번들) + 대상 스코프(`/`·`~`·`.`·`$HOME`). `-f` 없는 `rm -r`·`rm -rf $HOME` 등 포섭(상대경로 대상은 종전대로 자율 허용 — 스코프 불변).
   - **git**: 전역옵션(`-C`·`-c` 등)을 건너뛴 서브커맨드 기준 — `push` 강제(`--force`/`--force-with-lease`/`-f`/**`+refspec`**), `reset --hard`, `clean` 강제(`-f`; `-d` 없이도). `git push origin +main`·`git -C <dir> push --force`·`git clean -df` 등 포섭.

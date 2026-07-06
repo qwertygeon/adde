@@ -16,6 +16,8 @@ import {
   finalizeApprovalDeny,
   isConflictFile,
   createMarkdownSource,
+  ensureBlankSend,
+  blankSendLine,
 } from "../../src/src-adapters/markdown.js";
 import type { Source } from "../../src/src-adapters/source.js";
 import type { PermRequest } from "../../src/gate/gate.js";
@@ -79,6 +81,13 @@ describe("parseInbox (actions)", () => {
     expect(parseInbox("msg\n- [x] 🚀 send\n").actions[0]).toMatchObject({ kind: "fresh" });
   });
 
+  it("CRLF(\\r\\n) 저장 노트의 체크된 send 도 트리거로 인식한다", () => {
+    const r = parseInbox("메시지\r\n- [x] 📤 send\r\n");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh" });
+    expect(r.actions[0]!.text).toContain("메시지");
+  });
+
   it("A4: 트리거가 아닌 사용자 체크박스는 본문에 포함(경계 아님)", () => {
     const r = parseInbox("- [ ] buy milk\n해주세요\n- [x] send\n");
     expect(r.actions).toHaveLength(1);
@@ -98,6 +107,52 @@ describe("parseInbox (actions)", () => {
   it("A3: 구버전 sending 마커(스탬프 없음)는 stamp 없이 resume 액션", () => {
     const r = parseInbox("재개\n- [x] ⏳ sending old-id\n");
     expect(r.actions).toEqual([{ kind: "resume", id: "old-id", text: "재개", lineIndex: 1 }]);
+  });
+});
+
+describe("ensureBlankSend (M8 상시 빈 send)", () => {
+  it("미체크 빈 send 가 없으면 끝에 하나 추가하고 true 를 반환한다 (문서 관습 이모지 표기)", () => {
+    const lines = ["보낸 메시지", sentLine("id-1", STAMP)];
+    expect(ensureBlankSend(lines)).toBe(true);
+    expect(lines[lines.length - 1]).toBe(blankSendLine());
+    expect(blankSendLine()).toBe("- [ ] 📤 send");
+  });
+
+  it("이미 미체크 빈 send 가 있으면 무변경·false (중복 방지)", () => {
+    const lines = ["초안", "- [ ] send"];
+    const before = [...lines];
+    expect(ensureBlankSend(lines)).toBe(false);
+    expect(lines).toEqual(before);
+  });
+
+  it("이모지-접두 미체크 send 도 기존 트리거로 인식해 중복 추가하지 않는다", () => {
+    expect(ensureBlankSend(["- [ ] 📤 send"])).toBe(false);
+    expect(ensureBlankSend(["- [ ] 🚀 send"])).toBe(false);
+  });
+
+  it("send 가 아닌 미체크 체크박스는 트리거로 세지 않는다 (초안 to-do 오인 금지)", () => {
+    const lines = ["- [ ] buy milk", "- [ ] send now"]; // 정확 일치 아님
+    expect(ensureBlankSend(lines)).toBe(true);
+    expect(lines[lines.length - 1]).toBe(blankSendLine());
+  });
+
+  it("체크된 send(대소문자 [x]/[X] = 소모)만 있으면 새 빈 send 를 추가한다", () => {
+    const lower = ["보낼 것", "- [x] send"];
+    expect(ensureBlankSend(lower)).toBe(true);
+    expect(lower.filter((l) => l === blankSendLine())).toHaveLength(1);
+    const upper = ["보낼 것", "- [X] send"];
+    expect(ensureBlankSend(upper)).toBe(true);
+    expect(upper.filter((l) => l === blankSendLine())).toHaveLength(1);
+  });
+
+  it("CRLF(\\r) 미체크 send 도 기존 트리거로 인식한다 (중복 추가 없음)", () => {
+    expect(ensureBlankSend(["- [ ] send\r"])).toBe(false);
+  });
+
+  it("추가된 빈 send 는 미체크라 parseInbox 액션이 되지 않는다 (오전송 없음)", () => {
+    const lines = [sentLine("id-1", STAMP)];
+    ensureBlankSend(lines);
+    expect(parseInbox(lines.join("\n")).actions).toHaveLength(0);
   });
 });
 
@@ -379,9 +434,54 @@ describe("createMarkdownSource (통합)", () => {
     // 인박스가 sent 종단으로 재작성됨
     await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("sent"));
 
-    // 자기쓰기 가드: 종단 후 추가 enqueue 없음
+    // M8: 소모된 send 를 대체할 빈 send 가 정확히 하나 준비된다(단일 write 통합).
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(blankSendLine()));
+    const finalInbox = fs.readFileSync(inboxPath, "utf8");
+    const blanks = finalInbox.split("\n").filter((l) => l === blankSendLine());
+    expect(blanks).toHaveLength(1);
+    // finding2 회귀: 트레일링 개행 누적 없음 + sent 와 blank send 사이 공백줄 없음(개행 위생).
+    expect(finalInbox.endsWith("\n\n")).toBe(false);
+    expect(finalInbox).not.toContain("\n\n" + blankSendLine());
+
+    // 자기쓰기 가드: 종단 후 추가 enqueue 없음(빈 send 추가는 미체크라 재트리거 안 됨)
     await new Promise((r) => setTimeout(r, 200));
     expect(msgCount()).toBe(1);
+  });
+
+  it("M8: 미체크 send 가 없는 inbox(재기동·삭제)면 빈 send 를 self-heal 한다 (액션 없음)", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    // sent 종단만 있고 사용 가능한 미체크 send 가 없는 상태(예: 재기동 후).
+    fs.writeFileSync(inboxPath, "지난 메시지\n" + sentLine("old-id", STAMP) + "\n");
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(blankSendLine()));
+    // 액션이 아니므로 큐잉 없음(빈 send 만 추가).
+    expect(msgCount()).toBe(0);
+    // 멱등: 이후 스캔이 두 번째 빈 send 를 추가하지 않는다.
+    await new Promise((r) => setTimeout(r, 200));
+    const blanks = fs
+      .readFileSync(inboxPath, "utf8")
+      .split("\n")
+      .filter((l) => l === blankSendLine());
+    expect(blanks).toHaveLength(1);
+  });
+
+  it("M8: 미체크 빈 send 만 있는 inbox 는 전송하지 않고 유지한다 (오전송 없음)", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, blankSendLine() + "\n");
+
+    source = makeSource();
+    source.start();
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(msgCount()).toBe(0); // 미체크 → 액션 없음 → enqueue 없음
+    const blanks = fs
+      .readFileSync(inboxPath, "utf8")
+      .split("\n")
+      .filter((l) => l === blankSendLine());
+    expect(blanks).toHaveLength(1); // 이미 있으므로 추가도 없음
   });
 
   // FR-12: enqueue 연속 실패 임계 도달 시 outbox 알림 노트 1회
@@ -402,6 +502,8 @@ describe("createMarkdownSource (통합)", () => {
     const alertPath = path.join(rootDir, "out", "_enqueue-alert.md");
     await waitFor(() => fs.existsSync(alertPath));
     expect(fs.readFileSync(alertPath, "utf8")).toContain("enqueue");
+    // finding3(enqueue 전량 실패 경로): finalize 없음에도 빈 send 는 보장된다(else-if 분기).
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(blankSendLine()));
   });
 
   // A3: 크래시(enqueue 전 sending 마킹만 남음) → 재기동 시 정확히 1회 enqueue
@@ -430,6 +532,12 @@ describe("createMarkdownSource (통합)", () => {
     // 중복 없음
     await new Promise((r) => setTimeout(r, 150));
     expect(msgCount()).toBe(1);
+    // finding3(resume 경로): 종단과 함께 빈 send 가 정확히 하나 준비된다(Phase B 통합).
+    const blanks = fs
+      .readFileSync(inboxPath, "utf8")
+      .split("\n")
+      .filter((l) => l === blankSendLine());
+    expect(blanks).toHaveLength(1);
   });
 
   // A3: 이미 처리된 sending(out 존재) → 재enqueue 없이 종단만

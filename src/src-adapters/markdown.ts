@@ -47,7 +47,9 @@ export function isConflictFile(filename: string): boolean {
 }
 
 /** 체크박스 라인 파싱: `- [ ]`/`- [x]` + 라벨. */
-const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)$/;
+// `\r?$` — CRLF 저장 노트(Windows 에디터·일부 동기 도구)의 라인 끝 \r 을 허용해 send/제어
+// 트리거를 놓치지 않는다(`.` 는 \r 를 매칭하지 않으므로 명시 필요).
+const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)\r?$/;
 
 /** 라벨 앞쪽의 이모지·기호·공백을 제거한 본문(대소문자 보존 — resume 인자의 세션 id 는 대문자 포함 가능). */
 function labelBody(label: string): string {
@@ -132,6 +134,30 @@ export function sentLine(id: string, stamp: string): string {
 }
 export function emptyLine(): string {
   return "- [x] ⚠️ empty (no message)";
+}
+/** 항상 준비되는 빈 send 트리거(M8) — 사용자가 매번 send 줄을 만들 필요 없게 한다.
+ * 문서 관습(`- [ ] 📤 send`)과 동일 표기로 self-heal 라인의 시각 일관성을 맞춘다. */
+export function blankSendLine(): string {
+  return "- [ ] 📤 send";
+}
+
+/**
+ * inbox 에 미체크 빈 `- [ ] 📤 send` 트리거가 하나도 없으면 하나 추가(M8, 상시 빈 send).
+ * 이미 있으면 무변경(중복 방지). 추가는 미체크라 parseInbox 가 액션으로 삼지 않는다(오전송 없음).
+ * 추가했으면 true(호출부가 write 여부 판단). lines 를 in-place 변경.
+ * 삽입 위치는 **끝의 빈 줄들 앞** — split 의 트레일링 빈 요소와 blank send 사이에 공백줄이 끼어
+ * 누적되는 것을 막는다(joinLines 와 함께 개행 위생 유지).
+ */
+export function ensureBlankSend(lines: string[]): boolean {
+  const hasUnchecked = lines.some((line) => {
+    const cb = CHECKBOX.exec(line);
+    return cb !== null && cb[1] === " " && isSendLabel(cb[2]!.trim());
+  });
+  if (hasUnchecked) return false;
+  let insertAt = lines.length;
+  while (insertAt > 0 && lines[insertAt - 1] === "") insertAt--;
+  lines.splice(insertAt, 0, blankSendLine());
+  return true;
 }
 
 /**
@@ -456,7 +482,11 @@ export function createMarkdownSource(cfg: SourceContext): Source {
   }
 
   function joinLines(lines: string[], trailingNewline: boolean): string {
-    return lines.join("\n") + (trailingNewline ? "\n" : "");
+    // 멱등 트레일링 개행 — split 의 트레일링 빈 요소가 이미 개행을 만들므로, 무조건 "\n" 을 더하면
+    // 재작성마다 개행이 하나씩 누적된다(inbox 비대화). 이미 개행으로 끝나면 그대로 둔다.
+    const body = lines.join("\n");
+    if (!trailingNewline) return body;
+    return body.endsWith("\n") ? body : body + "\n";
   }
 
   async function handleInbox(): Promise<void> {
@@ -468,7 +498,14 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       if (lastSelfWrite.get(inboxPath) === content) return; // 자기쓰기 echo
 
       const { actions, lines, trailingNewline } = parseInbox(content);
-      if (actions.length === 0) return;
+      if (actions.length === 0) {
+        // 액션이 없어도 상시 빈 send 유지(M8) — 초기·재기동·사용자 삭제 시 self-heal.
+        // 미체크 추가라 재파싱서 액션이 되지 않고, echo 가드가 자기쓰기 재트리거를 막는다.
+        if (ensureBlankSend(lines)) {
+          await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
+        }
+        return;
+      }
 
       // Phase A: fresh→id 부여+sending 마킹, empty→마킹 (내구 기록 후 enqueue).
       // control 은 단일 단계(마킹 없이 enqueue→sent 종단) — 재구성 불가한 제어 정보라 sending
@@ -529,6 +566,11 @@ export function createMarkdownSource(cfg: SourceContext): Source {
           });
         }
       }
+      // 상시 빈 send(M8)를 "이미 일어날 write" 에 태워 여분 write 를 피한다:
+      //  - enqueue 대상이 없으면(pending 0 = empty-only) Phase A 가 유일 write → 여기서 보충.
+      //  - pending 이 있으면 Phase B(sent write)에 태운다(아래). resume/control 은 Phase A 불필요.
+      // 추가는 미체크라 재파싱서 액션 아님. 크래시 시 blank 는 무해.
+      if (pending.length === 0 && ensureBlankSend(lines)) dirtyA = true;
       if (dirtyA) await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
 
       // enqueue (resume 이고 이미 존재하면 스킵) → 성공분만 종단 후보.
@@ -562,11 +604,15 @@ export function createMarkdownSource(cfg: SourceContext): Source {
         }
       }
 
-      // Phase B: enqueue 확정분을 sent 로 종단.
+      // Phase B: enqueue 확정분을 sent 로 종단 + 빈 send 를 같은 write 에 통합(소모 대체).
       if (finalize.length > 0) {
         for (const f of finalize) lines[f.lineIndex] = sentLine(f.id, f.stamp);
+        ensureBlankSend(lines);
         await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
         cfg.onInbound?.(); // injector 깨우기(in-process)
+      } else if (pending.length > 0 && ensureBlankSend(lines)) {
+        // pending 이 있었으나 전량 enqueue 실패(finalize 없음) — 빈 send 만 별도 보장(드묾).
+        await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
       }
     } finally {
       inboxBusy = false;

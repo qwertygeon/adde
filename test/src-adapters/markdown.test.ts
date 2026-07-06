@@ -436,11 +436,12 @@ describe("createMarkdownSource (통합)", () => {
 
     // M8: 소모된 send 를 대체할 빈 send 가 정확히 하나 준비된다(단일 write 통합).
     await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(blankSendLine()));
-    const blanks = fs
-      .readFileSync(inboxPath, "utf8")
-      .split("\n")
-      .filter((l) => l === blankSendLine());
+    const finalInbox = fs.readFileSync(inboxPath, "utf8");
+    const blanks = finalInbox.split("\n").filter((l) => l === blankSendLine());
     expect(blanks).toHaveLength(1);
+    // finding2 회귀: 트레일링 개행 누적 없음 + sent 와 blank send 사이 공백줄 없음(개행 위생).
+    expect(finalInbox.endsWith("\n\n")).toBe(false);
+    expect(finalInbox).not.toContain("\n\n" + blankSendLine());
 
     // 자기쓰기 가드: 종단 후 추가 enqueue 없음(빈 send 추가는 미체크라 재트리거 안 됨)
     await new Promise((r) => setTimeout(r, 200));
@@ -501,6 +502,8 @@ describe("createMarkdownSource (통합)", () => {
     const alertPath = path.join(rootDir, "out", "_enqueue-alert.md");
     await waitFor(() => fs.existsSync(alertPath));
     expect(fs.readFileSync(alertPath, "utf8")).toContain("enqueue");
+    // finding3(enqueue 전량 실패 경로): finalize 없음에도 빈 send 는 보장된다(else-if 분기).
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(blankSendLine()));
   });
 
   // A3: 크래시(enqueue 전 sending 마킹만 남음) → 재기동 시 정확히 1회 enqueue
@@ -529,6 +532,12 @@ describe("createMarkdownSource (통합)", () => {
     // 중복 없음
     await new Promise((r) => setTimeout(r, 150));
     expect(msgCount()).toBe(1);
+    // finding3(resume 경로): 종단과 함께 빈 send 가 정확히 하나 준비된다(Phase B 통합).
+    const blanks = fs
+      .readFileSync(inboxPath, "utf8")
+      .split("\n")
+      .filter((l) => l === blankSendLine());
+    expect(blanks).toHaveLength(1);
   });
 
   // A3: 이미 처리된 sending(out 존재) → 재enqueue 없이 종단만

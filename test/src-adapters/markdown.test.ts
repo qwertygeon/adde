@@ -81,6 +81,13 @@ describe("parseInbox (actions)", () => {
     expect(parseInbox("msg\n- [x] 🚀 send\n").actions[0]).toMatchObject({ kind: "fresh" });
   });
 
+  it("CRLF(\\r\\n) 저장 노트의 체크된 send 도 트리거로 인식한다", () => {
+    const r = parseInbox("메시지\r\n- [x] 📤 send\r\n");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh" });
+    expect(r.actions[0]!.text).toContain("메시지");
+  });
+
   it("A4: 트리거가 아닌 사용자 체크박스는 본문에 포함(경계 아님)", () => {
     const r = parseInbox("- [ ] buy milk\n해주세요\n- [x] send\n");
     expect(r.actions).toHaveLength(1);
@@ -104,11 +111,11 @@ describe("parseInbox (actions)", () => {
 });
 
 describe("ensureBlankSend (M8 상시 빈 send)", () => {
-  it("미체크 빈 send 가 없으면 끝에 하나 추가하고 true 를 반환한다", () => {
+  it("미체크 빈 send 가 없으면 끝에 하나 추가하고 true 를 반환한다 (문서 관습 이모지 표기)", () => {
     const lines = ["보낸 메시지", sentLine("id-1", STAMP)];
     expect(ensureBlankSend(lines)).toBe(true);
     expect(lines[lines.length - 1]).toBe(blankSendLine());
-    expect(blankSendLine()).toBe("- [ ] send");
+    expect(blankSendLine()).toBe("- [ ] 📤 send");
   });
 
   it("이미 미체크 빈 send 가 있으면 무변경·false (중복 방지)", () => {
@@ -118,10 +125,28 @@ describe("ensureBlankSend (M8 상시 빈 send)", () => {
     expect(lines).toEqual(before);
   });
 
-  it("체크된 send(사용 중)만 있으면 새 빈 send 를 추가한다", () => {
-    const lines = ["보낼 것", "- [x] send"]; // 체크됨 = 소모 예정 → 미체크 없음
+  it("이모지-접두 미체크 send 도 기존 트리거로 인식해 중복 추가하지 않는다", () => {
+    expect(ensureBlankSend(["- [ ] 📤 send"])).toBe(false);
+    expect(ensureBlankSend(["- [ ] 🚀 send"])).toBe(false);
+  });
+
+  it("send 가 아닌 미체크 체크박스는 트리거로 세지 않는다 (초안 to-do 오인 금지)", () => {
+    const lines = ["- [ ] buy milk", "- [ ] send now"]; // 정확 일치 아님
     expect(ensureBlankSend(lines)).toBe(true);
-    expect(lines.filter((l) => l === "- [ ] send")).toHaveLength(1);
+    expect(lines[lines.length - 1]).toBe(blankSendLine());
+  });
+
+  it("체크된 send(대소문자 [x]/[X] = 소모)만 있으면 새 빈 send 를 추가한다", () => {
+    const lower = ["보낼 것", "- [x] send"];
+    expect(ensureBlankSend(lower)).toBe(true);
+    expect(lower.filter((l) => l === blankSendLine())).toHaveLength(1);
+    const upper = ["보낼 것", "- [X] send"];
+    expect(ensureBlankSend(upper)).toBe(true);
+    expect(upper.filter((l) => l === blankSendLine())).toHaveLength(1);
+  });
+
+  it("CRLF(\\r) 미체크 send 도 기존 트리거로 인식한다 (중복 추가 없음)", () => {
+    expect(ensureBlankSend(["- [ ] send\r"])).toBe(false);
   });
 
   it("추가된 빈 send 는 미체크라 parseInbox 액션이 되지 않는다 (오전송 없음)", () => {
@@ -409,12 +434,12 @@ describe("createMarkdownSource (통합)", () => {
     // 인박스가 sent 종단으로 재작성됨
     await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("sent"));
 
-    // M8: 소모된 send 를 대체할 빈 `- [ ] send` 가 정확히 하나 준비된다(Phase B 단일 write 통합).
-    await waitFor(() => /^\s*-\s*\[ \]\s+send\s*$/m.test(fs.readFileSync(inboxPath, "utf8")));
+    // M8: 소모된 send 를 대체할 빈 send 가 정확히 하나 준비된다(단일 write 통합).
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(blankSendLine()));
     const blanks = fs
       .readFileSync(inboxPath, "utf8")
       .split("\n")
-      .filter((l) => /^\s*-\s*\[ \]\s+send\s*$/.test(l));
+      .filter((l) => l === blankSendLine());
     expect(blanks).toHaveLength(1);
 
     // 자기쓰기 가드: 종단 후 추가 enqueue 없음(빈 send 추가는 미체크라 재트리거 안 됨)
@@ -430,7 +455,7 @@ describe("createMarkdownSource (통합)", () => {
     source = makeSource();
     source.start();
 
-    await waitFor(() => /^\s*-\s*\[ \]\s+send\s*$/m.test(fs.readFileSync(inboxPath, "utf8")));
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(blankSendLine()));
     // 액션이 아니므로 큐잉 없음(빈 send 만 추가).
     expect(msgCount()).toBe(0);
     // 멱등: 이후 스캔이 두 번째 빈 send 를 추가하지 않는다.
@@ -438,7 +463,7 @@ describe("createMarkdownSource (통합)", () => {
     const blanks = fs
       .readFileSync(inboxPath, "utf8")
       .split("\n")
-      .filter((l) => /^\s*-\s*\[ \]\s+send\s*$/.test(l));
+      .filter((l) => l === blankSendLine());
     expect(blanks).toHaveLength(1);
   });
 
@@ -454,7 +479,7 @@ describe("createMarkdownSource (통합)", () => {
     const blanks = fs
       .readFileSync(inboxPath, "utf8")
       .split("\n")
-      .filter((l) => /^\s*-\s*\[ \]\s+send\s*$/.test(l));
+      .filter((l) => l === blankSendLine());
     expect(blanks).toHaveLength(1); // 이미 있으므로 추가도 없음
   });
 

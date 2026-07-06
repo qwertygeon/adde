@@ -47,7 +47,9 @@ export function isConflictFile(filename: string): boolean {
 }
 
 /** 체크박스 라인 파싱: `- [ ]`/`- [x]` + 라벨. */
-const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)$/;
+// `\r?$` — CRLF 저장 노트(Windows 에디터·일부 동기 도구)의 라인 끝 \r 을 허용해 send/제어
+// 트리거를 놓치지 않는다(`.` 는 \r 를 매칭하지 않으므로 명시 필요).
+const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)\r?$/;
 
 /** 라벨 앞쪽의 이모지·기호·공백을 제거한 본문(대소문자 보존 — resume 인자의 세션 id 는 대문자 포함 가능). */
 function labelBody(label: string): string {
@@ -133,9 +135,10 @@ export function sentLine(id: string, stamp: string): string {
 export function emptyLine(): string {
   return "- [x] ⚠️ empty (no message)";
 }
-/** 항상 준비되는 빈 send 트리거(M8) — 사용자가 매번 send 줄을 만들 필요 없게 한다. */
+/** 항상 준비되는 빈 send 트리거(M8) — 사용자가 매번 send 줄을 만들 필요 없게 한다.
+ * 문서 관습(`- [ ] 📤 send`)과 동일 표기로 self-heal 라인의 시각 일관성을 맞춘다. */
 export function blankSendLine(): string {
-  return "- [ ] send";
+  return "- [ ] 📤 send";
 }
 
 /**
@@ -555,6 +558,10 @@ export function createMarkdownSource(cfg: SourceContext): Source {
           });
         }
       }
+      // 상시 빈 send 를 Phase A(enqueue 전 durable write)에 통합 — 별도 write 를 피한다(M8).
+      // sending/empty 로 소모된 트리거를 대체할 미체크 send 를 여기서 보충하면, finalize 유무와
+      // 무관하게 단일 write 로 준비된다(추가는 미체크라 재파싱서 액션 아님). 크래시 시 blank 는 무해.
+      if (ensureBlankSend(lines)) dirtyA = true;
       if (dirtyA) await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
 
       // enqueue (resume 이고 이미 존재하면 스킵) → 성공분만 종단 후보.
@@ -588,15 +595,11 @@ export function createMarkdownSource(cfg: SourceContext): Source {
         }
       }
 
-      // Phase B: enqueue 확정분을 sent 로 종단 + 상시 빈 send 유지(단일 write 에 통합, M8).
+      // Phase B: enqueue 확정분을 sent 로 종단(빈 send 는 Phase A 에서 이미 준비됨).
       if (finalize.length > 0) {
         for (const f of finalize) lines[f.lineIndex] = sentLine(f.id, f.stamp);
-        ensureBlankSend(lines); // sent 로 소모된 send 를 대체할 빈 트리거 준비(같은 write)
         await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
         cfg.onInbound?.(); // injector 깨우기(in-process)
-      } else if (ensureBlankSend(lines)) {
-        // finalize 없음(예: empty 마킹만·enqueue 전량 실패) — 빈 send 만 별도 보장.
-        await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
       }
     } finally {
       inboxBusy = false;

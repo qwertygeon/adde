@@ -133,6 +133,25 @@ export function sentLine(id: string, stamp: string): string {
 export function emptyLine(): string {
   return "- [x] ⚠️ empty (no message)";
 }
+/** 항상 준비되는 빈 send 트리거(M8) — 사용자가 매번 send 줄을 만들 필요 없게 한다. */
+export function blankSendLine(): string {
+  return "- [ ] send";
+}
+
+/**
+ * inbox 에 미체크 빈 `- [ ] send` 트리거가 하나도 없으면 끝에 하나 추가(M8, 상시 빈 send).
+ * 이미 있으면 무변경(중복 방지). 추가는 미체크라 parseInbox 가 액션으로 삼지 않는다(오전송 없음).
+ * 추가했으면 true(호출부가 write 여부 판단). lines 를 in-place 변경.
+ */
+export function ensureBlankSend(lines: string[]): boolean {
+  const hasUnchecked = lines.some((line) => {
+    const cb = CHECKBOX.exec(line);
+    return cb !== null && cb[1] === " " && isSendLabel(cb[2]!.trim());
+  });
+  if (hasUnchecked) return false;
+  lines.push(blankSendLine());
+  return true;
+}
 
 /**
  * 인박스 본문을 파싱해 액션 목록을 만든다(파일은 쓰지 않음, id 부여도 main 책임).
@@ -468,7 +487,14 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       if (lastSelfWrite.get(inboxPath) === content) return; // 자기쓰기 echo
 
       const { actions, lines, trailingNewline } = parseInbox(content);
-      if (actions.length === 0) return;
+      if (actions.length === 0) {
+        // 액션이 없어도 상시 빈 send 유지(M8) — 초기·재기동·사용자 삭제 시 self-heal.
+        // 미체크 추가라 재파싱서 액션이 되지 않고, echo 가드가 자기쓰기 재트리거를 막는다.
+        if (ensureBlankSend(lines)) {
+          await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
+        }
+        return;
+      }
 
       // Phase A: fresh→id 부여+sending 마킹, empty→마킹 (내구 기록 후 enqueue).
       // control 은 단일 단계(마킹 없이 enqueue→sent 종단) — 재구성 불가한 제어 정보라 sending
@@ -562,11 +588,15 @@ export function createMarkdownSource(cfg: SourceContext): Source {
         }
       }
 
-      // Phase B: enqueue 확정분을 sent 로 종단.
+      // Phase B: enqueue 확정분을 sent 로 종단 + 상시 빈 send 유지(단일 write 에 통합, M8).
       if (finalize.length > 0) {
         for (const f of finalize) lines[f.lineIndex] = sentLine(f.id, f.stamp);
+        ensureBlankSend(lines); // sent 로 소모된 send 를 대체할 빈 트리거 준비(같은 write)
         await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
         cfg.onInbound?.(); // injector 깨우기(in-process)
+      } else if (ensureBlankSend(lines)) {
+        // finalize 없음(예: empty 마킹만·enqueue 전량 실패) — 빈 send 만 별도 보장.
+        await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
       }
     } finally {
       inboxBusy = false;

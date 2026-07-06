@@ -16,6 +16,8 @@ import {
   finalizeApprovalDeny,
   isConflictFile,
   createMarkdownSource,
+  ensureBlankSend,
+  blankSendLine,
 } from "../../src/src-adapters/markdown.js";
 import type { Source } from "../../src/src-adapters/source.js";
 import type { PermRequest } from "../../src/gate/gate.js";
@@ -98,6 +100,34 @@ describe("parseInbox (actions)", () => {
   it("A3: 구버전 sending 마커(스탬프 없음)는 stamp 없이 resume 액션", () => {
     const r = parseInbox("재개\n- [x] ⏳ sending old-id\n");
     expect(r.actions).toEqual([{ kind: "resume", id: "old-id", text: "재개", lineIndex: 1 }]);
+  });
+});
+
+describe("ensureBlankSend (M8 상시 빈 send)", () => {
+  it("미체크 빈 send 가 없으면 끝에 하나 추가하고 true 를 반환한다", () => {
+    const lines = ["보낸 메시지", sentLine("id-1", STAMP)];
+    expect(ensureBlankSend(lines)).toBe(true);
+    expect(lines[lines.length - 1]).toBe(blankSendLine());
+    expect(blankSendLine()).toBe("- [ ] send");
+  });
+
+  it("이미 미체크 빈 send 가 있으면 무변경·false (중복 방지)", () => {
+    const lines = ["초안", "- [ ] send"];
+    const before = [...lines];
+    expect(ensureBlankSend(lines)).toBe(false);
+    expect(lines).toEqual(before);
+  });
+
+  it("체크된 send(사용 중)만 있으면 새 빈 send 를 추가한다", () => {
+    const lines = ["보낼 것", "- [x] send"]; // 체크됨 = 소모 예정 → 미체크 없음
+    expect(ensureBlankSend(lines)).toBe(true);
+    expect(lines.filter((l) => l === "- [ ] send")).toHaveLength(1);
+  });
+
+  it("추가된 빈 send 는 미체크라 parseInbox 액션이 되지 않는다 (오전송 없음)", () => {
+    const lines = [sentLine("id-1", STAMP)];
+    ensureBlankSend(lines);
+    expect(parseInbox(lines.join("\n")).actions).toHaveLength(0);
   });
 });
 
@@ -379,9 +409,53 @@ describe("createMarkdownSource (통합)", () => {
     // 인박스가 sent 종단으로 재작성됨
     await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("sent"));
 
-    // 자기쓰기 가드: 종단 후 추가 enqueue 없음
+    // M8: 소모된 send 를 대체할 빈 `- [ ] send` 가 정확히 하나 준비된다(Phase B 단일 write 통합).
+    await waitFor(() => /^\s*-\s*\[ \]\s+send\s*$/m.test(fs.readFileSync(inboxPath, "utf8")));
+    const blanks = fs
+      .readFileSync(inboxPath, "utf8")
+      .split("\n")
+      .filter((l) => /^\s*-\s*\[ \]\s+send\s*$/.test(l));
+    expect(blanks).toHaveLength(1);
+
+    // 자기쓰기 가드: 종단 후 추가 enqueue 없음(빈 send 추가는 미체크라 재트리거 안 됨)
     await new Promise((r) => setTimeout(r, 200));
     expect(msgCount()).toBe(1);
+  });
+
+  it("M8: 미체크 send 가 없는 inbox(재기동·삭제)면 빈 send 를 self-heal 한다 (액션 없음)", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    // sent 종단만 있고 사용 가능한 미체크 send 가 없는 상태(예: 재기동 후).
+    fs.writeFileSync(inboxPath, "지난 메시지\n" + sentLine("old-id", STAMP) + "\n");
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => /^\s*-\s*\[ \]\s+send\s*$/m.test(fs.readFileSync(inboxPath, "utf8")));
+    // 액션이 아니므로 큐잉 없음(빈 send 만 추가).
+    expect(msgCount()).toBe(0);
+    // 멱등: 이후 스캔이 두 번째 빈 send 를 추가하지 않는다.
+    await new Promise((r) => setTimeout(r, 200));
+    const blanks = fs
+      .readFileSync(inboxPath, "utf8")
+      .split("\n")
+      .filter((l) => /^\s*-\s*\[ \]\s+send\s*$/.test(l));
+    expect(blanks).toHaveLength(1);
+  });
+
+  it("M8: 미체크 빈 send 만 있는 inbox 는 전송하지 않고 유지한다 (오전송 없음)", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, blankSendLine() + "\n");
+
+    source = makeSource();
+    source.start();
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(msgCount()).toBe(0); // 미체크 → 액션 없음 → enqueue 없음
+    const blanks = fs
+      .readFileSync(inboxPath, "utf8")
+      .split("\n")
+      .filter((l) => /^\s*-\s*\[ \]\s+send\s*$/.test(l));
+    expect(blanks).toHaveLength(1); // 이미 있으므로 추가도 없음
   });
 
   // FR-12: enqueue 연속 실패 임계 도달 시 outbox 알림 노트 1회

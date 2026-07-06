@@ -18,6 +18,9 @@ import {
   createMarkdownSource,
   ensureBlankSend,
   blankSendLine,
+  matchSentMarker,
+  planArchive,
+  archivedLine,
 } from "../../src/src-adapters/markdown.js";
 import type { Source } from "../../src/src-adapters/source.js";
 import type { PermRequest } from "../../src/gate/gate.js";
@@ -100,13 +103,99 @@ describe("parseInbox (actions)", () => {
     const content = ["재개 메시지", sendingLine("crash-id", STAMP)].join("\n");
     const r = parseInbox(content);
     expect(r.actions).toEqual([
-      { kind: "resume", id: "crash-id", stamp: STAMP, text: "재개 메시지", lineIndex: 1 },
+      {
+        kind: "resume",
+        id: "crash-id",
+        stamp: STAMP,
+        text: "재개 메시지",
+        lineIndex: 1,
+        segmentStart: 0,
+      },
     ]);
   });
 
   it("A3: 구버전 sending 마커(스탬프 없음)는 stamp 없이 resume 액션", () => {
     const r = parseInbox("재개\n- [x] ⏳ sending old-id\n");
-    expect(r.actions).toEqual([{ kind: "resume", id: "old-id", text: "재개", lineIndex: 1 }]);
+    expect(r.actions).toEqual([
+      { kind: "resume", id: "old-id", text: "재개", lineIndex: 1, segmentStart: 0 },
+    ]);
+  });
+
+  // M8 2b-2: 아카이브 파싱 — 수동 트리거·strict sent 세그먼트 수집·segmentStart.
+  it("fresh 액션은 세그먼트 본문 시작(segmentStart)을 보존한다(전송시점 아카이브용)", () => {
+    const r = parseInbox("본문A\n- [x] 📤 send\n");
+    expect(r.actions[0]).toMatchObject({ kind: "fresh", lineIndex: 1, segmentStart: 0 });
+  });
+
+  it("`🗄️ archive` 체크는 archive 액션(엔진 미경유 로컬 스윕)", () => {
+    const r = parseInbox("- [x] 🗄️ archive\n");
+    expect(r.actions).toEqual([{ kind: "archive", text: "", lineIndex: 0 }]);
+    expect(parseInbox("- [ ] 🗄️ archive\n").actions).toHaveLength(0); // 미체크 → 액션 아님
+  });
+
+  it("종단 `archived` 라인은 경계일 뿐 액션·본문이 아니다(재파싱 오염 방지)", () => {
+    const r = parseInbox("x\n- [x] 🗄️ archived 3 20260101-000000\n두번째\n- [x] send\n");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh", text: "두번째" });
+  });
+
+  it("strict sent 마커는 sentSegments 로 수집된다(bodyStart·id·stamp)", () => {
+    const content = [
+      "본문1",
+      sentLine("id-1", STAMP),
+      "본문2",
+      sentLine("id-2", "20260202-010203"),
+    ].join("\n");
+    const r = parseInbox(content);
+    expect(r.sentSegments).toEqual([
+      { markerIndex: 1, bodyStart: 0, id: "id-1", stamp: STAMP },
+      { markerIndex: 3, bodyStart: 2, id: "id-2", stamp: "20260202-010203" },
+    ]);
+  });
+
+  it("레거시 `sent <id>`·수동 `✅ sent`(위키링크 없음)는 sentSegments 비대상(strict)", () => {
+    expect(parseInbox("x\n- [x] ✅ sent legacy-id\n").sentSegments).toHaveLength(0);
+    expect(parseInbox("x\n- [x] ✅ sent\n").sentSegments).toHaveLength(0);
+  });
+});
+
+describe("아카이브 헬퍼 (M8 2b-2 sent 세그먼트 이관)", () => {
+  it("matchSentMarker 는 strict `✅ sent [[stamp id]]` 만 매칭(CRLF 관용)", () => {
+    expect(matchSentMarker(sentLine("id-1", STAMP))).toEqual({ stamp: STAMP, id: "id-1" });
+    expect(matchSentMarker(sentLine("id-1", STAMP) + "\r")).toEqual({ stamp: STAMP, id: "id-1" });
+    expect(matchSentMarker("- [x] ✅ sent legacy-id")).toBeNull(); // 레거시
+    expect(matchSentMarker("- [x] ✅ sent")).toBeNull(); // 위키링크 없음
+    expect(matchSentMarker("- [ ] 📤 send")).toBeNull();
+  });
+
+  it("archivedLine 은 자동 ON 시 · auto 부기", () => {
+    expect(archivedLine(2, STAMP, false)).toBe(`- [x] 🗄️ archived 2 ${STAMP}`);
+    expect(archivedLine(2, STAMP, true)).toBe(`- [x] 🗄️ archived 2 ${STAMP} · auto`);
+  });
+
+  it("planArchive 는 본문을 문서순 append 텍스트+제거범위로 계획, 빈 본문은 멱등 skip", () => {
+    const lines = [
+      "본문1",
+      sentLine("id-1", STAMP),
+      sentLine("id-2", STAMP),
+      "본문3",
+      sentLine("id-3", STAMP),
+    ];
+    // id-1: body [0,1)="본문1"; id-2: body [2,2)=빈(직전 마커 바로 뒤) → skip; id-3: body [3,4)="본문3".
+    const targets = [
+      { markerIndex: 1, bodyStart: 0, id: "id-1", stamp: STAMP },
+      { markerIndex: 2, bodyStart: 2, id: "id-2", stamp: STAMP },
+      { markerIndex: 4, bodyStart: 3, id: "id-3", stamp: STAMP },
+    ];
+    const { text, ranges } = planArchive(lines, targets);
+    expect(ranges).toEqual([
+      [0, 1],
+      [3, 4],
+    ]);
+    expect(text).toContain(`## [[${outNoteBase(STAMP, "id-1")}]]`);
+    expect(text).toContain("본문1");
+    expect(text).toContain("본문3");
+    expect(text).not.toContain("id-2"); // 빈 본문 skip
   });
 });
 
@@ -862,5 +951,166 @@ describe("createMarkdownSource (통합)", () => {
     expect(note).toContain("> ❓ 빌드 오류 원인 분석해줘");
     expect(note).toContain("20260703-162045"); // 요청 스탬프
     expect(note).toContain("20260703-162130"); // 완료 스탬프
+  });
+
+  // ── M8 2b-2: sent 세그먼트 아카이브 이관 ──────────────────────────────────
+  const archivePath = (): string => path.join(rootDir, "sent-archive.md");
+
+  it("자동(config on): 전송 시점에 본문을 아카이브로 이관하고 inbox 엔 sent 마커만 남긴다", async () => {
+    conf.markdown!.archive = "sent-archive.md";
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "이관될 본문입니다\n- [x] 📤 send\n");
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => /sent \[\[.+\]\]/.test(fs.readFileSync(inboxPath, "utf8")));
+    await waitFor(() => fs.existsSync(archivePath()));
+
+    const inbox = fs.readFileSync(inboxPath, "utf8");
+    expect(inbox).not.toContain("이관될 본문입니다"); // 본문 제거
+    expect(inbox).toMatch(/sent \[\[.+\]\]/); // 마커는 잔존
+    expect(inbox.split("\n").filter((l) => l === blankSendLine())).toHaveLength(1);
+    expect(fs.readFileSync(archivePath(), "utf8")).toContain("이관될 본문입니다"); // 본문은 아카이브에
+    expect(msgCount()).toBe(1); // enqueue 는 정상 1회
+  });
+
+  it("자동(config on): 조용한 턴(체크 액션 없음)엔 스윕하지 않아 상위 초안이 보존된다(S4·S6)", async () => {
+    conf.markdown!.archive = "sent-archive.md";
+    const inboxPath = path.join(rootDir, "inbox.md");
+    // sent 마커 위의 미완성 초안 — 조용한 턴엔 자동 스윕 대상 아님(전송 시점에만 아카이브).
+    fs.writeFileSync(inboxPath, "미완성 초안\n" + sentLine("old", STAMP) + "\n- [ ] 📤 send\n");
+
+    source = makeSource();
+    source.start();
+
+    await new Promise((r) => setTimeout(r, 250));
+    const inbox = fs.readFileSync(inboxPath, "utf8");
+    expect(inbox).toContain("미완성 초안"); // 초안 보존
+    expect(msgCount()).toBe(0); // enqueue 없음
+    expect(fs.existsSync(archivePath())).toBe(false); // 조용한 턴 → 아카이브 write 없음(no-op)
+  });
+
+  it("수동(config off): `🗄️ archive` 체크 시 기존 sent 본문을 일괄 이관하고 종단 표기(자동 아님)", async () => {
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "지난 본문\n" + sentLine("old", STAMP) + "\n- [x] 🗄️ archive\n");
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => /archived \d+/.test(fs.readFileSync(inboxPath, "utf8")));
+    const inbox = fs.readFileSync(inboxPath, "utf8");
+    expect(inbox).not.toContain("지난 본문"); // 본문 이관
+    expect(inbox).toContain(`sent [[${outNoteBase(STAMP, "old")}]]`); // 마커 잔존
+    expect(inbox).toMatch(/🗄️ archived 1 \d{8}-\d{6}$/m); // 종단 표기 · auto 없음(config off)
+    expect(inbox).not.toContain("· auto");
+    expect(fs.readFileSync(archivePath(), "utf8")).toContain("지난 본문");
+    expect(msgCount()).toBe(0); // 아카이브는 enqueue 미대상
+  });
+
+  it("수동+자동: · auto 표기 + 진행 중(sent 아님) 초안은 스윕되지 않는다", async () => {
+    conf.markdown!.archive = "sent-archive.md";
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(
+      inboxPath,
+      "옛 본문\n" + sentLine("s1", STAMP) + "\n작성중 초안\n- [x] 🗄️ archive\n",
+    );
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => /archived \d+/.test(fs.readFileSync(inboxPath, "utf8")));
+    const inbox = fs.readFileSync(inboxPath, "utf8");
+    expect(inbox).toContain("· auto"); // 자동 활성 표기
+    expect(inbox).not.toContain("옛 본문"); // sent 세그먼트 본문 이관
+    expect(inbox).toContain("작성중 초안"); // sent 아닌 진행 초안 보존
+    expect(fs.readFileSync(archivePath(), "utf8")).toContain("옛 본문");
+  });
+
+  it("크래시 멱등(Order X): 아카이브 append 후 inbox 미갱신 재기동 — 재전송 없이 본문 이관 수렴", async () => {
+    conf.markdown!.archive = "sent-archive.md";
+    const inboxPath = path.join(rootDir, "inbox.md");
+    // 크래시 재현: sending + 본문 잔존, out/<id>.out 존재(이미 enqueue/완료), 아카이브엔 이미 append 됨.
+    fs.writeFileSync(inboxPath, "복구 본문\n" + sendingLine("crash-2", STAMP) + "\n");
+    fs.writeFileSync(path.join(paths.outDir, "crash-2.out"), "응답");
+    fs.writeFileSync(archivePath(), `\n## [[${outNoteBase(STAMP, "crash-2")}]]\n\n복구 본문\n`);
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(`sent [[${STAMP} crash-2]]`));
+    const inbox = fs.readFileSync(inboxPath, "utf8");
+    expect(inbox).not.toContain("복구 본문"); // 본문 제거 수렴
+    expect(msgCount()).toBe(0); // 재enqueue 없음(hasId dedup)
+    // 아카이브엔 본문 존재(재append 로 중복 가능 — 무해)
+    expect(fs.readFileSync(archivePath(), "utf8")).toContain("복구 본문");
+  });
+
+  it("자동: 한 턴 두 세그먼트 — 둘 다 이관·마커 잔존·빈 send 하나(경계·bottom-up splice)", async () => {
+    conf.markdown!.archive = "sent-archive.md";
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "본문하나\n- [x] 📤 send\n본문둘\n- [x] 📤 send\n");
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(() => msgCount() >= 2);
+    await waitFor(() => {
+      const a = fs.existsSync(archivePath()) ? fs.readFileSync(archivePath(), "utf8") : "";
+      return a.includes("본문하나") && a.includes("본문둘");
+    });
+
+    const inbox = fs.readFileSync(inboxPath, "utf8");
+    expect(inbox).not.toContain("본문하나");
+    expect(inbox).not.toContain("본문둘");
+    expect(inbox.match(/sent \[\[.+\]\]/g)).toHaveLength(2); // 마커 둘 잔존
+    expect(inbox.split("\n").filter((l) => l === blankSendLine())).toHaveLength(1);
+    // 문서 순서로 아카이브(본문하나 먼저).
+    const archive = fs.readFileSync(archivePath(), "utf8");
+    expect(archive.indexOf("본문하나")).toBeLessThan(archive.indexOf("본문둘"));
+  });
+
+  it("자동: 중첩 아카이브 경로(부모 부재)도 start 시 부모 생성 후 정상 이관", async () => {
+    conf.markdown!.archive = "logs/sent-archive.md";
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "중첩 경로 본문\n- [x] 📤 send\n");
+
+    source = makeSource();
+    expect(() => source!.start()).not.toThrow();
+
+    const nested = path.join(rootDir, "logs", "sent-archive.md");
+    await waitFor(
+      () => fs.existsSync(nested) && fs.readFileSync(nested, "utf8").includes("중첩 경로 본문"),
+    );
+    expect(fs.readFileSync(inboxPath, "utf8")).not.toContain("중첩 경로 본문"); // 종단·제거 정상(스톨 없음)
+    expect(msgCount()).toBe(1);
+  });
+
+  it("자동: 이관 완료 후 재이벤트는 아카이브를 다시 append 하지 않는다(멱등 — 중복 없음)", async () => {
+    conf.markdown!.archive = "sent-archive.md";
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "멱등 본문\n- [x] 📤 send\n");
+
+    source = makeSource();
+    source.start();
+
+    await waitFor(
+      () =>
+        fs.existsSync(archivePath()) &&
+        fs.readFileSync(archivePath(), "utf8").includes("멱등 본문"),
+    );
+    const after1 = fs.readFileSync(archivePath(), "utf8");
+    // 조용한 재스캔 유도 + 자기쓰기 echo 가드로 재처리 없음 → 아카이브 불변.
+    await new Promise((r) => setTimeout(r, 250));
+    expect(fs.readFileSync(archivePath(), "utf8")).toBe(after1); // 재append 없음
+    // 본문은 정확히 한 번만 아카이브.
+    expect(after1.split("멱등 본문")).toHaveLength(2);
+  });
+
+  it("아카이브 경로가 approvals 디렉터리 내부면 start 거부(fail-closed)", () => {
+    conf.markdown!.approvals = "approvals";
+    conf.markdown!.archive = "approvals/sent-archive.md";
+    source = makeSource();
+    expect(() => source!.start()).toThrow();
   });
 });

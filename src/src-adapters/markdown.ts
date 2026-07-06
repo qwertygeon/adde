@@ -10,7 +10,7 @@ import { t, tFor } from "../shared/i18n.js";
 import { errMsg, errCode } from "../shared/errors.js";
 import { watch, existsSync, mkdirSync, statSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import { readFile, rename, mkdir, stat, readdir } from "node:fs/promises";
+import { readFile, rename, mkdir, stat, readdir, appendFile } from "node:fs/promises";
 import { join, dirname, isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isPathInside, normCasePath, pathsOverlap } from "../shared/paths.js";
@@ -104,10 +104,13 @@ export function isoFromStamp(stamp: string): string | null {
 
 /** 인박스 액션 — main 이 id 부여·enqueue·종단 마킹을 수행. */
 export interface InboxAction {
-  /** fresh=신규 트리거 · resume=`sending <id>` 재개 · empty=빈 트리거 · control=세션 제어 라벨. */
-  kind: "fresh" | "resume" | "empty" | "control";
+  /** fresh=신규 트리거 · resume=`sending <id>` 재개 · empty=빈 트리거 · control=세션 제어 라벨
+   *  · archive=수동 `🗄️ archive` 스윕(어댑터 로컬, 엔진 미경유). */
+  kind: "fresh" | "resume" | "empty" | "control" | "archive";
   lineIndex: number;
   text: string;
+  /** fresh/resume 세그먼트 본문 시작 라인(이전 경계+1) — 전송 시점 본문 아카이브 범위 [segmentStart, lineIndex). */
+  segmentStart?: number;
   /** resume 시 기존 id. */
   id?: string;
   /** resume 시 sending 라인에 기록된 전송 스탬프(구버전 라인엔 없음). */
@@ -117,10 +120,22 @@ export interface InboxAction {
   controlArg?: string;
 }
 
+/** 아카이브 대상 sent 세그먼트 — 마커 라인·본문 시작·식별자(수동 스윕/전송시점 공용). */
+export interface SentSegment {
+  /** strict `✅ sent` 마커 라인 인덱스(경계, 유지 대상). */
+  markerIndex: number;
+  /** 본문 시작 라인(이전 경계+1). 본문 = lines[bodyStart, markerIndex). */
+  bodyStart: number;
+  id: string;
+  stamp: string;
+}
+
 export interface InboxParse {
   actions: InboxAction[];
   lines: string[];
   trailingNewline: boolean;
+  /** 파싱 시점에 이미 존재하던 strict `✅ sent [[stamp id]]` 세그먼트(레거시/이전 턴 — 수동 스윕 대상). */
+  sentSegments: SentSegment[];
 }
 
 /** send 트리거 라인을 단계별 마커로 재작성하는 헬퍼(2단계 내구 마킹). */
@@ -134,6 +149,42 @@ export function sentLine(id: string, stamp: string): string {
 }
 export function emptyLine(): string {
   return "- [x] ⚠️ empty (no message)";
+}
+
+/** 아카이브 적격 strict 마커 — sentLine 형식(`- [x] ✅ sent [[stamp id]]`)만. 캡처: 1=stamp, 2=id.
+ * 느슨한 경계 검출(`core.startsWith("sent")`)과 구분해, 수동 입력 `✅ sent`·레거시 `sent <id>` 는
+ * 아카이브 대상에서 제외한다(초안 오삭제 방지). `\r?$` — CRLF 관용. */
+const SENT_MARKER = /^\s*-\s*\[[xX]\]\s+✅\s+sent\s+\[\[([^\]\s]+)\s+([^\]\s]+)\]\]\s*\r?$/;
+export function matchSentMarker(line: string): { stamp: string; id: string } | null {
+  const m = SENT_MARKER.exec(line);
+  return m ? { stamp: m[1]!, id: m[2]! } : null;
+}
+
+/** 수동 `🗄️ archive` 스윕 완료 종단 라인. `archived` 는 경계 마커라 재파싱서 본문 오염 없음.
+ * auto=true(config 자동 아카이브 ON) 면 `· auto` 부기 — 자동 아카이브 활성 표기(사용자 인지용). */
+export function archivedLine(count: number, stamp: string, auto: boolean): string {
+  return `- [x] 🗄️ archived ${count} ${stamp}${auto ? " · auto" : ""}`;
+}
+
+/**
+ * sent 세그먼트 본문 이관 계획(순수) — 아카이브 append 텍스트 + 제거할 라인 범위.
+ * 본문 = lines[bodyStart, markerIndex)(마커는 유지). 빈 본문은 멱등 skip(이미 이관됨/원래 빔).
+ * 문서 순서(bodyStart 오름차순) 로 아카이브. splice 는 호출부가 bottom-up 으로 적용(인덱스 보존).
+ */
+export function planArchive(
+  lines: string[],
+  targets: SentSegment[],
+): { text: string; ranges: Array<[number, number]> } {
+  let text = "";
+  const ranges: Array<[number, number]> = [];
+  const sorted = [...targets].sort((a, b) => a.bodyStart - b.bodyStart);
+  for (const seg of sorted) {
+    const body = lines.slice(seg.bodyStart, seg.markerIndex).join("\n").trim();
+    if (body.length === 0) continue;
+    text += `\n## [[${outNoteBase(seg.stamp, seg.id)}]]\n\n${body}\n`;
+    ranges.push([seg.bodyStart, seg.markerIndex]);
+  }
+  return { text, ranges };
 }
 /** 항상 준비되는 빈 send 트리거(M8) — 사용자가 매번 send 줄을 만들 필요 없게 한다.
  * 문서 관습(`- [ ] 📤 send`)과 동일 표기로 self-heal 라인의 시각 일관성을 맞춘다. */
@@ -171,6 +222,7 @@ export function parseInbox(content: string): InboxParse {
   const trailingNewline = content.endsWith("\n");
   const lines = content.split("\n");
   const actions: InboxAction[] = [];
+  const sentSegments: SentSegment[] = [];
   let segmentStart = 0;
 
   const segment = (end: number): string => lines.slice(segmentStart, end).join("\n").trim();
@@ -186,15 +238,25 @@ export function parseInbox(content: string): InboxParse {
     if (core.startsWith("sending")) {
       const m = /sending\s+(\S+)(?:\s+(\S+))?/i.exec(label);
       if (m) {
-        const action: InboxAction = { kind: "resume", id: m[1]!, text: segment(i), lineIndex: i };
+        const action: InboxAction = {
+          kind: "resume",
+          id: m[1]!,
+          text: segment(i),
+          lineIndex: i,
+          segmentStart,
+        };
         if (m[2]) action.stamp = m[2];
         actions.push(action);
       }
       segmentStart = i + 1;
       continue;
     }
-    if (core.startsWith("sent") || core.startsWith("empty")) {
-      segmentStart = i + 1; // 종단 마커 — 경계
+    // 종단 마커(경계): sent/empty/archived. strict `✅ sent [[stamp id]]` 는 아카이브 대상으로도 수집.
+    if (core.startsWith("sent") || core.startsWith("empty") || core.startsWith("archived")) {
+      const sm = matchSentMarker(lines[i]!);
+      if (sm)
+        sentSegments.push({ markerIndex: i, bodyStart: segmentStart, id: sm.id, stamp: sm.stamp });
+      segmentStart = i + 1;
       continue;
     }
     if (isSendLabel(label)) {
@@ -202,11 +264,18 @@ export function parseInbox(content: string): InboxParse {
         const text = segment(i);
         actions.push(
           text.length > 0
-            ? { kind: "fresh", text, lineIndex: i }
+            ? { kind: "fresh", text, lineIndex: i, segmentStart }
             : { kind: "empty", text: "", lineIndex: i },
         );
       }
       segmentStart = i + 1; // 체크/미체크 무관 경계
+      continue;
+    }
+    // 수동 아카이브 트리거 `🗄️ archive`(어댑터 로컬 스윕, 엔진 미경유·항상 경계).
+    // `archive`(트리거) vs `archived`(종단, 위 분기) — 정확 일치로 구분.
+    if (core === "archive") {
+      if (checked) actions.push({ kind: "archive", text: "", lineIndex: i });
+      segmentStart = i + 1;
       continue;
     }
     // 세션 제어 라벨(send 와 동일 계약: 정확 일치·앞 이모지 허용·체크 시 트리거·항상 경계).
@@ -237,7 +306,7 @@ export function parseInbox(content: string): InboxParse {
     // send/sent/sending/empty/제어 가 아닌 체크박스 → 본문(경계 아님, segmentStart 유지)
   }
 
-  return { actions, lines, trailingNewline };
+  return { actions, lines, trailingNewline, sentSegments };
 }
 
 const PERM_MARKER = /<!--\s*adde:perm\s+id=(\S+)\s+status=(\S+)\s*-->/;
@@ -357,6 +426,8 @@ function resolvePaths(conf: LaneConf): {
   approvalsDir: string;
   outboxDir: string;
   quarantineDir: string;
+  archivePath: string;
+  autoArchive: boolean;
 } {
   const md = conf.markdown;
   if (!md?.root) throw new Error(t("markdown.confRootMissing"));
@@ -368,12 +439,16 @@ function resolvePaths(conf: LaneConf): {
   const approvalsDir = md.approvals ? join(rootDir, md.approvals) : join(inboxDir, "approvals");
   const outboxDir = md.outbox ? join(rootDir, md.outbox) : join(inboxDir, "out");
   const quarantineDir = join(inboxDir, ".conflicts");
-  return { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir };
+  // 아카이브: markdown.archive 지정 시 그 경로 + 전송시점 자동 아카이브 ON. 미지정 시 기본 파일(수동 라벨용) + 자동 OFF.
+  const archivePath = md.archive ? join(rootDir, md.archive) : join(inboxDir, "sent-archive.md");
+  const autoArchive = md.archive !== undefined && md.archive.length > 0;
+  return { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir, archivePath, autoArchive };
 }
 
 export function createMarkdownSource(cfg: SourceContext): Source {
   const tl = tFor(cfg.conf.lang);
-  const { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir } = resolvePaths(cfg.conf);
+  const { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir, archivePath, autoArchive } =
+    resolvePaths(cfg.conf);
   // 결정완료(allow/deny) 승인 파일을 이관하는 아카이브 서브디렉터리(M6). pending 만 top-level 에
   // 남겨 폴 dirSig·handleApprovals 스캔을 O(pending) 로 유지(누적 승인수 A 에 비례하지 않게).
   const decidedDir = join(approvalsDir, ".decided");
@@ -497,7 +572,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       if (content === null) return; // 부재 또는 변경 진행 중(B1) — 다음 이벤트 재시도
       if (lastSelfWrite.get(inboxPath) === content) return; // 자기쓰기 echo
 
-      const { actions, lines, trailingNewline } = parseInbox(content);
+      const { actions, lines, trailingNewline, sentSegments } = parseInbox(content);
       if (actions.length === 0) {
         // 액션이 없어도 상시 빈 send 유지(M8) — 초기·재기동·사용자 삭제 시 self-heal.
         // 미체크 추가라 재파싱서 액션이 되지 않고, echo 가드가 자기쓰기 재트리거를 막는다.
@@ -518,12 +593,15 @@ export function createMarkdownSource(cfg: SourceContext): Source {
         stamp: string;
         ts: string;
         control?: ControlRequest;
+        segmentStart?: number;
       }> = [];
       let dirtyA = false;
       for (const a of actions) {
         if (a.kind === "empty") {
           lines[a.lineIndex] = emptyLine();
           dirtyA = true;
+        } else if (a.kind === "archive") {
+          continue; // 수동 아카이브 — enqueue 미대상. Phase B 에서 스윕·종단 표기.
         } else if (a.kind === "control") {
           const id = randomUUID();
           const d = new Date();
@@ -549,6 +627,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
             resume: false,
             stamp,
             ts: d.toISOString(),
+            ...(a.segmentStart !== undefined ? { segmentStart: a.segmentStart } : {}),
           });
         } else {
           // resume: 라인은 이미 `sending <id> [<stamp>]` — 스탬프를 라인에서 복원해
@@ -563,18 +642,26 @@ export function createMarkdownSource(cfg: SourceContext): Source {
             resume: true,
             stamp,
             ts,
+            ...(a.segmentStart !== undefined ? { segmentStart: a.segmentStart } : {}),
           });
         }
       }
+      const hasArchive = actions.some((a) => a.kind === "archive");
       // 상시 빈 send(M8)를 "이미 일어날 write" 에 태워 여분 write 를 피한다:
       //  - enqueue 대상이 없으면(pending 0 = empty-only) Phase A 가 유일 write → 여기서 보충.
       //  - pending 이 있으면 Phase B(sent write)에 태운다(아래). resume/control 은 Phase A 불필요.
+      //  - 수동 아카이브가 있으면 Phase B 가 반드시 write 하므로 여기선 미보충(중복 write 회피).
       // 추가는 미체크라 재파싱서 액션 아님. 크래시 시 blank 는 무해.
-      if (pending.length === 0 && ensureBlankSend(lines)) dirtyA = true;
+      if (pending.length === 0 && !hasArchive && ensureBlankSend(lines)) dirtyA = true;
       if (dirtyA) await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
 
       // enqueue (resume 이고 이미 존재하면 스킵) → 성공분만 종단 후보.
-      const finalize: Array<{ id: string; lineIndex: number; stamp: string }> = [];
+      const finalize: Array<{
+        id: string;
+        lineIndex: number;
+        stamp: string;
+        segmentStart?: number;
+      }> = [];
       for (const p of pending) {
         try {
           if (p.resume && (await hasId(cfg.paths, p.id))) {
@@ -604,15 +691,52 @@ export function createMarkdownSource(cfg: SourceContext): Source {
         }
       }
 
-      // Phase B: enqueue 확정분을 sent 로 종단 + 빈 send 를 같은 write 에 통합(소모 대체).
-      if (finalize.length > 0) {
-        for (const f of finalize) lines[f.lineIndex] = sentLine(f.id, f.stamp);
-        ensureBlankSend(lines);
+      // Phase B: enqueue 확정분을 sent 로 종단(인덱스로 먼저 표기 — splice 전이라 인덱스 유효).
+      for (const f of finalize) lines[f.lineIndex] = sentLine(f.id, f.stamp);
+
+      // 아카이브 계획 — 전송 시점 자동(config on) + 수동 스윕(🗄️ archive). ORDER 불변식:
+      // 아카이브 append 를 inbox write(본문 splice) 보다 먼저 한다. 사이 크래시 시 본문이 양쪽에
+      // 잔존해 재기동 시 `✅ sent` 경계로 재전송 없이 수렴(무해 중복 1). 역순은 본문 유실 창.
+      let archiveText = "";
+      let removeRanges: Array<[number, number]> = [];
+      if (autoArchive || hasArchive) {
+        // 이번 턴 확정 세그먼트(전송 시점 대상 — fresh/resume 만 segmentStart 보유).
+        const finalizedSegs: SentSegment[] = finalize
+          .filter((f) => f.segmentStart !== undefined)
+          .map((f) => ({
+            bodyStart: f.segmentStart!,
+            markerIndex: f.lineIndex,
+            id: f.id,
+            stamp: f.stamp,
+          }));
+        // 수동 스윕은 이전 턴/레거시 sent 까지 전량, 자동만이면 이번 턴만.
+        const targets = hasArchive ? [...sentSegments, ...finalizedSegs] : finalizedSegs;
+        const plan = planArchive(lines, targets);
+        archiveText = plan.text;
+        removeRanges = plan.ranges;
+      }
+
+      // 수동 archive 트리거 라인 → 종단 표기(자동 ON 이면 · auto 부기). splice 전 인덱스로 반영.
+      if (hasArchive) {
+        const stamp = formatStamp(new Date());
+        for (const a of actions) {
+          if (a.kind === "archive")
+            lines[a.lineIndex] = archivedLine(removeRanges.length, stamp, autoArchive);
+        }
+      }
+
+      // write 필요 판정: 종단 마킹·아카이브 스윕·수동 표기 중 하나라도 있으면. 없고 전량 enqueue 실패면
+      // 빈 send 만 별도 보장(드묾, 종전 else-if 동치).
+      let needWrite = finalize.length > 0 || hasArchive || removeRanges.length > 0;
+      if (!needWrite && pending.length > 0) needWrite = ensureBlankSend(lines);
+
+      if (needWrite) {
+        if (archiveText.length > 0) await appendFile(archivePath, archiveText, "utf8");
+        removeRanges.sort((a, b) => b[0] - a[0]); // bottom-up splice — 인덱스 보존
+        for (const [s, e] of removeRanges) lines.splice(s, e - s);
+        ensureBlankSend(lines); // 소모된 send 대체(멱등 — 이미 있으면 무변경)
         await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
-        cfg.onInbound?.(); // injector 깨우기(in-process)
-      } else if (pending.length > 0 && ensureBlankSend(lines)) {
-        // pending 이 있었으나 전량 enqueue 실패(finalize 없음) — 빈 send 만 별도 보장(드묾).
-        await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
+        if (finalize.length > 0) cfg.onInbound?.(); // injector 깨우기(in-process)
       }
     } finally {
       inboxBusy = false;
@@ -889,6 +1013,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       ["inbox", cfg.conf.markdown?.inbox],
       ["approvals", cfg.conf.markdown?.approvals],
       ["outbox", cfg.conf.markdown?.outbox],
+      ["archive", cfg.conf.markdown?.archive],
     ] as const) {
       if (rel === undefined) continue;
       if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) {
@@ -903,6 +1028,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       ["inbox", inboxPath],
       ["approvals", approvalsDir],
       ["outbox", outboxDir],
+      ["archive", archivePath],
     ] as const) {
       if (isPathInside(p, effectiveCwd)) {
         throw new Error(t("markdown.controlNoteInCwd", { name, path: p, cwd: effectiveCwd }));
@@ -916,10 +1042,20 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     const rOutbox = resolve(outboxDir);
     const rInbox = resolve(inboxPath);
     const rQuarantine = resolve(quarantineDir);
+    const rArchive = resolve(archivePath);
+    const rQueueOut = resolve(cfg.paths.outDir);
     for (const [nameA, a, nameB, b] of [
       ["approvals", rApprovals, "outbox", rOutbox],
       ["approvals", rApprovals, "quarantine(.conflicts)", rQuarantine],
       ["outbox", rOutbox, "quarantine(.conflicts)", rQuarantine],
+      // 아카이브 파일은 inbox 와 동일해선 안 되고(자기 이관), 승인/출력/큐/격리 디렉터리 안이면 안 된다
+      // (승인 오파싱·출력 혼입·dedup 훼손 위험). inbox 형제 위치(기본 sent-archive.md)는 허용 —
+      // dispatch 가 inbox 외 파일을 무시하므로 재처리 없음.
+      ["archive", rArchive, "inbox", rInbox],
+      ["archive", rArchive, "approvals", rApprovals],
+      ["archive", rArchive, "outbox", rOutbox],
+      ["archive", rArchive, "out(queue)", rQueueOut],
+      ["archive", rArchive, "quarantine(.conflicts)", rQuarantine],
     ] as const) {
       if (pathsOverlap(a, b)) {
         throw new Error(t("markdown.pathsOverlap", { nameA, a, nameB, b }));
@@ -957,6 +1093,9 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거).
     mkdirSync(cfg.paths.outDir, { recursive: true });
     mkdirSync(outboxDir, { recursive: true });
+    // 아카이브 상위 디렉터리 보장 — 설정된 중첩 경로(logs/sent-archive.md 등)의 부모가 없으면
+    // Phase B 의 appendFile 이 ENOENT 로 던져 sent 종단·본문 제거가 막히고 매 이벤트 재시도로 멈춘다.
+    mkdirSync(dirname(archivePath), { recursive: true });
 
     // 기동 시 기존 인박스/승인 노트 1회 처리(능동 세션 재개).
     runInbox();

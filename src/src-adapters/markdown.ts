@@ -324,14 +324,15 @@ function resolvePaths(conf: LaneConf): {
   outboxDir: string;
   quarantineDir: string;
 } {
-  if (!conf.root) throw new Error(t("markdown.confRootMissing"));
-  if (!conf.inbox) throw new Error(t("markdown.confInboxMissing"));
-  const rootDir = conf.root;
-  const inboxPath = join(rootDir, conf.inbox);
+  const md = conf.markdown;
+  if (!md?.root) throw new Error(t("markdown.confRootMissing"));
+  if (!md.inbox) throw new Error(t("markdown.confInboxMissing"));
+  const rootDir = md.root;
+  const inboxPath = join(rootDir, md.inbox);
   const inboxDir = dirname(inboxPath);
-  // 승인은 요청당 파일 디렉터리(D, 백로그 B3) — conf.approvals 는 디렉터리(미지정 시 inbox 형제 approvals/).
-  const approvalsDir = conf.approvals ? join(rootDir, conf.approvals) : join(inboxDir, "approvals");
-  const outboxDir = conf.outbox ? join(rootDir, conf.outbox) : join(inboxDir, "out");
+  // 승인은 요청당 파일 디렉터리 — markdown.approvals 는 디렉터리(미지정 시 inbox 형제 approvals/).
+  const approvalsDir = md.approvals ? join(rootDir, md.approvals) : join(inboxDir, "approvals");
+  const outboxDir = md.outbox ? join(rootDir, md.outbox) : join(inboxDir, "out");
   const quarantineDir = join(inboxDir, ".conflicts");
   return { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir };
 }
@@ -747,9 +748,9 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     // 입력 검증(C): 상대 경로(inbox/approvals/outbox)는 root 안에 머물러야 한다 — '..'·절대경로로
     // root 를 탈출하면 임의 위치 읽기/쓰기 위험 → fail-closed 기동 거부.
     for (const [name, rel] of [
-      ["inbox", cfg.conf.inbox],
-      ["approvals", cfg.conf.approvals],
-      ["outbox", cfg.conf.outbox],
+      ["inbox", cfg.conf.markdown?.inbox],
+      ["approvals", cfg.conf.markdown?.approvals],
+      ["outbox", cfg.conf.markdown?.outbox],
     ] as const) {
       if (rel === undefined) continue;
       if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) {

@@ -270,8 +270,7 @@ describe("createMarkdownSource (통합)", () => {
       allowlist: [],
       denylist: [],
       hard_deny: [],
-      root: rootDir,
-      inbox: "inbox.md",
+      markdown: { root: rootDir, inbox: "inbox.md" },
     };
   });
 
@@ -283,26 +282,26 @@ describe("createMarkdownSource (통합)", () => {
 
   it("root/inbox conf 누락 시 생성에서 throw (fail-closed)", () => {
     const bad: LaneConf = { ...conf };
-    delete bad.root;
+    delete bad.markdown;
     expect(() =>
       createMarkdownSource({ lane: "L", proj: "p", engine: "e", paths, conf: bad }),
     ).toThrow();
   });
 
   it("없는 root 경로로 start 시 throw", () => {
-    conf.root = path.join(tmpBase, "NoSuchRoot");
+    conf.markdown!.root = path.join(tmpBase, "NoSuchRoot");
     source = makeSource();
     expect(() => source!.start()).toThrow();
   });
 
   it("inbox 상대경로에 '..' 면 start 시 throw (root 탈출 방지, 011-C)", () => {
-    conf.inbox = "../escape.md";
+    conf.markdown!.inbox = "../escape.md";
     source = makeSource();
     expect(() => source!.start()).toThrow();
   });
 
   it("outbox 절대경로면 start 시 throw (011-C)", () => {
-    conf.outbox = path.join(tmpBase, "evil");
+    conf.markdown!.outbox = path.join(tmpBase, "evil");
     source = makeSource();
     expect(() => source!.start()).toThrow();
   });
@@ -323,15 +322,15 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("상호 배타(006): approvals 와 outbox 가 같은 경로면 start 거부", () => {
-    conf.approvals = "shared";
-    conf.outbox = "shared";
+    conf.markdown!.approvals = "shared";
+    conf.markdown!.outbox = "shared";
     source = makeSource();
     expect(() => source!.start()).toThrow(/포함 관계|분리/);
   });
 
   it("상호 배타(006): inbox 노트가 outbox 디렉터리 내부면 start 거부", () => {
-    conf.inbox = "out/inbox.md";
-    conf.outbox = "out";
+    conf.markdown!.inbox = "out/inbox.md";
+    conf.markdown!.outbox = "out";
     source = makeSource();
     expect(() => source!.start()).toThrow(/겹칩니다|분리/);
   });
@@ -339,15 +338,15 @@ describe("createMarkdownSource (통합)", () => {
   it.runIf(process.platform === "darwin")(
     "상호 배타(006): 대소문자만 다른 경로(macOS 대소문자 무시 FS)도 start 거부",
     () => {
-      conf.approvals = "Shared";
-      conf.outbox = "shared";
+      conf.markdown!.approvals = "Shared";
+      conf.markdown!.outbox = "shared";
       source = makeSource();
       expect(() => source!.start()).toThrow(/포함 관계|분리/);
     },
   );
 
   it("상호 배타(006): approvals 를 격리 디렉터리(.conflicts)와 겹치게 두면 start 거부", () => {
-    conf.approvals = ".conflicts";
+    conf.markdown!.approvals = ".conflicts";
     source = makeSource();
     expect(() => source!.start()).toThrow(/포함 관계|분리/);
   });

@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **[BREAKING] 레인 conf 어댑터 키 네임스페이스화** — 어댑터 전용 키를 `<source>.<field>` 로 네임스페이스한다: `root`/`inbox`/`approvals`/`outbox` → `markdown.root`/`markdown.inbox`/`markdown.approvals`/`markdown.outbox`, `chat_id`/`allow_from` → `telegram.chat_id`/`telegram.allow_from`. 공통 키(source·backend·engine·cwd·lang·file_mode·allow/deny리스트)는 최상위 유지. **구 평면 키는 폐기(back-compat read 없음)** — 파서가 무시하므로 값이 반영되지 않는다. `adde doctor` 가 구 키를 `conf format` FAIL 로 감지해 마이그레이션을 안내하고, `adde up` 기동 시에도 경고를 남긴다.
+  - **마이그레이션**: 기존 레인 conf 의 위 키에 `markdown.`/`telegram.` 접두어를 붙이거나, `adde lane rm` 후 `adde lane add` 로 재생성한다(CLI 플래그 `--root`·`--chat-id`·`--allow-from` 등은 불변).
+  - **근거**: 어댑터별 설정을 타입·구조로 격리해 새 소스 어댑터를 충돌 없이 확장 가능하게 한다.
+- 소스 어댑터 레지스트리화(내부 리팩터) — 소스 선택을 `SOURCE_REGISTRY`(id→팩토리) 단일 SoT 로 통합. 경계의 닫힌 `"telegram"|"markdown"` 유니온을 열린 문자열로 개방하고, **미등록 소스를 조용히 telegram 으로 폴백하던 동작을 제거**(이제 해당 레인만 `error` 로 격리 — fail-closed). telegram 인바운드 인증셋 조립(chat_id ∪ allow_from)을 supervisor 인라인에서 telegram 어댑터로 이관(fail-closed 불변식 보존, 독립 검토 확인).
+
 ### Security
 
 - autopass/safe_defaults 권한 게이트를 **정규화 기반 인식기**로 견고화 — 리터럴 글롭이 플래그 순서·번들·롱숏·절대경로·래퍼·이중공백·셸 중첩으로 우회되던 공백을 일괄 차단한다. 명령을 정규화(경로 `/bin/rm`→`rm`·래퍼 `env`/`nice`/`command`/`time`/`timeout`/`nohup`/`xargs`/`\` 벗김·따옴표·이중공백 흡수·`$HOME`/`${HOME}`→홈 확장·`sh -c`/`bash -c` 페이로드 재귀 분해)한 뒤 형태 불문으로 대조:

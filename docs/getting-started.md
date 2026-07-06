@@ -114,10 +114,10 @@ cwd=/abs/project/dir     # this lane's AI working folder (project-folder mapping
 allowlist=Read,Grep      # optional: reduce approval frequency (gate stays on)
 ```
 
-Per-channel extra keys:
+Per-channel extra keys are **namespaced by source id** (`<source>.<field>`):
 
-- **markdown**: `root=<absolute path, e.g. Obsidian vault>`, `inbox=<relative to root>`, and optionally `approvals=` / `outbox=`. → [markdown guide](markdown.md).
-- **telegram**: `chat_id=<reply target>` (setting it also **auto-allows inbound from that chat**). The bot token goes not in the conf but in `~/.config/adde/<proj>/state/<lane>/.env` as `TELEGRAM_BOT_TOKEN=...` (never in arguments or logs). Inbound is processed only from allowed senders (`chat_id` ∪ `allow_from`); with none set, all inbound is denied (fail-closed) — authentication details: [telegram.md](telegram.md).
+- **markdown**: `markdown.root=<absolute path, e.g. Obsidian vault>`, `markdown.inbox=<relative to root>`, and optionally `markdown.approvals=` / `markdown.outbox=`. → [markdown guide](markdown.md).
+- **telegram**: `telegram.chat_id=<reply target>` (setting it also **auto-allows inbound from that chat**). The bot token goes not in the conf but in `~/.config/adde/<proj>/state/<lane>/.env` as `TELEGRAM_BOT_TOKEN=...` (never in arguments or logs). Inbound is processed only from allowed senders (`telegram.chat_id` ∪ `telegram.allow_from`); with none set, all inbound is denied (fail-closed) — authentication details: [telegram.md](telegram.md).
 
 ## Start / stop
 

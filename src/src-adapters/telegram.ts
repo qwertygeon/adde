@@ -204,13 +204,14 @@ export function resolveTelegramAuth(conf: LaneConf): {
   chatId: number | undefined;
   authorizedIds: number[];
 } {
-  const chatId =
-    conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
+  const chatIdRaw = conf.telegram?.chat_id;
+  const chatId = chatIdRaw && !Number.isNaN(Number(chatIdRaw)) ? Number(chatIdRaw) : undefined;
   const authorizedIds: number[] = [];
   const selfAuth = selfAuthorizedChatId(chatId);
   if (selfAuth !== undefined) authorizedIds.push(selfAuth);
-  const rawList = conf.allow_from
-    ? conf.allow_from
+  const allowFrom = conf.telegram?.allow_from;
+  const rawList = allowFrom
+    ? allowFrom
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s.length > 0)

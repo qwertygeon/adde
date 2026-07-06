@@ -280,6 +280,10 @@ lane add 옵션:
       unsupported: '미지원 source: "{{source}}"',
       hint: "conf 의 source 를 markdown 또는 telegram 으로 설정하세요.",
     },
+    legacyKeys: {
+      detail: "구 평면 어댑터 키 감지: {{keys}} (무시됨)",
+      hint: "conf 포맷이 네임스페이스 키로 변경됐습니다 — markdown.root/markdown.inbox, telegram.chat_id/telegram.allow_from 를 쓰세요. 레인을 재생성(adde lane add)하거나 키 이름을 바꾸세요.",
+    },
     cwd: {
       hint: "conf 의 cwd 를 존재하는 작업 폴더로 수정하세요.",
     },
@@ -512,6 +516,8 @@ lane add 옵션:
   log: {
     supervisor: {
       noConf: "[supervisor] {{proj}}: lanes.d 에 conf 없음",
+      legacyKeys:
+        "[supervisor] lane={{lane}} 구 평면 어댑터 키 무시: {{keys}} — conf 포맷이 네임스페이스 키(markdown.*/telegram.*)로 변경됨. 레인 재생성 또는 키 이름 변경 필요.",
       heartbeatFail: "[supervisor] lane={{lane}} 하트비트 touch 실패(보조): {{error}}",
       ledgerFail: "[supervisor] lane={{lane}} 세션 장부 갱신 실패(보조): {{error}}",
       deadCleanupFail: "[supervisor] lane={{lane}} dead runtime.json 정리 실패(보조): {{error}}",

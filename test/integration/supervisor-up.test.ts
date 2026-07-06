@@ -245,7 +245,7 @@ describe("supervisorUp source 분기 (markdown)", () => {
     fs.mkdirSync(rootDir, { recursive: true });
     const markdownConf =
       "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
-      `perm_tier=acp\nacp_version=v1\nroot=${rootDir}\ninbox=inbox.md\n`;
+      `perm_tier=acp\nacp_version=v1\nmarkdown.root=${rootDir}\nmarkdown.inbox=inbox.md\n`;
     const { base } = setupProject("mdproj", { "markdown-claude": markdownConf });
     const fakeAcpFactory = makeFakeAcpFactory();
 
@@ -263,7 +263,7 @@ describe("supervisorUp autopass 기동 배너 (005)", () => {
     // markdown 소스 — notify 가 outbox 노트로 표면화되어 네트워크 없이 관찰 가능.
     const conf =
       "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
-      `perm_tier=autopass\ndenylist=Bash\nacp_version=v1\nroot=${rootDir}\ninbox=inbox.md\n`;
+      `perm_tier=autopass\ndenylist=Bash\nacp_version=v1\nmarkdown.root=${rootDir}\nmarkdown.inbox=inbox.md\n`;
     const { base } = setupProject("approj", { "md-ap": conf });
 
     const result = await runUp("approj", { base, acpFactory: makeFakeAcpFactory() });
@@ -286,7 +286,7 @@ describe("supervisorUp autopass 기동 배너 (005)", () => {
     fs.mkdirSync(rootDir, { recursive: true });
     const conf =
       "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
-      `perm_tier=acp\nacp_version=v1\nroot=${rootDir}\ninbox=inbox.md\n`;
+      `perm_tier=acp\nacp_version=v1\nmarkdown.root=${rootDir}\nmarkdown.inbox=inbox.md\n`;
     const { base } = setupProject("acpproj", { "md-acp": conf });
 
     await runUp("acpproj", { base, acpFactory: makeFakeAcpFactory() });

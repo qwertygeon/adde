@@ -45,15 +45,16 @@ acp_version=v1
 # AI 엔진이 실제로 작업할 프로젝트 폴더(절대경로)
 cwd=/Users/me/work/my-project
 
+# markdown 어댑터 키는 markdown.<field> 네임스페이스
 # 마크다운 루트 디렉터리(절대경로, 예: Obsidian vault)
-root=/Users/me/ObsidianVault
+markdown.root=/Users/me/ObsidianVault
 
 # root 상대 경로 — 입력 노트(필수)
-inbox=adde/my-lane/inbox.md
+markdown.inbox=adde/my-lane/inbox.md
 
 # 선택(미지정 시 inbox 형제로 자동): 승인 디렉터리(요청당 파일) / 출력 디렉터리
-approvals=adde/my-lane/approvals/
-outbox=adde/my-lane/out/
+markdown.approvals=adde/my-lane/approvals/
+markdown.outbox=adde/my-lane/out/
 
 # 선택: 자주 쓰는 도구를 미리 허용해 승인 빈도 축소(게이트는 유지)
 allowlist=Read,Grep
@@ -68,7 +69,7 @@ allowlist=Read,Grep
 ```
 
 - `cwd` 가 이 레인 AI 의 작업 폴더입니다. **레인마다 다른 폴더**를 지정하면 메모와 프로젝트가 1:1로 묶입니다.
-- `root` 만 절대경로, `inbox`·`approvals`·`outbox` 는 root 기준 상대경로입니다. (Obsidian 을 쓴다면 `root` 가 vault 경로입니다.)
+- `markdown.root` 만 절대경로, `markdown.inbox`·`markdown.approvals`·`markdown.outbox` 는 root 기준 상대경로입니다. (Obsidian 을 쓴다면 `markdown.root` 가 vault 경로입니다.)
 - 입력 노트(`inbox.md`)는 에디터에서 직접 만들어 두세요(없으면 지시를 받을 수 없습니다).
 - ⚠️ **제어 노트는 `cwd` 밖에 두세요**: inbox·approvals·outbox 가 AI 작업폴더(`cwd`) 내부에 있으면 AI 가 자기 작업 중 승인 노트를 위조할 수 있어 **기동이 거부**됩니다(fail-closed). vault 와 프로젝트 폴더를 분리하세요.
 - ⚠️ **allowlist 는 자동 실행**: allowlist 에 넣은 도구는 채널 승인 없이 자동 허용됩니다(프롬프트 생략, 트랜스크립트에는 기록). `Bash`·파일 쓰기 등 광범위 도구는 넣지 마세요(자기승인 위험).

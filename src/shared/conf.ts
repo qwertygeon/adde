@@ -1,10 +1,33 @@
 /**
  * 레인 .conf 파싱 (INI 형식).
- * 계약 03 §7: source/backend/engine/perm_tier/acp_version/allowlist/denylist.
- * 누락 필드 기본값 적용, 알 수 없는 키 무시(forward-compat — 구 conf 의 channel= 도 무시).
- * cwd: 레인별 엔진 작업 폴더(프로젝트 폴더 매핑). 미지정 시 슈퍼바이저 실행 cwd.
- * markdown 전용: root/inbox/approvals/outbox. chat_id: telegram 회신 대상.
+ * 공통 키는 최상위 평면(source/backend/engine/perm_tier/acp_version/allow·deny·hard_deny/cwd/lang/file_mode).
+ * 어댑터 전용 키는 `<source-id>.<field>` 네임스페이스 — markdown.root/inbox/approvals/outbox,
+ * telegram.chat_id/allow_from. 새 어댑터는 서브타입 1개 + NAMESPACE_FIELDS 라우팅 1줄로 확장된다.
+ * 알 수 없는 키 무시(forward-compat — 구 conf 의 channel= 등).
  */
+
+/** markdown 어댑터 전용 설정(`markdown.*` 키). */
+export interface MarkdownLaneConf {
+  /** markdown 루트 디렉터리(절대경로, 예: Obsidian vault). */
+  root?: string;
+  /** 입력 노트(root 상대). */
+  inbox?: string;
+  /** 승인 노트 디렉터리(root 상대). 미지정 시 inbox 형제 approvals/. */
+  approvals?: string;
+  /** 출력 디렉터리(root 상대). 미지정 시 inbox 형제 out/. */
+  outbox?: string;
+}
+
+/** telegram 어댑터 전용 설정(`telegram.*` 키). */
+export interface TelegramLaneConf {
+  /** 회신 대상 chat id (문자열 보존, 어댑터가 숫자 변환). */
+  chat_id?: string;
+  /**
+   * 인바운드 발신자 허용 목록(CSV, 숫자 user/chat id). chat_id 와 합쳐 authorizedIds 구성.
+   * 그룹/멀티 발신자 확장용. 미지정+chat_id 부재 시 인바운드 fail-closed(전부 무시).
+   */
+  allow_from?: string;
+}
 
 export interface LaneConf {
   source: string;
@@ -22,44 +45,61 @@ export interface LaneConf {
   hard_deny: string[];
   /** 레인별 엔진 작업 폴더(절대경로). 미지정 시 undefined → 슈퍼바이저 cwd. */
   cwd?: string;
-  /** telegram 회신 대상 chat id (문자열 보존, 어댑터가 숫자 변환). */
-  chat_id?: string;
-  /** markdown 루트 디렉터리(절대경로, 예: Obsidian vault). */
-  root?: string;
-  /** markdown 입력 노트(root 상대). */
-  inbox?: string;
-  /** markdown 승인 노트(root 상대). 미지정 시 inbox 형제 approvals.md. */
-  approvals?: string;
-  /** markdown 출력 디렉터리(root 상대). 미지정 시 inbox 형제 out/. */
-  outbox?: string;
   /** 레인별 채널 메시지 로케일(en|ko). 미지정 시 전역 로케일. */
   lang?: string;
-  /**
-   * telegram 인바운드 발신자 허용 목록(CSV, 숫자 user/chat id). chat_id 와 합쳐 authorizedIds 구성.
-   * 그룹/멀티 발신자 확장용. 미지정+chat_id 부재 시 인바운드 fail-closed(전부 무시).
-   */
-  allow_from?: string;
   /**
    * 상태·출력·큐 디렉터리 권한 모드. private=0700(기본, 소유자 전용) / shared=0755(다중 사용자 열람 허용).
    * 미지정 시 private(secure-by-default).
    */
   file_mode?: string;
+  /** markdown 어댑터 전용 설정(`markdown.*` 키). 관련 키가 없으면 undefined. */
+  markdown?: MarkdownLaneConf;
+  /** telegram 어댑터 전용 설정(`telegram.*` 키). 관련 키가 없으면 undefined. */
+  telegram?: TelegramLaneConf;
 }
 
-export function parseLaneConf(text: string): LaneConf {
-  const conf: Record<string, string> = {};
+/** 공통 optional 키(최상위 평면) — 순서 = 직렬화 순서. */
+const COMMON_OPTIONAL_KEYS = ["cwd", "lang", "file_mode"] as const;
 
+/**
+ * 어댑터 네임스페이스별 필드 목록(`<ns>.<field>`). 파서·직렬화 공용 SoT.
+ * 새 어댑터 추가 = 여기에 한 줄 + LaneConf 서브타입 1개.
+ */
+const NAMESPACE_FIELDS = {
+  markdown: ["root", "inbox", "approvals", "outbox"],
+  telegram: ["chat_id", "allow_from"],
+} as const;
+
+/**
+ * 구 평면 어댑터 키(네임스페이스 이전 포맷). 클린 브레이크로 값은 읽지 않으며(무시),
+ * detectLegacyAdapterKeys 가 감지해 마이그레이션 경고에만 쓴다.
+ */
+const LEGACY_ADAPTER_KEYS = [
+  "root",
+  "inbox",
+  "approvals",
+  "outbox",
+  "chat_id",
+  "allow_from",
+] as const;
+
+/** raw .conf 텍스트를 key→value 맵으로(주석·공백 제외, 첫 `=` 기준 분할). */
+function parseKeyValues(text: string): Record<string, string> {
+  const kv: Record<string, string> = {};
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#") || line.startsWith(";")) continue;
-
     const eqIdx = line.indexOf("=");
     if (eqIdx === -1) continue;
-
     const key = line.slice(0, eqIdx).trim();
     const value = line.slice(eqIdx + 1).trim();
-    if (key) conf[key] = value;
+    if (key) kv[key] = value;
   }
+  return kv;
+}
+
+export function parseLaneConf(text: string): LaneConf {
+  const conf = parseKeyValues(text);
 
   const parseToolList = (raw: string): string[] =>
     raw
@@ -78,33 +118,41 @@ export function parseLaneConf(text: string): LaneConf {
     hard_deny: parseToolList(conf["hard_deny"] ?? ""),
   };
 
-  // optional 필드는 존재할 때만 채운다(부재 = undefined).
-  for (const key of OPTIONAL_KEYS) {
+  // 공통 optional 은 존재할 때만 채운다(부재 = undefined).
+  for (const key of COMMON_OPTIONAL_KEYS) {
     const value = conf[key];
     if (value !== undefined && value.length > 0) {
       result[key] = value;
     }
   }
 
+  // 어댑터 네임스페이스(`<ns>.<field>`) — 필드가 하나라도 있으면 서브객체 생성.
+  for (const [ns, fields] of Object.entries(NAMESPACE_FIELDS)) {
+    const sub: Record<string, string> = {};
+    for (const field of fields) {
+      const value = conf[`${ns}.${field}`];
+      if (value !== undefined && value.length > 0) sub[field] = value;
+    }
+    if (Object.keys(sub).length > 0) {
+      (result as unknown as Record<string, unknown>)[ns] = sub;
+    }
+  }
+
   return result;
 }
 
-/** parse/serialize 가 공유하는 optional 키 목록(순서 = 직렬화 순서). */
-const OPTIONAL_KEYS = [
-  "cwd",
-  "chat_id",
-  "root",
-  "inbox",
-  "approvals",
-  "outbox",
-  "lang",
-  "allow_from",
-  "file_mode",
-] as const;
+/**
+ * 구 평면 어댑터 키(root=·chat_id= 등, 네임스페이스 이전 포맷)를 감지해 반환(마이그레이션 경고용).
+ * 없으면 빈 배열. 값은 파서가 무시하므로(클린 브레이크), 이 감지가 사용자에게 포맷 변경을 알리는 경로다.
+ */
+export function detectLegacyAdapterKeys(text: string): string[] {
+  const kv = parseKeyValues(text);
+  return (LEGACY_ADAPTER_KEYS as readonly string[]).filter((k) => kv[k] !== undefined);
+}
 
 /**
  * LaneConf → .conf INI 텍스트 직렬화. parseLaneConf 의 역연산.
- * 필수 키는 항상, optional 키는 값이 있을 때만, allowlist 는 비어있지 않을 때만 출력.
+ * 필수 키는 항상, optional 은 값이 있을 때만, 어댑터 키는 `<ns>.<field>` 로 출력.
  * parseLaneConf(serializeLaneConf(c)) 는 c 와 동치(round-trip 안정).
  */
 export function serializeLaneConf(conf: LaneConf): string {
@@ -118,9 +166,18 @@ export function serializeLaneConf(conf: LaneConf): string {
   if (conf.allowlist.length > 0) lines.push(`allowlist=${conf.allowlist.join(",")}`);
   if (conf.denylist.length > 0) lines.push(`denylist=${conf.denylist.join(",")}`);
   if (conf.hard_deny.length > 0) lines.push(`hard_deny=${conf.hard_deny.join(",")}`);
-  for (const key of OPTIONAL_KEYS) {
+  for (const key of COMMON_OPTIONAL_KEYS) {
     const value = conf[key];
     if (value !== undefined && value.length > 0) lines.push(`${key}=${value}`);
+  }
+  for (const [ns, fields] of Object.entries(NAMESPACE_FIELDS)) {
+    const sub = (conf as unknown as Record<string, unknown>)[ns] as
+      Record<string, string> | undefined;
+    if (!sub) continue;
+    for (const field of fields) {
+      const value = sub[field];
+      if (value !== undefined && value.length > 0) lines.push(`${ns}.${field}=${value}`);
+    }
   }
   return lines.join("\n") + "\n";
 }

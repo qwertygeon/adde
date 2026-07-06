@@ -9,7 +9,7 @@ import { errMsg } from "../shared/errors.js";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { parseLaneConf } from "../shared/conf.js";
+import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
 import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 import { secureLaneDirs } from "../shared/fs-atomic.js";
 import { resolveFileMode } from "./lane-config.js";
@@ -163,9 +163,16 @@ export async function supervisorUp(
     const confText = await readFile(confPath, "utf8");
     const conf = parseLaneConf(confText);
 
+    // 구 평면 어댑터 키(root=·chat_id= 등) 감지 — 포맷이 `<source>.<key>` 로 변경됨. 파서가 구 키를
+    // 무시하므로(값 미반영) 경고로 가시화한다(markdown 레인은 root 누락으로 error 가 되지만 원인을 명시).
+    const legacyKeys = detectLegacyAdapterKeys(confText);
+    if (legacyKeys.length > 0) {
+      console.warn(t("log.supervisor.legacyKeys", { lane, keys: legacyKeys.join(", ") }));
+    }
+
     // 사용자 입력 경로의 ~ 확장 (Node 는 자동 확장 안 함).
     if (conf.cwd) conf.cwd = expandTilde(conf.cwd);
-    if (conf.root) conf.root = expandTilde(conf.root);
+    if (conf.markdown?.root) conf.markdown.root = expandTilde(conf.markdown.root);
 
     const paths = lanePaths(baseDir, proj, lane);
 

@@ -45,15 +45,16 @@ acp_version=v1
 # the project folder the AI engine actually works in (absolute path)
 cwd=/Users/me/work/my-project
 
+# markdown adapter keys are namespaced as markdown.<field>
 # markdown root directory (absolute path, e.g. Obsidian vault)
-root=/Users/me/ObsidianVault
+markdown.root=/Users/me/ObsidianVault
 
 # path relative to root — input note (required)
-inbox=adde/my-lane/inbox.md
+markdown.inbox=adde/my-lane/inbox.md
 
 # optional (auto-placed as inbox siblings if omitted): approvals dir (one file per request) / output dir
-approvals=adde/my-lane/approvals/
-outbox=adde/my-lane/out/
+markdown.approvals=adde/my-lane/approvals/
+markdown.outbox=adde/my-lane/out/
 
 # optional: pre-allow frequently used tools to reduce approval frequency (gate stays on)
 allowlist=Read,Grep
@@ -68,7 +69,7 @@ allowlist=Read,Grep
 ```
 
 - `cwd` is this lane's AI working folder. Assigning a **different folder per lane** pairs a note with a project 1:1.
-- Only `root` is an absolute path; `inbox`, `approvals`, and `outbox` are relative to root. (If you use Obsidian, `root` is your vault path.)
+- Only `markdown.root` is an absolute path; `markdown.inbox`, `markdown.approvals`, and `markdown.outbox` are relative to root. (If you use Obsidian, `markdown.root` is your vault path.)
 - Create the input note (`inbox.md`) yourself in the editor (without it, no instructions can be received).
 - ⚠️ **Keep the control notes outside `cwd`**: if inbox/approvals/outbox live inside the AI working folder (`cwd`), the AI could forge an approval note during its own work, so **startup is refused** (fail-closed). Separate the vault and the project folder.
 - ⚠️ **allowlist is auto-run**: tools in the allowlist are auto-allowed without channel approval (prompt skipped, still recorded in the transcript). Don't add broad tools like `Bash` or file writes (self-approval risk).

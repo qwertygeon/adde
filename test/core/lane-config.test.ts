@@ -82,7 +82,7 @@ describe("laneAdd", () => {
     const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
     expect(conf.cwd).toBe("/abs/project");
     expect(conf.allowlist).toEqual(["Read", "Grep"]);
-    expect(conf.chat_id).toBe("12345");
+    expect(conf.telegram?.chat_id).toBe("12345");
   });
 
   it("--safe-defaults 는 hard_deny 에 내장 위험 목록을 채운다", async () => {
@@ -124,8 +124,8 @@ describe("laneAdd", () => {
     });
     const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
     expect(conf.source).toBe("markdown");
-    expect(conf.root).toBe("/abs/Notes");
-    expect(conf.inbox).toBe("in.md");
+    expect(conf.markdown?.root).toBe("/abs/Notes");
+    expect(conf.markdown?.inbox).toBe("in.md");
   });
 
   it("미지원 source 는 거부한다", async () => {
@@ -146,7 +146,7 @@ describe("laneAdd", () => {
   it("음수 chat_id(그룹)는 허용한다", async () => {
     const res = await laneAdd("proj", "tg", { base, chat_id: "-100123" });
     const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
-    expect(conf.chat_id).toBe("-100123");
+    expect(conf.telegram?.chat_id).toBe("-100123");
   });
 
   it("기존 conf 는 force 없이는 덮어쓰지 않는다", async () => {
@@ -407,9 +407,9 @@ describe("인바운드 인증(allow_from) + 파일 권한(file_mode)", () => {
       chat_id: "111",
       allow_from: "222,333",
     });
-    expect(res.conf.allow_from).toBe("222,333");
+    expect(res.conf.telegram?.allow_from).toBe("222,333");
     const reparsed = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
-    expect(reparsed.allow_from).toBe("222,333");
+    expect(reparsed.telegram?.allow_from).toBe("222,333");
   });
 
   it("allow_from 항목이 숫자가 아니면 거부한다", async () => {

@@ -280,6 +280,10 @@ lane add options:
       unsupported: 'unsupported source: "{{source}}"',
       hint: "Set source in the conf to markdown or telegram.",
     },
+    legacyKeys: {
+      detail: "legacy flat adapter keys detected: {{keys}} (ignored)",
+      hint: "The conf format changed to namespaced keys — use markdown.root/markdown.inbox, telegram.chat_id/telegram.allow_from. Recreate the lane (adde lane add) or rename the keys.",
+    },
     cwd: {
       hint: "Fix cwd in the conf to an existing working directory.",
     },
@@ -520,6 +524,8 @@ lane add options:
   log: {
     supervisor: {
       noConf: "[supervisor] {{proj}}: no conf in lanes.d",
+      legacyKeys:
+        "[supervisor] lane={{lane}} legacy flat adapter keys ignored: {{keys}} — conf format changed to namespaced keys (markdown.*/telegram.*). Recreate the lane or rename the keys.",
       heartbeatFail: "[supervisor] lane={{lane}} heartbeat touch failed (auxiliary): {{error}}",
       ledgerFail: "[supervisor] lane={{lane}} session ledger update failed (auxiliary): {{error}}",
       deadCleanupFail:

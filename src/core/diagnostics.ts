@@ -10,7 +10,7 @@ import { resolveAdapterBin } from "./supervisor.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
 import { lanePaths, defaultBase, expandTilde, isSafeSegment } from "../shared/paths.js";
-import { parseLaneConf } from "../shared/conf.js";
+import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
 import { daemonRegState, daemonEntryPath } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
 import { SOURCE_IDS } from "../src-adapters/index.js";
@@ -314,6 +314,18 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
       });
     }
 
+    // 구 평면 어댑터 키(root=·chat_id= 등) 감지 — 포맷이 `<source>.<key>` 네임스페이스로 변경됨.
+    // 파서가 구 키를 무시하므로(값 미반영) 여기서 감지해 마이그레이션을 안내한다(조용한 실패 방지).
+    const legacyKeys = detectLegacyAdapterKeys(confText);
+    if (legacyKeys.length > 0) {
+      checks.push({
+        name: `${lane}: conf format`,
+        level: "FAIL",
+        detail: t("doctor.legacyKeys.detail", { keys: legacyKeys.join(", ") }),
+        hint: t("doctor.legacyKeys.hint"),
+      });
+    }
+
     // cwd 존재(지정된 경우)
     if (conf.cwd) {
       const cwd = expandTilde(conf.cwd);
@@ -357,21 +369,22 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
     // 레인을 생성하므로, up 전에 doctor 가 검출해 조치를 안내한다). resolvePaths 필수 키와 동일 기준.
     if (conf.source === "markdown") {
       const mdName = t("doctor.markdown.name", { lane });
-      if (!conf.root) {
+      const mdRoot = conf.markdown?.root;
+      if (!mdRoot) {
         checks.push({
           name: mdName,
           level: "FAIL",
           detail: t("doctor.markdown.rootMissing"),
           hint: t("doctor.markdown.rootMissingHint"),
         });
-      } else if (!(await pathExists(expandTilde(conf.root)))) {
+      } else if (!(await pathExists(expandTilde(mdRoot)))) {
         checks.push({
           name: mdName,
           level: "FAIL",
-          detail: t("doctor.markdown.rootNotFound", { path: expandTilde(conf.root) }),
+          detail: t("doctor.markdown.rootNotFound", { path: expandTilde(mdRoot) }),
           hint: t("doctor.markdown.rootNotFoundHint"),
         });
-      } else if (!conf.inbox) {
+      } else if (!conf.markdown?.inbox) {
         checks.push({
           name: mdName,
           level: "FAIL",

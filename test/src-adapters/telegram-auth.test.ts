@@ -6,8 +6,8 @@ import {
 } from "../../src/src-adapters/telegram.js";
 import type { LaneConf } from "../../src/shared/conf.js";
 
-/** 테스트용 최소 LaneConf — telegram 인증 관련 필드만 지정. */
-function conf(partial: Partial<LaneConf>): LaneConf {
+/** 테스트용 최소 LaneConf — telegram 네임스페이스 인증 필드만 지정. */
+function conf(tg: { chat_id?: string; allow_from?: string }): LaneConf {
   return {
     source: "telegram",
     backend: "acp",
@@ -17,7 +17,7 @@ function conf(partial: Partial<LaneConf>): LaneConf {
     allowlist: [],
     denylist: [],
     hard_deny: [],
-    ...partial,
+    ...(Object.keys(tg).length > 0 ? { telegram: tg } : {}),
   };
 }
 

@@ -233,6 +233,18 @@ interface LaneState {
   onIdle: (() => void) | null;
 }
 
+/**
+ * 승인 상관키 포맷(F11) — `<세션프리픽스>-<seq>`. 프리픽스는 sessionId 를 [A-Za-z0-9_-] 로
+ * 새니타이즈 후 앞 12자 — 재기동 시 엔진이 새 sessionId 를 발급한다는 전제 하에(ACP 계약) 디스크
+ * 잔존 승인파일과의 크로스-프로세스 충돌을 막는다(새 프로세스는 seq 를 0 부터 재시작하므로).
+ * seq 는 인스턴스 단조 카운터(프로세스 내 유일). 결과 charset 은 telegram callback_data(≤64B)·
+ * markdown 파일명·envelope msg-id 정규식(`^[A-Za-z0-9_:-]+$`)에 모두 안전하다. seq 주입으로 순수·결정론.
+ */
+export function formatPermId(sessionId: string, seq: number): string {
+  const prefix = (sessionId || "s").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 12);
+  return `${prefix}-${seq}`;
+}
+
 export class AcpBackendImpl implements AcpBackend {
   private readonly adapterBin: string;
   private readonly lanes = new Map<string, LaneState>();
@@ -249,8 +261,25 @@ export class AcpBackendImpl implements AcpBackend {
     onIdle: (() => void) | null;
   } | null = null;
 
+  /**
+   * 요청당 승인 상관키 카운터(F11) — 인스턴스 레벨이라 relaunch/reset 이 같은 impl 을
+   * 재사용해도 단조 증가가 유지된다(프로세스 내 유일성 보장). launch 클로저 지역이면
+   * 재기동마다 0 으로 리셋돼 프리픽스 충돌 시 같은 키를 재발급할 수 있어 인스턴스에 둔다.
+   */
+  private permSeq = 0;
+
   constructor(adapterBin: string) {
     this.adapterBin = adapterBin;
+  }
+
+  /**
+   * 요청당 고유 승인 상관키 발급(F11) — 인스턴스 카운터를 소비해 formatPermId 로 조립.
+   * 세션 내 전 권한요청이 sessionId 를 공유하면 스테일 버튼·병렬 호출이 서로의 대기자
+   * (supervisor pendingDecisions)·승인파일(markdown atomicWrite)을 오귀속·덮어쓴다 → per-call
+   * 고유키로 격리한다. 카운터는 인스턴스 레벨이라 프로세스 내 단조 증가(유일성)를 보장한다.
+   */
+  private mintPermId(sessionId: string): string {
+    return formatPermId(sessionId, this.permSeq++);
   }
 
   /**
@@ -317,6 +346,8 @@ export class AcpBackendImpl implements AcpBackend {
     const laneRef: { state: LaneState | null } = { state: null };
     // toolCallId→원시 도구명 — tool_call 업데이트에서 채집, 권한 매칭에 사용.
     const toolNames = new Map<string, string>();
+    // clientImpl 객체 메서드 안의 this 는 clientImpl 이므로, 인스턴스 카운터 소비용으로 바인딩 캡처.
+    const mintPermId = this.mintPermId.bind(this);
 
     const conn = new acp.ClientSideConnection((_agent) => {
       const clientImpl: acp.Client = {
@@ -445,7 +476,8 @@ export class AcpBackendImpl implements AcpBackend {
 
           const req: PermRequest = {
             v: 1,
-            id: params.sessionId,
+            // per-call 고유키(F11) — sessionId 공유 시 스테일 버튼·병렬 호출 오귀속을 막는다.
+            id: mintPermId(params.sessionId),
             lane,
             channel,
             // 채널 표시: "도구명 · 제목" — 제목(인자 포함)은 사용자 판단 근거, 도구명은 식별자.

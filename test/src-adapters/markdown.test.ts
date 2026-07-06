@@ -195,6 +195,13 @@ describe("approvals 파싱", () => {
     expect(block).toContain("자동 거부"); // 기한 안내(테스트 로케일 ko)
   });
 
+  it("renderApprovalBlock 기한은 주입된 timeoutMs 를 반영한다 (F12a 옵트인 타임아웃)", () => {
+    const now = new Date(2026, 6, 3, 16, 20, 45);
+    // 기본(600s) 기한이 아니라 60s 후(16:21:45)로 표기되어야 한다.
+    const block = renderApprovalBlock(req, undefined, now, 60_000);
+    expect(block).toContain("20260703-162145");
+  });
+
   it("allow 단일 체크 → allow 결정 + 마커 종단 재작성", () => {
     const content = renderApprovalBlock(req).replace("- [ ] allow", "- [x] allow");
     const r = parseApprovals(content);
@@ -494,7 +501,7 @@ describe("createMarkdownSource (통합)", () => {
     await waitFor(() => fs.readFileSync(reqFile, "utf8").includes("status=allow"));
   });
 
-  it("경로 탈출 req.id(엔진 sessionId)는 fail-closed throw — approvals 밖 쓰기 차단", async () => {
+  it("경로 탈출 req.id 는 fail-closed throw — approvals 밖 쓰기 차단(방어심화)", async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
     source.start();

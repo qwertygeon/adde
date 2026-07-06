@@ -115,3 +115,30 @@ describe("gateRequestDecision (allow — 명시적 사용자 승인)", () => {
     expect(result.decision).toBe("deny");
   });
 });
+
+// F12b: 결정/오류 종결 경로에서 타임아웃 타이머를 clear — 미clear 시 결정 후에도 timeoutMs(기본 10분)
+// 만큼 타이머가 상주해 24h 기동 시 누적된다.
+describe("gateRequestDecision (F12b 타임아웃 타이머 clear)", () => {
+  it("결정 승리 시 타임아웃 타이머를 clear 한다 (상주 타이머 0)", async () => {
+    const req = makePermRequest("clear-on-decision");
+    const result = await gateRequestDecision(req, {
+      sendPermPrompt: vi.fn().mockResolvedValue(undefined),
+      waitForDecision: () => Promise.resolve("allow"),
+      timeoutMs: 600_000,
+    });
+    expect(result.decision).toBe("allow");
+    // 미clear 면 600s 타임아웃 타이머가 남는다.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("전송 오류 deny 경로도 타임아웃 타이머를 clear 한다", async () => {
+    const req = makePermRequest("clear-on-error");
+    const result = await gateRequestDecision(req, {
+      sendPermPrompt: vi.fn().mockRejectedValue(new Error("channel down")),
+      waitForDecision: () => new Promise(() => {}),
+      timeoutMs: 600_000,
+    });
+    expect(result.decision).toBe("deny");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

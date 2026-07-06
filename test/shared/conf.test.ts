@@ -139,6 +139,35 @@ describe("serializeLaneConf", () => {
   });
 });
 
+describe("gate_timeout_sec (F12a 옵트인 게이트 타임아웃)", () => {
+  it("미지정 시 undefined (기본 600초는 소비측이 적용)", () => {
+    expect(parseLaneConf("source=telegram\n").gate_timeout_sec).toBeUndefined();
+  });
+
+  it("양의 정수를 초 단위로 파싱한다", () => {
+    expect(parseLaneConf("source=telegram\ngate_timeout_sec=120\n").gate_timeout_sec).toBe(120);
+  });
+
+  it("0·음수·비수치는 무시한다 (undefined → 기본값 폴백)", () => {
+    expect(parseLaneConf("source=telegram\ngate_timeout_sec=0\n").gate_timeout_sec).toBeUndefined();
+    expect(
+      parseLaneConf("source=telegram\ngate_timeout_sec=-5\n").gate_timeout_sec,
+    ).toBeUndefined();
+    expect(
+      parseLaneConf("source=telegram\ngate_timeout_sec=abc\n").gate_timeout_sec,
+    ).toBeUndefined();
+  });
+
+  it("값이 있을 때만 직렬화하고 round-trip 이 동치이다", () => {
+    expect(serializeLaneConf(parseLaneConf("source=telegram\n"))).not.toContain(
+      "gate_timeout_sec=",
+    );
+    const original = parseLaneConf("source=telegram\ngate_timeout_sec=300\n");
+    expect(serializeLaneConf(original)).toContain("gate_timeout_sec=300");
+    expect(parseLaneConf(serializeLaneConf(original))).toEqual(original);
+  });
+});
+
 describe("detectLegacyAdapterKeys", () => {
   it("구 평면 어댑터 키를 감지한다 (마이그레이션 경고용)", () => {
     const conf = "source=markdown\nroot=/abs/Notes\ninbox=in.md\nchat_id=12345\n";

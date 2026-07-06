@@ -10,9 +10,10 @@ import { resolveAdapterBin } from "./supervisor.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
 import { lanePaths, defaultBase, expandTilde, isSafeSegment } from "../shared/paths.js";
-import { parseLaneConf } from "../shared/conf.js";
+import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
 import { daemonRegState, daemonEntryPath } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
+import { SOURCE_IDS } from "../src-adapters/index.js";
 
 export interface DiagBaseOptions {
   /** 설정 base 경로(테스트 override). 미지정 시 $ADDE_HOME 또는 ~/.config/adde. */
@@ -301,8 +302,8 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
     }
     const conf = parseLaneConf(confText);
 
-    // source 유효성
-    if (conf.source === "telegram" || conf.source === "markdown") {
+    // source 유효성 — 등록된 소스(SOURCE_REGISTRY)만 PASS. 미등록은 FAIL(supervisor fail-closed 와 동일 기준).
+    if (SOURCE_IDS.includes(conf.source)) {
       checks.push({ name: `${lane}: source`, level: "PASS", detail: conf.source });
     } else {
       checks.push({
@@ -310,6 +311,18 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
         level: "FAIL",
         detail: t("doctor.source.unsupported", { source: conf.source }),
         hint: t("doctor.source.hint"),
+      });
+    }
+
+    // 구 평면 어댑터 키(root=·chat_id= 등) 감지 — 포맷이 `<source>.<key>` 네임스페이스로 변경됨.
+    // 파서가 구 키를 무시하므로(값 미반영) 여기서 감지해 마이그레이션을 안내한다(조용한 실패 방지).
+    const legacyKeys = detectLegacyAdapterKeys(confText);
+    if (legacyKeys.length > 0) {
+      checks.push({
+        name: `${lane}: conf format`,
+        level: "FAIL",
+        detail: t("doctor.legacyKeys.detail", { keys: legacyKeys.join(", ") }),
+        hint: t("doctor.legacyKeys.hint"),
       });
     }
 
@@ -356,21 +369,22 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
     // 레인을 생성하므로, up 전에 doctor 가 검출해 조치를 안내한다). resolvePaths 필수 키와 동일 기준.
     if (conf.source === "markdown") {
       const mdName = t("doctor.markdown.name", { lane });
-      if (!conf.root) {
+      const mdRoot = conf.markdown?.root;
+      if (!mdRoot) {
         checks.push({
           name: mdName,
           level: "FAIL",
           detail: t("doctor.markdown.rootMissing"),
           hint: t("doctor.markdown.rootMissingHint"),
         });
-      } else if (!(await pathExists(expandTilde(conf.root)))) {
+      } else if (!(await pathExists(expandTilde(mdRoot)))) {
         checks.push({
           name: mdName,
           level: "FAIL",
-          detail: t("doctor.markdown.rootNotFound", { path: expandTilde(conf.root) }),
+          detail: t("doctor.markdown.rootNotFound", { path: expandTilde(mdRoot) }),
           hint: t("doctor.markdown.rootNotFoundHint"),
         });
-      } else if (!conf.inbox) {
+      } else if (!conf.markdown?.inbox) {
         checks.push({
           name: mdName,
           level: "FAIL",

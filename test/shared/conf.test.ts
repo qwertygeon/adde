@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseLaneConf, serializeLaneConf } from "../../src/shared/conf.js";
+import {
+  parseLaneConf,
+  serializeLaneConf,
+  detectLegacyAdapterKeys,
+} from "../../src/shared/conf.js";
 
 // parseLaneConf: ini 형식 레인 설정 파싱 — FR-001/021
 
@@ -50,21 +54,34 @@ channel=telegram
     expect(parseLaneConf(conf).cwd).toBe("/abs/project/dir");
   });
 
-  it("chat_id 를 문자열로 보존한다", () => {
-    const conf = minimalConf + "chat_id=12345\n";
-    expect(parseLaneConf(conf).chat_id).toBe("12345");
+  it("telegram.chat_id 를 문자열로 보존한다 (네임스페이스)", () => {
+    const conf = minimalConf + "telegram.chat_id=12345\n";
+    expect(parseLaneConf(conf).telegram?.chat_id).toBe("12345");
   });
 
-  it("markdown 키(root/inbox/approvals/outbox)를 파싱한다", () => {
+  it("markdown 네임스페이스 키(markdown.root/inbox/approvals/outbox)를 파싱한다", () => {
     const conf =
-      "source=markdown\nchannel=markdown\n" +
-      "root=/abs/Notes\ninbox=adde/L/inbox.md\napprovals=adde/L/approvals.md\noutbox=adde/L/out/\n";
+      "source=markdown\n" +
+      "markdown.root=/abs/Notes\nmarkdown.inbox=adde/L/inbox.md\nmarkdown.approvals=adde/L/approvals.md\nmarkdown.outbox=adde/L/out/\n";
     const result = parseLaneConf(conf);
     expect(result.source).toBe("markdown");
-    expect(result.root).toBe("/abs/Notes");
-    expect(result.inbox).toBe("adde/L/inbox.md");
-    expect(result.approvals).toBe("adde/L/approvals.md");
-    expect(result.outbox).toBe("adde/L/out/");
+    expect(result.markdown?.root).toBe("/abs/Notes");
+    expect(result.markdown?.inbox).toBe("adde/L/inbox.md");
+    expect(result.markdown?.approvals).toBe("adde/L/approvals.md");
+    expect(result.markdown?.outbox).toBe("adde/L/out/");
+  });
+
+  it("관련 네임스페이스 키가 없으면 서브객체는 undefined 다", () => {
+    const result = parseLaneConf(minimalConf);
+    expect(result.markdown).toBeUndefined();
+    expect(result.telegram).toBeUndefined();
+  });
+
+  it("구 평면 어댑터 키(root=·chat_id=)는 무시한다 (클린 브레이크 — 값 미반영)", () => {
+    const conf = "source=markdown\nroot=/abs/Notes\ninbox=in.md\nchat_id=12345\n";
+    const result = parseLaneConf(conf);
+    expect(result.markdown).toBeUndefined(); // 평면 root/inbox 는 markdown.* 로 안 들어감
+    expect(result.telegram).toBeUndefined();
   });
 
   it("빈 값 optional 키는 undefined 로 둔다", () => {
@@ -100,13 +117,42 @@ describe("serializeLaneConf", () => {
     expect(text).not.toContain("chat_id=");
   });
 
-  it("parse→serialize→parse round-trip 이 동치이다", () => {
+  it("parse→serialize→parse round-trip 이 동치이다 (네임스페이스 키 포함)", () => {
     const original = parseLaneConf(
-      "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
-        "perm_tier=acp\nacp_version=v1\nallowlist=Read,Grep\ncwd=/abs/p\nroot=/abs/Notes\ninbox=in.md\n",
+      "source=markdown\nbackend=acp\nengine=claude-agent-acp\n" +
+        "perm_tier=acp\nacp_version=v1\nallowlist=Read,Grep\ncwd=/abs/p\nmarkdown.root=/abs/Notes\nmarkdown.inbox=in.md\n",
     );
     const reparsed = parseLaneConf(serializeLaneConf(original));
     expect(reparsed).toEqual(original);
+    expect(reparsed.markdown?.root).toBe("/abs/Notes");
+  });
+
+  it("telegram 네임스페이스 round-trip 이 동치이다", () => {
+    const original = parseLaneConf(
+      "source=telegram\nbackend=acp\nengine=claude-agent-acp\nperm_tier=acp\nacp_version=v1\n" +
+        "telegram.chat_id=12345\ntelegram.allow_from=111,222\n",
+    );
+    const reparsed = parseLaneConf(serializeLaneConf(original));
+    expect(reparsed).toEqual(original);
+    expect(reparsed.telegram?.chat_id).toBe("12345");
+    expect(reparsed.telegram?.allow_from).toBe("111,222");
+  });
+});
+
+describe("detectLegacyAdapterKeys", () => {
+  it("구 평면 어댑터 키를 감지한다 (마이그레이션 경고용)", () => {
+    const conf = "source=markdown\nroot=/abs/Notes\ninbox=in.md\nchat_id=12345\n";
+    const found = detectLegacyAdapterKeys(conf);
+    expect(found).toEqual(expect.arrayContaining(["root", "inbox", "chat_id"]));
+  });
+
+  it("네임스페이스 키만 있으면 빈 배열이다 (신규 포맷)", () => {
+    const conf = "source=markdown\nmarkdown.root=/abs/Notes\nmarkdown.inbox=in.md\n";
+    expect(detectLegacyAdapterKeys(conf)).toEqual([]);
+  });
+
+  it("어댑터 키가 없으면 빈 배열이다", () => {
+    expect(detectLegacyAdapterKeys("source=telegram\nbackend=acp\n")).toEqual([]);
   });
 });
 

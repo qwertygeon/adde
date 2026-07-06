@@ -13,7 +13,6 @@ import type { FSWatcher } from "node:fs";
 import { readFile, rename, mkdir, stat, readdir } from "node:fs/promises";
 import { join, dirname, isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { LanePaths } from "../shared/paths.js";
 import { isPathInside, normCasePath, pathsOverlap } from "../shared/paths.js";
 import { atomicWrite as atomicWriteFile } from "../shared/fs-atomic.js";
 import type { LaneConf } from "../shared/conf.js";
@@ -22,7 +21,7 @@ import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
 import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
-import type { Source, DecisionCallback, Decision } from "./source.js";
+import type { Source, DecisionCallback, Decision, SourceContext } from "./source.js";
 import { ENQUEUE_FAIL_THRESHOLD } from "./source.js";
 import { formatException } from "../shared/notify.js";
 import type { NotifyT } from "../shared/notify.js";
@@ -32,16 +31,6 @@ const DEBOUNCE_MS = 150;
 const POLL_INTERVAL_MS = 2_000;
 /** 내용 안정화 재확인 간격(B1) — 동기 중 잘린 파일 읽기 방지. */
 const READ_SETTLE_MS = 50;
-
-export interface MarkdownConfig {
-  lane: string;
-  proj: string;
-  engine: string;
-  paths: LanePaths;
-  conf: LaneConf;
-  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요. */
-  onInbound?: (() => void) | undefined;
-}
 
 // --- 순수 파싱 (테스트 대상) -------------------------------------------------
 
@@ -335,19 +324,20 @@ function resolvePaths(conf: LaneConf): {
   outboxDir: string;
   quarantineDir: string;
 } {
-  if (!conf.root) throw new Error(t("markdown.confRootMissing"));
-  if (!conf.inbox) throw new Error(t("markdown.confInboxMissing"));
-  const rootDir = conf.root;
-  const inboxPath = join(rootDir, conf.inbox);
+  const md = conf.markdown;
+  if (!md?.root) throw new Error(t("markdown.confRootMissing"));
+  if (!md.inbox) throw new Error(t("markdown.confInboxMissing"));
+  const rootDir = md.root;
+  const inboxPath = join(rootDir, md.inbox);
   const inboxDir = dirname(inboxPath);
-  // 승인은 요청당 파일 디렉터리(D, 백로그 B3) — conf.approvals 는 디렉터리(미지정 시 inbox 형제 approvals/).
-  const approvalsDir = conf.approvals ? join(rootDir, conf.approvals) : join(inboxDir, "approvals");
-  const outboxDir = conf.outbox ? join(rootDir, conf.outbox) : join(inboxDir, "out");
+  // 승인은 요청당 파일 디렉터리 — markdown.approvals 는 디렉터리(미지정 시 inbox 형제 approvals/).
+  const approvalsDir = md.approvals ? join(rootDir, md.approvals) : join(inboxDir, "approvals");
+  const outboxDir = md.outbox ? join(rootDir, md.outbox) : join(inboxDir, "out");
   const quarantineDir = join(inboxDir, ".conflicts");
   return { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir };
 }
 
-export function createMarkdownSource(cfg: MarkdownConfig): Source {
+export function createMarkdownSource(cfg: SourceContext): Source {
   const tl = tFor(cfg.conf.lang);
   const { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir } = resolvePaths(cfg.conf);
 
@@ -758,9 +748,9 @@ export function createMarkdownSource(cfg: MarkdownConfig): Source {
     // 입력 검증(C): 상대 경로(inbox/approvals/outbox)는 root 안에 머물러야 한다 — '..'·절대경로로
     // root 를 탈출하면 임의 위치 읽기/쓰기 위험 → fail-closed 기동 거부.
     for (const [name, rel] of [
-      ["inbox", cfg.conf.inbox],
-      ["approvals", cfg.conf.approvals],
-      ["outbox", cfg.conf.outbox],
+      ["inbox", cfg.conf.markdown?.inbox],
+      ["approvals", cfg.conf.markdown?.approvals],
+      ["outbox", cfg.conf.markdown?.outbox],
     ] as const) {
       if (rel === undefined) continue;
       if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) {

@@ -4,7 +4,7 @@ _English | [한국어](markdown.ko.md)_
 
 In button-less environments you drive an AI lane **just by editing markdown note files**. You send instructions with a checkbox in the inbox note, allow/deny permissions with checkboxes in the approval notes, and receive responses in output notes.
 
-This works in any markdown editor, but the **Obsidian + sync (Obsidian Sync / Syncthing)** combination fits best — notes sync to mobile without a server, and you can toggle checkboxes by tapping. This document uses Obsidian as the representative example.
+This works in any markdown editor and stays entirely in local files. To reach the notes from your phone, sync the folder with whatever tool you already use (Obsidian Sync, Syncthing, iCloud, …) — ADDE is sync-tool-agnostic and doesn't care which. The examples below use Obsidian, but nothing here is Obsidian-specific.
 
 ## Table of Contents
 
@@ -45,15 +45,16 @@ acp_version=v1
 # the project folder the AI engine actually works in (absolute path)
 cwd=/Users/me/work/my-project
 
+# markdown adapter keys are namespaced as markdown.<field>
 # markdown root directory (absolute path, e.g. Obsidian vault)
-root=/Users/me/ObsidianVault
+markdown.root=/Users/me/ObsidianVault
 
 # path relative to root — input note (required)
-inbox=adde/my-lane/inbox.md
+markdown.inbox=adde/my-lane/inbox.md
 
 # optional (auto-placed as inbox siblings if omitted): approvals dir (one file per request) / output dir
-approvals=adde/my-lane/approvals/
-outbox=adde/my-lane/out/
+markdown.approvals=adde/my-lane/approvals/
+markdown.outbox=adde/my-lane/out/
 
 # optional: pre-allow frequently used tools to reduce approval frequency (gate stays on)
 allowlist=Read,Grep
@@ -68,7 +69,7 @@ allowlist=Read,Grep
 ```
 
 - `cwd` is this lane's AI working folder. Assigning a **different folder per lane** pairs a note with a project 1:1.
-- Only `root` is an absolute path; `inbox`, `approvals`, and `outbox` are relative to root. (If you use Obsidian, `root` is your vault path.)
+- Only `markdown.root` is an absolute path; `markdown.inbox`, `markdown.approvals`, and `markdown.outbox` are relative to root. (If you use Obsidian, `markdown.root` is your vault path.)
 - Create the input note (`inbox.md`) yourself in the editor (without it, no instructions can be received).
 - ⚠️ **Keep the control notes outside `cwd`**: if inbox/approvals/outbox live inside the AI working folder (`cwd`), the AI could forge an approval note during its own work, so **startup is refused** (fail-closed). Separate the vault and the project folder.
 - ⚠️ **allowlist is auto-run**: tools in the allowlist are auto-allowed without channel approval (prompt skipped, still recorded in the transcript). Don't add broad tools like `Bash` or file writes (self-approval risk).
@@ -174,7 +175,7 @@ One `adde up work` brings up all three lanes at once, each with its own note↔f
 
 ## Sync conflicts and caveats
 
-- **Conflict-file isolation**: `*.sync-conflict*` / `(conflicted copy)` files created by Obsidian Sync / Syncthing are isolated by ADDE into a `.conflicts/` folder and **never executed**.
+- **Conflict-file isolation**: `*.sync-conflict*` / `(conflicted copy)` files — created by whatever sync tool you use (Obsidian Sync, Syncthing, Dropbox, …) — are isolated by ADDE into a `.conflicts/` folder and **never executed**.
 - **Self-write safety**: even when ADDE updates the inbox/approval notes (status markers), no re-send loop occurs (idempotent via markers).
 - **Watch concurrent edits**: if you edit the same line at the exact moment ADDE updates a note, a sync conflict can occur. An active session viewed on one device is recommended.
 

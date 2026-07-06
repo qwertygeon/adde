@@ -4,7 +4,7 @@ _[English](markdown.md) | 한국어_
 
 버튼이 없는 환경에서는 **마크다운 노트 파일 편집만으로** AI 레인을 구동합니다. 지시는 인박스 노트에 체크박스로 보내고, 권한은 승인 노트의 체크박스로 허용/거부하며, 응답은 출력 노트로 받습니다.
 
-이 방식은 임의의 마크다운 에디터에서 동작하지만, **Obsidian + 동기(Obsidian Sync / Syncthing)** 조합이 가장 잘 맞습니다 — 서버 없이 모바일까지 노트가 동기되고, 체크박스를 탭으로 토글할 수 있기 때문입니다. 이 문서는 Obsidian 을 대표 예시로 설명합니다.
+이 방식은 임의의 마크다운 에디터에서 **로컬 파일만으로** 동작합니다. 모바일에서 노트를 보려면 **이미 쓰는 동기화 도구(Obsidian Sync·Syncthing·iCloud 등) 아무거나**로 폴더를 동기화하면 되고, ADDE 는 어떤 도구를 쓰든 상관하지 않습니다. 아래 예시는 Obsidian 을 쓰지만 Obsidian 전용 내용은 없습니다.
 
 ## 목차
 
@@ -45,15 +45,16 @@ acp_version=v1
 # AI 엔진이 실제로 작업할 프로젝트 폴더(절대경로)
 cwd=/Users/me/work/my-project
 
+# markdown 어댑터 키는 markdown.<field> 네임스페이스
 # 마크다운 루트 디렉터리(절대경로, 예: Obsidian vault)
-root=/Users/me/ObsidianVault
+markdown.root=/Users/me/ObsidianVault
 
 # root 상대 경로 — 입력 노트(필수)
-inbox=adde/my-lane/inbox.md
+markdown.inbox=adde/my-lane/inbox.md
 
 # 선택(미지정 시 inbox 형제로 자동): 승인 디렉터리(요청당 파일) / 출력 디렉터리
-approvals=adde/my-lane/approvals/
-outbox=adde/my-lane/out/
+markdown.approvals=adde/my-lane/approvals/
+markdown.outbox=adde/my-lane/out/
 
 # 선택: 자주 쓰는 도구를 미리 허용해 승인 빈도 축소(게이트는 유지)
 allowlist=Read,Grep
@@ -68,7 +69,7 @@ allowlist=Read,Grep
 ```
 
 - `cwd` 가 이 레인 AI 의 작업 폴더입니다. **레인마다 다른 폴더**를 지정하면 메모와 프로젝트가 1:1로 묶입니다.
-- `root` 만 절대경로, `inbox`·`approvals`·`outbox` 는 root 기준 상대경로입니다. (Obsidian 을 쓴다면 `root` 가 vault 경로입니다.)
+- `markdown.root` 만 절대경로, `markdown.inbox`·`markdown.approvals`·`markdown.outbox` 는 root 기준 상대경로입니다. (Obsidian 을 쓴다면 `markdown.root` 가 vault 경로입니다.)
 - 입력 노트(`inbox.md`)는 에디터에서 직접 만들어 두세요(없으면 지시를 받을 수 없습니다).
 - ⚠️ **제어 노트는 `cwd` 밖에 두세요**: inbox·approvals·outbox 가 AI 작업폴더(`cwd`) 내부에 있으면 AI 가 자기 작업 중 승인 노트를 위조할 수 있어 **기동이 거부**됩니다(fail-closed). vault 와 프로젝트 폴더를 분리하세요.
 - ⚠️ **allowlist 는 자동 실행**: allowlist 에 넣은 도구는 채널 승인 없이 자동 허용됩니다(프롬프트 생략, 트랜스크립트에는 기록). `Bash`·파일 쓰기 등 광범위 도구는 넣지 마세요(자기승인 위험).
@@ -174,7 +175,7 @@ AI 가 파일 쓰기·Bash 실행 등 권한이 필요한 도구를 호출하면
 
 ## 동기 충돌·주의사항
 
-- **충돌 파일 격리**: Obsidian Sync / Syncthing 이 만드는 `*.sync-conflict*`·`(conflicted copy)` 파일은 ADDE 가 `.conflicts/` 폴더로 격리하고 **절대 실행하지 않습니다**.
+- **충돌 파일 격리**: 쓰는 동기화 도구(Obsidian Sync·Syncthing·Dropbox 등)가 만드는 `*.sync-conflict*`·`(conflicted copy)` 파일은 ADDE 가 `.conflicts/` 폴더로 격리하고 **절대 실행하지 않습니다**.
 - **자기쓰기 안전**: ADDE 가 인박스/승인 노트를 갱신해도(상태 마커) 재전송 루프는 발생하지 않습니다(마커로 멱등 처리).
 - **동시 편집 주의**: ADDE 가 노트를 갱신하는 순간 같은 줄을 동시에 편집하면 동기 충돌이 날 수 있습니다. 한 기기에서 보는 능동 세션을 권장합니다.
 

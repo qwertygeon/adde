@@ -17,6 +17,7 @@ import { errMsg } from "../shared/errors.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
 import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
+import { SOURCE_IDS } from "../src-adapters/index.js";
 import { createPrompter } from "./prompt.js";
 import type { Ask } from "./prompt.js";
 
@@ -159,7 +160,7 @@ export async function collectInteractive(
     return ids.length > 0 && ids.every(isNumericId);
   };
 
-  const source = await askEnum(ask, t("lane.prompt.source"), ["markdown", "telegram"], "markdown");
+  const source = await askEnum(ask, t("lane.prompt.source"), [...SOURCE_IDS], "markdown");
   opts.source = source;
   opts.engine = await ask("engine", "claude-agent-acp");
   opts.backend = await ask("backend", "acp");

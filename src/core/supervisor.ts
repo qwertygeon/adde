@@ -9,16 +9,15 @@ import { errMsg } from "../shared/errors.js";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { parseLaneConf } from "../shared/conf.js";
+import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
 import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 import { secureLaneDirs } from "../shared/fs-atomic.js";
-import { parseCsv, resolveFileMode } from "./lane-config.js";
+import { resolveFileMode } from "./lane-config.js";
 import { AcpBackendImpl } from "../backend/acp/client.js";
 import type { AcpBackend } from "../backend/acp/client.js";
 import { createInjector } from "./injector.js";
 import { recordSession } from "./session-ledger.js";
-import { createTelegramSource, createMarkdownSource } from "../src-adapters/index.js";
-import { selfAuthorizedChatId } from "../src-adapters/telegram.js";
+import { SOURCE_REGISTRY } from "../src-adapters/index.js";
 import type { Source } from "../src-adapters/index.js";
 import { gateRequestDecision } from "../gate/gate.js";
 import { formatWarnNote, formatException } from "../shared/notify.js";
@@ -164,9 +163,16 @@ export async function supervisorUp(
     const confText = await readFile(confPath, "utf8");
     const conf = parseLaneConf(confText);
 
+    // 구 평면 어댑터 키(root=·chat_id= 등) 감지 — 포맷이 `<source>.<key>` 로 변경됨. 파서가 구 키를
+    // 무시하므로(값 미반영) 경고로 가시화한다(markdown 레인은 root 누락으로 error 가 되지만 원인을 명시).
+    const legacyKeys = detectLegacyAdapterKeys(confText);
+    if (legacyKeys.length > 0) {
+      console.warn(t("log.supervisor.legacyKeys", { lane, keys: legacyKeys.join(", ") }));
+    }
+
     // 사용자 입력 경로의 ~ 확장 (Node 는 자동 확장 안 함).
     if (conf.cwd) conf.cwd = expandTilde(conf.cwd);
-    if (conf.root) conf.root = expandTilde(conf.root);
+    if (conf.markdown?.root) conf.markdown.root = expandTilde(conf.markdown.root);
 
     const paths = lanePaths(baseDir, proj, lane);
 
@@ -200,7 +206,8 @@ export async function supervisorUp(
       }
     }
 
-    const channel: "telegram" | "markdown" = conf.source === "markdown" ? "markdown" : "telegram";
+    // 채널 라벨 = 소스 id 그대로(권한 요청 표기용). 미지 소스를 telegram 으로 오분류하지 않는다.
+    const channel: string = conf.source;
 
     // 권한 경고(perm-diff 등)를 채널로도 표면화 — source 는 아래에서 생성되므로 지연 참조.
     // 알림은 보조 신호: 전송 실패는 warn 후 흡수(레인 동작에 영향 없음).
@@ -264,33 +271,15 @@ export async function supervisorUp(
     const onInbound = () => injector.notify();
 
     try {
-      // 소스 생성을 try 안에서 — createMarkdownSource 등이 오구성(markdown root/inbox 누락)에
-      // 던지면 이 레인만 status:"error" 로 격리하고 나머지 레인·up 은 계속한다(전체 크래시 방지).
-      if (conf.source === "markdown") {
-        source = createMarkdownSource({ lane, proj, engine, paths, conf, onInbound });
-      } else {
-        const chatId =
-          conf.chat_id && !Number.isNaN(Number(conf.chat_id)) ? Number(conf.chat_id) : undefined;
-        // 인바운드/콜백 허용 발신자 = allow_from ∪ (개인 chat 인 chatId). 비면 어댑터가 fail-closed.
-        // 음수 chatId(그룹)는 인증 앵커 아님 — 멤버는 allow_from 으로만 인증(어댑터 병합 규칙과 동일).
-        const authorizedIds: number[] = [];
-        const selfAuth = selfAuthorizedChatId(chatId);
-        if (selfAuth !== undefined) authorizedIds.push(selfAuth);
-        for (const raw of conf.allow_from ? parseCsv(conf.allow_from) : []) {
-          const n = Number(raw);
-          if (!Number.isNaN(n)) authorizedIds.push(n);
-        }
-        source = createTelegramSource({
-          lane,
-          proj,
-          engine,
-          paths,
-          chatId,
-          authorizedIds,
-          onInbound,
-          lang: conf.lang,
-        });
+      // 소스 생성을 try 안에서 — 팩토리가 오구성(markdown root/inbox 누락 등)에 던지면 이 레인만
+      // status:"error" 로 격리하고 나머지 레인·up 은 계속한다(전체 크래시 방지).
+      // 미등록 소스도 조용히 폴백하지 않고 여기서 던져 fail-closed 로 격리한다(telegram 오분류 없음).
+      // 어댑터별 설정(telegram 인증셋 등)은 팩토리가 conf 에서 self-resolve 한다.
+      const factory = SOURCE_REGISTRY[conf.source];
+      if (!factory) {
+        throw new Error(t("supervisor.source.unknown", { source: conf.source }));
       }
+      source = factory({ lane, proj, engine, paths, conf, onInbound });
 
       source.onDecision((reqId, decision) => {
         const resolve = pendingDecisions.get(reqId);

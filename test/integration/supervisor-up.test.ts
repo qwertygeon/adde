@@ -148,6 +148,28 @@ acp_version=v1
     // 다른 정상 레인은 기동 — up 전체가 무너지지 않음
     expect(tg?.status).toBe("running");
   });
+
+  it("미등록 소스(source=bogus)는 status=error 로 격리한다 (레지스트리 fail-closed — telegram 폴백 없음)", async () => {
+    // B2 레지스트리: 미지 소스를 조용히 telegram 으로 폴백하지 않고 팩토리 부재로 throw → 이 레인만 error.
+    // 구 코드는 "markdown 아니면 telegram" 삼항이라 bogus 를 telegram 으로 오분류해 기동했다.
+    const bogus = `source=bogus
+backend=acp
+engine=claude-agent-acp
+perm_tier=acp
+acp_version=v1
+`;
+    const { base } = setupProject("bogusproj", {
+      "x-lane": bogus,
+      "telegram-claude": minimalConf,
+    });
+    const result = await runUp("bogusproj", { base, acpFactory: makeFakeAcpFactory() });
+
+    const bad = result.lanes.find((l) => l.lane === "x-lane");
+    const tg = result.lanes.find((l) => l.lane === "telegram-claude");
+    expect(bad?.status).toBe("error");
+    expect(bad?.error).toMatch(/bogus/); // 소스명이 오류에 표기 — telegram 으로 새지 않음
+    expect(tg?.status).toBe("running");
+  });
 });
 
 describe("supervisorUp (SC-001 레인 기동)", () => {
@@ -223,7 +245,7 @@ describe("supervisorUp source 분기 (markdown)", () => {
     fs.mkdirSync(rootDir, { recursive: true });
     const markdownConf =
       "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
-      `perm_tier=acp\nacp_version=v1\nroot=${rootDir}\ninbox=inbox.md\n`;
+      `perm_tier=acp\nacp_version=v1\nmarkdown.root=${rootDir}\nmarkdown.inbox=inbox.md\n`;
     const { base } = setupProject("mdproj", { "markdown-claude": markdownConf });
     const fakeAcpFactory = makeFakeAcpFactory();
 
@@ -241,7 +263,7 @@ describe("supervisorUp autopass 기동 배너 (005)", () => {
     // markdown 소스 — notify 가 outbox 노트로 표면화되어 네트워크 없이 관찰 가능.
     const conf =
       "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
-      `perm_tier=autopass\ndenylist=Bash\nacp_version=v1\nroot=${rootDir}\ninbox=inbox.md\n`;
+      `perm_tier=autopass\ndenylist=Bash\nacp_version=v1\nmarkdown.root=${rootDir}\nmarkdown.inbox=inbox.md\n`;
     const { base } = setupProject("approj", { "md-ap": conf });
 
     const result = await runUp("approj", { base, acpFactory: makeFakeAcpFactory() });
@@ -264,7 +286,7 @@ describe("supervisorUp autopass 기동 배너 (005)", () => {
     fs.mkdirSync(rootDir, { recursive: true });
     const conf =
       "source=markdown\nbackend=acp\nengine=claude-agent-acp\nchannel=markdown\n" +
-      `perm_tier=acp\nacp_version=v1\nroot=${rootDir}\ninbox=inbox.md\n`;
+      `perm_tier=acp\nacp_version=v1\nmarkdown.root=${rootDir}\nmarkdown.inbox=inbox.md\n`;
     const { base } = setupProject("acpproj", { "md-acp": conf });
 
     await runUp("acpproj", { base, acpFactory: makeFakeAcpFactory() });

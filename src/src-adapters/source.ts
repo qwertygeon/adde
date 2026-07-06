@@ -4,12 +4,31 @@
  * 권한 표면화 방식(telegram=inline 버튼, markdown=승인 노트 체크박스)은 구현이 흡수.
  */
 import type { PermRequest } from "../gate/gate.js";
+import type { LanePaths } from "../shared/paths.js";
+import type { LaneConf } from "../shared/conf.js";
 
 export type Decision = "allow" | "deny";
 export type DecisionCallback = (reqId: string, decision: Decision) => void;
 
 /** enqueue 연속 실패가 이 횟수에 도달하면 운영자에게 1회 알림 — 어댑터 공통 임계. */
 export const ENQUEUE_FAIL_THRESHOLD = 3;
+
+/**
+ * 소스 팩토리 공통 컨텍스트 — 모든 어댑터가 동일 시그니처로 생성된다.
+ * 어댑터별 설정(markdown=root/inbox, telegram=chat_id/allow_from)은 conf 에서 self-resolve 한다.
+ */
+export interface SourceContext {
+  lane: string;
+  proj: string;
+  engine: string;
+  paths: LanePaths;
+  conf: LaneConf;
+  /** 인바운드 enqueue 직후 호출(injector 깨우기). in-process 신호 — watch 불요. */
+  onInbound?: (() => void) | undefined;
+}
+
+/** 소스 어댑터 팩토리 — 레지스트리(SOURCE_REGISTRY)가 source id 로 조회해 생성. */
+export type SourceFactory = (ctx: SourceContext) => Source;
 
 export interface Source {
   /** 인바운드 수신 + 아웃바운드(out 감시) 기동. 대상(chat_id/root)은 conf 에서 self-resolve. */

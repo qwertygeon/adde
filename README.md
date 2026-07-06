@@ -11,7 +11,7 @@ _English | [한국어](README.ko.md)_
 
 > ⚠️ **Status: early development.** ACP backend + Markdown/Telegram source adapters work (a PoC vertical slice). The API may change.
 
-ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely from a **channel** (Markdown notes such as Obsidian / Telegram; Discord on hold). The AI does the development work while you instruct, approve, and observe from chat.
+ADDE is a gateway that drives an **AI CLI** (Claude Code / Codex, etc.) remotely from a **channel** (Markdown notes such as Obsidian / Telegram; Discord on hold). The AI does the development work while you instruct, approve, and observe from your notes or chat.
 
 ## When to use it
 

@@ -202,17 +202,30 @@ describe("runDoctor (SC3)", () => {
   it("root(존재)+inbox 지정 markdown 레인은 마크다운 경로 PASS", async () => {
     const rootDir = path.join(tmpBase, "vault");
     fs.mkdirSync(rootDir, { recursive: true });
-    writeConf("p", "md-ok", mdConf(`root=${rootDir}\ninbox=inbox.md\n`));
+    writeConf("p", "md-ok", mdConf(`markdown.root=${rootDir}\nmarkdown.inbox=inbox.md\n`));
     const checks = await runDoctor("p", { base: tmpBase });
     const md = checks.find((c) => c.name.endsWith("마크다운 경로"));
     expect(md?.level).toBe("PASS");
   });
 
   it("존재하지 않는 root 의 markdown 레인은 마크다운 경로 FAIL", async () => {
-    writeConf("p", "md-noroot", mdConf(`root=${path.join(tmpBase, "no-vault")}\ninbox=inbox.md\n`));
+    writeConf(
+      "p",
+      "md-noroot",
+      mdConf(`markdown.root=${path.join(tmpBase, "no-vault")}\nmarkdown.inbox=inbox.md\n`),
+    );
     const checks = await runDoctor("p", { base: tmpBase });
     const md = checks.find((c) => c.name.endsWith("마크다운 경로"));
     expect(md?.level).toBe("FAIL");
+  });
+
+  it("구 평면 어댑터 키(root=)를 쓰면 conf format FAIL 로 마이그레이션을 안내한다", async () => {
+    // 클린 브레이크: 파서가 구 키를 무시하므로 doctor 가 감지해 포맷 변경을 알린다(조용한 실패 방지).
+    writeConf("p", "md-legacy", mdConf(`root=${tmpBase}\ninbox=inbox.md\n`));
+    const checks = await runDoctor("p", { base: tmpBase });
+    const fmt = checks.find((c) => c.name.endsWith("conf format"));
+    expect(fmt?.level).toBe("FAIL");
+    expect(fmt?.detail).toContain("root");
   });
 
   it("그룹/기타 읽기 가능한 .env 는 파일 권한 WARN (토큰 노출)", async () => {

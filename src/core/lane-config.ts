@@ -103,21 +103,22 @@ async function collectAddWarnings(conf: LaneConf, token?: string): Promise<strin
     }
   }
   if (conf.source === "markdown") {
-    if (!conf.root) {
+    const md = conf.markdown;
+    if (!md?.root) {
       warnings.push(t("laneConfig.warn.mdRootMissingConf"));
-    } else if (!(await exists(expandTilde(conf.root)))) {
-      warnings.push(t("laneConfig.warn.mdRootNotFound", { path: expandTilde(conf.root) }));
+    } else if (!(await exists(expandTilde(md.root)))) {
+      warnings.push(t("laneConfig.warn.mdRootNotFound", { path: expandTilde(md.root) }));
     }
     // 경로 상호 배타 사전 경고 — 기동 시 fail-closed 거부되는 조합을 생성 시점에 미리 안내.
     // 해석 규칙은 markdown 어댑터 resolvePaths·기동 가드와 동일(미지정 시 inbox 형제, darwin 대소문자 정규화).
-    if (conf.root && conf.inbox) {
-      const root = expandTilde(conf.root);
-      const inboxPath = resolve(join(root, conf.inbox));
+    if (md?.root && md.inbox) {
+      const root = expandTilde(md.root);
+      const inboxPath = resolve(join(root, md.inbox));
       const inboxDir = dirname(inboxPath);
       const approvalsDir = resolve(
-        conf.approvals ? join(root, conf.approvals) : join(inboxDir, "approvals"),
+        md.approvals ? join(root, md.approvals) : join(inboxDir, "approvals"),
       );
-      const outboxDir = resolve(conf.outbox ? join(root, conf.outbox) : join(inboxDir, "out"));
+      const outboxDir = resolve(md.outbox ? join(root, md.outbox) : join(inboxDir, "out"));
       const quarantineDir = resolve(join(inboxDir, ".conflicts"));
       const insideNorm = (child: string, parent: string): boolean =>
         isPathInside(normCasePath(child), normCasePath(parent));
@@ -145,9 +146,10 @@ async function collectAddWarnings(conf: LaneConf, token?: string): Promise<strin
   // 자기 인증은 개인 chat(양수 chat_id)만 성립 — 그룹(음수) chat_id 는 회신 대상일 뿐 멤버를
   // 인증하지 않으므로, 그룹만 있고 allow_from 이 없으면 여전히 전부 거부된다.
   if (conf.source === "telegram") {
-    const chatIdNum = conf.chat_id ? Number(conf.chat_id) : NaN;
+    const tg = conf.telegram;
+    const chatIdNum = tg?.chat_id ? Number(tg.chat_id) : NaN;
     const hasSelfAuth = Number.isFinite(chatIdNum) && chatIdNum > 0;
-    if (!hasSelfAuth && !conf.allow_from) {
+    if (!hasSelfAuth && !tg?.allow_from) {
       warnings.push(t("laneConfig.warn.telegramNoAuth"));
     }
   }
@@ -323,14 +325,19 @@ export async function laneAdd(
   };
   // exactOptionalPropertyTypes: undefined 대입 금지 — 값이 있을 때만 설정.
   if (opts.cwd) conf.cwd = opts.cwd;
-  if (opts.chat_id) conf.chat_id = opts.chat_id;
-  if (opts.root) conf.root = opts.root;
-  if (opts.inbox) conf.inbox = opts.inbox;
-  if (opts.approvals) conf.approvals = opts.approvals;
-  if (opts.outbox) conf.outbox = opts.outbox;
   if (opts.lang) conf.lang = opts.lang;
-  if (opts.allow_from) conf.allow_from = opts.allow_from;
   if (opts.file_mode) conf.file_mode = opts.file_mode;
+  // 어댑터 전용 설정은 네임스페이스 서브객체로 — 관련 필드가 하나라도 있을 때만 생성.
+  const markdown: NonNullable<LaneConf["markdown"]> = {};
+  if (opts.root) markdown.root = opts.root;
+  if (opts.inbox) markdown.inbox = opts.inbox;
+  if (opts.approvals) markdown.approvals = opts.approvals;
+  if (opts.outbox) markdown.outbox = opts.outbox;
+  if (Object.keys(markdown).length > 0) conf.markdown = markdown;
+  const telegram: NonNullable<LaneConf["telegram"]> = {};
+  if (opts.chat_id) telegram.chat_id = opts.chat_id;
+  if (opts.allow_from) telegram.allow_from = opts.allow_from;
+  if (Object.keys(telegram).length > 0) conf.telegram = telegram;
 
   const base = opts.base ?? defaultBase();
   const paths = lanePaths(base, proj, lane);

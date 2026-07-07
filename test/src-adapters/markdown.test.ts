@@ -421,6 +421,7 @@ describe("createMarkdownSource (통합)", () => {
       allowlist: [],
       denylist: [],
       hard_deny: [],
+      auto_relaunch: true,
       markdown: { root: rootDir, inbox: "inbox.md" },
     };
   });

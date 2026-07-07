@@ -447,6 +447,13 @@ lane add options:
       unknown:
         'unknown source "{{source}}" — not a registered source. Fix source= in lanes.d/<lane>.conf (see adde doctor for supported sources).',
     },
+    selfRecovery: {
+      attempt: "⚠️ engine crashed on lane {{lane}} — attempting auto-recovery (backoff)…",
+      abandoned:
+        "🛑 lane {{lane}} auto-recovery gave up after {{attempts}} attempts — status set to error. Recover with adde restart {{proj}}.",
+      disabled:
+        "🛑 engine crashed on lane {{lane}} — auto-relaunch is off (auto_relaunch=false); status set to error, no restart attempted. Recover with adde restart {{proj}}.",
+    },
   },
   launchd: {
     macOnly: {

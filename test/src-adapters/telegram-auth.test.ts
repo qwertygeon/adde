@@ -17,6 +17,7 @@ function conf(tg: { chat_id?: string; allow_from?: string }): LaneConf {
     allowlist: [],
     denylist: [],
     hard_deny: [],
+    auto_relaunch: true,
     ...(Object.keys(tg).length > 0 ? { telegram: tg } : {}),
   };
 }

@@ -16,6 +16,7 @@ import { resolveFileMode } from "./lane-config.js";
 import { AcpBackendImpl } from "../backend/acp/client.js";
 import type { AcpBackend } from "../backend/acp/client.js";
 import { createInjector } from "./injector.js";
+import { createLaneWatcher } from "./lane-watcher.js";
 import { recordSession } from "./session-ledger.js";
 import { SOURCE_REGISTRY } from "../src-adapters/index.js";
 import type { Source } from "../src-adapters/index.js";
@@ -54,6 +55,10 @@ interface LaneHandle {
   lane: string;
   /** 하트비트가 mtime 을 touch 할 runtime.json 경로. */
   paths: LanePaths;
+  /**
+   * 레인 헬스(watcher 소유) — false 면 크래시-확정/재시도 구간. 미설정 시 항상 touch(기존 동작).
+   */
+  isHealthy?(): boolean;
   stop(): Promise<void>;
 }
 
@@ -111,6 +116,9 @@ function armHeartbeat(proj: string, handles: LaneHandle[]): void {
   }
   const timer = setInterval(() => {
     for (const h of handles) {
+      // 크래시-확정/재시도 구간(unhealthy) 은 touch 스킵 — mtime 이 stale 로 넘어가 "running" 오표기를
+      // 막는다. isHealthy 미설정 handle 은 항상 touch(기존 동작 보존).
+      if (h.isHealthy && !h.isHealthy()) continue;
       // 하트비트는 보조 신호 — touch 실패는 warn 후 흡수(레인 동작에 영향 없음).
       void touchRuntime(h.paths).catch((err: unknown) =>
         console.warn(t("log.supervisor.heartbeatFail", { lane: h.lane, error: errMsg(err) })),
@@ -245,6 +253,65 @@ export async function supervisorUp(
     const engine = conf.engine || "claude";
     let source: Source;
 
+    // 자가 회복(self-recovery) watcher — 크래시 시 유계 백오프 재기동(ON) 또는 즉시 error 확정(OFF).
+    // deps 는 전부 클로저 — arm()·backend.onExit 배선은 launch 성공 후(아래)에 이뤄진다.
+    const watcher = createLaneWatcher({
+      lane,
+      autoRelaunch: conf.auto_relaunch,
+      resumeSession: (sid) =>
+        backend.resumeSession
+          ? backend.resumeSession(lane, sid)
+          : Promise.reject(new Error(`[lane-watcher] lane "${lane}" backend has no resumeSession`)),
+      isAlive: () => backend.isAlive?.(lane) ?? false,
+      lastSessionId: async () => {
+        try {
+          return (await readFile(paths.sessionIdFile, "utf8")).trim();
+        } catch {
+          return "";
+        }
+      },
+      denyPending: () => {
+        for (const resolveFn of [...pendingDecisions.values()]) resolveFn("deny");
+      },
+      // LaneHandle.isHealthy 는 watcher.isHealthy() 를 직접 참조(아래 handles.push) — 별도 상태 보관 불요.
+      setHealth: () => {},
+      writeError: () =>
+        writeErrorRuntime(paths, {
+          lane,
+          source: conf.source || channel,
+          backend: conf.backend || "acp",
+          engine,
+          error: "engine crashed; self-recovery did not keep the lane running",
+        }).catch((err: unknown) =>
+          console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(err) })),
+        ),
+      onSessionUpdated: async (sid) => {
+        await writeRuntime(paths, {
+          v: 1,
+          pid: process.pid,
+          lane,
+          sessionId: sid,
+          startedAt: new Date().toISOString(),
+          source: conf.source || channel,
+          backend: conf.backend || "acp",
+          engine,
+        }).catch((err: unknown) =>
+          console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(err) })),
+        );
+      },
+      notify: (kind, ctx) => {
+        const tl = tFor(conf.lang);
+        if (kind === "attempt") {
+          channelWarn(tl("supervisor.selfRecovery.attempt", { lane }));
+        } else if (kind === "disabled") {
+          channelWarn(tl("supervisor.selfRecovery.disabled", { lane, proj }));
+        } else {
+          const attempts = typeof ctx?.["attempts"] === "number" ? ctx["attempts"] : 0;
+          channelWarn(tl("supervisor.selfRecovery.abandoned", { lane, attempts, proj }));
+        }
+      },
+    });
+
     // injector 를 source 보다 먼저 생성 — render 는 source 를 지연 참조(closure, turn 종료 시 호출).
     // in-process 배선: source.onInbound → injector.notify, injector.render → source.renderOut.
     // 주입 실패도 채널로 표면화(onFail → source.notify) — 채널 언어(레인 로케일)로 렌더.
@@ -301,10 +368,15 @@ export async function supervisorUp(
       backend.subscribe(lane, (e) => injector.onSessionEvent(e));
 
       backend.onPermissionRequest(lane, async (req) => {
-        const waitForDecision = () =>
-          new Promise<"allow" | "deny">((resolveFn) => {
-            pendingDecisions.set(req.id, resolveFn);
-          });
+        // pendingDecisions 등록을 sendPermPrompt(비동기 채널 전송) 이전에 동기적으로 선행한다 —
+        // 크래시가 전송 중(아직 waitForDecision 미호출) 구간에 발생해도 denyPending 이 이 요청을
+        // 찾아 deny 종결할 수 있게 한다(그 반대 순서면 전송-대기 사이 창에서 크래시가 놓친다).
+        let resolveDecision!: (decision: "allow" | "deny") => void;
+        const decisionPromise = new Promise<"allow" | "deny">((resolveFn) => {
+          resolveDecision = resolveFn;
+        });
+        pendingDecisions.set(req.id, resolveDecision);
+        const waitForDecision = () => decisionPromise;
 
         const sendPermPrompt = async () => {
           await source.requestPermission(req);
@@ -325,6 +397,11 @@ export async function supervisorUp(
           pendingDecisions.delete(req.id);
         }
       });
+
+      // 자가 회복 watcher 배선 — onExit 등록은 ON/OFF 공통(크래시 감지는 항상 수행).
+      // arm() 은 ON 에서만(OFF 는 재기동 트리거 자체를 비활성 — 감지 후 즉시 error 확정).
+      if (conf.auto_relaunch) watcher.arm();
+      backend.onExit?.(lane, (_l, info) => watcher.onCrash(info));
 
       // 인젝터 기동은 비차단(첫 inject 가 turn 종료까지 블록될 수 있어 await 하지 않음).
       // fire-and-forget 이므로 rejection 은 unhandled 가 되지 않도록 로깅한다.
@@ -376,8 +453,11 @@ export async function supervisorUp(
       handles.push({
         lane,
         paths,
-        // 정지 순서: 소스 먼저(신규 인바운드·turn 차단) → 백엔드 child 정리 → 상태 파일 제거.
+        isHealthy: () => watcher.isHealthy(),
+        // 정지 순서: watcher disarm(잔존 백오프 타이머 정리) → 소스(신규 인바운드·turn 차단) →
+        // 백엔드 child 정리 → 상태 파일 제거.
         async stop() {
+          watcher.disarm();
           await source.stop();
           await backend.close(lane);
           await removeRuntime(paths).catch((err: unknown) =>

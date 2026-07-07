@@ -154,13 +154,13 @@ adde status [<proj>] [--all] [--json]
 
 Scans each lane in `lanes.d` and determines its status.
 
-| Status    | Meaning                                                                                                     |
-| --------- | ----------------------------------------------------------------------------------------------------------- |
-| `running` | State file exists, the launched process (pid) is alive, and the heartbeat is fresh                          |
-| `stale`   | The pid is alive but the heartbeat (state-file mtime) has stopped — **suspected hung**                      |
-| `dead`    | State file exists but the process is gone — **abnormal exit (crash) residue**                               |
-| `error`   | The lane **failed to start** (engine spawn/handshake, missing config, …) — the reason is recorded and shown |
-| `stopped` | No state file — normal exit or never started                                                                |
+| Status    | Meaning                                                                                                                                                                                                                     |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `running` | State file exists, the launched process (pid) is alive, and the heartbeat is fresh                                                                                                                                          |
+| `stale`   | The pid is alive but the heartbeat (state-file mtime) has stopped — **suspected hung, or an engine crash currently being auto-recovered** (see [troubleshooting](troubleshooting.md#engine-crash--self-recovery))           |
+| `dead`    | State file exists but the process is gone — **abnormal exit (crash) residue**                                                                                                                                               |
+| `error`   | The lane **failed to start** (engine spawn/handshake, missing config, …), or an engine that crashed after starting **gave up self-recovery** (or has it disabled, `auto_relaunch=false`) — the reason is recorded and shown |
+| `stopped` | No state file — normal exit or never started                                                                                                                                                                                |
 
 - **With `<proj>`**: prints all lanes of that project (including stopped) in a `LANE · STATUS · PID · UPTIME · SEEN · SOURCE` table.
 - **Without `<proj>`**: aggregates all projects (`~/.config/adde/*/`) and prints **running (non-stopped) lanes** in a `PROJECT · LANE · …` table. If no lanes are running, an informational message.
@@ -347,6 +347,8 @@ Passing `--token-stdin` (or any field flag) already makes the command non-intera
 > **Inbound authentication (telegram)**: inbound messages and permission callbacks are processed only from allowed senders and the rest are ignored (fail-closed). Allowed set = **private `chat_id` (positive = that user, self-authenticated) ∪ `allow_from`**. **A group `chat_id` (negative) is only a reply target and does not authenticate members**, so in a group specify the allowed members' user ids with `--allow-from` (a group chat_id alone does not allow the whole group). With no allowed sender, all inbound is denied. This is the boundary that prevents an arbitrary user with access to the bot from injecting a prompt into the host-executing session or approving permissions without authorization.
 >
 > **File permissions (`--file-mode`)**: the default `private` locks the lane's state/out/queue/lanes.d directories to 0700 (owner only) to block other local users on a multi-user host from reading the conversation, responses, and config metadata. `shared` is an opt-in that does not apply this lock (keeps the existing umask default — typically 0755); use it only when read sharing is needed. (The bot-token `.env` is always 0600 regardless of mode.)
+>
+> **Engine crash self-recovery (`auto_relaunch`)**: not a `lane add` flag — set directly in the lane's `.conf` file (`auto_relaunch=false`), then `adde restart <proj>`. Defaults to on: if the lane's engine process crashes after the handshake, ADDE relaunches it with a bounded exponential backoff, carrying over the same session, subscribers, and permission handler. `auto_relaunch=false` disables only the automatic relaunch — crash detection, the immediate `error` status, denial of any permission request still pending at crash time, and the one-time channel notice all still happen. See [troubleshooting](troubleshooting.md#engine-crash--self-recovery).
 
 ## proj — project listing and deletion
 

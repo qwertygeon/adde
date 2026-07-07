@@ -322,6 +322,8 @@ export async function laneAdd(
     hard_deny: opts.safe_defaults
       ? [...new Set([...DEFAULT_AUTOPASS_DENYLIST, ...(opts.hard_deny ?? [])])]
       : (opts.hard_deny ?? []),
+    // 노브 미노출(최소 표면) — CLI 는 항상 기본 ON 으로 생성(serialize 시 미출력).
+    auto_relaunch: true,
   };
   // exactOptionalPropertyTypes: undefined 대입 금지 — 값이 있을 때만 설정.
   if (opts.cwd) conf.cwd = opts.cwd;

@@ -185,6 +185,50 @@ describe("detectLegacyAdapterKeys", () => {
   });
 });
 
+// SC-012(NFR-005 — 하위호환)·SC-015(FR-008 — ON 경로): auto_relaunch 는 명시 "false" 만 OFF,
+// 그 외(부재·true·빈값·무효값)는 ON(default-on·forward-compat). 002-lane-engine-recovery.
+describe("auto_relaunch (FR-008 자가 재기동 opt-out 노브)", () => {
+  it("키가 없으면 true(ON, default-on) — 기존 conf 하위호환 (SC-012 Happy)", () => {
+    expect(parseLaneConf("source=telegram\n").auto_relaunch).toBe(true);
+  });
+
+  it("명시 false 만 OFF — 무효/빈/대문자 값은 ON(forward-compat) (SC-012 Edge)", () => {
+    expect(parseLaneConf("source=telegram\nauto_relaunch=false\n").auto_relaunch).toBe(false);
+    expect(parseLaneConf("source=telegram\nauto_relaunch=true\n").auto_relaunch).toBe(true);
+    expect(parseLaneConf("source=telegram\nauto_relaunch=maybe\n").auto_relaunch).toBe(true);
+    expect(parseLaneConf("source=telegram\nauto_relaunch=\n").auto_relaunch).toBe(true);
+    expect(parseLaneConf("source=telegram\nauto_relaunch=TRUE\n").auto_relaunch).toBe(true);
+    expect(parseLaneConf("source=telegram\nauto_relaunch=FALSE\n").auto_relaunch).toBe(false);
+  });
+
+  it("true 는 직렬화 시 라인을 출력하지 않는다(churn 0) — false 만 출력 (SC-015 Edge)", () => {
+    const onText = serializeLaneConf(parseLaneConf("source=telegram\n"));
+    expect(onText).not.toContain("auto_relaunch=");
+
+    const offText = serializeLaneConf(parseLaneConf("source=telegram\nauto_relaunch=false\n"));
+    expect(offText).toContain("auto_relaunch=false");
+  });
+
+  it("round-trip 이 동치이다(true/false 양쪽) (SC-015 Edge)", () => {
+    const onOriginal = parseLaneConf("source=telegram\n");
+    expect(parseLaneConf(serializeLaneConf(onOriginal))).toEqual(onOriginal);
+    expect(parseLaneConf(serializeLaneConf(onOriginal)).auto_relaunch).toBe(true);
+
+    const offOriginal = parseLaneConf("source=telegram\nauto_relaunch=false\n");
+    expect(parseLaneConf(serializeLaneConf(offOriginal))).toEqual(offOriginal);
+    expect(parseLaneConf(serializeLaneConf(offOriginal)).auto_relaunch).toBe(false);
+  });
+
+  it("기존 v:1 레인(auto_relaunch 키 부재)이 정상 파싱된다 — 필수 필드화로 파손 없음 (SC-012)", () => {
+    const legacyConf =
+      "source=markdown\nbackend=acp\nengine=claude-agent-acp\nperm_tier=acp\nacp_version=v1\n" +
+      "markdown.root=/abs/Notes\nmarkdown.inbox=in.md\n";
+    const result = parseLaneConf(legacyConf);
+    expect(result.auto_relaunch).toBe(true);
+    expect(result.markdown?.root).toBe("/abs/Notes"); // 기존 필드 파손 없음
+  });
+});
+
 describe("denylist (005 autopass)", () => {
   it("denylist 를 콤마 목록으로 파싱하고, 미지정 시 빈 배열이다", () => {
     expect(parseLaneConf("source=telegram\n").denylist).toEqual([]);

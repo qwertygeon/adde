@@ -14,6 +14,7 @@ Diagnosis and remedies by symptom. Two commands narrow down most issues first:
 - [Won't start](#wont-start)
 - [Lane shows as dead](#lane-shows-as-dead)
 - [Lane shows as stale (hung)](#lane-shows-as-stale-hung)
+- [Engine crash & self-recovery](#engine-crash--self-recovery)
 - [Recovery after reboot / orphan cleanup](#recovery-after-reboot--orphan-cleanup)
 - [No response after sending a message](#no-response-after-sending-a-message)
 - [Failure notice after session control (clear/resume)](#failure-notice-after-session-control-clearresume)
@@ -72,6 +73,23 @@ adde restart <proj>                # recover by restarting the daemon
 ```
 
 A common cause of a hang is the engine being tied up in a long task / external wait, or its response stopping. If a restart doesn't clear it, check the environment with the `--engine` log and `adde doctor <proj>`.
+
+## Engine crash & self-recovery
+
+If a lane's **engine** process (not the daemon itself) crashes after the handshake, ADDE detects it and, by default, relaunches it automatically — carrying over the same session, subscribers, and permission handler, so a single crash doesn't require a manual restart. While it's retrying (bounded exponential backoff, capped attempts), `adde status` may briefly show `stale` (the heartbeat is intentionally held back so a crashed-and-retrying lane isn't misreported as `running`). If every attempt fails, ADDE gives up, marks the lane `error`, and sends a one-time channel notice:
+
+```
+🛑 lane <lane> auto-recovery gave up after <N> attempts — status set to error. Recover with adde restart <proj>.
+```
+
+Any permission approval still pending at crash time is denied (fail-closed) rather than left to time out — the channel does not hang waiting for the full approval timeout.
+
+- **Recovering after a give-up**: `adde restart <proj>` (or `/clear`/`/resume` from the channel).
+- **Turning self-recovery off**: add `auto_relaunch=false` to the lane's `.conf` (not a `lane add` flag — edit the file, then `adde restart <proj>`). With it off, ADDE still detects the crash, denies pending approvals, and sends a one-time notice, but marks the lane `error` **immediately** instead of retrying:
+  ```
+  🛑 engine crashed on lane <lane> — auto-relaunch is off (auto_relaunch=false); status set to error, no restart attempted. Recover with adde restart <proj>.
+  ```
+- Intentional restarts (`adde restart`, `/clear`, `/resume`) are unaffected — self-recovery only reacts to _unexpected_ engine exits, and disarms itself during a deliberate restart so the engine isn't double-started.
 
 ## Recovery after reboot / orphan cleanup
 

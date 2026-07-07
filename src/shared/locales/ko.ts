@@ -442,6 +442,13 @@ lane add 옵션:
       unknown:
         '알 수 없는 소스 "{{source}}" — 등록되지 않은 소스입니다. lanes.d/<lane>.conf 의 source= 를 수정하세요(지원 소스는 adde doctor 참조).',
     },
+    selfRecovery: {
+      attempt: "⚠️ 레인 {{lane}} 엔진이 크래시됐습니다 — 자가 회복(백오프) 시도 중…",
+      abandoned:
+        "🛑 레인 {{lane}} 자가 회복이 {{attempts}}회 시도 후 포기했습니다 — 상태를 error 로 표기합니다. adde restart {{proj}} 로 복구하세요.",
+      disabled:
+        "🛑 레인 {{lane}} 엔진이 크래시됐습니다 — auto-relaunch 가 꺼져 있어(auto_relaunch=false) 재기동을 시도하지 않고 상태를 error 로 표기합니다. adde restart {{proj}} 로 복구하세요.",
+    },
   },
   launchd: {
     macOnly: {

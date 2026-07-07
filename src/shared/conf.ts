@@ -67,6 +67,11 @@ export interface LaneConf {
   markdown?: MarkdownLaneConf;
   /** telegram 어댑터 전용 설정(`telegram.*` 키). 관련 키가 없으면 undefined. */
   telegram?: TelegramLaneConf;
+  /**
+   * 자가 재기동(self-recovery) 활성 여부. 기본 true(ON) — 명시 `false` 일 때만 OFF.
+   * 파서가 부재·무효값을 전부 true 로 해석해 상시 채우는 필수 필드(하위호환·forward-compat).
+   */
+  auto_relaunch: boolean;
 }
 
 /** 공통 optional 키(최상위 평면) — 순서 = 직렬화 순서. */
@@ -127,6 +132,8 @@ export function parseLaneConf(text: string): LaneConf {
     allowlist: parseToolList(conf["allowlist"] ?? ""),
     denylist: parseToolList(conf["denylist"] ?? ""),
     hard_deny: parseToolList(conf["hard_deny"] ?? ""),
+    // "false" 명시값만 OFF — 부재·true·빈값·무효값은 전부 ON(default-on, forward-compat).
+    auto_relaunch: (conf["auto_relaunch"] ?? "").trim().toLowerCase() !== "false",
   };
 
   // 공통 optional 은 존재할 때만 채운다(부재 = undefined).
@@ -184,6 +191,8 @@ export function serializeLaneConf(conf: LaneConf): string {
   if (conf.allowlist.length > 0) lines.push(`allowlist=${conf.allowlist.join(",")}`);
   if (conf.denylist.length > 0) lines.push(`denylist=${conf.denylist.join(",")}`);
   if (conf.hard_deny.length > 0) lines.push(`hard_deny=${conf.hard_deny.join(",")}`);
+  // false 일 때만 출력 — true(기본)는 미출력해 round-trip·기존 conf churn 을 0으로 유지.
+  if (conf.auto_relaunch === false) lines.push(`auto_relaunch=false`);
   for (const key of COMMON_OPTIONAL_KEYS) {
     const value = conf[key];
     if (value !== undefined && value.length > 0) lines.push(`${key}=${value}`);

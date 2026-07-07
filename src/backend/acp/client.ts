@@ -207,6 +207,17 @@ export interface AcpBackend {
   reset?(lane: string): Promise<{ sessionId: string }>;
   /** 지정 세션으로 복귀(/resume 등가) — 재기동 + session/load. 실패 시 새 세션 폴백(resumed=false). */
   resumeSession?(lane: string, sessionId: string): Promise<{ sessionId: string; resumed: boolean }>;
+  /**
+   * 엔진 child 의 정상·비정상 종료(크래시) 신호 등록 — 라이브니스 감독(watcher) 배선용.
+   * 핸드셰이크 완료 후에만 유효(그 전 크래시는 launch() 의 spawnFailed 경로가 처리).
+   * 의도적 close/relaunch 로 교체·삭제된 child 의 종료는 신호에서 자연 제외된다.
+   */
+  onExit?(
+    lane: string,
+    cb: (lane: string, info: { code: number | null; signal: NodeJS.Signals | null }) => void,
+  ): void;
+  /** 현재 레인 엔진 child 생존 여부 — watcher 의 백오프 fire 재확인(double-spawn 가드)용. */
+  isAlive?(lane: string): boolean;
 }
 
 interface LaneConfig {
@@ -231,6 +242,9 @@ interface LaneState {
   paths: LanePaths;
   addePolicy: AddePolicy;
   onIdle: (() => void) | null;
+  /** 크래시(종료) 신호 콜백 — onExit() 이 설정, 핸드셰이크 후 exit 리스너가 호출. */
+  onExitHandler:
+    ((lane: string, info: { code: number | null; signal: NodeJS.Signals | null }) => void) | null;
 }
 
 /**
@@ -259,6 +273,8 @@ export class AcpBackendImpl implements AcpBackend {
     subscribers: Array<(e: SessionEvent) => void>;
     permHandler: ((req: PermRequest) => Promise<PermResponse>) | null;
     onIdle: (() => void) | null;
+    onExitHandler:
+      ((lane: string, info: { code: number | null; signal: NodeJS.Signals | null }) => void) | null;
   } | null = null;
 
   /**
@@ -597,6 +613,15 @@ export class AcpBackendImpl implements AcpBackend {
     onSpawnError = (err) =>
       console.error(t("log.acp.engineProcessError", { lane, error: err.message }));
 
+    // 크래시 감지 — 'exit' 은 정상/비정상 종료 모두에서 발생(Node child_process 공식 동작).
+    // "종료된 child === 현재 레인의 child" 가드로 의도적 close/relaunch(delete-before-kill) 는 자연
+    // 억제한다(double-spawn 방지) — 별도 intentional-close 플래그 불요.
+    const thisChild = child;
+    thisChild.on("exit", (code, signal) => {
+      if (this.lanes.get(lane)?.child !== thisChild) return;
+      this.lanes.get(lane)?.onExitHandler?.(lane, { code, signal });
+    });
+
     const sessionId = sessionResp.sessionId;
 
     if (paths) {
@@ -617,6 +642,7 @@ export class AcpBackendImpl implements AcpBackend {
       paths: paths ?? ({} as LanePaths),
       addePolicy: addePolicy ?? { perm_tier: "acp", allowlist: [] },
       onIdle: inherit?.onIdle ?? null,
+      onExitHandler: inherit?.onExitHandler ?? null,
     };
     laneRef.state = state;
     this.lanes.set(lane, state);
@@ -686,6 +712,7 @@ export class AcpBackendImpl implements AcpBackend {
       subscribers: old ? [...old.subscribers] : [],
       permHandler: old?.permHandler ?? null,
       onIdle: old?.onIdle ?? null,
+      onExitHandler: old?.onExitHandler ?? null,
     };
     try {
       await this.close(lane);
@@ -744,6 +771,23 @@ export class AcpBackendImpl implements AcpBackend {
     const state = this.lanes.get(lane);
     if (!state) throw new Error(`[acp] lane "${lane}" not launched`);
     state.permHandler = handler;
+  }
+
+  /**
+   * 크래시 신호 콜백 등록 — subscribe/onPermissionRequest 와 달리 launch 전 호출도 무해하게
+   * no-op 한다(콜백을 걸 대상 상태가 아직 없을 뿐, 등록 자체는 크래시를 유발하지 않음). watcher 는
+   * 항상 launch 성공 후에 등록하므로 정상 경로에서는 이 분기를 타지 않는다.
+   */
+  onExit(
+    lane: string,
+    cb: (lane: string, info: { code: number | null; signal: NodeJS.Signals | null }) => void,
+  ): void {
+    const state = this.lanes.get(lane);
+    if (state) state.onExitHandler = cb;
+  }
+
+  isAlive(lane: string): boolean {
+    return this.lanes.get(lane)?.child.exitCode === null;
   }
 
   /** 레인 종료 — 엔진 child 정리(SIGTERM→유예→SIGKILL) + 상태 제거. */

@@ -56,6 +56,11 @@ markdown.inbox=adde/my-lane/inbox.md
 markdown.approvals=adde/my-lane/approvals/
 markdown.outbox=adde/my-lane/out/
 
+# optional (opt-in): archive file. When set, a sent message's body is moved here at send time,
+# leaving only the compact `✅ sent [[...]]` marker in the inbox (keeps a long-running inbox small).
+# If omitted, bodies stay in the inbox (current behavior); you can still archive on demand with a `🗄️ archive` checkbox.
+markdown.archive=adde/my-lane/sent-archive.md
+
 # optional: pre-allow frequently used tools to reduce approval frequency (gate stays on)
 allowlist=Read,Grep
 
@@ -120,6 +125,15 @@ You can use **session-control labels** with the same contract as send (exact lab
 ```
 
 When processed, the line terminates as `✅ sent [[...]]` and the result (completion notice / session list) is linked into a response note. Control labels act as message boundaries like send, so put them **alone on their own line**. Details: [command reference](commands.md#session-control-channel-commands).
+
+### Archiving sent messages (keeping the inbox small)
+
+Over a long-running lane the inbox accumulates the bodies of every message you've sent. Two ways to move them into an archive file, keeping only the compact `✅ sent [[...]]` marker in the inbox:
+
+- **Automatic (opt-in)**: set `markdown.archive=<path>` (see config above). At send time the message body is moved into that file and removed from the inbox — the `✅ sent` marker stays as the separator and clickable link. If unset, bodies stay in the inbox.
+- **On demand**: check a `- [x] 🗄️ archive` box. It moves the bodies of all existing `✅ sent` messages into the archive file (works with or without the config). The line terminates as `- [x] 🗄️ archived N <time>` (with `· auto` appended when the automatic mode is on). It only touches completed `✅ sent` segments — a message you're still drafting is never archived.
+
+The archive is a plain append-only log (`## [[send-time id]]` heading + the body). Your delivered messages and responses are unaffected — archiving only rewrites the inbox surface, never the queue or the response notes, so it can never lose or re-send a message.
 
 ## 4. Receiving responses (output notes)
 

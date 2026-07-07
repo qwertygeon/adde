@@ -16,6 +16,12 @@ export interface MarkdownLaneConf {
   approvals?: string;
   /** 출력 디렉터리(root 상대). 미지정 시 inbox 형제 out/. */
   outbox?: string;
+  /**
+   * 전송된(`✅ sent`) 세그먼트 본문을 이관할 아카이브 파일(root 상대, 옵트인).
+   * 지정 시 전송 시점에 본문을 이 파일로 이관하고 inbox 에선 `✅ sent` 마커만 남긴다(24h 성장 억제).
+   * 미지정 시 자동 아카이브 OFF(본문 잔존 — 현행 동작). 수동 `🗄️ archive` 라벨은 미지정 시 기본 파일로 동작.
+   */
+  archive?: string;
 }
 
 /** telegram 어댑터 전용 설정(`telegram.*` 키). */
@@ -71,7 +77,7 @@ const COMMON_OPTIONAL_KEYS = ["cwd", "lang", "file_mode"] as const;
  * 새 어댑터 추가 = 여기에 한 줄 + LaneConf 서브타입 1개.
  */
 const NAMESPACE_FIELDS = {
-  markdown: ["root", "inbox", "approvals", "outbox"],
+  markdown: ["root", "inbox", "approvals", "outbox", "archive"],
   telegram: ["chat_id", "allow_from"],
 } as const;
 

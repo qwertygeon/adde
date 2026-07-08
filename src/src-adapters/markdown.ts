@@ -152,12 +152,32 @@ export function emptyLine(): string {
 }
 
 /** 아카이브 적격 strict 마커 — sentLine 형식(`- [x] ✅ sent [[stamp id]]`)만. 캡처: 1=stamp, 2=id.
- * 느슨한 경계 검출(`core.startsWith("sent")`)과 구분해, 수동 입력 `✅ sent`·레거시 `sent <id>` 는
- * 아카이브 대상에서 제외한다(초안 오삭제 방지). `\r?$` — CRLF 관용. */
+ * 앵커+키워드만 보는 `isTerminalMarker`(경계 판별)와 구분해, 수동 입력 `✅ sent`·레거시 `sent <id>`
+ * (위키링크 없음)는 아카이브 대상에서 제외한다(초안 오삭제 방지). `\r?$` — CRLF 관용. */
 const SENT_MARKER = /^\s*-\s*\[[xX]\]\s+✅\s+sent\s+\[\[([^\]\s]+)\s+([^\]\s]+)\]\]\s*\r?$/;
 export function matchSentMarker(line: string): { stamp: string; id: string } | null {
   const m = SENT_MARKER.exec(line);
   return m ? { stamp: m[1]!, id: m[2]! } : null;
+}
+
+/** sending(크래시 재개) 앵커 마커 — `⏳` 앵커 + 체크됨(`[xX]`) 이중 게이트, id 필수·stamp 선택(레거시
+ * in-flight 라인엔 stamp 가 없다). 앵커 없음/미체크/id 없음이면 null(호출부가 본문으로 보존). `\r?$` CRLF 관용. */
+const SENDING_MARKER = /^\s*-\s*\[[xX]\]\s+⏳\s+sending\s+(\S+)(?:\s+(\S+))?\s*\r?$/;
+export function matchSendingMarker(line: string): { id: string; stamp?: string } | null {
+  const m = SENDING_MARKER.exec(line);
+  if (!m) return null;
+  const result: { id: string; stamp?: string } = { id: m[1]! };
+  if (m[2]) result.stamp = m[2];
+  return result;
+}
+
+/** 종단 마커(경계) 판별 — `✅ sent`/`⚠️ empty`/`🗄️ archived` 중 하나의 앵커+키워드 필수, tail·checked
+ * 무관(레거시·수동 마커 호환). 키워드 뒤 word-boundary(공백·위키링크·EOL·CRLF)만 인정해 `sentiment`·
+ * `emptying` 같은 접두 오매칭을 막는다. VS16(`⚠️`·`🗄️`)은 VS 없는 레거시 표기 호환을 위해 선택 허용. */
+const TERMINAL_MARKER =
+  /^\s*-\s*\[[ xX]\]\s+(?:✅\s+sent|⚠️?\s+empty|🗄️?\s+archived)(?=\s|\[\[|\r|$)/;
+export function isTerminalMarker(line: string): boolean {
+  return TERMINAL_MARKER.test(line);
 }
 
 /** 수동 `🗄️ archive` 스윕 완료 종단 라인. `archived` 는 경계 마커라 재파싱서 본문 오염 없음.
@@ -235,24 +255,22 @@ export function parseInbox(content: string): InboxParse {
     const label = cb[2]!.trim();
     const core = labelCore(label);
 
-    if (core.startsWith("sending")) {
-      const m = /sending\s+(\S+)(?:\s+(\S+))?/i.exec(label);
-      if (m) {
-        const action: InboxAction = {
-          kind: "resume",
-          id: m[1]!,
-          text: segment(i),
-          lineIndex: i,
-          segmentStart,
-        };
-        if (m[2]) action.stamp = m[2];
-        actions.push(action);
-      }
+    const sending = matchSendingMarker(lines[i]!);
+    if (sending) {
+      const action: InboxAction = {
+        kind: "resume",
+        id: sending.id,
+        text: segment(i),
+        lineIndex: i,
+        segmentStart,
+      };
+      if (sending.stamp) action.stamp = sending.stamp;
+      actions.push(action);
       segmentStart = i + 1;
       continue;
     }
     // 종단 마커(경계): sent/empty/archived. strict `✅ sent [[stamp id]]` 는 아카이브 대상으로도 수집.
-    if (core.startsWith("sent") || core.startsWith("empty") || core.startsWith("archived")) {
+    if (isTerminalMarker(lines[i]!)) {
       const sm = matchSentMarker(lines[i]!);
       if (sm)
         sentSegments.push({ markerIndex: i, bodyStart: segmentStart, id: sm.id, stamp: sm.stamp });

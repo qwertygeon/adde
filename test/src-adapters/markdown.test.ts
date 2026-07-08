@@ -19,6 +19,8 @@ import {
   ensureBlankSend,
   blankSendLine,
   matchSentMarker,
+  matchSendingMarker,
+  isTerminalMarker,
   planArchive,
   archivedLine,
 } from "../../src/src-adapters/markdown.js";
@@ -156,6 +158,140 @@ describe("parseInbox (actions)", () => {
   it("레거시 `sent <id>`·수동 `✅ sent`(위키링크 없음)는 sentSegments 비대상(strict)", () => {
     expect(parseInbox("x\n- [x] ✅ sent legacy-id\n").sentSegments).toHaveLength(0);
     expect(parseInbox("x\n- [x] ✅ sent\n").sentSegments).toHaveLength(0);
+  });
+
+  // SC-001: 앵커+체크 sending 은 재개 경계로 판별된다.
+  it("SC-001: 앵커+체크 sending 은 resume 액션(id·stamp)이 되고 앞 세그먼트가 본문 보존된다", () => {
+    const r = parseInbox("중요한 초안\n- [x] ⏳ sending abc 20260708-101010");
+    expect(r.actions).toEqual([
+      {
+        kind: "resume",
+        id: "abc",
+        stamp: "20260708-101010",
+        text: "중요한 초안",
+        lineIndex: 1,
+        segmentStart: 0,
+      },
+    ]);
+  });
+
+  // SC-002: 미체크 앵커 sending 은 재개 경계가 아니다.
+  it("SC-002: 미체크 앵커 sending 은 resume 액션을 만들지 않는다(경계 아님)", () => {
+    const r = parseInbox("- [ ] ⏳ sending abc 20260708-101010");
+    expect(r.actions).toHaveLength(0);
+  });
+
+  // SC-003 (S1): 앵커 없는 "sent …" 접두 사용자 라인은 종단 경계가 아니며 그 앞 메시지가 유실되지 않는다.
+  it("SC-003: 앵커 없는 sent 접두 사용자 라인은 경계가 아니라 send 트리거의 fresh 본문에 포함된다", () => {
+    const r = parseInbox(
+      "안녕하세요 질문이 있습니다\n- [x] sent invoice to client\n- [x] 📤 send",
+    );
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh" });
+    expect(r.actions[0]!.text).toContain("안녕하세요 질문이 있습니다");
+    expect(r.actions[0]!.text).toContain("sent invoice to client"); // 경계 아니므로 본문에 그대로 포함
+  });
+
+  // SC-004: 앵커를 가진 종단 마커(strict)는 세그먼트 경계로 판별되고 아카이브 수집 대상이 된다.
+  it("SC-004: 앵커 종단 마커는 세그먼트 경계로 처리되고 strict 형식은 sentSegments 로 수집된다", () => {
+    const r = parseInbox("이전 메시지 본문\n- [x] ✅ sent [[20260708-101010 abc]]");
+    expect(r.actions).toHaveLength(0); // 종단 마커 자체는 액션이 아니라 경계
+    expect(r.sentSegments).toEqual([
+      { markerIndex: 1, bodyStart: 0, id: "abc", stamp: "20260708-101010" },
+    ]);
+  });
+
+  // SC-005 (S2, 체크·미체크 공통): 앵커 없는 "sending …" 사용자 라인은 재개를 발동하지 않고 원문이 파괴되지 않는다.
+  it("SC-005: 앵커 없는 sending 접두 라인(체크)은 재개를 발동하지 않고 원문이 본문으로 보존된다", () => {
+    const r = parseInbox("중요한 초안\n- [x] sending report to boss\n- [x] 📤 send");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh" });
+    expect(r.actions[0]!.text).toContain("중요한 초안");
+    expect(r.actions[0]!.text).toContain("sending report to boss"); // 줄 덮어쓰기 없음(원문 그대로)
+  });
+
+  it("SC-005: 앵커 없는 sending 접두 라인(미체크)도 재개를 발동하지 않는다", () => {
+    const r = parseInbox("- [ ] sending 내일 리포트\n- [x] 📤 send");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh" });
+    expect(r.actions[0]!.text).toContain("sending 내일 리포트");
+  });
+
+  // SC-006 (S3): 경계 단어를 접두로 갖는 일상 to-do 는 경계로 오인되지 않는다.
+  it("SC-006: `sentiment …` 라인은 sent 종단으로 오인되지 않고 본문으로 취급된다", () => {
+    const r = parseInbox("- [x] sentiment analysis done\n- [x] 📤 send");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh" });
+    expect(r.actions[0]!.text).toContain("sentiment analysis done");
+  });
+
+  it("SC-006: `sending list ready` 라인(앵커 없음)은 재개로 오인되지 않고 본문으로 취급된다", () => {
+    const r = parseInbox("- [ ] sending list ready\n- [x] 📤 send");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh" });
+    expect(r.actions[0]!.text).toContain("sending list ready");
+  });
+
+  // SC-007: 스탬프가 없는 레거시 in-flight sending 앵커 마커는 계속 재개로 인식된다(회귀 없음).
+  it("SC-007: 레거시 sending 앵커(스탬프 없음)는 stamp 없이 resume 액션이 된다", () => {
+    const r = parseInbox("초안 본문\n- [x] ⏳ sending old-id");
+    expect(r.actions).toEqual([
+      { kind: "resume", id: "old-id", text: "초안 본문", lineIndex: 1, segmentStart: 0 },
+    ]);
+  });
+
+  // SC-008: 위키링크가 없는 레거시/수동 `✅ sent` 앵커 마커는 종단 경계로 유지되되 아카이브 수집 대상에서는 제외된다.
+  it("SC-008: 위키링크 없는 수동 `✅ sent` 는 경계로 유지되나 sentSegments 로 수집되지 않는다", () => {
+    const r = parseInbox("이전\n- [x] ✅ sent\n두번째\n- [x] 📤 send");
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]).toMatchObject({ kind: "fresh", text: "두번째" }); // 경계 이후로 세그먼트 분리
+    expect(r.sentSegments).toHaveLength(0); // strict 형식 아니므로 아카이브 수집 대상 아님
+  });
+
+  // SC-009: 엄격 `✅ sent [[stamp id]]` 아카이브 수집이 앵커화 이후에도 회귀 없이 유지된다.
+  // 기존 send/archive/제어/크래시-재개 스위트(라인 61~159·599~645·1031~1048) 전건 통과는 5b 실행 시 검증.
+  it("SC-009: 앵커화 이후에도 strict sent 마커는 sentSegments 로 계속 수집된다", () => {
+    const content = ["본문1", sentLine("id-1", STAMP), "본문2", sentLine("id-2", STAMP)].join("\n");
+    const r = parseInbox(content);
+    expect(r.sentSegments).toHaveLength(2);
+    expect(r.sentSegments[0]).toMatchObject({ id: "id-1", stamp: STAMP });
+    expect(r.sentSegments[1]).toMatchObject({ id: "id-2", stamp: STAMP });
+  });
+});
+
+describe("마커 앵커 판별 헬퍼 — matchSendingMarker/isTerminalMarker (SC-001/002/006/007/008)", () => {
+  it("SC-001: 앵커+체크 sending 라인은 id·stamp 를 반환한다", () => {
+    expect(matchSendingMarker("- [x] ⏳ sending abc 20260708-101010")).toEqual({
+      id: "abc",
+      stamp: "20260708-101010",
+    });
+  });
+
+  it("SC-002: 미체크 앵커 sending 라인은 null(경계 아님)", () => {
+    expect(matchSendingMarker("- [ ] ⏳ sending abc 20260708-101010")).toBeNull();
+  });
+
+  it("SC-006: 앵커 없는 sending 라인·word-boundary 실패 sent 라인은 판별되지 않는다(lookalike 거부)", () => {
+    expect(matchSendingMarker("- [ ] sending list ready")).toBeNull();
+    expect(isTerminalMarker("- [x] sentiment analysis done")).toBe(false);
+  });
+
+  it("SC-007: 스탬프 없는 레거시 sending 앵커는 stamp 없이 id 만 반환한다", () => {
+    expect(matchSendingMarker("- [x] ⏳ sending old-id")).toEqual({ id: "old-id" });
+  });
+
+  it("SC-004/SC-008: 종단 앵커는 tail(위키링크) 유무·checked 무관하게 true 를 반환한다", () => {
+    expect(isTerminalMarker("- [x] ✅ sent [[20260708-101010 abc]]")).toBe(true);
+    expect(isTerminalMarker("- [x] ✅ sent")).toBe(true); // 위키링크 없어도 경계(SC-008)
+    expect(isTerminalMarker("- [ ] ✅ sent")).toBe(true); // checked-agnostic(ADR-003)
+    expect(isTerminalMarker("- [x] ⚠️ empty (no message)")).toBe(true);
+    expect(isTerminalMarker("- [x] 🗄️ archived 3 20260101-000000")).toBe(true);
+  });
+
+  it("SC-003/SC-005: 앵커 없는 sent/sending 접두 라인은 종단·재개 어느 쪽으로도 판별되지 않는다", () => {
+    expect(isTerminalMarker("- [x] sent invoice to client")).toBe(false);
+    expect(matchSendingMarker("- [x] sending report to boss")).toBeNull();
+    expect(matchSendingMarker("- [ ] sending 내일 리포트")).toBeNull();
   });
 });
 
@@ -990,6 +1126,23 @@ describe("createMarkdownSource (통합)", () => {
     expect(inbox).toContain("미완성 초안"); // 초안 보존
     expect(msgCount()).toBe(0); // enqueue 없음
     expect(fs.existsSync(archivePath())).toBe(false); // 조용한 턴 → 아카이브 write 없음(no-op)
+  });
+
+  // SC-010: 자동 아카이브 ON 상태에서 앵커 없는 사용자 초안은 아카이브 이관·inbox 삭제 대상이 되지 않는다.
+  it("SC-010: 자동 아카이브 ON — 앵커 없는 사용자 초안은 이관·삭제되지 않고 inbox 에 잔존한다", async () => {
+    conf.markdown!.archive = "sent-archive.md";
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "사용자 초안 텍스트\n- [x] sending report to boss\n");
+
+    source = makeSource();
+    source.start();
+
+    await new Promise((r) => setTimeout(r, 250));
+    const inbox = fs.readFileSync(inboxPath, "utf8");
+    expect(inbox).toContain("사용자 초안 텍스트"); // inbox 잔존(삭제 아님)
+    expect(inbox).toContain("sending report to boss"); // 원문 라인 파괴 없음
+    expect(fs.existsSync(archivePath())).toBe(false); // 아카이브 이관 없음(대상 미수집)
+    expect(msgCount()).toBe(0); // 경계·액션 미생성 → enqueue 도 없음
   });
 
   it("수동(config off): `🗄️ archive` 체크 시 기존 sent 본문을 일괄 이관하고 종단 표기(자동 아님)", async () => {

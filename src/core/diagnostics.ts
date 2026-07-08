@@ -9,7 +9,14 @@ import { laneList, resolveFileMode } from "./lane-config.js";
 import { resolveAdapterBin } from "./supervisor.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
-import { lanePaths, defaultBase, expandTilde, isSafeSegment, daemonHaltPath } from "../shared/paths.js";
+import {
+  lanePaths,
+  defaultBase,
+  expandTilde,
+  isSafeSegment,
+  daemonHaltPath,
+  daemonBootsPath,
+} from "../shared/paths.js";
 import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
 import { daemonRegState, daemonEntryPath } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
@@ -144,12 +151,19 @@ export async function readHalt(base: string, proj: string): Promise<HaltRecord |
   }
 }
 
-/** halt 기록 제거(ENOENT 흡수 — 멱등) — `adde up`/`restart` 가 사용자 명시 재시도 시 호출. */
+/**
+ * halt 기록 + 짧은-수명 연속 카운터 제거(ENOENT 흡수 — 멱등) — `adde up`/`restart` 가 사용자
+ * 명시 재시도 시 호출. 카운터(daemon-boots.json)를 함께 지워야 한다: halt 마커만 지우면
+ * 재시도 부팅이 기존 streak 에 +1 하며 임계를 즉시 재초과 → 매 restart 가 곧바로 재정지해
+ * 사용자 명시 재시도가 영구히 무효화된다.
+ */
 export async function clearHalt(base: string, proj: string): Promise<void> {
-  try {
-    await unlink(daemonHaltPath(base, proj));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  for (const p of [daemonHaltPath(base, proj), daemonBootsPath(base, proj)]) {
+    try {
+      await unlink(p);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
   }
 }
 

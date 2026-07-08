@@ -15,7 +15,8 @@ import {
 } from "../../src/core/diagnostics.js";
 import { writeRuntime } from "../../src/core/runtime-state.js";
 import type { RuntimeInfo } from "../../src/core/runtime-state.js";
-import { lanePaths, daemonHaltPath } from "../../src/shared/paths.js";
+import { lanePaths, daemonHaltPath, daemonBootsPath } from "../../src/shared/paths.js";
+import { createCrashLoopGuard } from "../../src/core/crash-loop.js";
 import type { LaunchctlExec as LaunchctlExecType } from "../../src/core/launchd.js";
 import type { HaltRecord } from "../../src/core/crash-loop.js";
 
@@ -514,6 +515,37 @@ describe("readHalt / clearHalt", () => {
 
     // 이미 제거된 상태에서 재호출해도 throw 없음(ENOENT 흡수 — 멱등).
     await expect(clearHalt(tmpBase, "haltproj")).resolves.toBeUndefined();
+  });
+
+  it("clearHalt 는 짧은-수명 연속 카운터(daemon-boots.json)도 함께 제거한다 — 재시도 부팅이 즉시 재정지하지 않도록", async () => {
+    const haltPath = daemonHaltPath(tmpBase, "haltproj");
+    const bootsPath = daemonBootsPath(tmpBase, "haltproj");
+    fs.mkdirSync(path.dirname(haltPath), { recursive: true });
+    fs.writeFileSync(
+      haltPath,
+      JSON.stringify({ reason: "x", haltedAt: "2026-07-08T00:00:00.000Z", consecutiveShortLived: 6 }),
+    );
+    fs.writeFileSync(bootsPath, JSON.stringify({ consecutiveShortLived: 6 }));
+
+    await clearHalt(tmpBase, "haltproj");
+    expect(fs.existsSync(haltPath)).toBe(false);
+    expect(fs.existsSync(bootsPath)).toBe(false);
+  });
+
+  it("halt 후 clearHalt → 다음 부팅은 streak 을 승계하지 않는다 (회귀 — 실 launchd 검증에서 발견: restart 마다 즉시 재정지)", async () => {
+    const proj = "haltproj";
+    // halt 상태를 실제 guard 로 재현: 임계 2 로 두 번 연속 짧은-수명 부팅.
+    const mk = () => createCrashLoopGuard({ base: tmpBase, proj, maxShortLived: 2 });
+    await mk().checkOnBoot(); // count 1
+    const second = await mk().checkOnBoot(); // count 2 → halt
+    expect(second.halt).toBe(true);
+
+    // 사용자 명시 재시도(adde up/restart 경로) — halt + 카운터 모두 초기화돼야 한다.
+    await clearHalt(tmpBase, proj);
+
+    const retry = await mk().checkOnBoot();
+    expect(retry.halt).toBe(false);
+    expect(retry.count).toBe(1);
   });
 });
 

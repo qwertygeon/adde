@@ -137,6 +137,8 @@ lane add 옵션:
       "  확인: adde status {{proj}} · 설정 변경 반영: adde restart {{proj}} · 종료: adde down {{proj}}",
     alreadyUpUnhealthy:
       "[adde] {{proj}} 에 비정상 레인이 있습니다: {{lanes}}\n  ↳ 조치: adde status {{proj}} / adde logs {{proj}} --daemon 으로 확인 후 adde restart {{proj}}.",
+    deadRegistered:
+      "[adde] {{proj}} 는 등록되어 있으나 상주 중인 레인이 없습니다(데몬이 죽음) — 재적재합니다...",
     upFailed:
       "[adde] 기동 실패 레인: {{lanes}}\n  ↳ 조치: adde logs {{proj}} <lane> --engine 또는 데몬 로그 adde logs {{proj}} --daemon 으로 확인 후 adde restart {{proj}}.",
     upSummary: "  실행 중 {{running}} · 실패 {{failed}} · 기동 중 {{pending}}",
@@ -164,6 +166,8 @@ lane add 옵션:
         "오류: 기동 실패 레인: {{lanes}}.\n  ↳ 조치: 데몬 로그(adde logs <proj> --daemon) 또는 엔진 로그(adde logs <proj> <lane> --engine) 확인 후 adde restart <proj>.",
       errorWarnSingle:
         "오류: 기동 실패 레인: {{lanes}}.\n  ↳ 조치: 데몬 로그(adde logs {{proj}} --daemon) 또는 엔진 로그(adde logs {{proj}} <lane> --engine) 확인 후 adde restart {{proj}}.",
+      haltWarn:
+        "[adde] {{proj}} 가 반복된 크래시루프 재기동 후 자가 정지했습니다.\n  ↳ 조치: 원인을 수정한 뒤 adde restart {{proj}}.",
     },
     doctor: {
       hint: "    ↳ 조치: {{hint}}",
@@ -312,6 +316,17 @@ lane add 옵션:
         "state 디렉터리가 그룹/기타에서 접근 가능(mode {{mode}}) — file_mode=private 는 0700 을 기대합니다",
       stateHint:
         "권한을 제한하세요: chmod 700 {{path}} — 또는 레인을 재시작(adde restart {{proj}})하면 다시 잠급니다.",
+    },
+    halt: {
+      name: "자가 정지 ({{proj}})",
+      detail: "연속 {{count}}회 짧은-수명 크래시 후 자가 정지됨 — {{reason}}",
+      hint: "원인을 수정한 뒤 adde restart {{proj}} 로 재시도하세요.",
+    },
+    deadReg: {
+      name: "데몬 생존 ({{proj}})",
+      detail:
+        "launchctl 에 등록되어 있으나 상주 레인이 없습니다 — auto_restart=off 라면 크래시 후 예상된 상태(자동 재기동 없음)이고, 아니면 데몬이 부팅에 실패했을 수 있습니다",
+      hint: "adde logs {{proj}} --daemon 으로 원인을 확인한 뒤 adde restart {{proj}}.",
     },
   },
   update: {
@@ -584,6 +599,9 @@ lane add 옵션:
       subscriberError: "[acp] lane={{lane}} 구독자 오류: {{error}}",
       transcriptWriteFail: "[acp] lane={{lane}} transcript 기록 실패: {{error}}",
       permDiff: "[acp] launch perm-diff: {{note}}",
+    },
+    rotate: {
+      fail: "[log-rotate] {{path}} 회전 실패(흡수 — 기록 계속): {{detail}}",
     },
   },
   notify: {

@@ -5,6 +5,10 @@ import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
 import { findCommand, suggestCommands } from "./spec.js";
 import { completionScript, SUPPORTED_SHELLS } from "./completion.js";
+import { installCrashGuard } from "../core/crash-guard.js";
+import type { ShutdownState } from "../core/crash-guard.js";
+import { createCrashLoopGuard } from "../core/crash-loop.js";
+import { defaultBase } from "../shared/paths.js";
 
 /** -h/--help 플래그가 인자에 있는지. */
 function wantsHelp(argv: readonly string[]): boolean {
@@ -18,6 +22,23 @@ function wantsHelp(argv: readonly string[]): boolean {
  */
 async function runDaemonForeground(proj: string): Promise<number> {
   const { supervisorUp, supervisorDown } = await import("../core/supervisor.js");
+
+  // 종료 진행 공유 플래그 — 크래시 가드(exit 1)와 정상 shutdown(exit 0)이 서로 재진입하지 않도록
+  // 공유한다. 크래시 가드는 부팅 최상단에 설치해 부팅 도중 비결정적 크래시도 커버한다.
+  const shutdownState: ShutdownState = { active: false };
+  installCrashGuard({
+    onCleanup: () => supervisorDown(proj).then(() => {}),
+    exit: (code) => process.exit(code),
+    log: (line) => process.stderr.write(`${line}\n`),
+    state: shutdownState,
+  });
+
+  // 크래시루프 감지 — 짧은-수명 연속 사망을 이번 부팅에서 +1 집계, 임계 도달 시
+  // halt 기록 후 확정 종료(exit 0)로 launchd 무한 재기동을 끊는다.
+  const crashLoop = createCrashLoopGuard({ base: defaultBase(), proj });
+  const { halt } = await crashLoop.checkOnBoot();
+  if (halt) return 0;
+
   const result = await supervisorUp(proj);
   process.stdout.write(`${result.message}\n`);
 
@@ -46,16 +67,20 @@ async function runDaemonForeground(proj: string): Promise<number> {
         }) + "\n",
       );
     }
-    // 기동된 레인이 없으면 상주할 이유가 없다 — 오류 레인이 있으면 1.
-    return errorLanes.length > 0 ? 1 : 0;
+    // 기동된 레인이 없으면 상주할 이유가 없다 — 결정적 부팅 실패("확정 종료, 재시도 무익").
+    // exit 0 전환이 표면화를 삭제하지 않는다(runtime.json status:error + up 폴링).
+    return 0;
   }
+
+  // 안정 판정 arm — minLifetimeMs(기본 60초) 생존 시 크래시루프 카운터 리셋.
+  crashLoop.armStable();
 
   // 종료 신호 시 graceful shutdown — supervisorDown 으로 엔진 child·소스를 정리한 뒤 종료.
   // await 완료 후에만 exit(typescript 규칙: 비동기 작업이 끝나기 전에 process.exit 금지).
-  let shuttingDown = false;
   const shutdown = (sig: NodeJS.Signals): void => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (shutdownState.active) return;
+    shutdownState.active = true;
+    crashLoop.disarm();
     process.stderr.write(`\n${t("run.signalShutdown", { sig })}\n`);
     void supervisorDown(proj)
       .then((r) => {
@@ -227,8 +252,11 @@ export async function run(argv: readonly string[]): Promise<number> {
     try {
       return await runDaemonForeground(proj);
     } catch (err) {
+      // runDaemonForeground/supervisorUp 을 await 하다 잡힌 동기·await 부팅 예외 — 동일 입력에
+      // 재현되는 결정적 실패("확정 종료, 재시도 무익")이므로 exit 0. 비결정적
+      // 크래시(글로벌 uncaughtException)는 크래시 가드가 별도로 exit 1 처리한다.
       process.stderr.write(cmdError("__daemon", errMsg(err)) + "\n");
-      return 1;
+      return 0;
     }
   }
 
@@ -239,33 +267,42 @@ export async function run(argv: readonly string[]): Promise<number> {
       return 1;
     }
     try {
-      const { loadDaemon, daemonRegState } = await import("../core/launchd.js");
+      const { loadDaemon, daemonRegState, unloadDaemon } = await import("../core/launchd.js");
+      const { collectStatus, clearHalt } = await import("../core/diagnostics.js");
+      // 사용자 명령(up) = 명시적 재시도 → halt 초기화. 등록 잔존/신규 기동 분기 모두 선행.
+      await clearHalt(defaultBase(), proj);
       // 이미 등록·상주 중이면 launchctl load 는 "already loaded" 로 실패한다 — 혼란스러운
       // 오류 대신 "이미 기동 중"을 명시 안내한다(실행 중 레인 수를 runtime.json 에서 읽어 표면화).
       const reg = await daemonRegState(proj);
       if (reg.launchctlRegistered) {
-        const { collectStatus } = await import("../core/diagnostics.js");
         const rows = await collectStatus(proj);
         const running = rows.filter((r) => r.status === "running").length;
-        // 이미 기동 중이어도 건강하지 않은 레인(error/dead/stale)이 있으면 표면화하고 종료코드 1.
-        // 데몬이 이미 상주하므로 freshness 판별은 무의미(신규 기동 경로와 달리): 현재 상태를 그대로 보고한다.
-        // stale(하트비트 끊긴 행) 도 포함 — 상주 데몬에서 가장 알려야 할 상태다(status 도 stale 을 경고).
-        const unhealthy = rows.filter(
-          (r) => r.status === "error" || r.status === "dead" || r.status === "stale",
-        );
-        process.stdout.write(t("run.alreadyUp", { proj, running, total: rows.length }) + "\n");
-        if (unhealthy.length > 0) {
-          process.stderr.write(
-            t("run.alreadyUpUnhealthy", {
-              lanes: unhealthy
-                .map((r) => `${r.lane} (${r.status}${r.error ? `: ${r.error}` : ""})`)
-                .join(", "),
-              proj,
-            }) + "\n",
+        if (running === 0) {
+          // 등록 잔존 + 상주 레인 없음(부팅-실패-잔존 포함) — alreadyUp 조기반환
+          // 대신 재적재해 데드엔드를 해소한다. 아래 신규 기동과 동일한 load+poll 경로로 합류.
+          process.stdout.write(t("run.deadRegistered", { proj }) + "\n");
+          await unloadDaemon(proj);
+        } else {
+          // 이미 기동 중이어도 건강하지 않은 레인(error/dead/stale)이 있으면 표면화하고 종료코드 1.
+          // 데몬이 이미 상주하므로 freshness 판별은 무의미(신규 기동 경로와 달리): 현재 상태를 그대로 보고한다.
+          // stale(하트비트 끊긴 행) 도 포함 — 상주 데몬에서 가장 알려야 할 상태다(status 도 stale 을 경고).
+          const unhealthy = rows.filter(
+            (r) => r.status === "error" || r.status === "dead" || r.status === "stale",
           );
+          process.stdout.write(t("run.alreadyUp", { proj, running, total: rows.length }) + "\n");
+          if (unhealthy.length > 0) {
+            process.stderr.write(
+              t("run.alreadyUpUnhealthy", {
+                lanes: unhealthy
+                  .map((r) => `${r.lane} (${r.status}${r.error ? `: ${r.error}` : ""})`)
+                  .join(", "),
+                proj,
+              }) + "\n",
+            );
+          }
+          process.stdout.write(t("run.alreadyUpHint", { proj }) + "\n");
+          return unhealthy.length > 0 ? 1 : 0;
         }
-        process.stdout.write(t("run.alreadyUpHint", { proj }) + "\n");
-        return unhealthy.length > 0 ? 1 : 0;
       }
       // 이번 기동 기준시각 — 이후 데몬이 남기는 error/dead 만 "이번 실패"로 판별(stale 레코드 배제).
       const upStart = Date.now();
@@ -273,7 +310,6 @@ export async function run(argv: readonly string[]): Promise<number> {
       process.stdout.write(t("run.upDone", { proj }) + "\n");
       // 기동 결과를 바로 표면화 — 데몬(분리 프로세스)이 각 레인의 running/error 를 runtime.json 에
       // 남길 때까지 짧게 폴링해 성공/실패 레인을 이 터미널에 요약한다(요청: up 에서 즉시 실패 레인 표기).
-      const { collectStatus } = await import("../core/diagnostics.js");
       // 폴링 대기 상한(ms). 느린 머신에서 기동이 8s 이상 걸리면 ADDE_UP_POLL_MS 로 늘릴 수 있다.
       // 양수만 유효 — 0·음수·비수치는 기본 8000(음수를 그대로 쓰면 폴링을 건너뛰어 오탐을 유발).
       const pollEnv = Number(process.env.ADDE_UP_POLL_MS);
@@ -339,6 +375,9 @@ export async function run(argv: readonly string[]): Promise<number> {
     }
     try {
       const { unloadDaemon, loadDaemon } = await import("../core/launchd.js");
+      const { clearHalt } = await import("../core/diagnostics.js");
+      // 사용자 명령(restart) = 명시적 재시도 → halt 초기화.
+      await clearHalt(defaultBase(), proj);
       // down 완료 await 후 up — 부분 실패 시 up 오류 표면화.
       await unloadDaemon(proj);
       await loadDaemon(proj);

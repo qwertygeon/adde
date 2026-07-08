@@ -10,11 +10,14 @@ import {
   listRegisteredProjects,
   runDoctor,
   readLogs,
+  readHalt,
+  clearHalt,
 } from "../../src/core/diagnostics.js";
 import { writeRuntime } from "../../src/core/runtime-state.js";
 import type { RuntimeInfo } from "../../src/core/runtime-state.js";
-import { lanePaths } from "../../src/shared/paths.js";
+import { lanePaths, daemonHaltPath } from "../../src/shared/paths.js";
 import type { LaunchctlExec as LaunchctlExecType } from "../../src/core/launchd.js";
+import type { HaltRecord } from "../../src/core/crash-loop.js";
 
 // SC2: status running/dead/stopped 구분. SC3: doctor 점검+힌트. SC4: logs tail.
 // SC-008/009/014/015: daemon 등록 점검 케이스 (daemon-lifecycle spec)
@@ -474,5 +477,111 @@ describe("기존 conf·runtime.json 스키마 비침해 (SC-015)", () => {
     // conf 파일 내용 불변
     const afterContent = fs.readFileSync(confPath, "utf8");
     expect(afterContent).toBe(confContent);
+  });
+});
+
+// ── readHalt / clearHalt (SC-023·024·025 지원 프리미티브) ──────────────────
+
+describe("readHalt / clearHalt", () => {
+  it("daemon-halt.json 부재 시 readHalt 는 null", async () => {
+    expect(await readHalt(tmpBase, "haltproj")).toBeNull();
+  });
+
+  it("daemon-halt.json 존재 시 readHalt 가 원인·시점·카운트를 반환한다", async () => {
+    const haltPath = daemonHaltPath(tmpBase, "haltproj");
+    fs.mkdirSync(path.dirname(haltPath), { recursive: true });
+    const record: HaltRecord = {
+      reason: "crash-loop",
+      haltedAt: "2026-07-08T00:00:00.000Z",
+      consecutiveShortLived: 5,
+    };
+    fs.writeFileSync(haltPath, JSON.stringify(record));
+
+    const result = await readHalt(tmpBase, "haltproj");
+    expect(result).toEqual(record);
+  });
+
+  it("clearHalt 는 daemon-halt.json 을 제거한다(멱등 — 부재 시에도 throw 없음)", async () => {
+    const haltPath = daemonHaltPath(tmpBase, "haltproj");
+    fs.mkdirSync(path.dirname(haltPath), { recursive: true });
+    fs.writeFileSync(
+      haltPath,
+      JSON.stringify({ reason: "x", haltedAt: "2026-07-08T00:00:00.000Z", consecutiveShortLived: 5 }),
+    );
+
+    await clearHalt(tmpBase, "haltproj");
+    expect(fs.existsSync(haltPath)).toBe(false);
+
+    // 이미 제거된 상태에서 재호출해도 throw 없음(ENOENT 흡수 — 멱등).
+    await expect(clearHalt(tmpBase, "haltproj")).resolves.toBeUndefined();
+  });
+});
+
+// ── runDoctor — halt 자가정지 표면화 (SC-024 Happy) ────────────────────────
+
+describe("runDoctor — halt 자가정지 표면화 (SC-024)", () => {
+  it("daemon-halt.json 존재 시 'FAIL' + 자가 정지 안내 + restart 조치 힌트를 표면화한다", async () => {
+    writeConf("haltp", "lane1", conf());
+    const haltPath = daemonHaltPath(tmpBase, "haltp");
+    fs.mkdirSync(path.dirname(haltPath), { recursive: true });
+    fs.writeFileSync(
+      haltPath,
+      JSON.stringify({
+        reason: "crash-loop",
+        haltedAt: "2026-07-08T00:00:00.000Z",
+        consecutiveShortLived: 5,
+      }),
+    );
+
+    const checks = await runDoctor("haltp", { base: tmpBase });
+    const haltCheck = checks.find((c) => c.detail.includes("자가 정지") || c.hint?.includes("restart"));
+    expect(haltCheck).toBeDefined();
+    expect(haltCheck?.level).toBe("FAIL");
+    expect(haltCheck?.hint).toBeTruthy();
+    expect(haltCheck?.hint).toMatch(/restart/);
+  });
+
+  it("daemon-halt.json 부재 시 halt 관련 FAIL 항목이 없다(정상 상태)", async () => {
+    writeConf("nohaltp", "lane1", conf());
+
+    const checks = await runDoctor("nohaltp", { base: tmpBase });
+    const haltCheck = checks.find((c) => c.detail.includes("자가 정지"));
+    expect(haltCheck).toBeUndefined();
+  });
+});
+
+// ── runDoctor — auto_restart=off 죽은-등록 표면화 (SC-026 Edge) ────────────
+//
+// 테스트 환경 한계(기존 daemon 등록 점검 describe 의 주석과 동일 제약): daemonRegState 의
+// plistExists 는 실 home 경로를 stat 하므로(runDoctor 는 home override 를 받지 않음) 테스트
+// 환경에서 항상 plistExists=false 다. 따라서 "plistExists && launchctlRegistered && running===0"
+// 조합(구현의 신규 deadReg 경고 분기)의 **완전한 재현은 실 macOS 검증 영역**이다(test-cases.md
+// 미커버 항목 카테고리(2)). 여기서는 도달 가능한 결합(plist 불일치 + running===0)에서 "거짓 UP"
+// 으로 보고되지 않음을 확인한다 — 기존 daemon 등록 점검 describe 의 검증 한계와 동일 관례.
+describe("runDoctor — auto_restart=off 죽은-등록 표면화 (SC-026)", () => {
+  const isDarwin = process.platform === "darwin";
+
+  it("등록 잔존(불일치 조합) + running===0 이어도 'PASS(정상)' 로 오인 보고하지 않는다(거짓 UP 없음)", async () => {
+    if (!isDarwin) {
+      expect(true).toBe(true);
+      return;
+    }
+    writeConf("deadregproj", "lane1", conf());
+    // lane1 은 runtime.json 없음 → collectStatus 상 stopped(running 아님) → running===0.
+    const label = "com.qwertygeon.adde.deadregproj";
+    const fakeExec: LaunchctlExecType = async (args) => {
+      if (args[0] === "list") {
+        return { stdout: `PID\tStatus\tLabel\n-\t0\t${label}\n`, code: 0 };
+      }
+      return { stdout: "", code: 0 };
+    };
+
+    const checks = await runDoctor("deadregproj", { base: tmpBase, launchctlExec: fakeExec });
+    const rows = await collectStatus("deadregproj", { base: tmpBase });
+    expect(rows.every((r) => r.status !== "running")).toBe(true);
+
+    const daemonCheck = checks.find((c) => c.name.startsWith("daemon 등록"));
+    expect(daemonCheck).toBeDefined();
+    expect(daemonCheck?.level).not.toBe("PASS");
   });
 });

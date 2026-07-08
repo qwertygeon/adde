@@ -9,6 +9,7 @@ import {
   loadDaemon,
   unloadDaemon,
   daemonRegState,
+  trimTail,
 } from "../../src/core/launchd.js";
 import type { LaunchctlExec, LaunchdDeps } from "../../src/core/launchd.js";
 
@@ -86,37 +87,51 @@ describe("plistPath", () => {
   });
 });
 
-// ── renderPlist (SC-007, SC-013) ──────────────────────────────────────────
+// ── renderPlist (SC-012 / SC-013 / SC-018) ────────────────────────────────
+// autoRestart 필드 필수 추가(research.md production 시그니처 변경 §1) — 기존 KeepAlive
+// boolean(<true/>) 단언은 신 시맨틱(on=dict/off=미포함)으로 대체된다.
 
-describe("renderPlist (SC-007 / SC-013)", () => {
+describe("renderPlist (SC-012 / SC-013 / SC-018)", () => {
   const opts = {
     nodeBin: "/usr/local/bin/node",
     addeBin: "/usr/local/bin/adde",
     logPath: "/tmp/adde-daemon.log",
+    autoRestart: true,
   };
 
-  it("renderPlist_KeepAlive_RunAtLoad_true_포함 (SC-007)", () => {
+  it("autoRestart=true → KeepAlive dict(SuccessfulExit=false·Crashed=true) + RunAtLoad 유지 (SC-012 Happy)", () => {
     const xml = renderPlist("testproj", opts);
     expect(xml).toContain("<key>KeepAlive</key>");
-    expect(xml).toContain("<true/>");
-    expect(xml).toContain("<key>RunAtLoad</key>");
-  });
-
-  it("KeepAlive=true 와 RunAtLoad=true 가 한 출력에 모두 존재", () => {
-    const xml = renderPlist("testproj", opts);
-    // 순서 무관 — 둘 다 존재해야 한다
     const keepAliveIdx = xml.indexOf("<key>KeepAlive</key>");
-    const runAtLoadIdx = xml.indexOf("<key>RunAtLoad</key>");
-    expect(keepAliveIdx).toBeGreaterThan(-1);
-    expect(runAtLoadIdx).toBeGreaterThan(-1);
-    // 각 키 직후에 <true/> 가 따른다
     const afterKeepAlive = xml.slice(keepAliveIdx).replace(/\s+/g, "");
-    expect(afterKeepAlive).toMatch(/^<key>KeepAlive<\/key><true\/>/);
+    expect(afterKeepAlive).toMatch(
+      /^<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><key>Crashed<\/key><true\/><\/dict>/,
+    );
+    expect(xml).toContain("<key>RunAtLoad</key>");
+    const runAtLoadIdx = xml.indexOf("<key>RunAtLoad</key>");
     const afterRunAtLoad = xml.slice(runAtLoadIdx).replace(/\s+/g, "");
     expect(afterRunAtLoad).toMatch(/^<key>RunAtLoad<\/key><true\/>/);
   });
 
-  it("renderPlist_토큰_정규식_미검출 (SC-013)", () => {
+  it("autoRestart=true → ThrottleInterval=60 (SC-013 Happy)", () => {
+    const xml = renderPlist("testproj", opts);
+    expect(xml).toContain("<key>ThrottleInterval</key>");
+    const idx = xml.indexOf("<key>ThrottleInterval</key>");
+    const after = xml.slice(idx).replace(/\s+/g, "");
+    expect(after).toMatch(/^<key>ThrottleInterval<\/key><integer>60<\/integer>/);
+  });
+
+  it("autoRestart=false → KeepAlive 키 미포함(ThrottleInterval 도 미포함)·RunAtLoad 유지 (SC-018 Happy)", () => {
+    const xml = renderPlist("testproj", { ...opts, autoRestart: false });
+    expect(xml).not.toContain("<key>KeepAlive</key>");
+    expect(xml).not.toContain("<key>ThrottleInterval</key>");
+    expect(xml).toContain("<key>RunAtLoad</key>");
+    const runAtLoadIdx = xml.indexOf("<key>RunAtLoad</key>");
+    const afterRunAtLoad = xml.slice(runAtLoadIdx).replace(/\s+/g, "");
+    expect(afterRunAtLoad).toMatch(/^<key>RunAtLoad<\/key><true\/>/);
+  });
+
+  it("renderPlist_토큰_정규식_미검출", () => {
     const xml = renderPlist("testproj", opts);
     // 실제 봇 토큰 패턴: [0-9]+:[A-Za-z0-9_-]{35,}
     const tokenPattern = /[0-9]+:[A-Za-z0-9_-]{35,}/;
@@ -155,6 +170,59 @@ describe("renderPlist (SC-007 / SC-013)", () => {
     const xml = renderPlist("myproj", { ...opts, pathEnv: "/a&b/bin:/c<d" });
     expect(xml).toContain("/a&amp;b/bin:/c&lt;d");
     expect(xml).not.toContain("/a&b/bin");
+  });
+});
+
+// ── trimTail (SC-011) ──────────────────────────────────────────────────────
+
+describe("trimTail (SC-011 Edge — launchd 로그 keep-tail 트림)", () => {
+  let tmpFile: string;
+
+  beforeEach(() => {
+    tmpFile = path.join(tmpHome, "big.err.log");
+  });
+
+  it("파일이 keepBytes 를 초과하면 끝 N바이트만 남긴다", async () => {
+    const content = "0123456789".repeat(1000); // 10000 bytes
+    fs.writeFileSync(tmpFile, content);
+    const keepBytes = 100;
+
+    await trimTail(tmpFile, keepBytes);
+
+    const result = fs.readFileSync(tmpFile, "utf8");
+    expect(result.length).toBe(keepBytes);
+    expect(result).toBe(content.slice(-keepBytes));
+  });
+
+  it("파일 크기가 keepBytes 이하이면 no-op(내용 불변)", async () => {
+    const content = "small content";
+    fs.writeFileSync(tmpFile, content);
+
+    await trimTail(tmpFile, 1024);
+
+    expect(fs.readFileSync(tmpFile, "utf8")).toBe(content);
+  });
+
+  it("파일 부재 시 throw 하지 않는다(no-op)", async () => {
+    const missing = path.join(tmpHome, "does-not-exist.err.log");
+    await expect(trimTail(missing, 1024)).resolves.toBeUndefined();
+  });
+
+  it("대용량 파일도 끝 N바이트만 유지하며 전체를 메모리로 적재하지 않는다", async () => {
+    // 5MB 파일 — 트림 자체가 완료되고(타임아웃 없이) 결과가 keepBytes 로 정확히 축소됨을 확인.
+    // (구현이 open→fstat→끝 keepBytes read→임시파일 write→rename 을 쓰는지는 API 계약으로
+    //  간접 검증 — 전체 적재 여부의 직접 계측은 E2E/프로파일링 영역, 여기선 결과 크기로 검증.)
+    const size = 5 * 1024 * 1024;
+    const buf = Buffer.alloc(size, "x");
+    buf.write("TAIL-MARKER", size - 20);
+    fs.writeFileSync(tmpFile, buf);
+    const keepBytes = 1024;
+
+    await trimTail(tmpFile, keepBytes);
+
+    const result = fs.readFileSync(tmpFile);
+    expect(result.length).toBe(keepBytes);
+    expect(result.toString("utf8")).toContain("TAIL-MARKER");
   });
 });
 

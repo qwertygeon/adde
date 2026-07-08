@@ -152,3 +152,57 @@ describe("spawnEngine stderr 캡처 (SC-R1)", () => {
     }
   });
 });
+
+// SC-016 (FR-008 — 통합): engine 로그 스트림 재열기 창에서 stderr chunk 가 유실되지 않는다.
+// 실 child + 실 파일 스트림으로 회전(다회) 중 유입되는 chunk 전부가 현재 또는 보관 세대
+// 어딘가에 기록되는지 검증(write-after-end 무음 유실 0). keep 을 예상 회전 횟수보다 크게
+// 잡아 "세대 보관 상한으로 인한 정상 소실"과 "재열기 창 버그로 인한 유실"을 구분한다.
+describe("spawnEngine stderrRotate — 재열기 창 무손실 (SC-016)", () => {
+  async function waitForExit(child: ReturnType<typeof spawnEngine>): Promise<void> {
+    await new Promise<void>((resolve) => {
+      child.on("exit", () => resolve());
+    });
+  }
+
+  it("회전이 여러 차례 발생해도 모든 stderr 마커가 손실 없이 기록된다", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "adde-spawn-rotate-"));
+    const logPath = join(dir, "engine.log");
+    const N = 20;
+    try {
+      const script = `
+        (async () => {
+          for (let i = 0; i < ${N}; i++) {
+            process.stderr.write('MARK-' + i + '-' + 'y'.repeat(15) + '\\n');
+            await new Promise((r) => setTimeout(r, 2));
+          }
+        })();
+      `;
+      const child = spawnEngine(process.execPath, ["-e", script], {
+        stderrPath: logPath,
+        stderrRotate: { maxBytes: 100, keep: 10 },
+      });
+
+      await waitForExit(child);
+      // stderr 'end' flush 까지 약간의 여유(마지막 라인 write 완료 대기).
+      await new Promise((r) => setTimeout(r, 50));
+
+      const files = (await readdirDir(dir)).filter((f) => f.startsWith("engine.log"));
+      expect(files.length).toBeGreaterThan(1); // 회전이 최소 1회 이상 발생
+
+      const combined = (
+        await Promise.all(files.map((f) => readFile(join(dir, f), "utf8")))
+      ).join("\n");
+
+      for (let i = 0; i < N; i++) {
+        expect(combined).toContain(`MARK-${i}-`);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+async function readdirDir(dir: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  return readdir(dir);
+}

@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 import {
   parseLaneConf,
   serializeLaneConf,
   detectLegacyAdapterKeys,
+  parseKeyValues,
+  parseProjConf,
+  readProjConf,
 } from "../../src/shared/conf.js";
 
 // parseLaneConf: ini 형식 레인 설정 파싱 — FR-001/021
@@ -248,5 +254,73 @@ describe("denylist (005 autopass)", () => {
       "source=telegram\nperm_tier=autopass\nallowlist=Read\ndenylist=Bash,Write\n",
     );
     expect(parseLaneConf(serializeLaneConf(original))).toEqual(original);
+  });
+});
+
+// SC-017 (FR-016): proj.conf 의 auto_restart 파싱 — 기본 on·명시 false 만 off·무효/부재 fallback.
+// auto_relaunch(레인 conf) 파싱 선례 준용(parseKeyValues 재사용, export 승격).
+
+describe("parseKeyValues (export 승격 — parseProjConf 가 재사용하는 SoT)", () => {
+  it("key=value 라인을 파싱하고 주석·빈 줄을 무시한다", () => {
+    const kv = parseKeyValues("# comment\nauto_restart=false\n\n; also comment\nfoo=bar\n");
+    expect(kv["auto_restart"]).toBe("false");
+    expect(kv["foo"]).toBe("bar");
+  });
+});
+
+describe("parseProjConf (SC-017 — (b)(c)(d)(e))", () => {
+  it("(b) auto_restart 키 부재 → on(true)", () => {
+    expect(parseProjConf("").auto_restart).toBe(true);
+    expect(parseProjConf("other_key=value\n").auto_restart).toBe(true);
+  });
+
+  it("(c) auto_restart=false 명시 → off(false)", () => {
+    expect(parseProjConf("auto_restart=false\n").auto_restart).toBe(false);
+  });
+
+  it("(d) auto_restart=true 명시 → on(true)", () => {
+    expect(parseProjConf("auto_restart=true\n").auto_restart).toBe(true);
+  });
+
+  it("(e) 무효값(예: maybe) → on(true) — fallback(auto_relaunch 선례 준용)", () => {
+    expect(parseProjConf("auto_restart=maybe\n").auto_restart).toBe(true);
+    expect(parseProjConf("auto_restart=\n").auto_restart).toBe(true);
+    expect(parseProjConf("auto_restart=FALSE\n").auto_restart).toBe(false); // 대소문자 무관 false 인식
+    expect(parseProjConf("auto_restart=TRUE\n").auto_restart).toBe(true);
+  });
+});
+
+describe("readProjConf (SC-017 — (a) 파일 부재)", () => {
+  let tmpBase: string;
+
+  beforeEach(() => {
+    tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-proj-conf-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  });
+
+  it("(a) proj.conf 파일 부재 → 기본 on(true)", async () => {
+    const conf = await readProjConf(tmpBase, "myproj");
+    expect(conf.auto_restart).toBe(true);
+  });
+
+  it("proj.conf 존재 + auto_restart=false → off(false)", async () => {
+    const projDir = path.join(tmpBase, "myproj");
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, "proj.conf"), "auto_restart=false\n");
+
+    const conf = await readProjConf(tmpBase, "myproj");
+    expect(conf.auto_restart).toBe(false);
+  });
+
+  it("proj.conf 존재 + 키 부재 → on(true)", async () => {
+    const projDir = path.join(tmpBase, "myproj");
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, "proj.conf"), "# no auto_restart key\n");
+
+    const conf = await readProjConf(tmpBase, "myproj");
+    expect(conf.auto_restart).toBe(true);
   });
 });

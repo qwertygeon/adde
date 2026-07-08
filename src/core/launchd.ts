@@ -5,12 +5,14 @@
  */
 import { t } from "../shared/i18n.js";
 import { execFile as nodeExecFile } from "node:child_process";
-import { writeFile, unlink, mkdir, stat } from "node:fs/promises";
+import { writeFile, unlink, mkdir, stat, open, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatBlock } from "../shared/notify.js";
-import { assertSafeSegment } from "../shared/paths.js";
+import { assertSafeSegment, defaultBase } from "../shared/paths.js";
+import { readProjConf } from "../shared/conf.js";
+import { DEFAULT_LOG_MAX_BYTES } from "../shared/log-rotate.js";
 
 // ── 타입 정의 ───────────────────────────────────────────────────────────────
 
@@ -97,6 +99,13 @@ export interface RenderPlistOpts {
    * 이 PATH 에 있어야 한다. 미지정 시 EnvironmentVariables 를 생략(구 동작).
    */
   pathEnv?: string;
+  /**
+   * 무인 자동 재기동 활성 여부(proj.conf `auto_restart`). 필수 필드 — 유일 호출부인
+   * loadDaemon 이 항상 proj.conf 값을 전달하도록 컴파일 강제(배선 누락 방지).
+   * true(기본) → KeepAlive dict(비정상 종료 시에만 재기동) + ThrottleInterval 60초.
+   * false → KeepAlive 키 자체를 미포함(크래시 자동 재기동만 비활성, RunAtLoad 는 유지).
+   */
+  autoRestart: boolean;
 }
 
 /** plist 문자열 값의 XML 특수문자 이스케이프(경로에 &·< 등이 있어도 유효한 plist 유지). */
@@ -106,7 +115,9 @@ function xmlEscape(s: string): string {
 
 /**
  * launchd plist XML 생성.
- * - KeepAlive=true, RunAtLoad=true.
+ * - RunAtLoad=true(항상 — auto_restart 값과 무관, 재부팅·적재 시 자동복구).
+ * - autoRestart=on(기본) → KeepAlive dict(비정상 종료 시에만 재기동) + ThrottleInterval 60초.
+ *   autoRestart=off → KeepAlive 키·ThrottleInterval 전부 미렌더(크래시 자동 재기동만 비활성).
  * - ProgramArguments=[nodeBin, addeBin, "__daemon", proj] — 시크릿 미포함.
  * - EnvironmentVariables: PATH 만 주입(pathEnv 지정 시). 토큰 등 시크릿은 넣지 않는다
  *   (데몬이 .env 파일에서 로드). PATH 는 시크릿이 아니다.
@@ -114,13 +125,25 @@ function xmlEscape(s: string): string {
 export function renderPlist(proj: string, opts: RenderPlistOpts): string {
   assertSafeSegment("proj", proj);
   const label = plistLabel(proj);
-  const { nodeBin, addeBin, logPath, pathEnv } = opts;
+  const { nodeBin, addeBin, logPath, pathEnv, autoRestart } = opts;
   const envBlock = pathEnv
     ? `  <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
     <string>${xmlEscape(pathEnv)}</string>
   </dict>
+`
+    : "";
+  const keepAliveBlock = autoRestart
+    ? `  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
 `
     : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -138,15 +161,40 @@ export function renderPlist(proj: string, opts: RenderPlistOpts): string {
   </array>
 ${envBlock}  <key>RunAtLoad</key>
   <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
+${keepAliveBlock}  <key>StandardOutPath</key>
   <string>${logPath}.out.log</string>
   <key>StandardErrorPath</key>
   <string>${logPath}.err.log</string>
 </dict>
 </plist>
 `;
+}
+
+/**
+ * launchd 로그 keep-tail 트림 — (재)적재 시점(launchd fd 미보유 창)에만 호출한다.
+ * 런타임 중에는 회전하지 않는다(launchd 가 파일 디스크립터를 보유하는 동안 자를 수 없음).
+ * 파일 전체를 메모리에 적재하지 않고 끝 keepBytes 만 read 한다.
+ */
+export async function trimTail(path: string, keepBytes: number): Promise<void> {
+  let fh;
+  try {
+    fh = await open(path, "r");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return; // 파일 부재 — no-op
+    throw err;
+  }
+  try {
+    const { size } = await fh.stat();
+    if (size <= keepBytes) return; // 이미 임계 이하 — no-op
+    const start = size - keepBytes;
+    const buf = Buffer.alloc(keepBytes);
+    const { bytesRead } = await fh.read(buf, 0, keepBytes, start);
+    const tmpPath = `${path}.trim-tmp`;
+    await writeFile(tmpPath, buf.subarray(0, bytesRead));
+    await rename(tmpPath, path);
+  } finally {
+    await fh.close();
+  }
 }
 
 // ── launchctl 실행자 기본 구현 ────────────────────────────────────────────
@@ -218,7 +266,14 @@ export async function loadDaemon(proj: string, deps?: LaunchdDeps): Promise<void
   // 데몬 stdout/stderr 로그 경로 base: ~/Library/Logs/adde/<proj> (adde logs --daemon 과 동일 SSOT).
   const logPath = daemonLogBase(proj, deps);
 
-  const plistContent = renderPlist(proj, { nodeBin, addeBin, logPath, pathEnv });
+  // proj.conf 의 auto_restart — 레인 base(defaultBase/$ADDE_HOME)에 위치(launchd 로그 base 와 별개).
+  const { auto_restart: autoRestart } = await readProjConf(defaultBase(), proj);
+  const plistContent = renderPlist(proj, { nodeBin, addeBin, logPath, pathEnv, autoRestart });
+
+  // launchd 표준출력/표준오류 로그 — (재)적재 시점(현재, launchd fd 미보유 창)에만 keep-tail 트림.
+  const { out, err } = daemonLogPaths(proj, deps);
+  await trimTail(out, DEFAULT_LOG_MAX_BYTES);
+  await trimTail(err, DEFAULT_LOG_MAX_BYTES);
 
   // LaunchAgents 디렉터리 생성(존재하면 noop).
   await mkdir(dirname(targetPlist), { recursive: true });

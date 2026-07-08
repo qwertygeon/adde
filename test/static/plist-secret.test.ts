@@ -12,6 +12,7 @@ const baseOpts = {
   nodeBin: "/usr/local/bin/node",
   addeBin: "/usr/local/bin/adde",
   logPath: "/Users/user/.config/adde/myproj/daemon.log",
+  autoRestart: true,
 };
 
 describe("renderPlist 출력 — 시크릿 비포함 (SC-013)", () => {

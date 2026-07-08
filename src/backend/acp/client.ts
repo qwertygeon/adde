@@ -20,6 +20,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type { ChildProcess } from "node:child_process";
 import { spawnEngine } from "./spawn.js";
+import { DEFAULT_LOG_MAX_BYTES, DEFAULT_LOG_KEEP } from "../../shared/log-rotate.js";
 import type { LanePaths } from "../../shared/paths.js";
 import { appendTranscript } from "../../core/transcript.js";
 import type { SessionEvent } from "../../core/transcript.js";
@@ -330,7 +331,16 @@ export class AcpBackendImpl implements AcpBackend {
     const channel = config?.channel ?? "telegram";
 
     // paths 가 있으면 엔진 stderr 를 레인 engine.log 로 캡처(없으면 inherit — 테스트/레거시).
-    const child = spawnEngine(this.adapterBin, [], paths ? { stderrPath: paths.engineLog } : {});
+    const child = spawnEngine(
+      this.adapterBin,
+      [],
+      paths
+        ? {
+            stderrPath: paths.engineLog,
+            stderrRotate: { maxBytes: DEFAULT_LOG_MAX_BYTES, keep: DEFAULT_LOG_KEEP },
+          }
+        : {},
+    );
 
     // child 'error'(예: 바이너리 ENOENT) 는 미처리 시 프로세스를 크래시시킨다.
     // 핸드셰이크 완료 전에는 launch 실패로 전환하고, 이후에는 로깅한다(상시 리스너 유지).

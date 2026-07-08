@@ -2,7 +2,7 @@
  * `adde status|doctor|logs` — 운영 가시성 명령의 CLI 표면.
  * core/diagnostics 의 읽기 전용 로직을 호출하고 표/JSON/텍스트로 표면화한다.
  */
-import { collectStatus, collectAllStatus, runDoctor, readLogs } from "../core/diagnostics.js";
+import { collectStatus, collectAllStatus, runDoctor, readLogs, readHalt } from "../core/diagnostics.js";
 import { checkForUpdate, formatUpdateNotice } from "../core/update-check.js";
 import { errMsg } from "../shared/errors.js";
 import type { LaneStatusRow, AggregatedLaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
@@ -132,6 +132,14 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
             "\n",
         );
       }
+      // 크래시루프 자가 정지 표면화 — 집계 뷰에 등장한 프로젝트마다 halt 기록 확인.
+      const base = defaultBase();
+      for (const proj of [...new Set(rows.map((r) => r.proj))]) {
+        const halt = await readHalt(base, proj);
+        if (halt) {
+          process.stdout.write("\n" + t("ops.status.haltWarn", { proj }) + "\n");
+        }
+      }
       await printUpdateNoticeIfAny();
     }
     return rows.some((r) => r.status === "dead" || r.status === "stale" || r.status === "error")
@@ -177,6 +185,11 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
           }) +
           "\n",
       );
+    }
+    // 크래시루프 자가 정지 표면화.
+    const halt = await readHalt(defaultBase(), proj);
+    if (halt) {
+      process.stdout.write("\n" + t("ops.status.haltWarn", { proj }) + "\n");
     }
     await printUpdateNoticeIfAny();
   }

@@ -3,17 +3,25 @@
  * CLI 계층(cli/ops.ts)이 결과를 표/JSON/텍스트로 표면화한다.
  */
 import { t } from "../shared/i18n.js";
-import { readFile, stat, readdir } from "node:fs/promises";
+import { readFile, stat, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { laneList, resolveFileMode } from "./lane-config.js";
 import { resolveAdapterBin } from "./supervisor.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
-import { lanePaths, defaultBase, expandTilde, isSafeSegment } from "../shared/paths.js";
+import {
+  lanePaths,
+  defaultBase,
+  expandTilde,
+  isSafeSegment,
+  daemonHaltPath,
+  daemonBootsPath,
+} from "../shared/paths.js";
 import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
 import { daemonRegState, daemonEntryPath } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
 import { SOURCE_IDS } from "../src-adapters/index.js";
+import type { HaltRecord } from "./crash-loop.js";
 
 export interface DiagBaseOptions {
   /** 설정 base 경로(테스트 override). 미지정 시 $ADDE_HOME 또는 ~/.config/adde. */
@@ -131,6 +139,34 @@ export async function collectAllStatus(
   return rows;
 }
 
+// ── 크래시루프 halt 상태 ─────────────────────────────────
+
+/** `daemon-halt.json` 읽기 — 크래시루프 자가 정지 기록. 부재/파싱 실패 시 null(halt 아님). */
+export async function readHalt(base: string, proj: string): Promise<HaltRecord | null> {
+  try {
+    const text = await readFile(daemonHaltPath(base, proj), "utf8");
+    return JSON.parse(text) as HaltRecord;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * halt 기록 + 짧은-수명 연속 카운터 제거(ENOENT 흡수 — 멱등) — `adde up`/`restart` 가 사용자
+ * 명시 재시도 시 호출. 카운터(daemon-boots.json)를 함께 지워야 한다: halt 마커만 지우면
+ * 재시도 부팅이 기존 streak 에 +1 하며 임계를 즉시 재초과 → 매 restart 가 곧바로 재정지해
+ * 사용자 명시 재시도가 영구히 무효화된다.
+ */
+export async function clearHalt(base: string, proj: string): Promise<void> {
+  for (const p of [daemonHaltPath(base, proj), daemonBootsPath(base, proj)]) {
+    try {
+      await unlink(p);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+}
+
 // ── doctor ──────────────────────────────────────────────────────────────
 
 export type CheckLevel = "PASS" | "WARN" | "FAIL";
@@ -230,6 +266,17 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
 
   if (proj === undefined) return checks;
 
+  // 크래시루프 자가 정지 상태 — plist/launchctl 등록 여부와 무관하게 halt 기록 파일로 판정.
+  const halt = await readHalt(base, proj);
+  if (halt) {
+    checks.push({
+      name: t("doctor.halt.name", { proj }),
+      level: "FAIL",
+      detail: t("doctor.halt.detail", { count: halt.consecutiveShortLived, reason: halt.reason }),
+      hint: t("doctor.halt.hint", { proj }),
+    });
+  }
+
   // daemon 등록 상태 점검 (macOS 전용 — 비-darwin 은 항목 스킵).
   if (process.platform === "darwin") {
     try {
@@ -244,6 +291,21 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
           level: "PASS",
           detail: t("doctor.daemon.registered"),
         });
+        // 등록은 잔존하나 실제 상주 레인이 0 — auto_restart=off 크래시 후 미재기동 또는
+        // 부팅-실패-잔존(rekick 대상)의 관찰 시점 스냅샷. 거짓 UP 표기 방지.
+        const { lanes: regLanes } = await laneList(proj, { base });
+        if (regLanes.length > 0) {
+          const statusRows = await collectStatus(proj, opts);
+          const runningCount = statusRows.filter((r) => r.status === "running").length;
+          if (runningCount === 0) {
+            checks.push({
+              name: t("doctor.deadReg.name", { proj }),
+              level: "WARN",
+              detail: t("doctor.deadReg.detail"),
+              hint: t("doctor.deadReg.hint", { proj }),
+            });
+          }
+        }
       } else if (!plistExists && !launchctlRegistered) {
         // 둘 다 false — 데몬 미기동 상태(정상 — 기동 전 또는 down 후).
         checks.push({

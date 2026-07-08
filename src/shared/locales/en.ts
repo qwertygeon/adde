@@ -136,6 +136,8 @@ lane add options:
       "  View: adde status {{proj}} · apply conf changes: adde restart {{proj}} · stop: adde down {{proj}}",
     alreadyUpUnhealthy:
       "[adde] {{proj}} has unhealthy lane(s): {{lanes}}\n  ↳ action: inspect with adde status {{proj}} / adde logs {{proj}} --daemon, then adde restart {{proj}}.",
+    deadRegistered:
+      "[adde] {{proj}} is registered but no lane is running (the daemon died) — reloading it...",
     upFailed:
       "[adde] lane(s) failed to start: {{lanes}}\n  ↳ action: inspect with adde logs {{proj}} <lane> --engine, or the daemon log with adde logs {{proj}} --daemon; then adde restart {{proj}}.",
     upSummary: "  {{running}} running · {{failed}} failed · {{pending}} still starting",
@@ -163,6 +165,8 @@ lane add options:
         "error: lane(s) failed to start: {{lanes}}.\n  ↳ action: inspect the daemon log (adde logs <proj> --daemon) or engine log (adde logs <proj> <lane> --engine), then adde restart <proj>.",
       errorWarnSingle:
         "error: lane(s) failed to start: {{lanes}}.\n  ↳ action: inspect the daemon log (adde logs {{proj}} --daemon) or engine log (adde logs {{proj}} <lane> --engine), then adde restart {{proj}}.",
+      haltWarn:
+        "[adde] {{proj}} self-halted after repeated crash-loop restarts.\n  ↳ action: fix the underlying cause, then adde restart {{proj}}.",
     },
     doctor: {
       hint: "    ↳ action: {{hint}}",
@@ -312,6 +316,17 @@ lane add options:
         "state dir is group/other-accessible (mode {{mode}}) but file_mode=private is expected to be 0700",
       stateHint:
         "Restrict it: chmod 700 {{path}} — or restart the lane (adde restart {{proj}}) to re-secure it.",
+    },
+    halt: {
+      name: "self-halt ({{proj}})",
+      detail: "self-halted after {{count}} consecutive short-lived crashes — {{reason}}",
+      hint: "Fix the underlying cause, then retry with adde restart {{proj}}.",
+    },
+    deadReg: {
+      name: "daemon liveness ({{proj}})",
+      detail:
+        "registered in launchctl but no lane is running — expected if auto_restart=off after a crash (no auto-restart); otherwise the daemon may have failed to boot",
+      hint: "Check adde logs {{proj}} --daemon for the cause, then adde restart {{proj}}.",
     },
   },
   update: {
@@ -600,6 +615,9 @@ lane add options:
       subscriberError: "[acp] lane={{lane}} subscriber error: {{error}}",
       transcriptWriteFail: "[acp] lane={{lane}} transcript write failed: {{error}}",
       permDiff: "[acp] launch perm-diff: {{note}}",
+    },
+    rotate: {
+      fail: "[log-rotate] rotation failed for {{path}} (absorbed — logging continues): {{detail}}",
     },
   },
   notify: {

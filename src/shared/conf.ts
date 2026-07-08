@@ -6,6 +6,9 @@
  * 알 수 없는 키 무시(forward-compat — 구 conf 의 channel= 등).
  */
 
+import { readFile } from "node:fs/promises";
+import { projConfPath } from "./paths.js";
+
 /** markdown 어댑터 전용 설정(`markdown.*` 키). */
 export interface MarkdownLaneConf {
   /** markdown 루트 디렉터리(절대경로, 예: Obsidian vault). */
@@ -99,8 +102,8 @@ const LEGACY_ADAPTER_KEYS = [
   "allow_from",
 ] as const;
 
-/** raw .conf 텍스트를 key→value 맵으로(주석·공백 제외, 첫 `=` 기준 분할). */
-function parseKeyValues(text: string): Record<string, string> {
+/** raw .conf 텍스트를 key→value 맵으로(주석·공백 제외, 첫 `=` 기준 분할). proj.conf 파서(export)와 공유하는 SoT. */
+export function parseKeyValues(text: string): Record<string, string> {
   const kv: Record<string, string> = {};
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -208,4 +211,32 @@ export function serializeLaneConf(conf: LaneConf): string {
     }
   }
   return lines.join("\n") + "\n";
+}
+
+// ── proj.conf (프로젝트 수준 설정 최초 선례) ─────────────────────────────────
+// 데몬은 proj 당 1개(레인이 아닌 proj 단위) — auto_restart 는 여기 둔다.
+
+/** proj.conf 파싱 결과. */
+export interface ProjConf {
+  /** 무인 자동 재기동(launchd KeepAlive) 활성 여부. 기본 on — 명시 false 만 off. */
+  auto_restart: boolean;
+}
+
+/**
+ * proj.conf 텍스트 파싱 — `auto_relaunch` 파싱 선례 준용.
+ * "false" 명시값만 OFF — 부재·true·빈값·무효값은 전부 ON(default-on, forward-compat).
+ */
+export function parseProjConf(text: string): ProjConf {
+  const kv = parseKeyValues(text);
+  return { auto_restart: (kv["auto_restart"] ?? "").trim().toLowerCase() !== "false" };
+}
+
+/** `<base>/<proj>/proj.conf` 읽어 파싱. 파일 부재 시 기본값(auto_restart=on, 하위호환). */
+export async function readProjConf(base: string, proj: string): Promise<ProjConf> {
+  try {
+    const text = await readFile(projConfPath(base, proj), "utf8");
+    return parseProjConf(text);
+  } catch {
+    return { auto_restart: true };
+  }
 }

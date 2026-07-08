@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { appendTranscript } from "../../src/core/transcript.js";
 import { lanePaths } from "../../src/shared/paths.js";
+import { readLogs } from "../../src/core/diagnostics.js";
 
 // SC-006: agent_message_chunk → transcript.log append (이전 내용 보존)
 // SC-007: 토큰 마스킹 (maskSecrets 통합)
@@ -66,5 +67,31 @@ describe("appendTranscript 토큰 마스킹 (SC-007)", () => {
     const content = fs.readFileSync(paths.transcriptLog, "utf8");
     expect(content).not.toContain(token);
     expect(content).toContain("***");
+  });
+});
+
+// SC-010 (FR-010): 회전 후에도 현재 로그를 정상 읽는다(기존 계약 — 마지막 N줄 출력) 유지.
+describe("appendTranscript 옵션 3번째 인자 — 회전 트리거 (SC-010 Happy)", () => {
+  it("작은 maxBytes 로 회전이 발생해도 이후 읽기 경로(readLogs)가 현재 로그를 정상 반환한다", async () => {
+    const rotateOpts = { rotate: { maxBytes: 50, keep: 2 } };
+    for (let i = 0; i < 10; i++) {
+      await appendTranscript(paths, { type: "agent_message_chunk" as const, content: `line-${i}` }, rotateOpts);
+    }
+
+    // 회전이 최소 1회 발생했어야 한다(임계 50바이트 대비 10줄 누적).
+    expect(fs.existsSync(`${paths.transcriptLog}.1`)).toBe(true);
+
+    const res = await readLogs("myproj", "test-lane", 5, { base: tmpBase });
+    expect(res.exists).toBe(true);
+    expect(res.lines.length).toBeGreaterThan(0);
+    // 마지막에 기록한 이벤트가 현재 로그(가장 최신 세대)에 존재해야 한다.
+    expect(res.lines.join("\n")).toContain("line-9");
+  });
+
+  it("opts 미지정(기존 2-인자 호출)은 하위호환 — 소형 로그에서 회전이 트리거되지 않는다", async () => {
+    await appendTranscript(paths, { type: "agent_message_chunk" as const, content: "small" });
+    expect(fs.existsSync(`${paths.transcriptLog}.1`)).toBe(false);
+    const content = fs.readFileSync(paths.transcriptLog, "utf8");
+    expect(content).toContain("small");
   });
 });

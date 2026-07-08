@@ -15,6 +15,7 @@ Diagnosis and remedies by symptom. Two commands narrow down most issues first:
 - [Lane shows as dead](#lane-shows-as-dead)
 - [Lane shows as stale (hung)](#lane-shows-as-stale-hung)
 - [Engine crash & self-recovery](#engine-crash--self-recovery)
+- [Crash safety & log rotation](#crash-safety--log-rotation)
 - [Recovery after reboot / orphan cleanup](#recovery-after-reboot--orphan-cleanup)
 - [No response after sending a message](#no-response-after-sending-a-message)
 - [Failure notice after session control (clear/resume)](#failure-notice-after-session-control-clearresume)
@@ -91,9 +92,23 @@ Any permission approval still pending at crash time is denied (fail-closed) rath
   ```
 - Intentional restarts (`adde restart`, `/clear`, `/resume`) are unaffected — self-recovery only reacts to _unexpected_ engine exits, and disarms itself during a deliberate restart so the engine isn't double-started.
 
+## Crash safety & log rotation
+
+The section above covers a lane's **engine** process. The **daemon** process itself (the launchd-managed worker that hosts all of a project's lanes) has a separate, lower-level safety net.
+
+- **Unhandled daemon errors**: an uncaught exception in the daemon worker is logged with secrets masked and the daemon exits (after a bounded, 5-second cleanup attempt) so launchd can restart it — see the crash-only auto-restart semantics below. An unhandled promise rejection, by contrast, is logged and absorbed instead of exiting, so a single stray rejection doesn't take the whole daemon down (repeats of the same cause are rate-limited to about once a minute in the log so they don't flood it).
+- **Log growth**: `transcript.log` and `engine.log` rotate once they reach 5MB (2 generations kept, oldest dropped), so a 24-hour resident daemon's logs stay bounded instead of eventually filling the disk (which would otherwise start failing every write — queue, output, runtime state, session ledger). `adde logs <proj> <lane>` keeps working across rotations. The launchd daemon log (`.out`/`.err.log`, `adde logs <proj> --daemon`) isn't rotated while running (launchd holds it open) but is trimmed to its last ~5MB when the daemon is next (re)loaded.
+
+| Symptom | Cause | Remedy |
+|---|---|---|
+| Daemon used to restart itself even right after a clean `adde down` or a manual stop | Previously `KeepAlive` was unconditional, so **any** exit (including a clean one) was relaunched; this is now fixed — a graceful stop exits cleanly and is not restarted | No action needed. If an older registration still shows this, `adde restart <proj>` to apply the current plist |
+| `adde up`/the daemon used to loop restarting every ~10s right after a config problem (e.g. zero lanes) | Previously a deterministic boot failure exited non-zero and got relaunched forever; this is now fixed — that kind of boot failure exits cleanly instead of looping (the failure is still reported by `adde up`, it's just not auto-retried) | Fix the underlying config (see the failure reason `adde up` printed), then `adde up <proj>` again |
+| `adde status`/`adde doctor <proj>` reports the daemon has **self-halted** | Repeated short-lived crashes right after boot (5 or more in a row, each surviving under a minute) tripped the crash-loop safety net, which stops retrying and records the halt cause/time instead of retrying forever | Check the reported cause, fix it, then `adde restart <proj>` — this clears the halt record and lets the daemon go through a normal boot again |
+| Daemon crashed and stayed down instead of auto-restarting | `proj.conf` has `auto_restart=false` for this project — see [command reference](commands.md#projconf--daemon-crash-auto-restart) | Expected with this setting; `adde restart <proj>` (or `adde up <proj>`) to bring it back up, or remove/flip the setting if you want launchd to auto-restart crashes again |
+
 ## Recovery after reboot / orphan cleanup
 
-- **Lane isn't up after a reboot/logout**: a daemon registered with `adde up` auto-recovers via `KeepAlive`/`RunAtLoad`, but confirm the actual status yourself — if `adde status <proj>` isn't `running`, check `adde doctor <proj>` (including registration status) then restart with `adde up <proj>`. The plist holds the PATH from the time of `adde up`, so if you later moved node/claude's install location, refresh the PATH with `adde restart <proj>`.
+- **Lane isn't up after a reboot/logout**: a daemon registered with `adde up` always auto-recovers via `RunAtLoad` regardless of `proj.conf`'s `auto_restart` (that setting only affects crash restarts, not reboot recovery), but confirm the actual status yourself — if `adde status <proj>` isn't `running`, check `adde doctor <proj>` (including registration status) then restart with `adde up <proj>`. The plist holds the PATH from the time of `adde up`, so if you later moved node/claude's install location, refresh the PATH with `adde restart <proj>`.
 - **Orphan engine process**: a `claude-agent-acp` engine process can linger after an abnormal exit. After `adde down <proj>`, check for leftovers with `ps aux | grep claude-agent-acp`, and if any remain, terminate that pid.
 
 ## No response after sending a message

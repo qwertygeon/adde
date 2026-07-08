@@ -12,6 +12,7 @@ The full command and option set of the ADDE CLI. The single main entry point is 
 - [up — start lanes (daemon)](#up--start-lanes-daemon)
 - [down — stop lanes](#down--stop-lanes)
 - [restart — restart lanes](#restart--restart-lanes)
+- [proj.conf — daemon crash auto-restart](#projconf--daemon-crash-auto-restart)
 - [status — lane status](#status--lane-status)
 - [doctor — environment check](#doctor--environment-check)
 - [logs — recent activity](#logs--recent-activity)
@@ -120,9 +121,9 @@ adde up <proj>
 Starts every `*.conf` lane in `~/.config/adde/<proj>/lanes.d/` as a **macOS launchd LaunchAgent daemon**. `adde up` itself exits immediately after registering the plist, and the actual lanes run as background daemons (managed by `launchd`).
 
 - **Terminal-independent**: the daemon keeps running even after you close the terminal.
-- **Auto-recovery**: launchd automatically restarts the daemon after a macOS reboot/logout.
+- **Crash-only auto-restart**: launchd restarts the daemon on a crash (non-zero exit or a fatal signal), throttled to at most once every 60 seconds, and always relaunches it after a macOS reboot/logout (`RunAtLoad`). A deliberate stop (`adde down`, or a `SIGTERM` that completes its graceful shutdown) exits cleanly and is **not** restarted, and a deterministic boot failure (e.g. zero lanes configured, or a boot-time config error) also exits cleanly instead of looping forever — the failure is still surfaced (see below), it just isn't retried automatically. See [`proj.conf` — daemon crash auto-restart](#projconf--daemon-crash-auto-restart) to opt out, and [crash safety & log rotation](troubleshooting.md#crash-safety--log-rotation) for the crash-loop self-halt safety net.
 - **Startup result**: after registering, `adde up` briefly polls each lane's state and prints a summary (`N running · M failed · K still starting`). Any lane that **failed to start** is listed with its reason, and `adde up` exits non-zero — so you learn about failures immediately instead of having to check `adde status`. (The failure is also recorded as `error` state; see `adde logs <proj> --daemon` for the daemon-level cause.) If **no lane** comes up within the wait window (the daemon likely failed to boot), `adde up` reports it and exits non-zero with a pointer to `adde logs <proj> --daemon`. The wait window can be extended on slow machines via the `ADDE_UP_POLL_MS` (milliseconds) env var.
-- **Already-up notice**: if the daemon is already registered, `adde up` does not re-register (which would fail as "already loaded"). Instead it prints an "already up" line with the running/total lane count and hints (`adde status` to view, `adde restart` to apply conf changes, `adde down` to stop). If any lane is currently unhealthy (`error`/`dead`/`stale`), it is listed and `adde up` exits non-zero here too.
+- **Already-up notice**: if the daemon is already registered *and* has at least one running lane, `adde up` does not re-register (which would fail as "already loaded"). Instead it prints an "already up" line with the running/total lane count and hints (`adde status` to view, `adde restart` to apply conf changes, `adde down` to stop). If any lane is currently unhealthy (`error`/`dead`/`stale`), it is listed and `adde up` exits non-zero here too. If the registration is present but **no lane is actually running** (e.g. after a deterministic boot failure that exited cleanly), `adde up` does not just report "already up" — it re-registers the daemon (unload+load) to recover it, then polls as a fresh start.
 - **Double-start guard**: within the daemon, an already-running lane is skipped with a warning (recorded in the daemon log). Double starts do not happen.
 - **macOS only**: the launchd feature works only on macOS. See [macOS-only features](#macos-only-features) for details.
 
@@ -145,6 +146,22 @@ adde restart <proj>
 Performs `down` then `up`, in order. Use it to restart the daemon after a config change, or to reset the daemon state.
 
 - If `up` fails after `down` succeeds, it surfaces the `up` error and returns exit code 1.
+- The plist is re-rendered from scratch on every `restart` (and every `up`), so it always picks up the current [`proj.conf`](#projconf--daemon-crash-auto-restart) `auto_restart` value — there is no separate migration step after editing it.
+- `restart` also clears the crash-loop self-halt marker (see [crash safety & log rotation](troubleshooting.md#crash-safety--log-rotation)), since running it is an explicit retry.
+
+## proj.conf — daemon crash auto-restart
+
+`<base>/<proj>/proj.conf` is a project-level (not per-lane) plain `key=value` settings file, edited by hand — there is no `adde` subcommand or flag for it.
+
+```
+# ~/.config/adde/<proj>/proj.conf
+auto_restart=false
+```
+
+- **Key**: `auto_restart` (boolean). Defaults to **on** — a missing file, a missing key, or an invalid value are all treated as on; only the literal `false` turns it off.
+- **Effect**: controls whether launchd auto-restarts the daemon after a crash (see the crash-only auto-restart note under [`up`](#up--start-lanes-daemon)). It does not affect `RunAtLoad` — reboot/logout auto-recovery keeps working either way — and it has no effect on a deliberate stop (`adde down` always stops the daemon regardless of this setting).
+- **When to use `auto_restart=false`**: a project whose daemon keeps crashing and you don't want launchd retrying in the background while you investigate (e.g. so you can watch a single failed run cleanly), or where you'd rather rely on the crash-loop self-halt for observability without the intervening restarts. With it off, a crash leaves the daemon down until you run `adde up`/`adde restart`; `adde status`/`adde doctor` surface that "registered but not running" state so it isn't silently mistaken for `running`.
+- Applying a change requires `adde restart <proj>` (plist is re-rendered from `proj.conf` on every `up`/`restart`).
 
 ## status — lane status
 
@@ -348,7 +365,7 @@ Passing `--token-stdin` (or any field flag) already makes the command non-intera
 >
 > **File permissions (`--file-mode`)**: the default `private` locks the lane's state/out/queue/lanes.d directories to 0700 (owner only) to block other local users on a multi-user host from reading the conversation, responses, and config metadata. `shared` is an opt-in that does not apply this lock (keeps the existing umask default — typically 0755); use it only when read sharing is needed. (The bot-token `.env` is always 0600 regardless of mode.)
 >
-> **Engine crash self-recovery (`auto_relaunch`)**: not a `lane add` flag — set directly in the lane's `.conf` file (`auto_relaunch=false`), then `adde restart <proj>`. Defaults to on: if the lane's engine process crashes after the handshake, ADDE relaunches it with a bounded exponential backoff, carrying over the same session, subscribers, and permission handler. `auto_relaunch=false` disables only the automatic relaunch — crash detection, the immediate `error` status, denial of any permission request still pending at crash time, and the one-time channel notice all still happen. See [troubleshooting](troubleshooting.md#engine-crash--self-recovery).
+> **Engine crash self-recovery (`auto_relaunch`)**: not a `lane add` flag — set directly in the lane's `.conf` file (`auto_relaunch=false`), then `adde restart <proj>`. Defaults to on: if the lane's engine process crashes after the handshake, ADDE relaunches it with a bounded exponential backoff, carrying over the same session, subscribers, and permission handler. `auto_relaunch=false` disables only the automatic relaunch — crash detection, the immediate `error` status, denial of any permission request still pending at crash time, and the one-time channel notice all still happen. See [troubleshooting](troubleshooting.md#engine-crash--self-recovery). (This is a per-lane setting for the *engine* process; the analogous per-project setting for the *daemon* process itself is [`proj.conf`'s `auto_restart`](#projconf--daemon-crash-auto-restart).)
 
 ## proj — project listing and deletion
 
@@ -442,7 +459,7 @@ CLI output and channel messages support two languages, en/ko.
 
 The daemon-management features of `adde up`/`down`/`restart` depend on macOS launchd. On Linux/WSL these commands return an error.
 
-**Reboot auto-recovery**: a daemon registered with `adde up` is automatically restarted after a macOS reboot/logout (`KeepAlive`/`RunAtLoad` settings). Confirming recovery yourself with `adde status <proj>` after a reboot is recommended.
+**Reboot auto-recovery**: a daemon registered with `adde up` is always restarted after a macOS reboot/logout (`RunAtLoad`, regardless of `proj.conf`'s `auto_restart`). Crash auto-restart (`KeepAlive`, a non-zero exit or fatal signal) is separate and throttled to once every 60 seconds — see [crash-only auto-restart](#up--start-lanes-daemon) and [`proj.conf`](#projconf--daemon-crash-auto-restart). Confirming recovery yourself with `adde status <proj>` after a reboot is recommended.
 
 **Operational verification checklist**: the items below are outside the automated verification scope and must be confirmed directly on a real macOS environment.
 
@@ -451,3 +468,7 @@ The daemon-management features of `adde up`/`down`/`restart` depend on macOS lau
 3. After a macOS reboot, `adde status <proj>` — confirm auto-recovery
 4. Run `adde up <proj>` twice in a row — confirm no double start (warning printed, then skipped)
 5. `adde down <proj>` then `ps aux | grep claude-agent-acp` — confirm no orphan process
+6. Send a manual `SIGTERM` to the daemon process and let it complete its graceful shutdown — confirm launchd does **not** restart it (distinct from a `kill -9`/crash, which should restart it)
+7. Set `auto_restart=false` in `proj.conf`, then crash the daemon (e.g. `kill -9`) — confirm launchd does not restart it and `adde status`/`adde doctor <proj>` surface it as registered-but-not-running (not a false `running`)
+8. Point every lane's conf at an invalid/missing config so the daemon boots with zero running lanes — confirm it exits cleanly instead of looping, and that `adde up <proj>` reports the failure
+9. Force repeated short-lived crashes on boot (5+ in a row, each under a minute) — confirm the daemon self-halts and `adde status`/`adde doctor <proj>` report it, then confirm `adde restart <proj>` clears the halt and lets it boot normally again

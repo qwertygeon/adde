@@ -111,3 +111,41 @@ describe("AcpBackend subscribe — agent_message_chunk (SC-006)", () => {
     expect(content).toContain("테스트 메시지");
   });
 });
+
+// SC-008 (FR-008): 동시 진행 중인 transcript append + 회전 경합에서도 기록 손실이 없다
+// (세대 소실 0). 실 fs + 실 동시 디스패치(Promise.all)로 경합을 재현한다 — ADR-003 경로별
+// Promise-chain 뮤텍스가 stat→rotate 인터리브(이중 회전에 의한 세대 소실)를 막는지 검증.
+describe("appendTranscript 동시 회전 무손실 (SC-008 Edge — 경합)", () => {
+  it("작은 임계로 다수 동시 append 해도 모든 이벤트가 정확히 1회씩 어딘가에 존재한다(소실·중복 없음)", async () => {
+    const N = 20;
+    // keep 을 N 보다 크게 잡아 "정상적인 keep 상한 소실"과 "버그로 인한 유실"을 구분한다 —
+    // 최대 회전 횟수는 append 횟수(N)를 넘지 않으므로 keep=N+5 면 세대 보관 상한으로 인한
+    // 정상 소실이 발생하지 않는다(이 테스트의 관심사는 오직 경합으로 인한 유실·중복 여부).
+    const rotateOpts = { rotate: { maxBytes: 60, keep: N + 5 } };
+
+    await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        appendTranscript(
+          paths,
+          { type: "agent_message_chunk" as const, content: `EVT-${i}` },
+          rotateOpts,
+        ),
+      ),
+    );
+
+    const files = fs
+      .readdirSync(path.dirname(paths.transcriptLog))
+      .filter((f) => f.startsWith(path.basename(paths.transcriptLog)))
+      .map((f) => path.join(path.dirname(paths.transcriptLog), f));
+    const combined = files.map((p) => fs.readFileSync(p, "utf8")).join("\n");
+
+    // N 개 이벤트 전부 정확히 1회씩 존재 — 손실(0회) 도 중복(2회+) 도 없다.
+    // 경계(뒤에 숫자가 오지 않음) 확인 필수 — 그냥 substring 매칭이면 "EVT-1" 이 "EVT-10".."EVT-19"
+    // 에도 매칭되어 오탐(false positive)이 난다.
+    for (let i = 0; i < N; i++) {
+      const marker = new RegExp(`EVT-${i}(?!\\d)`, "g");
+      const occurrences = (combined.match(marker) ?? []).length;
+      expect(occurrences).toBe(1);
+    }
+  });
+});

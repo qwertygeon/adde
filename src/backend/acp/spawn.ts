@@ -4,9 +4,12 @@
  */
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { createWriteStream, mkdirSync } from "node:fs";
+import { createWriteStream, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { maskSecrets } from "../../shared/mask.js";
+import { rotateGenerations } from "../../shared/log-rotate.js";
+import { t } from "../../shared/i18n.js";
+import { errMsg } from "../../shared/errors.js";
 
 /** CLAUDECODE 중첩 유발 환경변수 목록. */
 const NESTED_GUARD_KEYS = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"] as const;
@@ -30,6 +33,8 @@ export interface SpawnEngineOptions {
    * 미지정 시 기존 동작(부모 stderr inherit)을 유지한다 — 테스트/레거시 호환.
    */
   stderrPath?: string;
+  /** engine.log 세대 회전 설정(신규, 옵션 — 하위호환). 미지정 시 회전 안 함(기존 동작). */
+  stderrRotate?: { maxBytes: number; keep: number };
 }
 
 /**
@@ -51,10 +56,42 @@ export function spawnEngine(
 
   if (captureStderr && child.stderr) {
     const path = opts.stderrPath as string;
+    const rotate = opts.stderrRotate;
     mkdirSync(dirname(path), { recursive: true });
-    const ws = createWriteStream(path, { flags: "a" });
+    // let — 회전 시 재열기(신 inode)로 참조를 스왑한다. data/end 핸들러는 클로저로 최신 ws 를 본다.
+    let ws = createWriteStream(path, { flags: "a" });
     // 로그 스트림 오류는 흡수(진단 로그 — 엔진 동작 비차단, unhandled 'error' 방지).
     ws.on("error", () => {});
+    // 회전 임계 누적 바이트 — 기존 파일 크기로 시드(append 모드라 현 세대가 이미 채워져 있을 수 있음).
+    let written = rotate ? (statSync(path, { throwIfNoEntry: false })?.size ?? 0) : 0;
+    // 회전 진행 중 재트리거 방지 플래그(rotateGenerations 완료까지 재진입 금지).
+    let rotating = false;
+
+    /**
+     * 회전 트리거 — rename(fire-and-forget) 완료 후 참조 스왑 + 옛 ws.end().
+     * 순서 불변: rename → 신 ws 생성·스왑 → 옛 ws.end(). 스왑 전 도착 chunk 는 옛 ws(rename 후에도
+     * 동일 inode 참조라 무손실)로, 스왑 후 chunk 는 신 ws 로 — 재열기 창 무손실.
+     */
+    function maybeRotate(): void {
+      if (!rotate || rotating || written < rotate.maxBytes) return;
+      rotating = true;
+      rotateGenerations(path, rotate)
+        .then(() => {
+          const old = ws;
+          ws = createWriteStream(path, { flags: "a" });
+          ws.on("error", () => {});
+          written = 0;
+          old.end();
+        })
+        .catch((err: unknown) => {
+          // fail-open — 회전 실패는 기록을 막지 않는다.
+          console.warn(t("log.rotate.fail", { path, detail: errMsg(err) }));
+        })
+        .finally(() => {
+          rotating = false;
+        });
+    }
+
     // engine.log 는 마스킹되지 않는 side channel — 라인 단위로 maskSecrets 적용 후 기록
     // (transcript 만 마스킹하면 엔진 stderr 로 토큰·민감경로가 평문 유출될 수 있음).
     // pipe 대신 data 핸들러로 소비 — pipe 한 stream 미소비 시 backpressure 로 child 가 막힌다.
@@ -68,11 +105,17 @@ export function spawnEngine(
       while ((nl = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
-        ws.write(maskSecrets(line) + "\n");
+        const out = maskSecrets(line) + "\n";
+        ws.write(out);
+        written += Buffer.byteLength(out);
+        maybeRotate();
       }
       if (buf.length > MAX_BUF) {
-        ws.write(maskSecrets(buf));
+        const out = maskSecrets(buf);
+        ws.write(out);
+        written += Buffer.byteLength(out);
         buf = "";
+        maybeRotate();
       }
     });
     // stderr EOF('end') 에서 잔여 부분 라인 flush 후 스트림 정리 — 'exit' 는 stderr 버퍼 배출을

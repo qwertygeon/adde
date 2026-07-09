@@ -21,6 +21,10 @@ import {
   clearProcessing,
   markSent,
   isSent,
+  markSending,
+  isSending,
+  clearSending,
+  markAborted,
   findUnsent,
   quarantineCorrupt,
 } from "./queue.js";
@@ -43,6 +47,18 @@ export type RenderCallback = (id: string, hint?: RenderHint) => Promise<void>;
  * 보조 신호 — 알림 실패는 로그 후 흡수하고 .failed 사이드카·재처리 경로는 그대로 유지.
  */
 export type FailNotifyCallback = (id: string, detail: string) => Promise<void>;
+
+/** 전송 dedup 옵션(소스별). SourceDescriptor.deliveryIdempotent 에서 supervisor 가 파생해 주입. */
+export interface DeliveryOptions {
+  /**
+   * renderOut 이 멱등(재호출 안전)이면 true — `.sending` 저널을 쓰지 않고 재시작 재전송을 허용한다
+   * (at-least-once, markdown). 기본 false(비멱등, telegram 등): render 직전 `.sending` 을 남겨
+   * render 진행 중 크래시를 재시작 시 "전달 불확실"로 판정하고 재전송 대신 통지 후 종단한다(at-most-once).
+   */
+  idempotent?: boolean;
+  /** 전달 불확실(render 진행 중 크래시) 종단 시 채널 통지(보조 — 실패는 로그 후 흡수). */
+  onUncertain?: (id: string) => Promise<void>;
+}
 
 export interface Injector {
   start(): Promise<void>;
@@ -90,7 +106,11 @@ export function createInjector(
   onFail?: FailNotifyCallback,
   /** 제어 결과 등 채널 대면 문구의 로케일(레인 lang). 미지정 시 전역 t. */
   laneT: NotifyT = t,
+  /** 소스별 전송 dedup 옵션(멱등성·불확실 통지). 미지정 = 비멱등(중복 회피 방향 fail-safe). */
+  delivery: DeliveryOptions = {},
 ): Injector {
+  const idempotentDelivery = delivery.idempotent ?? false;
+  const onDeliveryUncertain = delivery.onUncertain;
   let state: InjectorState = "idle";
   let responseText = "";
   // claim→처리 진입을 직렬화(E4): idle 체크와 processOne(state=active) 사이의 두 await(claimNext·isDone)
@@ -255,7 +275,10 @@ export function createInjector(
 
   /**
    * 응답을 채널로 전송하고 성공 시 .sent 마커 기록.
-   * render 실패(부분 청크 실패 포함)는 .sent 미기록 → out/ 에 durable 하게 남아 재전송 대상(flushUnsent).
+   * 멱등 소스(markdown): render 실패는 .sent 미기록 → out/ 에 durable 하게 남아 재전송 대상(flushUnsent, at-least-once).
+   * 비멱등 소스(telegram): render 직전 .sending 저널을 남겨, render 진행 중 크래시를 재시작 시 "전달 불확실"로
+   * 판정하고 재전송 대신 통지 후 .aborted 종단(at-most-once across restart — 중복 전송 방지). 프로세스 내
+   * render 실패는 .sending 을 제거해 다음 턴 재시도를 유지한다(at-least-once within one process life).
    */
   async function deliver(id: string, hint?: RenderHint): Promise<void> {
     // 이중 전송 가드: in-flight 클레임은 await 이전에 동기적으로 잡아야 두 동시 호출이 모두 통과하는
@@ -267,14 +290,40 @@ export function createInjector(
         unsent.delete(id); // 직전 flush 가 이미 전송함(stale) — 추적 해제
         return;
       }
+      // 비멱등 소스에서 deliver 진입 시 .sending 이 보이면 전달 불확실 → 재전송 대신 1회 통지 후 종단.
+      // 대개 직전 프로세스가 render 진행 중 죽은 재시작 잔존물이다(프로세스 내에선 .sending 이 render
+      // 창에서만 존재하고 delivering Set 가 동시 진입을 막는다). 단 프로세스 내 한 예외: render 는
+      // 성공했으나 직후 markSent 가 던지면(예: .sent 기록 중 ENOSPC) .sending 이 정리되지 않고 남아
+      // 같은 프로세스의 다음 flush 가 여기로 온다 — 이미 전달됐는데 불확실로 통지되지만 재전송은 없어
+      // 안전방향(무중복)이다. 어느 경우든 재전송하지 않는 것이 옳다.
+      if (!idempotentDelivery && (await isSending(paths, id))) {
+        if (onDeliveryUncertain) {
+          await onDeliveryUncertain(id).catch((e: unknown) =>
+            console.error(t("log.injector.uncertainNotifyError", { lane, id, error: errMsg(e) })),
+          );
+        }
+        await markAborted(paths, id); // 종단(findUnsent 제외) → 재시작마다 반복 통지 없음
+        await clearSending(paths, id);
+        unsent.delete(id);
+        return;
+      }
       if (!render) {
         // 렌더 대상 없음(예: chat_id 미설정) — 전송 개념 부재로 즉시 종결 처리.
         await markSent(paths, id);
         unsent.delete(id);
         return;
       }
-      await render(id, hint);
+      if (!idempotentDelivery) await markSending(paths, id); // render 직전 저널(크래시 감지 앵커)
+      try {
+        await render(id, hint);
+      } catch (err) {
+        // 프로세스 내 render 실패 — 저널 제거 후 재던짐. 재시작이 아니므로 .sending 을 남기지 않아
+        // 다음 턴 flush 가 정상 재시도(at-least-once within process). 재던져 아래 공통 catch 로 로깅.
+        if (!idempotentDelivery) await clearSending(paths, id);
+        throw err;
+      }
       await markSent(paths, id);
+      if (!idempotentDelivery) await clearSending(paths, id); // 성공 → 저널 정리(.out+.sent 만 잔존)
       unsent.delete(id); // 전송 확정 → 미전송 추적 해제(render 실패 시엔 남겨 재전송)
     } catch (err) {
       console.error(

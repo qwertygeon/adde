@@ -18,6 +18,7 @@ Diagnosis and remedies by symptom. Two commands narrow down most issues first:
 - [Crash safety & log rotation](#crash-safety--log-rotation)
 - [Recovery after reboot / orphan cleanup](#recovery-after-reboot--orphan-cleanup)
 - [No response after sending a message](#no-response-after-sending-a-message)
+- ["Delivery uncertain" notice after an interrupted send](#delivery-uncertain-notice-after-an-interrupted-send)
 - [Failure notice after session control (clear/resume)](#failure-notice-after-session-control-clearresume)
 - [Permissions](#permissions)
 - [Telegram-only](#telegram-only)
@@ -117,6 +118,20 @@ The section above covers a lane's **engine** process. The **daemon** process its
 2. See whether the message is received/processed with `adde logs <proj> <lane>`.
 3. If the AI turn is long, the response comes **all at once at turn end** (no streaming during progress). Wait a moment.
 4. If message-queue enqueuing fails repeatedly due to a full disk or a permission problem, ADDE sends an "enqueue failed N times in a row" alert to the operator channel — check disk capacity and the `state` directory's permissions.
+
+## "Delivery uncertain" notice after an interrupted send
+
+In a **Telegram (chat)** lane, you may occasionally see a one-time notice like this:
+
+> ⚠️ The process was interrupted mid-send — delivery of this reply (id …) is uncertain. It will not be resent, to avoid duplicates. If it didn't arrive, please ask again.
+
+In plain terms:
+
+- ADDE had finished preparing an answer and was in the middle of sending it to your chat when the process was interrupted (for example, the daemon restarted at exactly that moment).
+- Because ADDE can't be sure whether that message actually reached you, it deliberately **does not send it again**. This prevents the earlier problem where you could receive the same answer twice.
+- The answer may or may not have arrived. **If it didn't show up, just send your request again** — that's the only action needed.
+- Nothing is broken and there is nothing to configure; this is normal crash-safety behavior.
+- This applies to **Telegram (chat) lanes only**. Markdown (note) lanes are unaffected — re-writing the same note is harmless, so they simply finish delivering with no duplicates.
 
 ## Failure notice after session control (clear/resume)
 

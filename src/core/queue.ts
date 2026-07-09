@@ -232,6 +232,38 @@ export async function isSent(paths: LanePaths, id: string): Promise<boolean> {
 }
 
 /**
+ * render 진행 중 저널 마커 out/<id>.sending 기록(atomic) — 비멱등 소스(telegram) 전송 직전.
+ * 프로세스가 이 마커를 남긴 채(=.sent 전) 죽으면 재시작 시 "전달 여부 불확실"로 판정해 재전송하지
+ * 않는다(at-most-once across restart). 정상 성공·프로세스 내 실패 시엔 clearSending 으로 제거된다.
+ */
+export async function markSending(paths: LanePaths, id: string): Promise<void> {
+  await atomicWrite(join(paths.outDir, `${id}.sending`), new Date().toISOString());
+}
+
+/** out/<id>.sending 존재 여부 — render 진행 중 크래시(전달 불확실) 판정. */
+export async function isSending(paths: LanePaths, id: string): Promise<boolean> {
+  try {
+    await access(join(paths.outDir, `${id}.sending`));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** out/<id>.sending 저널 제거(전송 성공·프로세스 내 실패 시). 부재는 무시. */
+export async function clearSending(paths: LanePaths, id: string): Promise<void> {
+  await unlink(join(paths.outDir, `${id}.sending`)).catch(() => {});
+}
+
+/**
+ * 전달 불확실 종단 마커 out/<id>.aborted 기록(atomic). `.sent`(전달 완료)와 구분해 "전송 시도 중
+ * 크래시 — 전달 여부 불확실"을 표현하되, findUnsent 가 종단으로 제외해 재시작마다 반복 통지되지 않는다.
+ */
+export async function markAborted(paths: LanePaths, id: string): Promise<void> {
+  await atomicWrite(join(paths.outDir, `${id}.aborted`), new Date().toISOString());
+}
+
+/**
  * 응답은 기록됐으나(out/<id>.out) 채널 전송이 안 된(out/<id>.sent 부재) id 목록.
  * render 실패·크래시로 미전달된 응답의 재전송 대상.
  */
@@ -242,13 +274,16 @@ export async function findUnsent(paths: LanePaths): Promise<string[]> {
   } catch {
     return [];
   }
-  const sent = new Set(
-    files.filter((f) => f.endsWith(".sent")).map((f) => f.replace(/\.sent$/, "")),
-  );
+  // 종단(재전송 비대상): .sent(전달 완료) + .aborted(전달 불확실 종단 — markAborted).
+  const terminal = new Set<string>();
+  for (const f of files) {
+    if (f.endsWith(".sent")) terminal.add(f.replace(/\.sent$/, ""));
+    else if (f.endsWith(".aborted")) terminal.add(f.replace(/\.aborted$/, ""));
+  }
   return files
     .filter((f) => f.endsWith(".out"))
     .map((f) => f.replace(/\.out$/, ""))
-    .filter((id) => !sent.has(id));
+    .filter((id) => !terminal.has(id));
 }
 
 /**

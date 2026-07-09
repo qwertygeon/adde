@@ -562,6 +562,8 @@ lane add options:
       securePermsFail:
         "[supervisor] lane={{lane}} state directory permission lock failed (auxiliary — files may be world-readable): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} start failed: {{reason}}",
+      laneCleanupFail:
+        "[supervisor] lane={{lane}} failed-start cleanup (engine close) failed (auxiliary): {{error}}",
     },
     queue: {
       quarantineFail: "[queue] corrupt message quarantine failed id={{id}}: {{code}}",

@@ -435,6 +435,29 @@ describe("supervisorUp — async 소스 기동 완료/실패 대기 (SC-011)", (
     const info = JSON.parse(fs.readFileSync(lp.runtimeJson, "utf8")) as { status?: string };
     expect(info.status).toBe("error");
   });
+
+  it("start() 가 reject 하면 이미 launch 된 엔진 백엔드를 close 하여 고아 프로세스를 남기지 않는다 (회귀)", async () => {
+    // 회귀: start() async 화 이전엔 start 가 reject 불가라 stop 핸들이 항상 등록됐으나,
+    // async+probe 도입 후 launch 이후 start reject 시 stop 핸들 미등록 → 엔진 child 고아.
+    // 실패 경로가 backend.close 를 호출해야 한다.
+    const conf = `source=${ASYNC_STUB_SOURCE_ID}\nbackend=acp\nengine=claude-agent-acp\nperm_tier=acp\nacp_version=v1\n`;
+    const { base } = setupProject("orphanproj", { "stub-lane": conf });
+    const acpFactory = makeFakeAcpFactory();
+
+    const resultPromise = runUp("orphanproj", { base, acpFactory });
+    await waitFor(() => stubSource.getDeferred() !== null);
+    stubSource.getDeferred()!.reject(new Error("stub start failed"));
+    const result = await resultPromise;
+
+    expect(result.lanes[0]?.status).toBe("error");
+    // 고아 방지 핵심 단언: launch 된 백엔드가 정확히 1회 close 되어야 한다(기동 실패 경로 정리).
+    const backendInstance = acpFactory.mock.results[0]?.value as {
+      launch: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+    };
+    expect(backendInstance.launch).toHaveBeenCalledTimes(1);
+    expect(backendInstance.close).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("supervisorUp — telegram 기동 연결 확인 실패 → status:error (SC-014, integration)", () => {

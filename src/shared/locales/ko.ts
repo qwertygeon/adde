@@ -550,6 +550,7 @@ lane add 옵션:
       securePermsFail:
         "[supervisor] lane={{lane}} 상태 디렉터리 권한 잠금 실패(보조 — 파일이 타 사용자에 노출될 수 있음): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} 기동 실패: {{reason}}",
+      laneCleanupFail: "[supervisor] lane={{lane}} 기동 실패 정리(엔진 종료) 실패(보조): {{error}}",
     },
     queue: {
       quarantineFail: "[queue] 손상 메시지 격리 실패 id={{id}}: {{code}}",

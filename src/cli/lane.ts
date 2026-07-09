@@ -165,14 +165,16 @@ export async function collectInteractive(
   const cwd = await askPath(t("lane.prompt.cwd"), "");
   if (cwd) opts.cwd = cwd;
 
+  // 공통 파일모드 프롬프트를 소스별 위저드보다 먼저 — 리팩터 전 프롬프트 순서(파일모드 → 소스별
+  // 토큰 등) 보존. 소스별 위저드가 시크릿(토큰) 프롬프트를 포함하므로 순서 역전 방지.
+  const fileMode = await askEnum(ask, t("lane.prompt.fileMode"), ["private", "shared"], "private");
+  if (fileMode && fileMode !== "private") opts.file_mode = fileMode;
+
   // 소스별 필드 프롬프트 위임 — 훅 미제공 소스는 공통 프롬프트만(생략).
   const wizard = SOURCE_REGISTRY[source]?.wizard;
   if (wizard) {
     Object.assign(opts, await wizard.collect({ ask, askSecret, askPath }));
   }
-
-  const fileMode = await askEnum(ask, t("lane.prompt.fileMode"), ["private", "shared"], "private");
-  if (fileMode && fileMode !== "private") opts.file_mode = fileMode;
 
   return opts;
 }

@@ -341,6 +341,9 @@ export async function supervisorUp(
     // 등록(정상 경로) 전에 발생하면, 이미 spawn 된 엔진 child·armed watcher 가 정리되지 않아 고아로 남는다.
     // 실패 경로에서 명시 정리하기 위해 launch 여부를 추적한다.
     let launched = false;
+    // 실패 정리용 — factory 로 생성된 소스 핸들(catch 에서 stop). `source`(let, 확정할당)는 catch
+    // 에서 미할당 가능성 때문에 직접 참조 불가 → 별도 nullable 핸들로 추적.
+    let createdSource: Source | undefined;
 
     try {
       // 소스 생성을 try 안에서 — 팩토리가 오구성(markdown root/inbox 누락 등)에 던지면 이 레인만
@@ -352,6 +355,7 @@ export async function supervisorUp(
         throw new Error(t("supervisor.source.unknown", { source: conf.source }));
       }
       source = descriptor.factory({ lane, proj, engine, paths, conf, onInbound });
+      createdSource = source;
 
       source.onDecision((reqId, decision) => {
         const resolve = pendingDecisions.get(reqId);
@@ -477,10 +481,17 @@ export async function supervisorUp(
       const reason = errMsg(err);
       console.error(t("log.supervisor.laneStartFail", { lane, reason }));
       // 실패 경로 정리(고아 방지): stop 핸들이 아직 등록되지 않았으므로 여기서 직접 정리한다.
-      // watcher 잔존 백오프 타이머 정리 + launch 됐으면 엔진 child 종료 — 안 하면 기동 실패한
-      // 레인의 ACP 엔진 자식이 데몬 수명 동안 고아로 남는다(예: telegram 잘못된 토큰 → probe 실패).
-      // 정리 실패는 보조라 흡수(로그)한다.
+      // 정상 stop 핸들과 동일 순서(watcher disarm → source stop → backend close)로, 생성/기동된
+      // 자원을 남기지 않는다 — 안 하면 기동 실패한 레인의 소스 자원·ACP 엔진 자식이 데몬 수명 동안
+      // 고아로 남는다(예: telegram 잘못된 토큰 → probe 실패). 각 정리 실패는 보조라 흡수(로그)한다.
       watcher.disarm();
+      if (createdSource) {
+        await createdSource
+          .stop()
+          .catch((e: unknown) =>
+            console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),
+          );
+      }
       if (launched) {
         await backend.close(lane).catch((e: unknown) =>
           console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),

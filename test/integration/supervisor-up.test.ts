@@ -16,11 +16,19 @@ import { lanePaths } from "../../src/shared/paths.js";
 const stubSource = vi.hoisted(() => {
   const ASYNC_STUB_SOURCE_ID = "async-stub-sc011";
   let deferred: { resolve: () => void; reject: (e: Error) => void } | null = null;
+  let stopCalls = 0;
   return {
     ASYNC_STUB_SOURCE_ID,
     getDeferred: () => deferred,
     setDeferred: (d: typeof deferred) => {
       deferred = d;
+    },
+    getStopCalls: () => stopCalls,
+    resetStopCalls: () => {
+      stopCalls = 0;
+    },
+    incStopCalls: () => {
+      stopCalls += 1;
     },
   };
 });
@@ -34,7 +42,9 @@ vi.mock("../../src/src-adapters/index.js", async (importOriginal) => {
         new Promise<void>((resolve, reject) => {
           stubSource.setDeferred({ resolve, reject });
         }),
-      stop: async () => {},
+      stop: async () => {
+        stubSource.incStopCalls();
+      },
       requestPermission: async () => {},
       onDecision: () => {},
       renderOut: async () => {},
@@ -443,6 +453,7 @@ describe("supervisorUp — async 소스 기동 완료/실패 대기 (SC-011)", (
     const conf = `source=${ASYNC_STUB_SOURCE_ID}\nbackend=acp\nengine=claude-agent-acp\nperm_tier=acp\nacp_version=v1\n`;
     const { base } = setupProject("orphanproj", { "stub-lane": conf });
     const acpFactory = makeFakeAcpFactory();
+    stubSource.resetStopCalls();
 
     const resultPromise = runUp("orphanproj", { base, acpFactory });
     await waitFor(() => stubSource.getDeferred() !== null);
@@ -457,6 +468,8 @@ describe("supervisorUp — async 소스 기동 완료/실패 대기 (SC-011)", (
     };
     expect(backendInstance.launch).toHaveBeenCalledTimes(1);
     expect(backendInstance.close).toHaveBeenCalledTimes(1);
+    // 방어 정리: 생성된 소스도 stop 되어야 한다(연결형 소스 자원 누수 방지).
+    expect(stubSource.getStopCalls()).toBe(1);
   });
 });
 

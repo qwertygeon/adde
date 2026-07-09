@@ -182,7 +182,7 @@ describe("TelegramSource long-poll (SC-014)", () => {
       authorizedIds: [99],
     });
 
-    source.start();
+    await source.start();
 
     // queue 에 .msg 파일이 생성될 때까지 대기
     await waitFor(
@@ -229,7 +229,7 @@ describe("TelegramSource long-poll (SC-014)", () => {
       authorizedIds: [99],
     });
 
-    source.start();
+    await source.start();
 
     // 두 번째 getUpdates 가 호출되고 첫 번째 enqueue 가 완료될 때까지 대기
     await waitFor(
@@ -404,7 +404,7 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
       gateCallbackCalls.push(`${reqId}:${decision}`);
     });
 
-    source.start();
+    await source.start();
 
     // answerCallbackQuery 가 호출될 때까지 대기
     await waitFor(() => answeredCallbacks.length >= 1);
@@ -450,7 +450,7 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
       gateCallbackCalls.push(`${reqId}:${decision}`);
     });
 
-    source.start();
+    await source.start();
     // ack(스피너 해제)는 여전히 수행됨.
     await waitFor(() => answeredCallbacks.length >= 1);
     releasePending();
@@ -490,7 +490,7 @@ describe("TelegramSource 콜백 처리 (SC-018)", () => {
       gateCallbackCalls.push(`${reqId}:${decision}`);
     });
 
-    source.start();
+    await source.start();
 
     // deny 결정이 게이트 콜백에 전달될 때까지 대기
     await waitFor(() => gateCallbackCalls.some((s) => s.includes("deny")));
@@ -640,7 +640,7 @@ describe("인바운드 인증 거부 (e2e 폴 루프)", () => {
       authorizedIds: [99],
     });
 
-    source.start();
+    await source.start();
     // 두 번째 getUpdates 호출 = 첫 update 처리 완료 신호(그 시점엔 이미 drop 판정 끝).
     await waitFor(() => fetchMock.mock.calls.length >= 2);
     releasePending();
@@ -671,7 +671,7 @@ describe("인바운드 인증 거부 (e2e 폴 루프)", () => {
       authorizedIds: [99],
     });
 
-    source.start();
+    await source.start();
     await waitFor(
       () => fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length >= 1,
     );
@@ -714,7 +714,7 @@ describe("인바운드 인증 거부 (e2e 폴 루프)", () => {
       gateCallbackCalls.push(`${reqId}:${decision}`);
     });
 
-    source.start();
+    await source.start();
     // 스피너 해제(answerCallbackQuery)는 인증과 무관하게 호출됨 — 그걸 처리 완료 신호로 사용.
     await waitFor(() => answeredCallbacks.length >= 1);
     // 폴 루프가 다음 getUpdates 로 진행(= 콜백 처리 완료)까지 대기 후 판정.
@@ -724,5 +724,182 @@ describe("인바운드 인증 거부 (e2e 폴 루프)", () => {
 
     expect(answeredCallbacks).toContain("cbq-unauth"); // 스피너는 해제
     expect(gateCallbackCalls.length).toBe(0); // 결정은 게이트에 미전달(무단 승인 차단)
+  });
+});
+
+// ── 005-source-extensibility (N4 — 기동 연결 확인 getMe bounded probe) ──────
+
+describe("telegram getMe bounded probe — 기동 연결 확인 실패 (SC-012)", () => {
+  it("getMe 가 HTTP 401(토큰 불량) 을 반환하면 start() 가 reject 한다(기동 실패 보고)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        const method = (url as string).split("/").pop() ?? "";
+        if (method === "getMe") {
+          return { ok: false, status: 401, json: async () => ({ ok: false }) } as Response;
+        }
+        return { ok: true, json: async () => ({ ok: true, result: [] }) } as Response;
+      }),
+    );
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-agent-acp",
+      paths,
+    });
+    await expect(source.start()).rejects.toThrow();
+  });
+
+  it("getMe 네트워크 접속 불가(fetch reject) 도 동일하게 기동 실패로 보고된다(원인 불문 — FR-010)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        const method = (url as string).split("/").pop() ?? "";
+        if (method === "getMe") throw new Error("network unreachable");
+        return { ok: true, json: async () => ({ ok: true, result: [] }) } as Response;
+      }),
+    );
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-agent-acp",
+      paths,
+    });
+    await expect(source.start()).rejects.toThrow();
+  });
+});
+
+describe("telegram getMe bounded probe — 10초 상한 (SC-013)", () => {
+  it("probe 가 응답하지 않으면 10초 경과 시 기동 실패로 간주한다(무한 대기 안 함)", async () => {
+    // setTimeout/clearTimeout 만 fake — getToken() 의 실 fs.readFile(libuv 콜백)은 실 시간으로
+    // settle 되어야 probe 의 setTimeout(10초) 등록 시점을 이 테스트가 놓치지 않는다.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation(async (url: string, options: RequestInit) => {
+          const method = (url as string).split("/").pop() ?? "";
+          if (method === "getMe") {
+            // 무응답 시뮬레이션 — 실 fetch+AbortSignal quirk 재현: signal 이 호출 시점에 이미
+            // abort 된 경우 미래 'abort' 이벤트는 다시 발생하지 않으므로(최초 1회성) 즉시 reject
+            // 해야 한다 — 이미 발생한 이벤트에 나중에 붙인 리스너는 절대 불리지 않는다.
+            return new Promise((_resolve, reject) => {
+              if (options.signal?.aborted) {
+                reject(new Error("aborted"));
+                return;
+              }
+              options.signal?.addEventListener(
+                "abort",
+                () => reject(new Error("aborted")),
+                { once: true },
+              );
+            });
+          }
+          return { ok: true, json: async () => ({ ok: true, result: [] }) } as Response;
+        }),
+      );
+      const source: TelegramSource = createTelegramSource({
+        lane: "test-lane",
+        proj: "myproj",
+        engine: "claude-agent-acp",
+        paths,
+      });
+      const startPromise = source.start();
+      const assertion = expect(startPromise).rejects.toThrow();
+      // getToken() 의 실 fs.readFile(libuv 콜백)이 settle 되어 probe 의 setTimeout(10초) 이
+      // 등록될 때까지 대기 — vi.waitFor 는 fake timer 환경에서도 실 시간으로 폴링한다(그 전에
+      // advanceTimersByTimeAsync 를 호출하면 아직 없는 타이머라 못 잡는다).
+      await vi.waitFor(() => {
+        if (vi.getTimerCount() === 0) throw new Error("probe 타이머 미등록");
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("telegram 기동 후 일시 폴링 오류는 상태를 바꾸지 않는다 (SC-015)", () => {
+  it(
+    "probe 성공 후 getUpdates 1회 실패해도 폴링을 재시도해 이후 메시지를 정상 처리한다(running 유지)",
+    { timeout: 15_000 },
+    async () => {
+    const fakeUpdate = {
+      update_id: 5101,
+      message: { message_id: 1, chat: { id: 99 }, text: "복구", from: { id: 99 } },
+    };
+    let getUpdatesCall = 0;
+    let releaseNext!: () => void;
+    const pending = new Promise<void>((r) => (releaseNext = r));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        const method = (url as string).split("/").pop() ?? "";
+        if (method === "getMe") return { ok: true, json: async () => ({ ok: true, result: true }) };
+        if (method === "getUpdates") {
+          getUpdatesCall++;
+          if (getUpdatesCall === 1) {
+            return { ok: false, status: 500, json: async () => ({ ok: false }) };
+          }
+          if (getUpdatesCall === 2) {
+            return { ok: true, json: async () => ({ ok: true, result: [fakeUpdate] }) };
+          }
+          await pending;
+          return { ok: true, json: async () => ({ ok: true, result: [] }) };
+        }
+        return { ok: true, json: async () => ({ ok: true, result: true }) };
+      }),
+    );
+
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-agent-acp",
+      paths,
+      authorizedIds: [99],
+    });
+    await source.start(); // probe 성공 — resolve(기동 실패로 취급되지 않음)
+
+    await waitFor(
+      () => fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length >= 1,
+    );
+    releaseNext();
+    source.stop();
+
+    // 1회 실패 후에도 폴 루프가 죽지 않고 재시도해 이후 메시지를 수신 — 레인이 error 로 전환되지 않았다.
+    expect(getUpdatesCall).toBeGreaterThanOrEqual(2);
+    },
+  );
+});
+
+describe("telegram 기동 실패 메시지는 토큰 값을 노출하지 않는다 (SC-021)", () => {
+  it("getMe 401 실패 시 오류 메시지에 토큰 원문이 포함되지 않는다(존재·형식만 표기 가능)", async () => {
+    const secretToken = "999888777:VERY-SECRET-TOKEN-XYZ";
+    fs.writeFileSync(paths.envFile, `TELEGRAM_BOT_TOKEN=${secretToken}\n`);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        const method = (url as string).split("/").pop() ?? "";
+        if (method === "getMe") {
+          return { ok: false, status: 401, json: async () => ({ ok: false }) } as Response;
+        }
+        return { ok: true, json: async () => ({ ok: true, result: [] }) } as Response;
+      }),
+    );
+    const source: TelegramSource = createTelegramSource({
+      lane: "test-lane",
+      proj: "myproj",
+      engine: "claude-agent-acp",
+      paths,
+    });
+    let caught: unknown;
+    try {
+      await source.start();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeDefined();
+    expect((caught as Error).message).not.toContain(secretToken);
   });
 });

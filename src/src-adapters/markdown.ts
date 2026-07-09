@@ -13,7 +13,7 @@ import type { FSWatcher } from "node:fs";
 import { readFile, rename, mkdir, stat, readdir, appendFile } from "node:fs/promises";
 import { join, dirname, isAbsolute, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { isPathInside, normCasePath, pathsOverlap } from "../shared/paths.js";
+import { isPathInside, normCasePath, pathsOverlap, expandTilde } from "../shared/paths.js";
 import { atomicWrite as atomicWriteFile } from "../shared/fs-atomic.js";
 import type { LaneConf } from "../shared/conf.js";
 import { enqueue, hasId, readSidecar } from "../core/queue.js";
@@ -22,10 +22,22 @@ import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
 import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
-import type { Source, DecisionCallback, Decision, SourceContext } from "./source.js";
+import type {
+  Source,
+  DecisionCallback,
+  Decision,
+  SourceContext,
+  SourceDescriptor,
+  SourceValidateInput,
+  SourceValidateResult,
+  SourceDoctorInput,
+  WizardCtx,
+} from "./source.js";
 import { ENQUEUE_FAIL_THRESHOLD } from "./source.js";
 import { formatException } from "../shared/notify.js";
 import type { NotifyT } from "../shared/notify.js";
+import type { LaneAddOptions } from "../core/lane-config.js";
+import type { DoctorCheck } from "../core/diagnostics.js";
 
 const DEBOUNCE_MS = 150;
 /**
@@ -462,6 +474,113 @@ function resolvePaths(conf: LaneConf): {
   const autoArchive = md.archive !== undefined && md.archive.length > 0;
   return { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir, archivePath, autoArchive };
 }
+
+// --- 소스 정의(descriptor) 훅 — validate/doctorChecks/wizard -----------------
+
+/**
+ * markdown conf 검증 — root 부재/경로 중첩 경고. 판정 규칙은 기동 가드(start())와
+ * 동일해야 한다(shared/paths 가 SSOT) — 생성 시점에 기동 시 거부될 조합을 미리 안내한다.
+ */
+function validateMarkdownConf(input: SourceValidateInput): SourceValidateResult {
+  const warnings: string[] = [];
+  const md = input.conf.markdown;
+
+  if (!md?.root) {
+    warnings.push(t("laneConfig.warn.mdRootMissingConf"));
+  } else if (!existsSync(expandTilde(md.root))) {
+    warnings.push(t("laneConfig.warn.mdRootNotFound", { path: expandTilde(md.root) }));
+  }
+
+  if (md?.root && md.inbox) {
+    const root = expandTilde(md.root);
+    const inboxPath = resolve(join(root, md.inbox));
+    const inboxDir = dirname(inboxPath);
+    const approvalsDir = resolve(
+      md.approvals ? join(root, md.approvals) : join(inboxDir, "approvals"),
+    );
+    const outboxDir = resolve(md.outbox ? join(root, md.outbox) : join(inboxDir, "out"));
+    const quarantineDir = resolve(join(inboxDir, ".conflicts"));
+    const insideNorm = (child: string, parent: string): boolean =>
+      isPathInside(normCasePath(child), normCasePath(parent));
+    if (
+      pathsOverlap(outboxDir, approvalsDir) ||
+      pathsOverlap(approvalsDir, quarantineDir) ||
+      pathsOverlap(outboxDir, quarantineDir) ||
+      insideNorm(inboxPath, approvalsDir) ||
+      insideNorm(inboxPath, outboxDir)
+    ) {
+      warnings.push(
+        t("laneConfig.warn.mdPathOverlap", { inbox: inboxPath, approvals: approvalsDir, outbox: outboxDir }),
+      );
+    }
+  }
+
+  return { errors: [], warnings };
+}
+
+/** markdown doctor 진단 — root/inbox 존재·설정 확인. */
+async function markdownDoctorChecks(input: SourceDoctorInput): Promise<DoctorCheck[]> {
+  const name = t("doctor.markdown.name", { lane: input.lane });
+  const mdRoot = input.conf.markdown?.root;
+  if (!mdRoot) {
+    return [
+      {
+        name,
+        level: "FAIL",
+        detail: t("doctor.markdown.rootMissing"),
+        hint: t("doctor.markdown.rootMissingHint"),
+      },
+    ];
+  }
+  if (!existsSync(expandTilde(mdRoot))) {
+    return [
+      {
+        name,
+        level: "FAIL",
+        detail: t("doctor.markdown.rootNotFound", { path: expandTilde(mdRoot) }),
+        hint: t("doctor.markdown.rootNotFoundHint"),
+      },
+    ];
+  }
+  if (!input.conf.markdown?.inbox) {
+    return [
+      {
+        name,
+        level: "FAIL",
+        detail: t("doctor.markdown.inboxMissing"),
+        hint: t("doctor.markdown.inboxMissingHint"),
+      },
+    ];
+  }
+  return [{ name, level: "PASS", detail: t("doctor.markdown.ok") }];
+}
+
+/** markdown 위저드 필드 수집 — root/inbox/approvals/outbox 경로 프롬프트. */
+async function collectMarkdownWizardFields(ctx: WizardCtx): Promise<Partial<LaneAddOptions>> {
+  const fields: Partial<LaneAddOptions> = {};
+  const askPath = ctx.askPath ?? ctx.ask;
+
+  const root = await askPath(t("lane.prompt.root"), "");
+  if (root) fields.root = root;
+  const inbox = await askPath(t("lane.prompt.inbox"), "inbox.md");
+  if (inbox) fields.inbox = inbox;
+  const approvals = await askPath(t("lane.prompt.approvals"), "");
+  if (approvals) fields.approvals = approvals;
+  const outbox = await askPath(t("lane.prompt.outbox"), "");
+  if (outbox) fields.outbox = outbox;
+
+  return fields;
+}
+
+/** markdown 소스 정의 — SOURCE_REGISTRY 가 등록한다(index.ts). postCreateHint 는 미제공(생략). */
+export const markdownDescriptor: SourceDescriptor = {
+  factory: createMarkdownSource,
+  validate: validateMarkdownConf,
+  doctorChecks: markdownDoctorChecks,
+  wizard: {
+    collect: collectMarkdownWizardFields,
+  },
+};
 
 export function createMarkdownSource(cfg: SourceContext): Source {
   const tl = tFor(cfg.conf.lang);
@@ -1020,7 +1139,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     pollTimer.unref(); // 폴 백스톱이 이벤트 루프를 살려두지 않도록(heartbeat 와 동일).
   }
 
-  function start(): void {
+  async function start(): Promise<void> {
     if (!existsSync(rootDir)) {
       throw new Error(t("markdown.rootNotFound", { path: rootDir }));
     }

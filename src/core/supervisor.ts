@@ -337,16 +337,25 @@ export async function supervisorUp(
     );
     const onInbound = () => injector.notify();
 
+    // backend.launch 이후 실패(예: source.start() reject — telegram getMe probe 실패)가 stop 핸들
+    // 등록(정상 경로) 전에 발생하면, 이미 spawn 된 엔진 child·armed watcher 가 정리되지 않아 고아로 남는다.
+    // 실패 경로에서 명시 정리하기 위해 launch 여부를 추적한다.
+    let launched = false;
+    // 실패 정리용 — factory 로 생성된 소스 핸들(catch 에서 stop). `source`(let, 확정할당)는 catch
+    // 에서 미할당 가능성 때문에 직접 참조 불가 → 별도 nullable 핸들로 추적.
+    let createdSource: Source | undefined;
+
     try {
       // 소스 생성을 try 안에서 — 팩토리가 오구성(markdown root/inbox 누락 등)에 던지면 이 레인만
       // status:"error" 로 격리하고 나머지 레인·up 은 계속한다(전체 크래시 방지).
       // 미등록 소스도 조용히 폴백하지 않고 여기서 던져 fail-closed 로 격리한다(telegram 오분류 없음).
       // 어댑터별 설정(telegram 인증셋 등)은 팩토리가 conf 에서 self-resolve 한다.
-      const factory = SOURCE_REGISTRY[conf.source];
-      if (!factory) {
+      const descriptor = SOURCE_REGISTRY[conf.source];
+      if (!descriptor) {
         throw new Error(t("supervisor.source.unknown", { source: conf.source }));
       }
-      source = factory({ lane, proj, engine, paths, conf, onInbound });
+      source = descriptor.factory({ lane, proj, engine, paths, conf, onInbound });
+      createdSource = source;
 
       source.onDecision((reqId, decision) => {
         const resolve = pendingDecisions.get(reqId);
@@ -358,6 +367,7 @@ export async function supervisorUp(
 
       // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
       const { sessionId } = await backend.launch(lane);
+      launched = true;
 
       // 세션 장부 기록(보조 — /resume 목록·마지막 대화 시각). 실패는 로그 후 흡수.
       await recordSession(paths, sessionId).catch((err: unknown) =>
@@ -413,7 +423,7 @@ export async function supervisorUp(
           }),
         );
       });
-      source.start();
+      await source.start();
 
       // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(no-silent).
       if (conf.perm_tier === "autopass") {
@@ -470,6 +480,23 @@ export async function supervisorUp(
     } catch (err) {
       const reason = errMsg(err);
       console.error(t("log.supervisor.laneStartFail", { lane, reason }));
+      // 실패 경로 정리(고아 방지): stop 핸들이 아직 등록되지 않았으므로 여기서 직접 정리한다.
+      // 정상 stop 핸들과 동일 순서(watcher disarm → source stop → backend close)로, 생성/기동된
+      // 자원을 남기지 않는다 — 안 하면 기동 실패한 레인의 소스 자원·ACP 엔진 자식이 데몬 수명 동안
+      // 고아로 남는다(예: telegram 잘못된 토큰 → probe 실패). 각 정리 실패는 보조라 흡수(로그)한다.
+      watcher.disarm();
+      if (createdSource) {
+        await createdSource
+          .stop()
+          .catch((e: unknown) =>
+            console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),
+          );
+      }
+      if (launched) {
+        await backend.close(lane).catch((e: unknown) =>
+          console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),
+        );
+      }
       // 실패 상태를 runtime.json 에 남겨 교차 프로세스(adde up·status)가 볼 수 있게 한다 —
       // 안 남기면 파일 부재라 status 가 stopped(미기동)와 구분 못 한다. 기록 실패는 흡수(보조).
       await writeErrorRuntime(paths, {

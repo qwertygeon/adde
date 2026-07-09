@@ -77,7 +77,7 @@ describe("telegram enqueue 연속 실패 알림 (SC3)", () => {
       paths,
       chatId: 99,
     });
-    source.start();
+    await source.start();
 
     await waitFor(() => sent.some((m) => String(m["text"]).includes("연속")));
     releaseNext();

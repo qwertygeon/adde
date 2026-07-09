@@ -4,8 +4,10 @@ import {
   visibleCommands,
   findCommand,
   suggestCommands,
+  FLAG_VALUES,
 } from "../../src/cli/spec.js";
 import { buildUsage } from "../../src/core/messages.js";
+import { SOURCE_IDS } from "../../src/src-adapters/index.js";
 
 // CLI 명령·플래그 SSOT — 자동완성·도움말·오타 힌트가 파생.
 
@@ -52,5 +54,15 @@ describe("COMMAND_SPECS 무결성", () => {
   it("이름 중복이 없다", () => {
     const names = COMMAND_SPECS.map((c) => c.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+// SC-003 (FR-003): 자동완성용 --source 미러(어댑터 eager import 회피 목적)가 레지스트리
+// 파생 목록(SOURCE_IDS)과 항상 일치함을 강제 — 불일치 시 이 테스트가 실패해 발산을 차단한다.
+describe("SC-003: FLAG_VALUES[--source] 미러가 SOURCE_IDS 와 일치한다", () => {
+  it("두 목록의 값 집합이 동일하다(순서 무관)", () => {
+    const mirror = [...(FLAG_VALUES["--source"] ?? [])].sort();
+    const derived = [...SOURCE_IDS].sort();
+    expect(mirror).toEqual(derived);
   });
 });

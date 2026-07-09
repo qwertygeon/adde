@@ -576,67 +576,67 @@ describe("createMarkdownSource (통합)", () => {
     ).toThrow();
   });
 
-  it("없는 root 경로로 start 시 throw", () => {
+  it("없는 root 경로로 start 시 throw", async () => {
     conf.markdown!.root = path.join(tmpBase, "NoSuchRoot");
     source = makeSource();
-    expect(() => source!.start()).toThrow();
+    await expect(source!.start()).rejects.toThrow();
   });
 
-  it("inbox 상대경로에 '..' 면 start 시 throw (root 탈출 방지, 011-C)", () => {
+  it("inbox 상대경로에 '..' 면 start 시 throw (root 탈출 방지, 011-C)", async () => {
     conf.markdown!.inbox = "../escape.md";
     source = makeSource();
-    expect(() => source!.start()).toThrow();
+    await expect(source!.start()).rejects.toThrow();
   });
 
-  it("outbox 절대경로면 start 시 throw (011-C)", () => {
+  it("outbox 절대경로면 start 시 throw (011-C)", async () => {
     conf.markdown!.outbox = path.join(tmpBase, "evil");
     source = makeSource();
-    expect(() => source!.start()).toThrow();
+    await expect(source!.start()).rejects.toThrow();
   });
 
   // A1: 제어 노트가 AI 작업폴더(cwd) 내부면 fail-closed 기동 거부
-  it("A1: inbox 가 cwd 내부면 start 거부(자기승인 방지)", () => {
+  it("A1: inbox 가 cwd 내부면 start 거부(자기승인 방지)", async () => {
     conf.cwd = rootDir; // 작업폴더 = 노트 루트 → inbox 가 cwd 내부
     source = makeSource();
-    expect(() => source!.start()).toThrow(/자기승인|cwd/);
+    await expect(source!.start()).rejects.toThrow(/자기승인|cwd/);
   });
 
-  it("A1: 제어 노트가 cwd 밖이면 정상 기동", () => {
+  it("A1: 제어 노트가 cwd 밖이면 정상 기동", async () => {
     conf.cwd = path.join(tmpBase, "project"); // 노트 루트와 분리
     fs.mkdirSync(conf.cwd, { recursive: true });
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
-    expect(() => source!.start()).not.toThrow();
+    await expect(source!.start()).resolves.toBeUndefined();
   });
 
-  it("상호 배타(006): approvals 와 outbox 가 같은 경로면 start 거부", () => {
+  it("상호 배타(006): approvals 와 outbox 가 같은 경로면 start 거부", async () => {
     conf.markdown!.approvals = "shared";
     conf.markdown!.outbox = "shared";
     source = makeSource();
-    expect(() => source!.start()).toThrow(/포함 관계|분리/);
+    await expect(source!.start()).rejects.toThrow(/포함 관계|분리/);
   });
 
-  it("상호 배타(006): inbox 노트가 outbox 디렉터리 내부면 start 거부", () => {
+  it("상호 배타(006): inbox 노트가 outbox 디렉터리 내부면 start 거부", async () => {
     conf.markdown!.inbox = "out/inbox.md";
     conf.markdown!.outbox = "out";
     source = makeSource();
-    expect(() => source!.start()).toThrow(/겹칩니다|분리/);
+    await expect(source!.start()).rejects.toThrow(/겹칩니다|분리/);
   });
 
   it.runIf(process.platform === "darwin")(
     "상호 배타(006): 대소문자만 다른 경로(macOS 대소문자 무시 FS)도 start 거부",
-    () => {
+    async () => {
       conf.markdown!.approvals = "Shared";
       conf.markdown!.outbox = "shared";
       source = makeSource();
-      expect(() => source!.start()).toThrow(/포함 관계|분리/);
+      await expect(source!.start()).rejects.toThrow(/포함 관계|분리/);
     },
   );
 
-  it("상호 배타(006): approvals 를 격리 디렉터리(.conflicts)와 겹치게 두면 start 거부", () => {
+  it("상호 배타(006): approvals 를 격리 디렉터리(.conflicts)와 겹치게 두면 start 거부", async () => {
     conf.markdown!.approvals = ".conflicts";
     source = makeSource();
-    expect(() => source!.start()).toThrow(/포함 관계|분리/);
+    await expect(source!.start()).rejects.toThrow(/포함 관계|분리/);
   });
 
   it("인박스의 체크된 send 블록을 envelope 으로 큐잉하고 sent 로 종단한다", async () => {
@@ -644,7 +644,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "마크다운 노트에서 보낸 지시\n- [x] 📤 send\n");
 
     source = makeSource();
-    source.start(); // 기동 시 초기 1회 처리
+    await source.start(); // 기동 시 초기 1회 처리
 
     await waitFor(() => msgCount() >= 1);
 
@@ -680,7 +680,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "지난 메시지\n" + sentLine("old-id", STAMP) + "\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(blankSendLine()));
     // 액션이 아니므로 큐잉 없음(빈 send 만 추가).
@@ -699,7 +699,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, blankSendLine() + "\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await new Promise((r) => setTimeout(r, 200));
     expect(msgCount()).toBe(0); // 미체크 → 액션 없음 → enqueue 없음
@@ -723,7 +723,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(paths.queueDir, "block");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     const alertPath = path.join(rootDir, "out", "_enqueue-alert.md");
     await waitFor(() => fs.existsSync(alertPath));
@@ -739,7 +739,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, `복구될 메시지\n${sendingLine("crash-1", STAMP)}\n`);
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => msgCount() >= 1);
     const files = fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg"));
@@ -774,7 +774,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(path.join(paths.outDir, "done-1.out"), "응답");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(`sent [[${STAMP} done-1]]`));
     expect(msgCount()).toBe(0); // 큐에 재enqueue 되지 않음
@@ -785,7 +785,7 @@ describe("createMarkdownSource (통합)", () => {
   it("동기 충돌 파일은 격리되고 큐잉되지 않는다", { timeout: 15_000 }, async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "정상\n");
     source = makeSource();
-    source.start();
+    await source.start();
 
     // start 이후 충돌 파일 생성 → watch 가 격리
     const conflict = path.join(rootDir, "inbox.sync-conflict-20260628-abc.md");
@@ -803,7 +803,7 @@ describe("createMarkdownSource (통합)", () => {
     const reqFile = path.join(rootDir, "approvals", "req-allow.md");
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
-    source.start();
+    await source.start();
 
     const decisions: string[] = [];
     source.onDecision((reqId, decision) => decisions.push(`${reqId}:${decision}`));
@@ -842,7 +842,7 @@ describe("createMarkdownSource (통합)", () => {
     const reqFile = path.join(rootDir, "approvals", "req-deny.md");
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
-    source.start();
+    await source.start();
     const decisions: string[] = [];
     source.onDecision((reqId, decision) => decisions.push(`${reqId}:${decision}`));
 
@@ -894,7 +894,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(path.join(approvals, "req-pend.md"), renderApprovalBlock(mkReq("req-pend")));
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => fs.existsSync(path.join(approvals, ".decided", "req-term.md")));
     expect(fs.existsSync(path.join(approvals, "req-term.md"))).toBe(false); // 종단분 이동됨
@@ -905,7 +905,7 @@ describe("createMarkdownSource (통합)", () => {
   it("경로 탈출 req.id 는 fail-closed throw — approvals 밖 쓰기 차단(방어심화)", async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
-    source.start();
+    await source.start();
 
     const evil: PermRequest = {
       v: 1,
@@ -926,7 +926,7 @@ describe("createMarkdownSource (통합)", () => {
   it("동시 다중 권한 요청은 요청당 별도 파일로 격리된다 (011-D)", async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
-    source.start();
+    await source.start();
 
     const mk = (id: string): PermRequest => ({
       v: 1,
@@ -961,7 +961,7 @@ describe("createMarkdownSource (통합)", () => {
   it("renderOut(id) 호출 시 마크다운 출력 노트를 작성한다(reply_ref 역참조 포함)", async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
-    source.start();
+    await source.start();
 
     // injector 가 writeOut 후 in-process 로 renderOut 호출(out/ watch 제거)
     fs.writeFileSync(
@@ -985,7 +985,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "- [x] 🧹 clear\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => msgCount() >= 1);
     const qFile = fs.readdirSync(paths.queueDir).find((f) => f.endsWith(".msg"))!;
@@ -1021,7 +1021,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "- [x] resume 2\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => msgCount() >= 1);
     const qFile = fs.readdirSync(paths.queueDir).find((f) => f.endsWith(".msg"))!;
@@ -1036,7 +1036,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "질문입니다\n- [x] 📤 send\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     // 인박스 처리 → sent 위키링크 확보
     await waitFor(() => /sent \[\[.+\]\]/.test(fs.readFileSync(inboxPath, "utf8")));
@@ -1063,7 +1063,7 @@ describe("createMarkdownSource (통합)", () => {
   it("renderOut: origin_ts sidecar → 스탬프 파일명 + 질문·시각 헤더", async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
-    source.start();
+    await source.start();
 
     const originIso = isoFromStamp("20260703-162045")!;
     const doneIso = isoFromStamp("20260703-162130")!;
@@ -1099,7 +1099,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "이관될 본문입니다\n- [x] 📤 send\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => /sent \[\[.+\]\]/.test(fs.readFileSync(inboxPath, "utf8")));
     await waitFor(() => fs.existsSync(archivePath()));
@@ -1119,7 +1119,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "미완성 초안\n" + sentLine("old", STAMP) + "\n- [ ] 📤 send\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await new Promise((r) => setTimeout(r, 250));
     const inbox = fs.readFileSync(inboxPath, "utf8");
@@ -1135,7 +1135,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "사용자 초안 텍스트\n- [x] sending report to boss\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await new Promise((r) => setTimeout(r, 250));
     const inbox = fs.readFileSync(inboxPath, "utf8");
@@ -1150,7 +1150,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "지난 본문\n" + sentLine("old", STAMP) + "\n- [x] 🗄️ archive\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => /archived \d+/.test(fs.readFileSync(inboxPath, "utf8")));
     const inbox = fs.readFileSync(inboxPath, "utf8");
@@ -1171,7 +1171,7 @@ describe("createMarkdownSource (통합)", () => {
     );
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => /archived \d+/.test(fs.readFileSync(inboxPath, "utf8")));
     const inbox = fs.readFileSync(inboxPath, "utf8");
@@ -1190,7 +1190,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(archivePath(), `\n## [[${outNoteBase(STAMP, "crash-2")}]]\n\n복구 본문\n`);
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(`sent [[${STAMP} crash-2]]`));
     const inbox = fs.readFileSync(inboxPath, "utf8");
@@ -1206,7 +1206,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "본문하나\n- [x] 📤 send\n본문둘\n- [x] 📤 send\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(() => msgCount() >= 2);
     await waitFor(() => {
@@ -1230,7 +1230,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "중첩 경로 본문\n- [x] 📤 send\n");
 
     source = makeSource();
-    expect(() => source!.start()).not.toThrow();
+    await expect(source!.start()).resolves.toBeUndefined();
 
     const nested = path.join(rootDir, "logs", "sent-archive.md");
     await waitFor(
@@ -1246,7 +1246,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(inboxPath, "멱등 본문\n- [x] 📤 send\n");
 
     source = makeSource();
-    source.start();
+    await source.start();
 
     await waitFor(
       () =>
@@ -1261,10 +1261,10 @@ describe("createMarkdownSource (통합)", () => {
     expect(after1.split("멱등 본문")).toHaveLength(2);
   });
 
-  it("아카이브 경로가 approvals 디렉터리 내부면 start 거부(fail-closed)", () => {
+  it("아카이브 경로가 approvals 디렉터리 내부면 start 거부(fail-closed)", async () => {
     conf.markdown!.approvals = "approvals";
     conf.markdown!.archive = "approvals/sent-archive.md";
     source = makeSource();
-    expect(() => source!.start()).toThrow();
+    await expect(source!.start()).rejects.toThrow();
   });
 });

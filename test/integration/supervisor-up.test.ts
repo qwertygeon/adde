@@ -1,4 +1,5 @@
 import { FAKE_ACP_CAPS } from "../helpers/fake-acp.js";
+import { waitFor } from "../helpers/wait.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -6,6 +7,55 @@ import * as os from "node:os";
 import { supervisorUp, supervisorDown } from "../../src/core/supervisor.js";
 import type { SupervisorUpOptions, SupervisorUpResult } from "../../src/core/supervisor.js";
 import { lanePaths } from "../../src/shared/paths.js";
+
+// SC-011 (FR-009): async 완료/실패 stub source — supervisor 가 기동 완료(또는 실패)를 실제로
+// 대기한 뒤에만 레인 상태를 확정하는지 검증하기 위해, start() 를 테스트에서 resolve/reject
+// 시점을 제어할 수 있는 컨트롤 가능한 stub 소스를 레지스트리에 추가한다(SOURCE_REGISTRY 를
+// 테스트 전용으로 확장 — markdown/telegram 실 동작은 무변경). vi.mock factory 는 파일 최상단으로
+// hoist 되므로, 참조하는 가변 상태·상수는 vi.hoisted 로 함께 hoist 한다(TDZ 회피).
+const stubSource = vi.hoisted(() => {
+  const ASYNC_STUB_SOURCE_ID = "async-stub-sc011";
+  let deferred: { resolve: () => void; reject: (e: Error) => void } | null = null;
+  let stopCalls = 0;
+  return {
+    ASYNC_STUB_SOURCE_ID,
+    getDeferred: () => deferred,
+    setDeferred: (d: typeof deferred) => {
+      deferred = d;
+    },
+    getStopCalls: () => stopCalls,
+    resetStopCalls: () => {
+      stopCalls = 0;
+    },
+    incStopCalls: () => {
+      stopCalls += 1;
+    },
+  };
+});
+const ASYNC_STUB_SOURCE_ID = stubSource.ASYNC_STUB_SOURCE_ID;
+
+vi.mock("../../src/src-adapters/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/src-adapters/index.js")>();
+  const asyncStubDescriptor = {
+    factory: () => ({
+      start: () =>
+        new Promise<void>((resolve, reject) => {
+          stubSource.setDeferred({ resolve, reject });
+        }),
+      stop: async () => {
+        stubSource.incStopCalls();
+      },
+      requestPermission: async () => {},
+      onDecision: () => {},
+      renderOut: async () => {},
+      notify: async () => {},
+    }),
+  };
+  return {
+    ...actual,
+    SOURCE_REGISTRY: { ...actual.SOURCE_REGISTRY, [stubSource.ASYNC_STUB_SOURCE_ID]: asyncStubDescriptor },
+  };
+});
 
 // SC-001: adde up → 레인 프로세스 기동·running 보고
 // SC-022: conf 수만큼 레인 기동
@@ -22,6 +72,21 @@ async function runUp(proj: string, opts: SupervisorUpOptions): Promise<Superviso
   return supervisorUp(proj, opts);
 }
 
+/**
+ * telegram 레인 기동 시 getMe bounded probe(N4)가 실제 네트워크를 타지 않도록 기본 성공 응답
+ * 스텁 — 본 파일의 시나리오는 probe 자체가 아니라 supervisor lifecycle(레인 기동·격리)이 검증
+ * 대상이므로, probe 는 항상 성공시켜 기존 관찰 동작(SC-019 회귀)을 보존한다.
+ */
+function stubTelegramProbeSuccess(): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, result: true }),
+    } as Response),
+  );
+}
+
 const minimalConf = `source=telegram
 backend=acp
 engine=claude-agent-acp
@@ -32,6 +97,7 @@ acp_version=v1
 
 beforeEach(() => {
   tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-sup-"));
+  stubTelegramProbeSuccess();
 });
 
 afterEach(async () => {
@@ -45,6 +111,8 @@ afterEach(async () => {
   startedProjs.clear();
   fs.rmSync(tmpBase, { recursive: true, force: true });
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  stubSource.setDeferred(null);
 });
 
 function setupProject(projName: string, laneConfs: Record<string, string>) {
@@ -341,5 +409,91 @@ describe("supervisorUp autopass 기동 배너 (005)", () => {
     // 배너 미발생 확인 — 짧게 대기 후 부재 단언.
     await new Promise((r) => setTimeout(r, 100));
     expect(fs.existsSync(path.join(rootDir, "out", "_adde-notice.md"))).toBe(false);
+  });
+});
+
+describe("supervisorUp — async 소스 기동 완료/실패 대기 (SC-011)", () => {
+  it("start() 가 늦게 resolve 해도 supervisor 는 완료를 대기한 뒤에만 running 을 확정한다", async () => {
+    const conf = `source=${ASYNC_STUB_SOURCE_ID}\nbackend=acp\nengine=claude-agent-acp\nperm_tier=acp\nacp_version=v1\n`;
+    const { base } = setupProject("asyncstubproj", { "stub-lane": conf });
+
+    const resultPromise = runUp("asyncstubproj", { base, acpFactory: makeFakeAcpFactory() });
+    await waitFor(() => stubSource.getDeferred() !== null);
+    // 아직 resolve 전 — 레인 runtime.json 이 기록되지 않았어야 한다(완료 대기 중).
+    const lp = lanePaths(base, "asyncstubproj", "stub-lane");
+    expect(fs.existsSync(lp.runtimeJson)).toBe(false);
+
+    stubSource.getDeferred()!.resolve();
+    const result = await resultPromise;
+    expect(result.lanes[0]?.status).toBe("running");
+    expect(fs.existsSync(lp.runtimeJson)).toBe(true);
+  });
+
+  it("start() 가 비동기로 reject 하면 supervisor 는 상태를 error 로 확정한다(running 미기록)", async () => {
+    const conf = `source=${ASYNC_STUB_SOURCE_ID}\nbackend=acp\nengine=claude-agent-acp\nperm_tier=acp\nacp_version=v1\n`;
+    const { base } = setupProject("asyncstubfailproj", { "stub-lane": conf });
+
+    const resultPromise = runUp("asyncstubfailproj", { base, acpFactory: makeFakeAcpFactory() });
+    await waitFor(() => stubSource.getDeferred() !== null);
+    stubSource.getDeferred()!.reject(new Error("stub start failed"));
+
+    const result = await resultPromise;
+    expect(result.lanes[0]?.status).toBe("error");
+    expect(result.lanes[0]?.error).toContain("stub start failed");
+    // running 미기록 — runtime.json 이 기록되더라도 status:"error" 여야 한다(조용한 running 없음).
+    const lp = lanePaths(base, "asyncstubfailproj", "stub-lane");
+    const info = JSON.parse(fs.readFileSync(lp.runtimeJson, "utf8")) as { status?: string };
+    expect(info.status).toBe("error");
+  });
+
+  it("start() 가 reject 하면 이미 launch 된 엔진 백엔드를 close 하여 고아 프로세스를 남기지 않는다 (회귀)", async () => {
+    // 회귀: start() async 화 이전엔 start 가 reject 불가라 stop 핸들이 항상 등록됐으나,
+    // async+probe 도입 후 launch 이후 start reject 시 stop 핸들 미등록 → 엔진 child 고아.
+    // 실패 경로가 backend.close 를 호출해야 한다.
+    const conf = `source=${ASYNC_STUB_SOURCE_ID}\nbackend=acp\nengine=claude-agent-acp\nperm_tier=acp\nacp_version=v1\n`;
+    const { base } = setupProject("orphanproj", { "stub-lane": conf });
+    const acpFactory = makeFakeAcpFactory();
+    stubSource.resetStopCalls();
+
+    const resultPromise = runUp("orphanproj", { base, acpFactory });
+    await waitFor(() => stubSource.getDeferred() !== null);
+    stubSource.getDeferred()!.reject(new Error("stub start failed"));
+    const result = await resultPromise;
+
+    expect(result.lanes[0]?.status).toBe("error");
+    // 고아 방지 핵심 단언: launch 된 백엔드가 정확히 1회 close 되어야 한다(기동 실패 경로 정리).
+    const backendInstance = acpFactory.mock.results[0]?.value as {
+      launch: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+    };
+    expect(backendInstance.launch).toHaveBeenCalledTimes(1);
+    expect(backendInstance.close).toHaveBeenCalledTimes(1);
+    // 방어 정리: 생성된 소스도 stop 되어야 한다(연결형 소스 자원 누수 방지).
+    expect(stubSource.getStopCalls()).toBe(1);
+  });
+});
+
+describe("supervisorUp — telegram 기동 연결 확인 실패 → status:error (SC-014, integration)", () => {
+  it("fake bot probe 실패(getMe 401) telegram 레인은 up 이후 상태가 error 로 표시된다(running 아님)", async () => {
+    // beforeEach 의 기본 성공 스텁(stubTelegramProbeSuccess)을 이 테스트만 실패로 재정의.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        const method = (url as string).split("/").pop() ?? "";
+        if (method === "getMe") {
+          return { ok: false, status: 401, json: async () => ({ ok: false }) } as Response;
+        }
+        return { ok: true, json: async () => ({ ok: true, result: [] }) } as Response;
+      }),
+    );
+
+    const { base } = setupProject("sc014proj", { "telegram-claude": minimalConf });
+    const result = await runUp("sc014proj", { base, acpFactory: makeFakeAcpFactory() });
+    expect(result.lanes[0]?.status).toBe("error");
+
+    // "adde status" 가 읽는 것과 동일한 소스(runtime.json)로 재확인 — running 아님.
+    const lp = lanePaths(base, "sc014proj", "telegram-claude");
+    const info = JSON.parse(fs.readFileSync(lp.runtimeJson, "utf8")) as { status?: string };
+    expect(info.status).toBe("error");
   });
 });

@@ -17,7 +17,7 @@ import { errMsg } from "../shared/errors.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
 import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
-import { SOURCE_IDS } from "../src-adapters/index.js";
+import { SOURCE_IDS, SOURCE_REGISTRY } from "../src-adapters/index.js";
 import { createPrompter } from "./prompt.js";
 import type { Ask } from "./prompt.js";
 
@@ -106,19 +106,6 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** 유효한 응답이 나올 때까지 재질의한다(숫자·CSV 필드 입력 시점 검증). */
-async function askUntil(
-  ask: Ask,
-  question: string,
-  def: string,
-  valid: (v: string) => boolean,
-  retry: string,
-): Promise<string> {
-  let v = await ask(question, def);
-  while (!valid(v)) v = await ask(retry, def);
-  return v;
-}
-
 /**
  * enum 필드를 번호(1/2/…) 또는 값 문자열로 선택한다. 유효할 때까지 재질의하고 정규화된 값을 반환.
  * 번호는 options 순서(1-기반)에 매핑한다. allowEmpty 면 빈 입력을 ""(전역/기본 위임)로 허용.
@@ -154,11 +141,6 @@ export async function collectInteractive(
   askPath: Ask = ask,
 ): Promise<LaneAddOptions> {
   const opts: LaneAddOptions = {};
-  const isNumericId = (v: string): boolean => /^-?\d+$/.test(v);
-  const isIdCsv = (v: string): boolean => {
-    const ids = parseCsv(v);
-    return ids.length > 0 && ids.every(isNumericId);
-  };
 
   const source = await askEnum(ask, t("lane.prompt.source"), [...SOURCE_IDS], "markdown");
   opts.source = source;
@@ -183,41 +165,15 @@ export async function collectInteractive(
   const cwd = await askPath(t("lane.prompt.cwd"), "");
   if (cwd) opts.cwd = cwd;
 
-  if (source === "telegram") {
-    const chatId = await askUntil(
-      ask,
-      t("lane.prompt.chatId"),
-      "",
-      (v) => v === "" || isNumericId(v),
-      t("lane.retry.chatId"),
-    );
-    if (chatId) opts.chat_id = chatId;
-    const allowFrom = await askUntil(
-      ask,
-      t("lane.prompt.allowFrom"),
-      "",
-      (v) => v === "" || isIdCsv(v),
-      t("lane.retry.allowFrom"),
-    );
-    if (allowFrom) opts.allow_from = allowFrom;
-  } else {
-    const root = await askPath(t("lane.prompt.root"), "");
-    if (root) opts.root = root;
-    const inbox = await askPath(t("lane.prompt.inbox"), "inbox.md");
-    if (inbox) opts.inbox = inbox;
-    const approvals = await askPath(t("lane.prompt.approvals"), "");
-    if (approvals) opts.approvals = approvals;
-    const outbox = await askPath(t("lane.prompt.outbox"), "");
-    if (outbox) opts.outbox = outbox;
-  }
-
+  // 공통 파일모드 프롬프트를 소스별 위저드보다 먼저 — 리팩터 전 프롬프트 순서(파일모드 → 소스별
+  // 토큰 등) 보존. 소스별 위저드가 시크릿(토큰) 프롬프트를 포함하므로 순서 역전 방지.
   const fileMode = await askEnum(ask, t("lane.prompt.fileMode"), ["private", "shared"], "private");
   if (fileMode && fileMode !== "private") opts.file_mode = fileMode;
 
-  // 봇 토큰(telegram) — 가려진 입력. 빈 입력이면 생성 후 안내로 위임(시크릿 비노출).
-  if (source === "telegram" && askSecret) {
-    const token = await askSecret(t("lane.prompt.token"));
-    if (token) opts.token = token;
+  // 소스별 필드 프롬프트 위임 — 훅 미제공 소스는 공통 프롬프트만(생략).
+  const wizard = SOURCE_REGISTRY[source]?.wizard;
+  if (wizard) {
+    Object.assign(opts, await wizard.collect({ ask, askSecret, askPath }));
   }
 
   return opts;
@@ -300,14 +256,12 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
   const result = await laneAdd(proj, lane, opts);
   for (const w of result.warnings) process.stdout.write(w + "\n");
   process.stdout.write(t("lane.created", { lane: result.lane, confPath: result.confPath }) + "\n");
-  if (result.envPath)
+  if (result.envPath) {
     process.stdout.write(t("lane.tokenWritten", { envPath: result.envPath }) + "\n");
-  else if (result.conf.source === "telegram") {
-    process.stdout.write(
-      t("lane.tokenNext", {
-        envPath: result.confPath.replace(/lanes\.d\/.*$/, `state/${result.lane}/.env`),
-      }) + "\n",
-    );
+  } else {
+    // 생성 후 힌트 위임 — 훅 미제공 소스는 힌트 없음(생략).
+    const hint = SOURCE_REGISTRY[result.conf.source]?.wizard?.postCreateHint?.(result);
+    if (hint) process.stdout.write(hint + "\n");
   }
   process.stdout.write(t("lane.startHint", { proj }) + "\n");
   return 0;

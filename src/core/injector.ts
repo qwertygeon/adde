@@ -290,9 +290,12 @@ export function createInjector(
         unsent.delete(id); // 직전 flush 가 이미 전송함(stale) — 추적 해제
         return;
       }
-      // 비멱등 소스에서 deliver 진입 시 .sending 이 보이면 = 직전 프로세스가 render 진행 중 죽은 잔존물
-      // (프로세스 내에선 .sending 이 render 창에서만 존재하고 delivering Set 가 동시 진입을 막으므로,
-      //  여기서 관측되는 .sending 은 재시작 잔존물로만 성립). 전달 불확실 → 재전송 대신 1회 통지 후 종단.
+      // 비멱등 소스에서 deliver 진입 시 .sending 이 보이면 전달 불확실 → 재전송 대신 1회 통지 후 종단.
+      // 대개 직전 프로세스가 render 진행 중 죽은 재시작 잔존물이다(프로세스 내에선 .sending 이 render
+      // 창에서만 존재하고 delivering Set 가 동시 진입을 막는다). 단 프로세스 내 한 예외: render 는
+      // 성공했으나 직후 markSent 가 던지면(예: .sent 기록 중 ENOSPC) .sending 이 정리되지 않고 남아
+      // 같은 프로세스의 다음 flush 가 여기로 온다 — 이미 전달됐는데 불확실로 통지되지만 재전송은 없어
+      // 안전방향(무중복)이다. 어느 경우든 재전송하지 않는 것이 옳다.
       if (!idempotentDelivery && (await isSending(paths, id))) {
         if (onDeliveryUncertain) {
           await onDeliveryUncertain(id).catch((e: unknown) =>

@@ -316,6 +316,9 @@ export async function supervisorUp(
     // in-process 배선: source.onInbound → injector.notify, injector.render → source.renderOut.
     // 주입 실패도 채널로 표면화(onFail → source.notify) — 채널 언어(레인 로케일)로 렌더.
     const laneT = tFor(conf.lang);
+    // 전송 멱등성: descriptor 선언값(markdown=true) 파생. 미선언/미등록 = 비멱등(중복 회피 fail-safe) →
+    // injector 가 .sending 저널로 재시작 중복 전송을 차단한다. (unknown 소스 throw 는 아래 try 에서.)
+    const idempotentDelivery = SOURCE_REGISTRY[conf.source]?.deliveryIdempotent ?? false;
     const injector = createInjector(
       paths,
       lane,
@@ -334,6 +337,11 @@ export async function supervisorUp(
           ),
         ),
       laneT,
+      {
+        idempotent: idempotentDelivery,
+        // 전달 불확실 종단 시 채널 통지(보조) — 레인 로케일. 실패는 injector 가 로그 후 흡수.
+        onUncertain: (id) => source.notify(laneT("injector.deliverUncertain", { id })),
+      },
     );
     const onInbound = () => injector.notify();
 

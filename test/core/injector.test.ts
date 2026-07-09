@@ -494,6 +494,189 @@ describe("FR-1: render 실패 시 재전송 (.sent 마커)", () => {
   });
 });
 
+describe("A3: 전송 dedup — .sending 저널 / at-most-once (비멱등 소스)", () => {
+  const outFile = (id: string, ext: string) => path.join(paths.outDir, `${id}.${ext}`);
+
+  it("SC-1 비멱등: .sending 잔존(전송 중 크래시) → 재전송 대신 불확실 통지 1회 + .aborted 종단", async () => {
+    const backend = makeBackend();
+    const render = vi.fn().mockResolvedValue(undefined);
+    const uncertain: string[] = [];
+    const onUncertain = vi.fn().mockImplementation(async (id: string) => {
+      uncertain.push(id);
+    });
+    // render 진행 중 크래시 모사: .out + .sending 존재, .sent 부재.
+    fs.writeFileSync(outFile("midsend", "out"), "전송 중이던 응답");
+    fs.writeFileSync(outFile("midsend", "out.json"), JSON.stringify({ ts: "x" }));
+    fs.writeFileSync(outFile("midsend", "sending"), new Date().toISOString());
+
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      render,
+      undefined,
+      undefined,
+      {
+        idempotent: false,
+        onUncertain,
+      },
+    );
+    await injector.start();
+    await waitFor(() => fs.existsSync(outFile("midsend", "aborted")));
+
+    expect(render).not.toHaveBeenCalled(); // 재전송 안 함
+    expect(uncertain).toEqual(["midsend"]); // 불확실 통지 정확히 1회
+    expect(fs.existsSync(outFile("midsend", "aborted"))).toBe(true);
+    expect(fs.existsSync(outFile("midsend", "sent"))).toBe(false);
+    expect(fs.existsSync(outFile("midsend", "sending"))).toBe(false); // 저널 정리
+  });
+
+  it("SC-2 비멱등: .out 만(전송 이전 크래시) → 재시작 시 정상 전송(.sent), 불확실 통지 없음", async () => {
+    const backend = makeBackend();
+    const render = vi.fn().mockResolvedValue(undefined);
+    const onUncertain = vi.fn().mockResolvedValue(undefined);
+    fs.writeFileSync(outFile("pre", "out"), "아직 안 보낸 응답");
+    fs.writeFileSync(outFile("pre", "out.json"), "{}");
+
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      render,
+      undefined,
+      undefined,
+      {
+        idempotent: false,
+        onUncertain,
+      },
+    );
+    await injector.start();
+    await waitFor(() => fs.existsSync(outFile("pre", "sent")));
+
+    expect(render).toHaveBeenCalledWith("pre", undefined);
+    expect(onUncertain).not.toHaveBeenCalled();
+    expect(fs.existsSync(outFile("pre", "aborted"))).toBe(false);
+  });
+
+  it("SC-3 비멱등 정상: render 직전 .sending 저널 → 성공 시 .sent + .sending 정리(불확실 없음)", async () => {
+    const backend = makeBackend();
+    let sawSendingDuringRender = false;
+    const render = vi.fn().mockImplementation(async (id: string) => {
+      sawSendingDuringRender = fs.existsSync(outFile(id, "sending"));
+    });
+    const onUncertain = vi.fn().mockResolvedValue(undefined);
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      render,
+      undefined,
+      undefined,
+      {
+        idempotent: false,
+        onUncertain,
+      },
+    );
+
+    await enqueue(paths, makeEnvelope("h1"));
+    await injector.start();
+    await waitFor(() => fs.existsSync(outFile("h1", "sent")));
+
+    expect(sawSendingDuringRender).toBe(true); // render 중 저널 존재
+    expect(fs.existsSync(outFile("h1", "sending"))).toBe(false); // 성공 후 정리
+    expect(fs.existsSync(outFile("h1", "aborted"))).toBe(false);
+    expect(onUncertain).not.toHaveBeenCalled();
+  });
+
+  it("SC-4 멱등(markdown): .sending 저널 미기록, 재전송 안전(불확실 없음)", async () => {
+    const backend = makeBackend();
+    let sawSending = false;
+    const render = vi.fn().mockImplementation(async (id: string) => {
+      if (fs.existsSync(outFile(id, "sending"))) sawSending = true;
+    });
+    const onUncertain = vi.fn().mockResolvedValue(undefined);
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      render,
+      undefined,
+      undefined,
+      {
+        idempotent: true,
+        onUncertain,
+      },
+    );
+
+    await enqueue(paths, makeEnvelope("m1"));
+    await injector.start();
+    await waitFor(() => fs.existsSync(outFile("m1", "sent")));
+
+    expect(sawSending).toBe(false); // 멱등 소스는 저널 미사용
+    expect(onUncertain).not.toHaveBeenCalled();
+  });
+
+  it("SC-5 비멱등 프로세스 내 render 실패 → .sending 정리 후 재시도(.sent), .aborted·불확실 없음", async () => {
+    const backend = makeBackend();
+    const render = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("send boom"))
+      .mockResolvedValue(undefined);
+    const onUncertain = vi.fn().mockResolvedValue(undefined);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      render,
+      undefined,
+      undefined,
+      {
+        idempotent: false,
+        onUncertain,
+      },
+    );
+
+    await enqueue(paths, makeEnvelope("w1", "응답대상"));
+    await injector.start();
+    await waitFor(() => fs.existsSync(outFile("w1", "sent")));
+
+    expect(render.mock.calls.length).toBeGreaterThanOrEqual(2); // 최초 실패 + 재시도
+    expect(onUncertain).not.toHaveBeenCalled(); // 프로세스 내 실패는 불확실 아님(at-least-once 유지)
+    expect(fs.existsSync(outFile("w1", "aborted"))).toBe(false);
+    expect(fs.existsSync(outFile("w1", "sending"))).toBe(false); // 최종 정리
+    errSpy.mockRestore();
+  });
+
+  it("SC-6 .aborted 종단 id 는 이후 재시작에서 재통지·재전송하지 않는다", async () => {
+    const backend = makeBackend();
+    const render = vi.fn().mockResolvedValue(undefined);
+    const onUncertain = vi.fn().mockResolvedValue(undefined);
+    fs.writeFileSync(outFile("done", "out"), "x");
+    fs.writeFileSync(outFile("done", "out.json"), "{}");
+    fs.writeFileSync(outFile("done", "aborted"), new Date().toISOString());
+
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      render,
+      undefined,
+      undefined,
+      {
+        idempotent: false,
+        onUncertain,
+      },
+    );
+    await injector.start();
+    await flush();
+    await flush();
+
+    expect(render).not.toHaveBeenCalled();
+    expect(onUncertain).not.toHaveBeenCalled();
+  });
+});
+
 describe("FR-2: 손상 큐 메시지 격리", () => {
   it("start() 재개 시 손상 processing 메시지를 격리(.corrupt) + .failed, 재기동 반복 안 함", async () => {
     const backend = makeBackend();

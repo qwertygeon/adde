@@ -510,6 +510,8 @@ lane add 옵션:
       situation: "메시지 처리 실패 — id {{id}}: {{detail}}",
       action: "메시지는 보존되어 재기동 시 재처리됩니다. 반복되면 트랜스크립트·로그를 확인하세요.",
     },
+    deliverUncertain:
+      "⚠️ 전송 중 프로세스가 중단됐습니다 — 이 응답(id {{id}})의 전달 여부가 불확실합니다. 중복 방지를 위해 재전송하지 않습니다. 도착하지 않았다면 다시 요청해 주세요.",
   },
   transcript: {
     commandsUpdated: "[{{ts}}] commands_update: (갱신)",
@@ -562,6 +564,8 @@ lane add 옵션:
       renderError: "[injector] 렌더 오류 lane={{lane}} id={{id}} — 재전송 대기: {{error}}",
       advanceError: "[injector] 진행 오류 lane={{lane}}: {{error}}",
       failNotifyError: "[injector] 실패 알림 전달 오류 lane={{lane}} id={{id}}: {{error}}",
+      uncertainNotifyError:
+        "[injector] 전달 불확실 통지 전송 오류 lane={{lane}} id={{id}}: {{error}}",
       relaunchError:
         "[injector] 세션 제어 엔진 재기동 실패 lane={{lane}} — 재시작 전까지 레인이 중단될 수 있음: {{error}}",
     },

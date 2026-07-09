@@ -516,6 +516,8 @@ lane add options:
       action:
         "The message is preserved and will be reprocessed on restart. If it recurs, check the transcript and logs.",
     },
+    deliverUncertain:
+      "⚠️ The process was interrupted mid-send — delivery of this reply (id {{id}}) is uncertain. It will not be resent, to avoid duplicates. If it didn't arrive, please ask again.",
   },
   transcript: {
     commandsUpdated: "[{{ts}}] commands_update: (updated)",
@@ -577,6 +579,8 @@ lane add options:
       advanceError: "[injector] advance error lane={{lane}}: {{error}}",
       failNotifyError:
         "[injector] failure notice delivery error lane={{lane}} id={{id}}: {{error}}",
+      uncertainNotifyError:
+        "[injector] uncertain-delivery notice error lane={{lane}} id={{id}}: {{error}}",
       relaunchError:
         "[injector] session-control engine relaunch failed lane={{lane}} — the lane may be down until restart: {{error}}",
     },

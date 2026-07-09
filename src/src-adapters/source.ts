@@ -79,6 +79,13 @@ export interface SourceDescriptor {
   doctorChecks?: (input: SourceDoctorInput) => Promise<DoctorCheck[]>;
   /** 소스별 CLI 위저드 프롬프트·생성 후 힌트. */
   wizard?: SourceWizard;
+  /**
+   * renderOut 이 멱등(재호출 안전)이면 true — 재시작 시 미전송분을 안전하게 재전송(at-least-once).
+   * markdown=true(동일 노트 atomicWrite). 미지정=false(비멱등: telegram 등 실 전송) — 이 경우
+   * injector 가 `.sending` 저널로 render 진행 중 크래시를 감지해 재전송 대신 불확실 통지 후 종단한다
+   * (at-most-once across restart, 중복 전송 방지). 미선언 소스를 비멱등으로 간주해 중복 회피 방향으로 fail-safe.
+   */
+  deliveryIdempotent?: boolean;
 }
 
 export interface Source {

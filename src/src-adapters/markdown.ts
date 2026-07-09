@@ -580,6 +580,8 @@ export const markdownDescriptor: SourceDescriptor = {
   wizard: {
     collect: collectMarkdownWizardFields,
   },
+  // renderOut 이 동일 노트 atomicWrite 라 재호출이 멱등 — 재시작 재전송이 안전하다(중복 노트 없음).
+  deliveryIdempotent: true,
 };
 
 export function createMarkdownSource(cfg: SourceContext): Source {

@@ -18,13 +18,30 @@ perm_tier=acp
 acp_version=v1
 `;
 
+/**
+ * telegram 레인 기동 시 getMe bounded probe(N4)가 실제 네트워크를 타지 않도록 기본 성공 응답
+ * 스텁 — 본 파일의 시나리오는 probe 자체가 아니라 supervisorDown lifecycle 이 검증 대상이므로,
+ * probe 는 항상 성공시켜 기존 관찰 동작(SC-019 회귀)을 보존한다.
+ */
+function stubTelegramProbeSuccess(): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, result: true }),
+    } as Response),
+  );
+}
+
 beforeEach(() => {
   tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-down-"));
+  stubTelegramProbeSuccess();
 });
 
 afterEach(() => {
   fs.rmSync(tmpBase, { recursive: true, force: true });
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function setupProject(projName: string) {

@@ -7,6 +7,9 @@ import type { PermRequest } from "../gate/gate.js";
 import type { LanePaths } from "../shared/paths.js";
 import type { LaneConf } from "../shared/conf.js";
 import type { RenderHint } from "../core/queue.js";
+import type { LaneAddOptions, LaneAddResult } from "../core/lane-config.js";
+import type { DoctorCheck } from "../core/diagnostics.js";
+import type { Ask } from "../cli/prompt.js";
 
 export type Decision = "allow" | "deny";
 export type DecisionCallback = (reqId: string, decision: Decision) => void;
@@ -31,9 +34,56 @@ export interface SourceContext {
 /** 소스 어댑터 팩토리 — 레지스트리(SOURCE_REGISTRY)가 source id 로 조회해 생성. */
 export type SourceFactory = (ctx: SourceContext) => Source;
 
+/** descriptor.validate 입력 — conf 조립 前/後 값을 모두 담아 위치 이동 없이 위임 가능하게 한다. */
+export interface SourceValidateInput {
+  conf: LaneConf;
+  token?: string | undefined;
+  opts: LaneAddOptions;
+}
+
+export interface SourceValidateResult {
+  errors: string[];
+  warnings: string[];
+}
+
+/** descriptor.doctorChecks 입력 — 미기동 정적 점검(레인별 doctor 루프에서 호출). */
+export interface SourceDoctorInput {
+  lane: string;
+  conf: LaneConf;
+  paths: LanePaths;
+}
+
+/** descriptor.wizard.collect 에 전달되는 대화형 질의 함수 묶음(cli/prompt.js Prompter 부분집합). */
+export interface WizardCtx {
+  ask: Ask;
+  askSecret?: ((question: string) => Promise<string>) | undefined;
+  askPath?: Ask | undefined;
+}
+
+export interface SourceWizard {
+  /** 소스별 필드 프롬프트 — 공통 필드는 CLI 가 이미 수집한 뒤 호출. */
+  collect: (ctx: WizardCtx) => Promise<Partial<LaneAddOptions>>;
+  /** 생성 후 힌트(예: telegram 토큰 설정 안내). 표시할 힌트가 없으면 undefined. */
+  postCreateHint?: (result: LaneAddResult) => string | undefined;
+}
+
+/**
+ * source id 1개의 정의 — factory 만 필수, 나머지 훅은 선택. 미제공 훅은 호출부가
+ * optional 체이닝으로 생략해 해당 단계를 오류 없이 스킵한다(공통 처리만 수행).
+ */
+export interface SourceDescriptor {
+  factory: SourceFactory;
+  /** 소스별 conf 검증 — 하드 오류(errors)는 생성 거부, warnings 는 생성은 하되 안내. */
+  validate?: (input: SourceValidateInput) => SourceValidateResult;
+  /** 소스별 doctor 진단. */
+  doctorChecks?: (input: SourceDoctorInput) => Promise<DoctorCheck[]>;
+  /** 소스별 CLI 위저드 프롬프트·생성 후 힌트. */
+  wizard?: SourceWizard;
+}
+
 export interface Source {
   /** 인바운드 수신 + 아웃바운드(out 감시) 기동. 대상(chat_id/root)은 conf 에서 self-resolve. */
-  start(): void;
+  start(): Promise<void>;
   /** 리스너·watcher 정지 + in-flight 작업 정리 대기(비동기). */
   stop(): Promise<void>;
   /**

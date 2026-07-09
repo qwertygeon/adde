@@ -342,11 +342,11 @@ export async function supervisorUp(
       // status:"error" 로 격리하고 나머지 레인·up 은 계속한다(전체 크래시 방지).
       // 미등록 소스도 조용히 폴백하지 않고 여기서 던져 fail-closed 로 격리한다(telegram 오분류 없음).
       // 어댑터별 설정(telegram 인증셋 등)은 팩토리가 conf 에서 self-resolve 한다.
-      const factory = SOURCE_REGISTRY[conf.source];
-      if (!factory) {
+      const descriptor = SOURCE_REGISTRY[conf.source];
+      if (!descriptor) {
         throw new Error(t("supervisor.source.unknown", { source: conf.source }));
       }
-      source = factory({ lane, proj, engine, paths, conf, onInbound });
+      source = descriptor.factory({ lane, proj, engine, paths, conf, onInbound });
 
       source.onDecision((reqId, decision) => {
         const resolve = pendingDecisions.get(reqId);
@@ -413,7 +413,7 @@ export async function supervisorUp(
           }),
         );
       });
-      source.start();
+      await source.start();
 
       // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(no-silent).
       if (conf.perm_tier === "autopass") {

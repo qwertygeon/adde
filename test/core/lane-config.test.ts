@@ -12,6 +12,8 @@ import {
 } from "../../src/core/lane-config.js";
 import { lanePaths } from "../../src/shared/paths.js";
 import { parseLaneConf } from "../../src/shared/conf.js";
+import type { LaneConf } from "../../src/shared/conf.js";
+import { SOURCE_REGISTRY, SOURCE_IDS } from "../../src/src-adapters/index.js";
 
 // adde lane <add|ls|show|rm> 코어 — conf 생성/조회/삭제, 검증, 원자적 쓰기
 
@@ -496,5 +498,103 @@ describe("인바운드 인증(allow_from) + 파일 권한(file_mode)", () => {
     const stateDir = path.dirname(res.envPath as string);
     // shared 는 no-op — 0700 이 아니어야 한다(기본 umask 권한 유지).
     expect(fs.statSync(stateDir).mode & 0o777).not.toBe(0o700);
+  });
+});
+
+// ── 005-source-extensibility ─────────────────────────────────────────────
+
+describe("SC-002: 미지원 소스 거부가 레지스트리 기준으로 판정된다", () => {
+  it("레지스트리에 없는 소스(foobar)는 거부되고 지원 목록을 안내한다", async () => {
+    let caught: unknown;
+    try {
+      await laneAdd("proj", "x", { base, source: "foobar" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(LaneConfigError);
+    const msg = (caught as Error).message;
+    expect(msg).toContain("foobar");
+    for (const id of SOURCE_IDS) expect(msg).toContain(id);
+  });
+
+  it("레지스트리에 등록된 소스(markdown)는 소스 판정을 통과한다", async () => {
+    const res = await laneAdd("proj", "md-ok", { base, source: "markdown" });
+    expect(res.conf.source).toBe("markdown");
+  });
+});
+
+describe("SC-004: telegram conf 검증이 소스 정의(descriptor.validate) 위임으로 수행된다", () => {
+  it("잘못된 chat_id 형식은 기존과 동일하게 생성을 거부한다", async () => {
+    await expect(
+      laneAdd("proj", "tg-bad", { base, source: "telegram", chat_id: "abc" }),
+    ).rejects.toThrow(LaneConfigError);
+  });
+
+  it("개인 chat 도 allow_from 도 없으면 기존과 동일한 무인증 경고를 반환한다(생성은 됨)", async () => {
+    const res = await laneAdd("proj", "tg-noauth", { base, source: "telegram" });
+    expect(fs.existsSync(res.confPath)).toBe(true);
+    expect(res.warnings.some((w) => w.includes("인증"))).toBe(true);
+  });
+
+  it("SOURCE_REGISTRY.telegram.validate 가 chat_id 형식 오류를 errors 로 반환한다(descriptor 직접 대조)", () => {
+    const validate = SOURCE_REGISTRY["telegram"]?.validate;
+    expect(typeof validate).toBe("function");
+    const conf: LaneConf = {
+      source: "telegram",
+      backend: "acp",
+      engine: "e",
+      perm_tier: "acp",
+      acp_version: "v1",
+      allowlist: [],
+      denylist: [],
+      hard_deny: [],
+      auto_relaunch: true,
+    };
+    const result = validate!({ conf, opts: { chat_id: "abc" } });
+    expect(result.errors.some((e) => e.includes("abc"))).toBe(true);
+  });
+});
+
+describe("SC-005: markdown conf 검증이 소스 정의(descriptor.validate) 위임으로 수행된다", () => {
+  it("root 미지정 markdown 레인은 기존과 동일한 root 부재 경고를 반환한다", async () => {
+    const res = await laneAdd("proj", "md-noroot", { base, source: "markdown" });
+    expect(res.warnings.some((w) => w.includes("root"))).toBe(true);
+  });
+
+  it("inbox/approvals/outbox 경로 중첩 조합은 기존과 동일한 경로 중첩 경고를 반환한다", async () => {
+    const rootDir = path.join(base, "vault");
+    fs.mkdirSync(rootDir, { recursive: true });
+    const res = await laneAdd("proj", "md-overlap", {
+      base,
+      source: "markdown",
+      root: rootDir,
+      inbox: "inbox.md",
+      approvals: "shared",
+      outbox: "shared",
+    });
+    expect(res.warnings.some((w) => w.includes("겹") || w.includes("분리"))).toBe(true);
+  });
+});
+
+describe("SC-017: 하드 오류/경고 구분이 유지된다", () => {
+  it("이미 존재하는 레인 이름은 force 없이 거부된다(하드 오류)", async () => {
+    await laneAdd("proj", "dup-sc17", { base });
+    await expect(laneAdd("proj", "dup-sc17", { base })).rejects.toThrow(LaneConfigError);
+  });
+
+  it("cwd 경로 부재는 레인 생성을 막지 않고 경고만 반환한다(비차단)", async () => {
+    const res = await laneAdd("proj", "cwd-warn-sc17", { base, cwd: path.join(base, "nope-cwd") });
+    expect(fs.existsSync(res.confPath)).toBe(true);
+    expect(res.warnings.some((w) => w.includes("cwd"))).toBe(true);
+  });
+});
+
+describe("SC-021: 토큰 값이 메시지에 노출되지 않는다 (lane-config 경고)", () => {
+  it("형식이 이상한 토큰으로 telegram 레인을 생성해도 경고 메시지에 토큰 원문이 포함되지 않는다", async () => {
+    const secretToken = "not-a-real-token-xyz789";
+    const res = await laneAdd("proj", "tg-secret", { base, source: "telegram", token: secretToken });
+    for (const w of res.warnings) {
+      expect(w).not.toContain(secretToken);
+    }
   });
 });

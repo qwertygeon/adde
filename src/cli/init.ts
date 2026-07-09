@@ -15,6 +15,7 @@ import { cmdError, laneError } from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
 import { RECOMMENDED_ALIASES, setupAliases, resolveAliasDeps } from "./alias.js";
 import type { AliasSetupResult } from "./alias.js";
+import { SOURCE_REGISTRY } from "../src-adapters/index.js";
 
 /** proj/lane 식별자 — 경로 세그먼트 안전 문자셋(lane-config NAME_RE 와 동일 규약). */
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
@@ -110,12 +111,10 @@ export async function runInit(argv: readonly string[]): Promise<number> {
     );
     if (result.envPath) {
       process.stdout.write(t("lane.tokenWritten", { envPath: result.envPath }) + "\n");
-    } else if (result.conf.source === "telegram") {
-      process.stdout.write(
-        t("lane.tokenNext", {
-          envPath: result.confPath.replace(/lanes\.d\/.*$/, `state/${result.lane}/.env`),
-        }) + "\n",
-      );
+    } else {
+      // 생성 후 힌트 위임 — 훅 미제공 소스는 힌트 없음(생략).
+      const hint = SOURCE_REGISTRY[result.conf.source]?.wizard?.postCreateHint?.(result);
+      if (hint) process.stdout.write(hint + "\n");
     }
     process.stdout.write("\n" + t("init.done", { proj }) + "\n");
     process.stdout.write(t("lane.startHint", { proj }) + "\n");

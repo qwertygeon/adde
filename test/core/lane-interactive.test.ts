@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { collectInteractive, shouldRunInteractive } from "../../src/cli/lane.js";
 import type { Ask } from "../../src/cli/lane.js";
+import { SOURCE_REGISTRY } from "../../src/src-adapters/index.js";
+import type { LaneAddResult } from "../../src/core/lane-config.js";
 
 describe("shouldRunInteractive (대화형 default 디스패치)", () => {
   it("맨 인자 + TTY 면 대화형", () => {
@@ -189,5 +191,62 @@ describe("collectInteractive (007 SC1)", () => {
     const { ask } = scriptedAsk({ source: "telegram" });
     const opts = await collectInteractive(ask);
     expect(opts.token).toBeUndefined();
+  });
+});
+
+// SC-008 (FR-006): 위저드 프롬프트·생성 후 힌트가 소스 정의(descriptor.wizard) 위임으로 제공된다.
+// collectInteractive 를 통한 소스별 필드 수집(블랙박스, 위 007 SC1 스위트와 동일 계약)은 회귀로
+// 이미 보존되므로, 여기서는 descriptor.wizard 자체의 존재·형태(FR-006 계약)를 직접 대조한다.
+describe("SC-008: 위저드/힌트가 descriptor.wizard 위임으로 제공된다", () => {
+  const makeConf = (
+    source: string,
+  ): LaneAddResult["conf"] => ({
+    source,
+    backend: "acp",
+    engine: "claude-agent-acp",
+    perm_tier: "acp",
+    acp_version: "v1",
+    allowlist: [],
+    denylist: [],
+    hard_deny: [],
+    auto_relaunch: true,
+  });
+
+  it("telegram descriptor 는 wizard.collect·wizard.postCreateHint 를 제공한다", () => {
+    expect(typeof SOURCE_REGISTRY["telegram"]?.wizard?.collect).toBe("function");
+    expect(typeof SOURCE_REGISTRY["telegram"]?.wizard?.postCreateHint).toBe("function");
+  });
+
+  it("markdown descriptor 는 wizard.collect 만 제공하고 postCreateHint 는 미제공이다(FR-007 훅 생략)", () => {
+    expect(typeof SOURCE_REGISTRY["markdown"]?.wizard?.collect).toBe("function");
+    expect(SOURCE_REGISTRY["markdown"]?.wizard?.postCreateHint).toBeUndefined();
+  });
+
+  it("telegram wizard.postCreateHint 는 토큰 다음 조치를 안내하는 힌트를 반환한다(기존 lane.tokenNext 위임)", () => {
+    const result: LaneAddResult = {
+      lane: "tg",
+      confPath: "/base/proj/lanes.d/tg.conf",
+      conf: makeConf("telegram"),
+      warnings: [],
+    };
+    const hint = SOURCE_REGISTRY["telegram"]?.wizard?.postCreateHint?.(result);
+    expect(hint).toBeDefined();
+    expect(hint).toContain(".env");
+  });
+
+  it("telegram wizard.collect 는 chat_id/allow_from 을 수집하고 markdown 필드는 다루지 않는다", async () => {
+    const { ask, questions } = scriptedAsk({ chat_id: "12345", allow_from: "1,2" });
+    const fields = await SOURCE_REGISTRY["telegram"]!.wizard!.collect({ ask });
+    expect(fields.chat_id).toBe("12345");
+    expect(fields.allow_from).toBe("1,2");
+    expect(questions.some((q) => q.includes("root"))).toBe(false);
+  });
+
+  it("markdown wizard.collect 는 root/inbox 를 수집하고 telegram 필드는 다루지 않는다", async () => {
+    const { ask } = scriptedAsk({ "root (markdown": "/vault" });
+    const fields = await SOURCE_REGISTRY["markdown"]!.wizard!.collect({ ask });
+    expect(fields.root).toBe("/vault");
+    expect(fields.inbox).toBe("inbox.md");
+    expect(fields.chat_id).toBeUndefined();
   });
 });

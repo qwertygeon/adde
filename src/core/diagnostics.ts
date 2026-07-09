@@ -20,7 +20,7 @@ import {
 import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
 import { daemonRegState, daemonEntryPath } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
-import { SOURCE_IDS } from "../src-adapters/index.js";
+import { SOURCE_IDS, SOURCE_REGISTRY } from "../src-adapters/index.js";
 import type { HaltRecord } from "./crash-loop.js";
 
 export interface DiagBaseOptions {
@@ -403,59 +403,10 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
       );
     }
 
-    // 토큰(telegram 한정)
-    if (conf.source === "telegram") {
-      let hasToken = false;
-      try {
-        hasToken = (await readFile(paths.envFile, "utf8")).includes("TELEGRAM_BOT_TOKEN=");
-      } catch {
-        // env 파일 부재/읽기 실패 = 토큰 없음(초기값 유지)
-      }
-      checks.push(
-        hasToken
-          ? {
-              name: t("doctor.token.name", { lane }),
-              level: "PASS",
-              detail: t("doctor.token.present"),
-            }
-          : {
-              name: t("doctor.token.name", { lane }),
-              level: "FAIL",
-              detail: t("doctor.token.missing", { path: paths.envFile }),
-              hint: t("doctor.token.hint", { path: paths.envFile }),
-            },
-      );
-    }
-
-    // 마크다운 경로(markdown 한정) — root/inbox 누락은 기동 실패로 이어진다(laneAdd 는 경고만 하고
-    // 레인을 생성하므로, up 전에 doctor 가 검출해 조치를 안내한다). resolvePaths 필수 키와 동일 기준.
-    if (conf.source === "markdown") {
-      const mdName = t("doctor.markdown.name", { lane });
-      const mdRoot = conf.markdown?.root;
-      if (!mdRoot) {
-        checks.push({
-          name: mdName,
-          level: "FAIL",
-          detail: t("doctor.markdown.rootMissing"),
-          hint: t("doctor.markdown.rootMissingHint"),
-        });
-      } else if (!(await pathExists(expandTilde(mdRoot)))) {
-        checks.push({
-          name: mdName,
-          level: "FAIL",
-          detail: t("doctor.markdown.rootNotFound", { path: expandTilde(mdRoot) }),
-          hint: t("doctor.markdown.rootNotFoundHint"),
-        });
-      } else if (!conf.markdown?.inbox) {
-        checks.push({
-          name: mdName,
-          level: "FAIL",
-          detail: t("doctor.markdown.inboxMissing"),
-          hint: t("doctor.markdown.inboxMissingHint"),
-        });
-      } else {
-        checks.push({ name: mdName, level: "PASS", detail: t("doctor.markdown.ok") });
-      }
+    // 소스별 doctor 진단 위임 — 훅 미제공 소스는 오류 없이 생략.
+    const doctorChecks = SOURCE_REGISTRY[conf.source]?.doctorChecks;
+    if (doctorChecks) {
+      checks.push(...(await doctorChecks({ lane, conf, paths })));
     }
 
     // 파일 권한 감사 — 시크릿(.env)·private 모드 상태 디렉터리가 그룹/기타에 노출됐는지.

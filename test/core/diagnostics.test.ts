@@ -19,6 +19,8 @@ import { lanePaths, daemonHaltPath, daemonBootsPath } from "../../src/shared/pat
 import { createCrashLoopGuard } from "../../src/core/crash-loop.js";
 import type { LaunchctlExec as LaunchctlExecType } from "../../src/core/launchd.js";
 import type { HaltRecord } from "../../src/core/crash-loop.js";
+import { SOURCE_REGISTRY } from "../../src/src-adapters/index.js";
+import { parseLaneConf } from "../../src/shared/conf.js";
 
 // SC2: status running/dead/stopped 구분. SC3: doctor 점검+힌트. SC4: logs tail.
 // SC-008/009/014/015: daemon 등록 점검 케이스 (daemon-lifecycle spec)
@@ -615,5 +617,43 @@ describe("runDoctor — auto_restart=off 죽은-등록 표면화 (SC-026)", () =
     const daemonCheck = checks.find((c) => c.name.startsWith("daemon 등록"));
     expect(daemonCheck).toBeDefined();
     expect(daemonCheck?.level).not.toBe("PASS");
+  });
+});
+
+// ── 005-source-extensibility ─────────────────────────────────────────────
+
+describe("SC-006: telegram doctor 진단이 소스 정의(descriptor.doctorChecks) 위임으로 수행된다", () => {
+  it("토큰 미존재(.env 부재)는 기존과 동일하게 토큰 누락 FAIL 로 보고된다", async () => {
+    writeConf("sc006", "tg", conf());
+    const checks = await runDoctor("sc006", { base: tmpBase });
+    const tokenCheck = checks.find((c) => c.name.includes("토큰"));
+    expect(tokenCheck?.level).toBe("FAIL");
+  });
+
+  it("SOURCE_REGISTRY.telegram.doctorChecks 를 직접 호출해도 토큰 부재를 FAIL 로 반환한다(descriptor 직접 대조)", async () => {
+    const lp = lanePaths(tmpBase, "sc006b", "tg");
+    fs.mkdirSync(lp.stateDir, { recursive: true }); // .env 없음
+    const doctorChecks = SOURCE_REGISTRY["telegram"]?.doctorChecks;
+    expect(typeof doctorChecks).toBe("function");
+    const result = await doctorChecks!({ lane: "tg", conf: parseLaneConf(conf()), paths: lp });
+    expect(result.some((c) => c.level === "FAIL")).toBe(true);
+  });
+});
+
+describe("SC-007: markdown doctor 진단이 소스 정의(descriptor.doctorChecks) 위임으로 수행된다", () => {
+  it("root 경로 부재는 기존과 동일하게 마크다운 경로 FAIL 로 보고된다", async () => {
+    writeConf("sc007", "md", mdConf(`markdown.root=${path.join(tmpBase, "NoSuchRoot")}\n`));
+    const checks = await runDoctor("sc007", { base: tmpBase });
+    const mdCheck = checks.find((c) => c.name.includes("마크다운"));
+    expect(mdCheck?.level).toBe("FAIL");
+  });
+
+  it("SOURCE_REGISTRY.markdown.doctorChecks 를 직접 호출해도 root 부재를 FAIL 로 반환한다(descriptor 직접 대조)", async () => {
+    const lp = lanePaths(tmpBase, "sc007b", "md");
+    const doctorChecks = SOURCE_REGISTRY["markdown"]?.doctorChecks;
+    expect(typeof doctorChecks).toBe("function");
+    const badConf = parseLaneConf(mdConf(`markdown.root=${path.join(tmpBase, "NoSuchRoot2")}\n`));
+    const result = await doctorChecks!({ lane: "md", conf: badConf, paths: lp });
+    expect(result.every((c) => c.level === "FAIL")).toBe(true);
   });
 });

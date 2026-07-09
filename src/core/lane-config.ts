@@ -5,37 +5,31 @@
  */
 import { t, SUPPORTED_LOCALES } from "../shared/i18n.js";
 import { readdir, readFile, mkdir, unlink, rm, stat } from "node:fs/promises";
-import { join, dirname, resolve } from "node:path";
+import { join } from "node:path";
 import { parseLaneConf, serializeLaneConf } from "../shared/conf.js";
 import type { LaneConf } from "../shared/conf.js";
-import {
-  lanePaths,
-  defaultBase,
-  expandTilde,
-  isPathInside,
-  normCasePath,
-  pathsOverlap,
-} from "../shared/paths.js";
+import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 import { parseDenyEntry, DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
 import { atomicWrite, secureLaneDirs } from "../shared/fs-atomic.js";
+import { SOURCE_IDS, SOURCE_REGISTRY } from "../src-adapters/index.js";
 
 /** proj/lane 식별자 — 디렉터리·파일명이 되므로 안전 문자만 허용. */
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
-/** telegram chat id — 그룹은 음수일 수 있음. */
-const CHAT_ID_RE = /^-?\d+$/;
 /** allowlist/denylist 도구명 — 도구 식별자 안전 문자셋(C). */
 const ALLOWLIST_ITEM_RE = /^[A-Za-z0-9_.-]+$/;
-/** allow_from 항목 — telegram user/chat id(그룹은 음수). */
-const ALLOW_FROM_RE = /^-?\d+$/;
+/**
+ * chat_id 형식(telegram chat id — 그룹은 음수일 수 있음). 리팩터 전과 동일하게 source 무관하게
+ * 형식만 검사한다(GAP-002 — chat_id 는 token/allow_from 과 달리 "특정 소스 전용" 교차 가드가
+ * 없었던 기존 동작이라 공통 본문에 유지. telegram descriptor.validate 도 동일 검사를 자체 보유해
+ * descriptor 직접 호출(레지스트리 단위 테스트) 시에도 동작한다).
+ */
+const CHAT_ID_RE = /^-?\d+$/;
 
 /** 파일 권한 모드 허용값. 미지정 시 private(secure-by-default). */
 export const KNOWN_FILE_MODES = ["private", "shared"] as const;
 
 /** 구현된 perm_tier 값. 오타 시 acp 처럼 동작(안전 방향)하지만 의도와 다르므로 생성 시 경고. */
 export const KNOWN_PERM_TIERS = ["acp", "autopass"] as const;
-
-const SUPPORTED_SOURCES = ["markdown", "telegram"] as const;
-type SupportedSource = (typeof SUPPORTED_SOURCES)[number];
 
 /** 검증 실패를 식별하기 위한 전용 에러(흡수 금지 — 호출자가 메시지를 사용자에게 전달). */
 export class LaneConfigError extends Error {
@@ -87,70 +81,17 @@ export interface LaneAddResult {
   warnings: string[];
 }
 
-/** 봇 토큰 대략 형식: <숫자id>:<영숫자/_-> (형식 오타 조기 발견용 휴리스틱). */
-const TELEGRAM_TOKEN_RE = /^\d+:[A-Za-z0-9_-]+$/;
-
 /**
- * 쓰기를 막지 않는 사전 검증 경고 수집 — cwd/markdown root 부재·telegram 토큰 형식.
- * 하드 오류(이름·source·chat_id 형식·중복)는 laneAdd 본문에서 throw 로 차단한다(여기 아님).
+ * 쓰기를 막지 않는 공통 사전 검증 경고 수집 — cwd 부재·lang·perm_tier·autopass.
+ * 소스별 경고(markdown root/경로 중첩, telegram 토큰 형식/무인증)는 descriptor.validate 가
+ * 담당한다(laneAdd 가 위임 호출). 하드 오류는 laneAdd 본문·descriptor.validate 가 throw 로 차단한다.
  */
-async function collectAddWarnings(conf: LaneConf, token?: string): Promise<string[]> {
+async function collectAddWarnings(conf: LaneConf): Promise<string[]> {
   const warnings: string[] = [];
   if (conf.cwd) {
     const p = expandTilde(conf.cwd);
     if (!(await exists(p))) {
       warnings.push(t("laneConfig.warn.cwdMissing", { path: p }));
-    }
-  }
-  if (conf.source === "markdown") {
-    const md = conf.markdown;
-    if (!md?.root) {
-      warnings.push(t("laneConfig.warn.mdRootMissingConf"));
-    } else if (!(await exists(expandTilde(md.root)))) {
-      warnings.push(t("laneConfig.warn.mdRootNotFound", { path: expandTilde(md.root) }));
-    }
-    // 경로 상호 배타 사전 경고 — 기동 시 fail-closed 거부되는 조합을 생성 시점에 미리 안내.
-    // 해석 규칙은 markdown 어댑터 resolvePaths·기동 가드와 동일(미지정 시 inbox 형제, darwin 대소문자 정규화).
-    if (md?.root && md.inbox) {
-      const root = expandTilde(md.root);
-      const inboxPath = resolve(join(root, md.inbox));
-      const inboxDir = dirname(inboxPath);
-      const approvalsDir = resolve(
-        md.approvals ? join(root, md.approvals) : join(inboxDir, "approvals"),
-      );
-      const outboxDir = resolve(md.outbox ? join(root, md.outbox) : join(inboxDir, "out"));
-      const quarantineDir = resolve(join(inboxDir, ".conflicts"));
-      const insideNorm = (child: string, parent: string): boolean =>
-        isPathInside(normCasePath(child), normCasePath(parent));
-      if (
-        pathsOverlap(outboxDir, approvalsDir) ||
-        pathsOverlap(approvalsDir, quarantineDir) ||
-        pathsOverlap(outboxDir, quarantineDir) ||
-        insideNorm(inboxPath, approvalsDir) ||
-        insideNorm(inboxPath, outboxDir)
-      ) {
-        warnings.push(
-          t("laneConfig.warn.mdPathOverlap", {
-            inbox: inboxPath,
-            approvals: approvalsDir,
-            outbox: outboxDir,
-          }),
-        );
-      }
-    }
-  }
-  if (conf.source === "telegram" && token !== undefined && !TELEGRAM_TOKEN_RE.test(token)) {
-    warnings.push(t("laneConfig.warn.tokenFormat"));
-  }
-  // 인바운드 인증 앵커 부재 → 기동 시 전 인바운드 fail-closed 무시. 생성 시점에 미리 안내.
-  // 자기 인증은 개인 chat(양수 chat_id)만 성립 — 그룹(음수) chat_id 는 회신 대상일 뿐 멤버를
-  // 인증하지 않으므로, 그룹만 있고 allow_from 이 없으면 여전히 전부 거부된다.
-  if (conf.source === "telegram") {
-    const tg = conf.telegram;
-    const chatIdNum = tg?.chat_id ? Number(tg.chat_id) : NaN;
-    const hasSelfAuth = Number.isFinite(chatIdNum) && chatIdNum > 0;
-    if (!hasSelfAuth && !tg?.allow_from) {
-      warnings.push(t("laneConfig.warn.telegramNoAuth"));
     }
   }
   if (conf.lang && !(SUPPORTED_LOCALES as readonly string[]).includes(conf.lang)) {
@@ -255,28 +196,26 @@ export async function laneAdd(
   assertName("lane", lane);
 
   const source = (opts.source ?? "markdown") as string;
-  if (!(SUPPORTED_SOURCES as readonly string[]).includes(source)) {
+  if (!SOURCE_IDS.includes(source)) {
     throw new LaneConfigError(
-      t("laneConfig.err.badSource", { source, supported: SUPPORTED_SOURCES.join(" | ") }),
+      t("laneConfig.err.badSource", { source, supported: SOURCE_IDS.join(" | ") }),
     );
   }
-  const src = source as SupportedSource;
 
+  // chat_id 형식(공통) — source 무관하게 형식만 검사(기존 동작, token/allow_from 과 달리
+  // "특정 소스 전용" 가드가 없었다). 나머지 telegram 고유 검증(무인증 경고 등)은 descriptor.validate 위임.
   if (opts.chat_id !== undefined && opts.chat_id !== "" && !CHAT_ID_RE.test(opts.chat_id)) {
     throw new LaneConfigError(t("laneConfig.err.badChatId", { chatId: opts.chat_id }));
   }
-  if (opts.token !== undefined && src !== "telegram") {
+  // 교차-소스 옵션 가드(공통) — telegram 전용 옵션을 다른 소스에 지정하면 거부한다.
+  // "옵션 X 는 소스 Y 전용" 지식은 여러 descriptor 에 흩어지면 중앙화 취지가 역행하므로 공통 본문에
+  // 유지한다. allow_from 형식·telegram 무인증 경고 등 telegram 고유 검증은 descriptor.validate 로
+  // 위임한다(아래).
+  if (opts.token !== undefined && source !== "telegram") {
     throw new LaneConfigError(t("laneConfig.err.tokenOnlyTelegram"));
   }
-  if (opts.allow_from !== undefined && opts.allow_from !== "") {
-    if (src !== "telegram") {
-      throw new LaneConfigError(t("laneConfig.err.allowFromOnlyTelegram"));
-    }
-    for (const id of parseCsv(opts.allow_from)) {
-      if (!ALLOW_FROM_RE.test(id)) {
-        throw new LaneConfigError(t("laneConfig.err.badAllowFrom", { id }));
-      }
-    }
+  if (opts.allow_from !== undefined && opts.allow_from !== "" && source !== "telegram") {
+    throw new LaneConfigError(t("laneConfig.err.allowFromOnlyTelegram"));
   }
   if (
     opts.file_mode !== undefined &&
@@ -309,7 +248,7 @@ export async function laneAdd(
 
   const permTier = opts.perm_tier ?? "acp";
   const conf: LaneConf = {
-    source: src,
+    source,
     backend: opts.backend ?? "acp",
     engine: opts.engine ?? "claude-agent-acp",
     perm_tier: permTier,
@@ -340,6 +279,16 @@ export async function laneAdd(
   if (opts.chat_id) telegram.chat_id = opts.chat_id;
   if (opts.allow_from) telegram.allow_from = opts.allow_from;
   if (Object.keys(telegram).length > 0) conf.telegram = telegram;
+
+  // 소스별 conf 검증 위임 — 훅 미제공 소스는 오류 없이 생략(공통 처리만).
+  // 검증 통과 후에만 디스크에 쓴다(validate-then-commit, 파일 상단 원칙) — 쓰기 이전에 호출.
+  const validated = SOURCE_REGISTRY[source]?.validate?.({ conf, token: opts.token, opts }) ?? {
+    errors: [],
+    warnings: [],
+  };
+  if (validated.errors.length > 0) {
+    throw new LaneConfigError(validated.errors[0]!);
+  }
 
   const base = opts.base ?? defaultBase();
   const paths = lanePaths(base, proj, lane);
@@ -373,7 +322,7 @@ export async function laneAdd(
     result.envPath = paths.envFile;
   }
 
-  result.warnings = await collectAddWarnings(conf, opts.token);
+  result.warnings = [...validated.warnings, ...(await collectAddWarnings(conf))];
   if (tokenOverwritten) {
     result.warnings.push(t("laneConfig.warn.tokenOverwritten", { envFile: paths.envFile }));
   }

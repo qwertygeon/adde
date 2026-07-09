@@ -29,8 +29,25 @@ async function runUp(proj: string, opts: SupervisorUpOptions): Promise<Superviso
   return supervisorUp(proj, opts);
 }
 
+/**
+ * telegram 레인 기동 시 getMe bounded probe(N4)가 실제 네트워크를 타지 않도록 기본 성공 응답
+ * 스텁 — 본 파일의 시나리오는 probe 자체가 아니라 하트비트/라이브니스가 검증 대상이므로,
+ * probe 는 항상 성공시켜 기존 관찰 동작(SC-019 회귀)을 보존한다. fetch mock 은 fake timer 와
+ * 무관하게 즉시 resolve 하므로 vi.useFakeTimers() 이후에도 runUp 이 블록되지 않는다.
+ */
+function stubTelegramProbeSuccess(): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, result: true }),
+    } as Response),
+  );
+}
+
 beforeEach(() => {
   tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-heartbeat-health-"));
+  stubTelegramProbeSuccess();
 });
 
 afterEach(async () => {
@@ -44,6 +61,7 @@ afterEach(async () => {
   }
   startedProjs.clear();
   fs.rmSync(tmpBase, { recursive: true, force: true });
+  vi.unstubAllGlobals();
 });
 
 const minimalConf = `source=telegram

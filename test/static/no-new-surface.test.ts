@@ -27,7 +27,11 @@ describe("SC-022: 기동 연결 확인 상한을 위한 신규 CLI 플래그가 
 describe("SC-022: 기동 연결 확인 상한을 위한 신규 conf 키가 없다", () => {
   it("shared/conf.ts NAMESPACE_FIELDS(telegram/markdown) 에 상한 관련 신규 키가 없다", () => {
     const src = fs.readFileSync(path.join(repoRoot, "src/shared/conf.ts"), "utf8");
-    const nsBlockMatch = /NAMESPACE_FIELDS\s*=\s*{([\s\S]*?)}\s*;/.exec(src);
+    // `}\s*;` 만으로 종료를 판정하면 실제 종결자가 `} as const;`(공백+리터럴 포함)라 첫 매치를
+    // 건너뛰고 그 뒤 아무 `{...};`(예: 무관 함수 본문의 빈 객체 리터럴)까지 과다 캡처해 버린다
+    // (관련 무관 주석·코드에 우연히 timeout/probe 단어가 있으면 오탐 회귀). `as const` 트레일러까지
+    // 명시해 객체 리터럴 자체로 매치를 정확히 경계 짓는다.
+    const nsBlockMatch = /NAMESPACE_FIELDS\s*=\s*{([\s\S]*?)}\s*as const\s*;/.exec(src);
     expect(nsBlockMatch, "NAMESPACE_FIELDS 선언을 찾을 수 없음").not.toBeNull();
     expect(nsBlockMatch![1]).not.toMatch(SURFACE_SUSPECT_RE);
   });

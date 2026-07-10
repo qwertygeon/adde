@@ -391,6 +391,8 @@ lane add 옵션:
         '[경고] lang "{{lang}}" 은 지원 로케일({{supported}})이 아닙니다 — 전역 로케일이 적용됩니다.\n  ↳ 조치: 오타라면 conf 의 lang 을 수정하세요.',
       telegramNoAuth:
         "[경고] telegram 레인에 허용 인바운드 발신자가 없습니다 — 모든 인바운드가 거부됩니다(fail-closed). 개인 chat_id 는 자기 인증되지만, 그룹 chat_id(음수)는 회신 대상일 뿐 멤버를 인증하지 않습니다.\n  ↳ 조치: --chat-id <본인 개인 chat id> 설정, 및/또는 --allow-from <id들> 로 멤버 id 를 지정하세요.",
+      mdBackupNoArchive:
+        "[경고] backup 이 활성화되어 있으나 archive 가 설정되지 않았습니다 — inbox 내용이 계속 쌓입니다.\n  ↳ 조치: markdown.archive 를 설정해 전송 본문도 함께 이관하세요.",
     },
     err: {
       emptyIdent: "{{kind}} 가 비어있습니다",
@@ -437,6 +439,14 @@ lane add 옵션:
     badApprovalId: '잘못된 승인 요청 id "{{reqId}}" — 경로 탈출 차단(fail-closed deny).',
     outMeta: "🕒 요청 {{sent}} · 완료 {{done}}",
     approvalMeta: "🕒 요청 {{requested}} · 무응답 시 {{deadline}} 자동 거부",
+    backupPathOverlap:
+      "[markdown] 백업 경로가 {{name}}({{path}})와 겹칩니다: {{backup}} — vault/state 손상 위험으로 기동을 거부합니다.",
+    syncProviderUnsupported:
+      '[markdown] 미지원 sync_provider "{{value}}" — 지원값: {{supported}}',
+    outRetentionTooLow:
+      "[markdown] out_retention_days({{outRetentionDays}}) 는 retention_days({{retentionDays}}) + {{margin}} 이상이어야 합니다 — 기동을 거부합니다.",
+    backupNoArchiveWarn:
+      "⚠️ 백업 이관은 켜져 있으나 archive 가 설정되지 않았습니다 — inbox 내용이 계속 쌓입니다(전송 본문이 이관되지 않음). markdown.archive 를 설정하면 아카이브도 이관됩니다.",
   },
   supervisor: {
     noLanesMsg: "{{proj}}: 레인 0개 — lanes.d 에 conf 없음",
@@ -591,6 +601,17 @@ lane add 옵션:
       approvalsError: "[markdown] approvals 처리 오류: {{error}}",
       pollError: "[markdown] 폴링 오류: {{error}}",
       decidedMoveError: "[markdown] 결정완료 승인 아카이브 실패 {{file}}: {{error}}",
+      backupWarnNotifyFail: "[markdown] 백업/아카이브 경고 노트 기록 실패: {{error}}",
+      legacyArchiveMoveError: "[markdown] 구버전 단일 아카이브 파일 이관 실패 {{path}}: {{error}}",
+    },
+    markdownRetention: {
+      relocateFail: "[markdown-retention] 이관 실패 {{src}} -> {{dst}}: {{error}} (fail-open, 계속 진행)",
+      migrateOutboxFail: "[markdown-retention] outbox 마이그레이션 실패 {{name}}: {{error}} (fail-open)",
+      migrateDecidedMtimeFail:
+        "[markdown-retention] decided mtime 조회 실패 {{name}}: {{error}} (fail-open)",
+      migrateDecidedFail: "[markdown-retention] decided 마이그레이션 실패 {{name}}: {{error}} (fail-open)",
+      maintenanceFail: "[markdown-retention] lane={{lane}} 유지작업 실행 실패: {{error}} (fail-open)",
+      lastRunWriteFail: "[markdown-retention] lane={{lane}} retention-last-run 기록 실패: {{error}}",
     },
     transcript: {
       auditAppendFail:

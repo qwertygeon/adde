@@ -168,5 +168,10 @@ Detailed setup: [Telegram guide](telegram.md).
 | Lane doesn't come up                    | Whether the `root` absolute path actually exists (fail-closed if not) · whether the inbox/approvals/outbox paths don't overlap (startup refused if equal or in a containment relationship) |
 | Startup refused (control-note location) | Whether inbox/approvals/outbox are **outside** `cwd` (refused with self-approval risk if inside)                                                                                           |
 | Response note not visible               | Check the `outbox` path, and whether the AI turn has ended (idle)                                                                                                                          |
+| Output note / decided approval not where expected | Look for a `YYYY-MM-DD/` subfolder underneath (date-partitioned by send/decision time, applied even without `markdown.backup`) — or, if `markdown.backup` is configured, in the backup folder for anything older than `retention_days` |
+| Startup refused ("backup path overlaps ...") | `markdown.backup` overlaps the vault or ADDE's internal state folder — point it somewhere else (outside the vault, no shared ancestor) |
+| Startup refused ("unsupported sync_provider") | `markdown.sync_provider` must be `local` or `icloud` (leave it unset for `local`) |
+| Startup refused ("out_retention_days ... must be >= retention_days ...") | `markdown.out_retention_days` must be at least `retention_days + 1` — raise it or unset it |
+| "backup relocation is on but archive is not configured" warning | `markdown.backup` is set but `markdown.archive` isn't — set an archive directory too if you also want sent text relocated (otherwise inbox text keeps accumulating) |
 
-Detailed setup: [Markdown guide](markdown.md).
+Detailed setup: [Markdown guide](markdown.md#keeping-the-vault-light-retention--backup-relocation).

@@ -11,13 +11,22 @@ import { errMsg, errCode } from "../shared/errors.js";
 import { watch, existsSync, mkdirSync, statSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import { readFile, rename, mkdir, stat, readdir, appendFile } from "node:fs/promises";
-import { join, dirname, isAbsolute, resolve } from "node:path";
+import { join, dirname, isAbsolute, resolve, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isPathInside, normCasePath, pathsOverlap, expandTilde } from "../shared/paths.js";
 import { atomicWrite as atomicWriteFile } from "../shared/fs-atomic.js";
 import type { LaneConf } from "../shared/conf.js";
-import { enqueue, hasId, readSidecar } from "../core/queue.js";
+import { enqueue, hasId, readSidecar, pruneOut } from "../core/queue.js";
 import type { RenderHint } from "../core/queue.js";
+import {
+  SYNC_PROVIDER_REGISTRY,
+  SYNC_PROVIDER_IDS,
+  resolveSyncProvider,
+  UnsupportedSyncProviderError,
+} from "./sync-provider.js";
+import type { SyncProviderDescriptor } from "./sync-provider.js";
+import { relocateOldFolders, migrateFlatToDated, migrateLegacyArchiveFile } from "./markdown-retention.js";
+import { formatDateFolder, dateFolderFromStamp } from "../shared/date-folder.js";
 import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
@@ -50,6 +59,10 @@ const POLL_MAX_INTERVAL_MS = 10_000;
 const POLL_IDLE_STEPS = 3;
 /** 내용 안정화 재확인 간격(B1) — 동기 중 잘린 파일 읽기 방지. */
 const READ_SETTLE_MS = 50;
+/** 정리(prune) 안전창 여유값 K=1 캘린더일 — out_retention_days >= retention_days+K 를 기동에서 강제한다. */
+const SAFETY_MARGIN_DAYS = 1;
+/** 이관 기준일(retention_days) 소비측 기본값 — 파서(conf.ts)는 미지정 시 undefined 를 보존, 여기서 적용. */
+const DEFAULT_RETENTION_DAYS = 2;
 
 // --- 순수 파싱 (테스트 대상) -------------------------------------------------
 
@@ -449,16 +462,28 @@ export function finalizeApprovalDeny(
 
 // --- 어댑터 ------------------------------------------------------------------
 
-/** root 상대 경로를 절대경로로 해소한다. 필수 키 누락 시 throw(fail-closed). */
-function resolvePaths(conf: LaneConf): {
+/** resolvePaths 반환 — vault 경로 + 이관/정리 설정. */
+interface MarkdownResolvedPaths {
   rootDir: string;
   inboxPath: string;
   approvalsDir: string;
   outboxDir: string;
   quarantineDir: string;
-  archivePath: string;
+  /** 전용 아카이브 디렉터리 — `<archiveDir>/<YYYY-MM-DD>.md` 날짜 파일만 이 하위에 쓴다. */
+  archiveDir: string;
   autoArchive: boolean;
-} {
+  /** 로컬 백업 폴더(옵트인, expandTilde 적용). 미지정 = 이관 기능 off. */
+  backupDir?: string;
+  /** 이관 기준일(캘린더일). 미지정 시 DEFAULT_RETENTION_DAYS 적용. */
+  retentionDays: number;
+  /** state out/ prune 안전창(캘린더일, 옵트인). 미지정 = prune off. */
+  outRetentionDays?: number;
+  /** 동기화 제공자 id — 미지정 시 "local". */
+  syncProvider: string;
+}
+
+/** root 상대 경로를 절대경로로 해소한다. 필수 키 누락 시 throw(fail-closed). */
+function resolvePaths(conf: LaneConf): MarkdownResolvedPaths {
   const md = conf.markdown;
   if (!md?.root) throw new Error(t("markdown.confRootMissing"));
   if (!md.inbox) throw new Error(t("markdown.confInboxMissing"));
@@ -469,10 +494,26 @@ function resolvePaths(conf: LaneConf): {
   const approvalsDir = md.approvals ? join(rootDir, md.approvals) : join(inboxDir, "approvals");
   const outboxDir = md.outbox ? join(rootDir, md.outbox) : join(inboxDir, "out");
   const quarantineDir = join(inboxDir, ".conflicts");
-  // 아카이브: markdown.archive 지정 시 그 경로 + 전송시점 자동 아카이브 ON. 미지정 시 기본 파일(수동 라벨용) + 자동 OFF.
-  const archivePath = md.archive ? join(rootDir, md.archive) : join(inboxDir, "sent-archive.md");
+  // 전용 아카이브 디렉터리 — 기존(v0.1.4 이하) 단일 파일 해석에서 디렉터리 해석으로 진화(오래된
+  // 산출물을 오이관하지 않도록 아카이브를 vault 의 다른 파일과 겹치지 않는 전용 위치로 분리).
+  // 지정 시 그 이름을 디렉터리로 + 전송시점 자동 아카이브 ON. 미지정 시 기본 디렉터리(수동
+  // 라벨용) + 자동 OFF. 기존 단일 파일과의 경로 충돌은 ensureArchiveDirReady 가 흡수한다.
+  const archiveDir = md.archive ? join(rootDir, md.archive) : join(inboxDir, "sent-archive");
   const autoArchive = md.archive !== undefined && md.archive.length > 0;
-  return { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir, archivePath, autoArchive };
+  const result: MarkdownResolvedPaths = {
+    rootDir,
+    inboxPath,
+    approvalsDir,
+    outboxDir,
+    quarantineDir,
+    archiveDir,
+    autoArchive,
+    retentionDays: md.retention_days ?? DEFAULT_RETENTION_DAYS,
+    syncProvider: md.sync_provider ?? "local",
+  };
+  if (md.backup) result.backupDir = expandTilde(md.backup);
+  if (md.out_retention_days !== undefined) result.outRetentionDays = md.out_retention_days;
+  return result;
 }
 
 // --- 소스 정의(descriptor) 훅 — validate/doctorChecks/wizard -----------------
@@ -513,6 +554,11 @@ function validateMarkdownConf(input: SourceValidateInput): SourceValidateResult 
         t("laneConfig.warn.mdPathOverlap", { inbox: inboxPath, approvals: approvalsDir, outbox: outboxDir }),
       );
     }
+  }
+
+  // 백업 활성 + 아카이브 미설정 → inbox 축적이 계속됨을 경고(침묵 금지 — 자동 활성은 채택하지 않음).
+  if (md?.backup && (!md.archive || md.archive.length === 0)) {
+    warnings.push(t("laneConfig.warn.mdBackupNoArchive"));
   }
 
   return { errors: [], warnings };
@@ -586,11 +632,24 @@ export const markdownDescriptor: SourceDescriptor = {
 
 export function createMarkdownSource(cfg: SourceContext): Source {
   const tl = tFor(cfg.conf.lang);
-  const { rootDir, inboxPath, approvalsDir, outboxDir, quarantineDir, archivePath, autoArchive } =
-    resolvePaths(cfg.conf);
+  const {
+    rootDir,
+    inboxPath,
+    approvalsDir,
+    outboxDir,
+    quarantineDir,
+    archiveDir,
+    autoArchive,
+    backupDir,
+    retentionDays,
+    outRetentionDays,
+    syncProvider,
+  } = resolvePaths(cfg.conf);
   // 결정완료(allow/deny) 승인 파일을 이관하는 아카이브 서브디렉터리(M6). pending 만 top-level 에
   // 남겨 폴 dirSig·handleApprovals 스캔을 O(pending) 로 유지(누적 승인수 A 에 비례하지 않게).
   const decidedDir = join(approvalsDir, ".decided");
+  // state/<lane>/retention-last-run — 이관·정리·마이그레이션 일간 게이트(날짜 문자열).
+  const retentionLastRunFile = join(cfg.paths.stateDir, "retention-last-run");
   // 옵트인 게이트 타임아웃(초→ms) — 승인 블록 기한 표기·어댑터 로컬 타이머를 게이트와 동일 기준으로 맞춘다.
   const gateTimeoutMs =
     cfg.conf.gate_timeout_sec !== undefined
@@ -622,6 +681,10 @@ export function createMarkdownSource(cfg: SourceContext): Source {
   // in-flight inbox/approvals 처리 추적 — stop() 이 정리 완료를 대기.
   let inboxOp: Promise<void> = Promise.resolve();
   let approvalsOp: Promise<void> = Promise.resolve();
+  // 기동 검증(start)에서 확정되는 동기화 제공자 — 초기값은 안전한 기본(local), 검증 통과 후 재대입.
+  let resolvedProvider: SyncProviderDescriptor = SYNC_PROVIDER_REGISTRY["local"]!;
+  // 이관·정리·마이그레이션 유지작업(fail-open) 추적 — stop() 이 정리 완료를 대기.
+  let retentionOp: Promise<void> = Promise.resolve();
 
   /** 원자 기록(shared 위임) + 자기쓰기 echo 가드 등록. */
   async function atomicWrite(filePath: string, content: string): Promise<void> {
@@ -870,7 +933,12 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       if (!needWrite && pending.length > 0) needWrite = ensureBlankSend(lines);
 
       if (needWrite) {
-        if (archiveText.length > 0) await appendFile(archivePath, archiveText, "utf8");
+        if (archiveText.length > 0) {
+          // 전용 아카이브 디렉터리 하위 날짜 파일(아카이브 시점 로컬일).
+          const archiveFile = join(archiveDir, `${formatDateFolder(new Date())}.md`);
+          await mkdir(archiveDir, { recursive: true });
+          await appendFile(archiveFile, archiveText, "utf8");
+        }
         removeRanges.sort((a, b) => b[0] - a[0]); // bottom-up splice — 인덱스 보존
         for (const [s, e] of removeRanges) lines.splice(s, e - s);
         ensureBlankSend(lines); // 소모된 send 대체(멱등 — 이미 있으면 무변경)
@@ -897,9 +965,11 @@ export function createMarkdownSource(cfg: SourceContext): Source {
    */
   async function moveToDecided(fn: string): Promise<void> {
     const src = join(approvalsDir, fn);
+    // 결정(이관) 시점의 로컬일 날짜 폴더 — pending(top-level)과 구분되는 유일한 파티션 근거.
+    const targetDir = join(decidedDir, formatDateFolder(new Date()));
     try {
-      await mkdir(decidedDir, { recursive: true });
-      await rename(src, join(decidedDir, fn));
+      await mkdir(targetDir, { recursive: true });
+      await rename(src, join(targetDir, fn));
       lastSelfWrite.delete(src);
     } catch (err) {
       console.error(t("log.markdown.decidedMoveError", { file: fn, error: errMsg(err) }));
@@ -961,6 +1031,111 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     }
   }
 
+  /**
+   * 아카이브 경로를 디렉터리로 준비한다. 동명 경로에 구버전(archive=파일 해석) 단일 파일이
+   * 남아있으면 mkdir 전에 치운다 — backupDir 설정 시 백업으로 이관(하이브리드 마이그레이션
+   * 본경로), 미설정 시 데이터 보존을 위해 `.legacy` 접미로 곁에 남긴다(무손실 우선, mkdir 이
+   * 파일과 충돌해 fail-closed 하는 것보다 안전 방향).
+   */
+  async function ensureArchiveDirReady(dir: string, backup: string | undefined): Promise<void> {
+    let existingIsFile = false;
+    try {
+      existingIsFile = (await stat(dir)).isFile();
+    } catch {
+      // 부재 — 정상 신규 경로
+    }
+    if (existingIsFile) {
+      try {
+        if (backup) {
+          await migrateLegacyArchiveFile({ legacyArchivePath: dir, backupDir: backup });
+        } else {
+          await rename(dir, `${dir}.legacy`);
+        }
+      } catch (err) {
+        console.error(t("log.markdown.legacyArchiveMoveError", { path: dir, error: errMsg(err) }));
+      }
+    }
+    await mkdir(dir, { recursive: true });
+  }
+
+  /** 이관 기준일(오늘 로컬 − retentionDays, 캘린더일 문자열) — cutoff 이전(strict <)만 이관 대상. */
+  function computeCutoffDate(now: Date, days: number): string {
+    const cutoff = new Date(now);
+    cutoff.setDate(cutoff.getDate() - days);
+    return formatDateFolder(cutoff);
+  }
+
+  /**
+   * 일간 이관+정리+최초1회 마이그레이션 게이트 — "오늘(local) > last-run" 이면 1회 실행 후
+   * last-run 갱신. backupDir·outRetentionDays 둘 다 미설정이면 진입하지 않는다(opt-in).
+   * fail-open — 실패해도 폴·메시지 파이프라인은 지속되며, last-run 은 성공·실패 무관하게 갱신해
+   * 같은 날 반복 재시도로 로그가 쌓이는 것을 막는다(다음 날 다시 시도).
+   */
+  // 재진입 가드 — poll tick(기본 2초)·start() 가 fire-and-forget 으로 겹쳐 호출해도 동시 실행을
+  // 차단한다. 첫 활성화 대량 이관·icloud dataless 유계 대기(파일당 수 초)에서는 한 실행이 다음
+  // tick 보다 오래 걸리는 게 일상 케이스라, 가드 없이는 동일 src/dst 에 대한 동시 copy+unlink 가
+  // 겹쳐 크래시 시 원본·사본 모두 잃는 창이 열린다(safeMove 무손실 불변식 훼손 — PR #44 재리뷰).
+  // 재진입 호출은 진행 중 실행의 핸들을 그대로 반환 → stop() 의 retentionOp 대기가 실 실행을 가리킨다.
+  let retentionInFlight: Promise<void> | null = null;
+  function runRetentionMaintenance(): Promise<void> {
+    if (retentionInFlight) return retentionInFlight;
+    retentionInFlight = doRetentionMaintenance().finally(() => {
+      retentionInFlight = null;
+    });
+    return retentionInFlight;
+  }
+
+  async function doRetentionMaintenance(): Promise<void> {
+    if (backupDir === undefined && outRetentionDays === undefined) return;
+    const now = new Date();
+    const todayStr = formatDateFolder(now);
+    const lastRun = await readMaybe(retentionLastRunFile);
+    if (lastRun === todayStr) return;
+
+    try {
+      if (backupDir !== undefined) {
+        await migrateFlatToDated({ outboxDir, decidedDir });
+        const cutoffDate = computeCutoffDate(now, retentionDays);
+        await relocateOldFolders({
+          roots: [
+            {
+              vaultDir: outboxDir,
+              backupDir: join(backupDir, relative(rootDir, outboxDir)),
+              unit: "folder",
+            },
+            {
+              vaultDir: decidedDir,
+              backupDir: join(backupDir, relative(rootDir, decidedDir)),
+              unit: "folder",
+            },
+            {
+              vaultDir: archiveDir,
+              backupDir: join(backupDir, relative(rootDir, archiveDir)),
+              unit: "file",
+            },
+          ],
+          cutoffDate,
+          materialize: (p) => resolvedProvider.ensureLocal(p),
+        });
+      }
+      if (outRetentionDays !== undefined) {
+        await pruneOut(cfg.paths, outRetentionDays, now);
+      }
+    } catch (err) {
+      console.error(
+        t("log.markdownRetention.maintenanceFail", { lane: cfg.lane, error: errMsg(err) }),
+      );
+    } finally {
+      // 내부 state 파일 — inbox/approvals 자기쓰기 echo 가드(lastSelfWrite) 대상이 아니므로
+      // 공용 atomicWriteFile 을 직접 사용(로컬 atomicWrite 래퍼는 vault 파일 전용).
+      await atomicWriteFile(retentionLastRunFile, todayStr).catch((err: unknown) =>
+        console.error(
+          t("log.markdownRetention.lastRunWriteFail", { lane: cfg.lane, error: errMsg(err) }),
+        ),
+      );
+    }
+  }
+
   /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOut 직후 in-process 호출. */
   /** enqueue 연속 실패 임계 도달 시 outbox 에 1회 액션형 알림 노트. 채널이 파일이라 outbox 로 표면화. */
   async function alertEnqueueFailure(count: number): Promise<void> {
@@ -985,6 +1160,9 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     // origin_ts 부재(구버전 sidecar)는 종전 `<id>.md` 유지.
     const stamp = sidecar?.origin_ts ? stampFromIso(sidecar.origin_ts) : null;
     const noteName = stamp ? `${outNoteBase(stamp, id)}.md` : `${id}.md`;
+    // stamp 파생 날짜 폴더(파티셔닝) — write-time 이 아닌 stamp 파생이라 재렌더해도 같은 폴더로
+    // 귀결한다(멱등). stamp 부재(레거시 폴백)는 flat 유지.
+    const noteDir = stamp ? join(outboxDir, dateFolderFromStamp(stamp)) : outboxDir;
     const headerLines: string[] = [];
     const replyRef = sidecar?.reply_ref?.channel_msg_id;
     if (replyRef) headerLines.push(`> ↩ ${replyRef}`);
@@ -995,7 +1173,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       );
     }
     const header = headerLines.length > 0 ? `${headerLines.join("\n")}\n\n` : "";
-    await atomicWrite(join(outboxDir, noteName), `${header}${text}`);
+    await atomicWrite(join(noteDir, noteName), `${header}${text}`);
   }
 
   /** handleInbox 를 추적 가능한 형태로 기동(fire-and-forget + .catch, stop 대기 대상). */
@@ -1111,6 +1289,13 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       } catch {
         // 디렉터리 부재 — 다음 폴에서 재시도
       }
+      // 저빈도 이관·정리·마이그레이션 게이트 — 내부적으로 "오늘>last-run" 아니면 즉시 반환
+      // (readMaybe 1회)이라 매 폴 tick 호출 비용은 무시할 수준.
+      retentionOp = runRetentionMaintenance().catch((err: unknown) =>
+        console.error(
+          t("log.markdownRetention.maintenanceFail", { lane: cfg.lane, error: errMsg(err) }),
+        ),
+      );
     } finally {
       pollBusy = false;
     }
@@ -1167,7 +1352,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       ["inbox", inboxPath],
       ["approvals", approvalsDir],
       ["outbox", outboxDir],
-      ["archive", archivePath],
+      ["archive", archiveDir],
     ] as const) {
       if (isPathInside(p, effectiveCwd)) {
         throw new Error(t("markdown.controlNoteInCwd", { name, path: p, cwd: effectiveCwd }));
@@ -1181,15 +1366,15 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     const rOutbox = resolve(outboxDir);
     const rInbox = resolve(inboxPath);
     const rQuarantine = resolve(quarantineDir);
-    const rArchive = resolve(archivePath);
+    const rArchive = resolve(archiveDir);
     const rQueueOut = resolve(cfg.paths.outDir);
     for (const [nameA, a, nameB, b] of [
       ["approvals", rApprovals, "outbox", rOutbox],
       ["approvals", rApprovals, "quarantine(.conflicts)", rQuarantine],
       ["outbox", rOutbox, "quarantine(.conflicts)", rQuarantine],
-      // 아카이브 파일은 inbox 와 동일해선 안 되고(자기 이관), 승인/출력/큐/격리 디렉터리 안이면 안 된다
-      // (승인 오파싱·출력 혼입·dedup 훼손 위험). inbox 형제 위치(기본 sent-archive.md)는 허용 —
-      // dispatch 가 inbox 외 파일을 무시하므로 재처리 없음.
+      // 아카이브 디렉터리는 inbox 와 동일해선 안 되고(자기 이관), 승인/출력/큐/격리 디렉터리 안이면
+      // 안 된다(승인 오파싱·출력 혼입·dedup 훼손 위험). inbox 형제 위치(기본 sent-archive/)는
+      // 허용 — dispatch 가 inbox 외 파일을 무시하므로 재처리 없음.
       ["archive", rArchive, "inbox", rInbox],
       ["archive", rArchive, "approvals", rApprovals],
       ["archive", rArchive, "outbox", rOutbox],
@@ -1207,6 +1392,53 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       if (isPathInside(normCasePath(rInbox), normCasePath(dir))) {
         throw new Error(t("markdown.inboxInsideDir", { inbox: rInbox, name, dir }));
       }
+    }
+
+    // 백업 경로 역-overlap 가드 — vault·state·레인 경로와 겹치면 기동 거부.
+    // vault 밖·절대·타 볼륨은 허용(inside-root 강제는 하지 않음).
+    if (backupDir !== undefined) {
+      const rBackup = resolve(backupDir);
+      for (const [name, p] of [
+        ["root", resolve(rootDir)],
+        ["inbox", rInbox],
+        ["approvals", rApprovals],
+        ["outbox", rOutbox],
+        ["archive", rArchive],
+        ["quarantine(.conflicts)", rQuarantine],
+        ["state(out)", rQueueOut],
+        ["state(dir)", resolve(cfg.paths.stateDir)],
+      ] as const) {
+        if (pathsOverlap(rBackup, p)) {
+          throw new Error(t("markdown.backupPathOverlap", { name, backup: rBackup, path: p }));
+        }
+      }
+    }
+
+    // 동기화 제공자 검증 — 미지원 값은 기동 거부(fail-closed).
+    try {
+      resolvedProvider = resolveSyncProvider(syncProvider);
+    } catch (err) {
+      if (err instanceof UnsupportedSyncProviderError) {
+        throw new Error(
+          t("markdown.syncProviderUnsupported", {
+            value: err.value,
+            supported: SYNC_PROVIDER_IDS.join(", "),
+          }),
+          { cause: err },
+        );
+      }
+      throw err;
+    }
+
+    // 정리(prune) 활성 시 안전창 부등식 강제(여유값 K 는 SAFETY_MARGIN_DAYS).
+    if (outRetentionDays !== undefined && outRetentionDays < retentionDays + SAFETY_MARGIN_DAYS) {
+      throw new Error(
+        t("markdown.outRetentionTooLow", {
+          outRetentionDays,
+          retentionDays,
+          margin: SAFETY_MARGIN_DAYS,
+        }),
+      );
     }
 
     running = true;
@@ -1232,13 +1464,28 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     // out 렌더는 injector 가 renderOut() 으로 in-process 호출(out/ watch 제거).
     mkdirSync(cfg.paths.outDir, { recursive: true });
     mkdirSync(outboxDir, { recursive: true });
-    // 아카이브 상위 디렉터리 보장 — 설정된 중첩 경로(logs/sent-archive.md 등)의 부모가 없으면
-    // Phase B 의 appendFile 이 ENOENT 로 던져 sent 종단·본문 제거가 막히고 매 이벤트 재시도로 멈춘다.
-    mkdirSync(dirname(archivePath), { recursive: true });
+    // 전용 아카이브 디렉터리 보장 — 동명 경로에 구버전 단일 파일이 남아있으면 먼저 치운다
+    // (하이브리드 마이그레이션 본경로, 데이터 무손실 우선).
+    await ensureArchiveDirReady(archiveDir, backupDir);
+
+    // 백업 활성 + 아카이브 미설정 → inbox 축적이 계속됨을 경고(침묵 금지).
+    if (backupDir !== undefined && !autoArchive) {
+      try {
+        await notify(tl("markdown.backupNoArchiveWarn"));
+      } catch (err) {
+        console.error(t("log.markdown.backupWarnNotifyFail", { error: errMsg(err) }));
+      }
+    }
 
     // 기동 시 기존 인박스/승인 노트 1회 처리(능동 세션 재개).
     runInbox();
     runApprovals();
+    // 이관·정리·마이그레이션 일간 게이트 — fail-open, stop() 이 in-flight 완료를 대기.
+    retentionOp = runRetentionMaintenance().catch((err: unknown) =>
+      console.error(
+        t("log.markdownRetention.maintenanceFail", { lane: cfg.lane, error: errMsg(err) }),
+      ),
+    );
 
     // 폴링 백스톱(B2): watch 가 이벤트를 놓쳐도 주기적으로 보정. inbox baseline seed 후 인터벌 시작.
     // approvals 는 디렉터리라 첫 폴에서 시그니처를 seed(첫 폴 1회 스캔은 멱등이라 무해).
@@ -1260,9 +1507,10 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     debounceTimers.clear();
     for (const t of permTimers.values()) clearTimeout(t);
     permTimers.clear();
-    // in-flight 처리(폴 + approvals 락 체인 + inbox/approvals/격리 op) settle 대기 —
+    // in-flight 처리(폴 + approvals 락 체인 + inbox/approvals/격리/이관 op) settle 대기 —
     // 임시 디렉터리 정리 뒤 살아남은 쓰기가 ENOENT 를 내지 않도록.
     await pollOp.catch(() => {});
+    await retentionOp.catch(() => {});
     await approvalsLock.catch(() => {});
     await inboxOp.catch(() => {});
     await approvalsOp.catch(() => {});

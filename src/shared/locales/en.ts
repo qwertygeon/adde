@@ -393,6 +393,8 @@ lane add options:
         '[warning] lang "{{lang}}" is not a supported locale ({{supported}}) — the global locale applies.\n  ↳ action: fix lang in the conf if it is a typo.',
       telegramNoAuth:
         "[warning] telegram lane has no authorized inbound sender — all inbound will be rejected (fail-closed). A private chat_id self-authorizes, but a group chat_id (negative) is only a reply target and does NOT authorize its members.\n  ↳ action: set --chat-id <your private chat id>, and/or list member ids with --allow-from <ids>.",
+      mdBackupNoArchive:
+        "[warning] backup is enabled but archive is not configured — inbox content will keep accumulating.\n  ↳ action: set markdown.archive to relocate sent text as well.",
     },
     err: {
       emptyIdent: "{{kind}} is empty",
@@ -441,6 +443,14 @@ lane add options:
       'invalid approval request id "{{reqId}}" — path escape blocked (fail-closed deny).',
     outMeta: "🕒 sent {{sent}} · done {{done}}",
     approvalMeta: "🕒 requested {{requested}} · auto-deny at {{deadline}} if no response",
+    backupPathOverlap:
+      '[markdown] backup path overlaps {{name}}({{path}}): {{backup}} — refusing startup to avoid corrupting vault/state.',
+    syncProviderUnsupported:
+      '[markdown] unsupported sync_provider "{{value}}" — supported: {{supported}}',
+    outRetentionTooLow:
+      "[markdown] out_retention_days({{outRetentionDays}}) must be >= retention_days({{retentionDays}}) + {{margin}} — refusing startup.",
+    backupNoArchiveWarn:
+      "⚠️ backup relocation is on but archive is not configured — inbox content keeps accumulating (archived text is not relocated). Set markdown.archive to enable archiving.",
   },
   supervisor: {
     noLanesMsg: "{{proj}}: 0 lanes — no conf in lanes.d",
@@ -608,6 +618,17 @@ lane add options:
       approvalsError: "[markdown] approvals processing error: {{error}}",
       pollError: "[markdown] polling error: {{error}}",
       decidedMoveError: "[markdown] failed to archive decided approval {{file}}: {{error}}",
+      backupWarnNotifyFail: "[markdown] failed to write backup/archive warning notice: {{error}}",
+      legacyArchiveMoveError: "[markdown] failed to relocate legacy archive file {{path}}: {{error}}",
+    },
+    markdownRetention: {
+      relocateFail: "[markdown-retention] relocate failed {{src}} -> {{dst}}: {{error}} (fail-open, continuing)",
+      migrateOutboxFail: "[markdown-retention] outbox migration failed {{name}}: {{error}} (fail-open)",
+      migrateDecidedMtimeFail:
+        "[markdown-retention] decided mtime lookup failed {{name}}: {{error}} (fail-open)",
+      migrateDecidedFail: "[markdown-retention] decided migration failed {{name}}: {{error}} (fail-open)",
+      maintenanceFail: "[markdown-retention] lane={{lane}} maintenance run failed: {{error}} (fail-open)",
+      lastRunWriteFail: "[markdown-retention] lane={{lane}} failed to persist retention-last-run: {{error}}",
     },
     transcript: {
       auditAppendFail:

@@ -20,11 +20,21 @@ export interface MarkdownLaneConf {
   /** 출력 디렉터리(root 상대). 미지정 시 inbox 형제 out/. */
   outbox?: string;
   /**
-   * 전송된(`✅ sent`) 세그먼트 본문을 이관할 아카이브 파일(root 상대, 옵트인).
-   * 지정 시 전송 시점에 본문을 이 파일로 이관하고 inbox 에선 `✅ sent` 마커만 남긴다(24h 성장 억제).
-   * 미지정 시 자동 아카이브 OFF(본문 잔존 — 현행 동작). 수동 `🗄️ archive` 라벨은 미지정 시 기본 파일로 동작.
+   * 전송된(`✅ sent`) 세그먼트 본문을 이관할 아카이브 디렉터리(root 상대, 옵트인).
+   * 지정 시 전송 시점에 본문을 이 디렉터리 하위 날짜 파일로 이관하고 inbox 에선 `✅ sent` 마커만
+   * 남긴다(24h 성장 억제). 미지정 시 자동 아카이브 OFF(본문 잔존 — 현행 동작). 수동 `🗄️ archive`
+   * 라벨은 미지정 시 기본 디렉터리로 동작. 기존(v0.1.4 이하) 단일 파일 해석에서 디렉터리 해석으로
+   * 진화 — 기존 단일 파일은 최초 활성화 시 백업으로 통째 이관된다(마이그레이션 하이브리드).
    */
   archive?: string;
+  /** 로컬 백업 폴더 경로(옵트인 — 미지정 시 일간 이관 기능 off). vault 밖·절대·타 볼륨 허용. */
+  backup?: string;
+  /** 이관 기준일(캘린더일, 옵트인). 미지정 시 소비측(resolvePaths) 기본값 2 적용 — 파서는 미지정을 undefined 로 보존. */
+  retention_days?: number;
+  /** state out/ prune 안전창(캘린더일, 옵트인 — 미지정 시 prune off). 활성 시 retention_days+1 이상이어야 한다(기동 검증). */
+  out_retention_days?: number;
+  /** 동기화 제공자 id(`local`|`icloud`). 미지정 시 소비측 기본 `local`. 미지원 값은 기동 검증에서 거부(fail-closed). */
+  sync_provider?: string;
 }
 
 /** telegram 어댑터 전용 설정(`telegram.*` 키). */
@@ -85,9 +95,26 @@ const COMMON_OPTIONAL_KEYS = ["cwd", "lang", "file_mode"] as const;
  * 새 어댑터 추가 = 여기에 한 줄 + LaneConf 서브타입 1개.
  */
 const NAMESPACE_FIELDS = {
-  markdown: ["root", "inbox", "approvals", "outbox", "archive"],
+  markdown: [
+    "root",
+    "inbox",
+    "approvals",
+    "outbox",
+    "archive",
+    "backup",
+    "retention_days",
+    "out_retention_days",
+    "sync_provider",
+  ],
   telegram: ["chat_id", "allow_from"],
 } as const;
+
+/**
+ * 네임스페이스 필드 중 정수로 파싱하는 필드(그 외는 문자열) — gate_timeout_sec 선례(conf.ts 상단
+ * `Number.parseInt`+`isFinite&&>0`) 준용. retention_days 기본값 2 는 소비측(resolvePaths)에서
+ * 적용하며 여기선 미지정을 undefined 로 보존한다.
+ */
+const NAMESPACE_INT_FIELDS = new Set(["retention_days", "out_retention_days"]);
 
 /**
  * 구 평면 어댑터 키(네임스페이스 이전 포맷). 클린 브레이크로 값은 읽지 않으며(무시),
@@ -155,11 +182,18 @@ export function parseLaneConf(text: string): LaneConf {
   }
 
   // 어댑터 네임스페이스(`<ns>.<field>`) — 필드가 하나라도 있으면 서브객체 생성.
+  // 정수 필드(NAMESPACE_INT_FIELDS)는 gate_timeout_sec 선례 준용(무효/0/음수는 무시).
   for (const [ns, fields] of Object.entries(NAMESPACE_FIELDS)) {
-    const sub: Record<string, string> = {};
+    const sub: Record<string, string | number> = {};
     for (const field of fields) {
       const value = conf[`${ns}.${field}`];
-      if (value !== undefined && value.length > 0) sub[field] = value;
+      if (value === undefined || value.length === 0) continue;
+      if (NAMESPACE_INT_FIELDS.has(field)) {
+        const n = Number.parseInt(value, 10);
+        if (Number.isFinite(n) && n > 0) sub[field] = n;
+      } else {
+        sub[field] = value;
+      }
     }
     if (Object.keys(sub).length > 0) {
       (result as unknown as Record<string, unknown>)[ns] = sub;
@@ -203,11 +237,13 @@ export function serializeLaneConf(conf: LaneConf): string {
   if (conf.gate_timeout_sec !== undefined) lines.push(`gate_timeout_sec=${conf.gate_timeout_sec}`);
   for (const [ns, fields] of Object.entries(NAMESPACE_FIELDS)) {
     const sub = (conf as unknown as Record<string, unknown>)[ns] as
-      Record<string, string> | undefined;
+      Record<string, string | number> | undefined;
     if (!sub) continue;
     for (const field of fields) {
       const value = sub[field];
-      if (value !== undefined && value.length > 0) lines.push(`${ns}.${field}=${value}`);
+      if (value === undefined) continue;
+      if (typeof value === "number") lines.push(`${ns}.${field}=${value}`);
+      else if (value.length > 0) lines.push(`${ns}.${field}=${value}`);
     }
   }
   return lines.join("\n") + "\n";

@@ -180,6 +180,23 @@ function makeFailingAcpFactory(msg: string) {
   }));
 }
 
+/**
+ * outbox 출력노트 탐색 — stamp 파생 날짜 폴더 파티셔닝(FR-001) 이후엔 top-level 이 아니라
+ * `<outboxDir>/<YYYY-MM-DD>/` 하위에 놓이므로 1단계 하위까지 탐색한다(알림류 `_*.md` 제외).
+ */
+function findOutNote(outDir: string): string | null {
+  if (!fs.existsSync(outDir)) return null;
+  for (const entry of fs.readdirSync(outDir)) {
+    const full = path.join(outDir, entry);
+    if (entry.endsWith(".md") && !entry.startsWith("_")) return full;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(entry) && fs.statSync(full).isDirectory()) {
+      const nested = fs.readdirSync(full).find((f) => f.endsWith(".md") && !f.startsWith("_"));
+      if (nested) return path.join(full, nested);
+    }
+  }
+  return null;
+}
+
 describe("supervisorUp 기동 실패 안내 (FR-8)", () => {
   it("레인 launch 실패 시 status=error 와 사유를 결과에 싣는다", async () => {
     const { base } = setupProject("failproj", { "bad-lane": minimalConf });
@@ -357,18 +374,17 @@ describe("supervisorUp source 분기 (markdown)", () => {
     expect(result.lanes[0]?.status).toBe("running");
 
     // 렌더된 out 노트(outbox=inbox 형제 out/)가 응답을 담으면 renderOut 이 전 경로로 배선된 것.
+    // 출력노트는 stamp 파생 날짜 폴더 하위에 놓이므로(FR-001) top-level + 1단계 하위까지 탐색한다.
     const outDir = path.join(rootDir, "out");
     const deadline = Date.now() + 3000;
-    let notes: string[] = [];
+    let notePath: string | null = null;
     while (Date.now() < deadline) {
-      notes = fs.existsSync(outDir)
-        ? fs.readdirSync(outDir).filter((f) => f.endsWith(".md") && !f.startsWith("_"))
-        : [];
-      if (notes.length > 0) break;
+      notePath = findOutNote(outDir);
+      if (notePath) break;
       await new Promise((r) => setTimeout(r, 20));
     }
-    expect(notes.length).toBeGreaterThan(0);
-    expect(fs.readFileSync(path.join(outDir, notes[0]!), "utf8")).toContain("pong");
+    expect(notePath).not.toBeNull();
+    expect(fs.readFileSync(notePath!, "utf8")).toContain("pong");
   });
 });
 

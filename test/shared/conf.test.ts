@@ -145,6 +145,62 @@ describe("serializeLaneConf", () => {
   });
 });
 
+// backup/retention_days/out_retention_days/sync_provider — 파싱측 opt-in·정수 필드 계약(SC-017 파싱측).
+describe("markdown 백업/이관 설정 파싱 (backup·retention_days·out_retention_days·sync_provider)", () => {
+  const base = "source=markdown\nmarkdown.root=/abs/Notes\nmarkdown.inbox=in.md\n";
+
+  it("미지정 시 네 필드 모두 undefined 다(opt-in, 기본값은 소비측 적용)", () => {
+    const result = parseLaneConf(base);
+    expect(result.markdown?.backup).toBeUndefined();
+    expect(result.markdown?.retention_days).toBeUndefined();
+    expect(result.markdown?.out_retention_days).toBeUndefined();
+    expect(result.markdown?.sync_provider).toBeUndefined();
+  });
+
+  it("backup 은 문자열 경로 그대로 보존한다(vault 밖·절대경로 포함)", () => {
+    const result = parseLaneConf(base + "markdown.backup=/Volumes/Ext/adde-backup\n");
+    expect(result.markdown?.backup).toBe("/Volumes/Ext/adde-backup");
+  });
+
+  it("retention_days·out_retention_days 는 정수로 파싱된다(gate_timeout_sec 선례 준용)", () => {
+    const result = parseLaneConf(
+      base + "markdown.retention_days=2\nmarkdown.out_retention_days=5\n",
+    );
+    expect(result.markdown?.retention_days).toBe(2);
+    expect(result.markdown?.out_retention_days).toBe(5);
+  });
+
+  it("무효/0/음수 retention_days 는 무시되어 undefined 로 남는다(소비측 기본값 적용 위임)", () => {
+    expect(parseLaneConf(base + "markdown.retention_days=0\n").markdown?.retention_days).toBeUndefined();
+    expect(
+      parseLaneConf(base + "markdown.retention_days=-1\n").markdown?.retention_days,
+    ).toBeUndefined();
+    expect(
+      parseLaneConf(base + "markdown.retention_days=abc\n").markdown?.retention_days,
+    ).toBeUndefined();
+  });
+
+  it("sync_provider 는 문자열 그대로 보존한다(허용값 검증은 기동 시점 — 파서는 미검증)", () => {
+    expect(parseLaneConf(base + "markdown.sync_provider=icloud\n").markdown?.sync_provider).toBe(
+      "icloud",
+    );
+    // 파서는 검증하지 않음 — 미지원 값도 그대로 통과, 거부는 C-01 기동 검증 책임.
+    expect(parseLaneConf(base + "markdown.sync_provider=gdrive\n").markdown?.sync_provider).toBe(
+      "gdrive",
+    );
+  });
+
+  it("parse→serialize→parse round-trip 이 네 필드 모두에 대해 동치이다", () => {
+    const original = parseLaneConf(
+      base +
+        "markdown.backup=/abs/Backup\nmarkdown.retention_days=3\nmarkdown.out_retention_days=7\nmarkdown.sync_provider=icloud\n",
+    );
+    const reparsed = parseLaneConf(serializeLaneConf(original));
+    expect(reparsed).toEqual(original);
+    expect(reparsed.markdown?.retention_days).toBe(3);
+  });
+});
+
 describe("gate_timeout_sec (F12a 옵트인 게이트 타임아웃)", () => {
   it("미지정 시 undefined (기본 600초는 소비측이 적용)", () => {
     expect(parseLaneConf("source=telegram\n").gate_timeout_sec).toBeUndefined();

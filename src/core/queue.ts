@@ -4,7 +4,7 @@
  * queue→processing→out 상태 전이는 원자적 rename.
  */
 import { t } from "../shared/i18n.js";
-import { mkdir, rename, readdir, access, readFile, unlink } from "node:fs/promises";
+import { mkdir, rename, readdir, access, readFile, unlink, stat } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { atomicWrite } from "../shared/fs-atomic.js";
 import { errMsg, errCode } from "../shared/errors.js";
@@ -318,6 +318,84 @@ export async function readSidecar(paths: LanePaths, id: string): Promise<OutSide
   } catch {
     return null;
   }
+}
+
+/** id 단위 그룹을 구성하는 out/ 파일 접미사(dedup 앵커 전체). */
+const OUT_GROUP_SUFFIXES = [".out", ".out.json", ".sent", ".aborted", ".failed"] as const;
+/** id 추출용 접미사(위 그룹 + 진행 중 마커) — 긴 접미사(`.out.json`)를 `.out` 보다 먼저 검사해야 오매치를 피한다. */
+const ID_EXTRACT_SUFFIXES = [".out.json", ".out", ".sent", ".sending", ".aborted", ".failed"] as const;
+
+/**
+ * 마커 파일의 나이(now 기준 경과일)를 판정한다. 내용이 ISO 타임스탬프(markSent/markAborted 가
+ * 기록)로 파싱되면 그 값을 우선 사용하고, 아니면(`.failed` 는 사유 문자열이라 파싱 실패) 파일
+ * mtime 으로 폴백한다.
+ */
+async function markerAgeDays(filePath: string, now: Date): Promise<number> {
+  let ts: Date | null = null;
+  try {
+    const content = (await readFile(filePath, "utf8")).trim();
+    const d = new Date(content);
+    if (!Number.isNaN(d.getTime())) ts = d;
+  } catch {
+    // 읽기 실패 — mtime 폴백으로 진행
+  }
+  if (!ts) ts = (await stat(filePath)).mtime;
+  return (now.getTime() - ts.getTime()) / (24 * 60 * 60 * 1000);
+}
+
+/**
+ * state out/ 의 dedup 앵커를 정리(prune)한다. 종단 그룹(`.sent`/`.aborted`/`.failed` 중 하나 이상
+ * 존재)만 대상이며, 전송 진행 중(`.sending`) id 는 절대 제외한다. 안전창(safeWindowDays) 경과분만
+ * id 단위 원자 그룹(`.out`/`.out.json`/`.sent`/`.aborted`/`.failed` 동시 unlink, 부재는 무시)으로
+ * 삭제한다. flat 유지 — isDone/hasId 의 O(1) access 계약을 깨지 않는다. 재실행은 no-op(대상 파일이
+ * 이미 없으므로 자연히 idempotent).
+ */
+export async function pruneOut(
+  paths: LanePaths,
+  safeWindowDays: number,
+  now: Date = new Date(),
+): Promise<{ removed: string[] }> {
+  let files: string[];
+  try {
+    files = await readdir(paths.outDir);
+  } catch {
+    return { removed: [] };
+  }
+
+  const ids = new Set<string>();
+  for (const f of files) {
+    for (const suf of ID_EXTRACT_SUFFIXES) {
+      if (f.endsWith(suf)) {
+        ids.add(f.slice(0, -suf.length));
+        break;
+      }
+    }
+  }
+
+  const removed: string[] = [];
+  for (const id of ids) {
+    if (await isSending(paths, id)) continue; // 진행 중 — 절대 제외(권한 게이트·미전송 메시지 보호)
+
+    const terminalSuffixes = [".sent", ".aborted", ".failed"] as const;
+    let latestAge: number | null = null;
+    for (const suf of terminalSuffixes) {
+      try {
+        const age = await markerAgeDays(join(paths.outDir, `${id}${suf}`), now);
+        if (latestAge === null || age < latestAge) latestAge = age; // 가장 최근(나이 최소) 종단 시각 기준
+      } catch {
+        // 해당 종단 마커 없음 — 다음 후보
+      }
+    }
+    if (latestAge === null) continue; // 종단 마커 없음(미완료) — 보존
+    if (latestAge < safeWindowDays) continue; // 안전창 미경과 — 보존
+
+    await Promise.all(
+      OUT_GROUP_SUFFIXES.map((suf) => unlink(join(paths.outDir, `${id}${suf}`)).catch(() => {})),
+    );
+    removed.push(id);
+  }
+
+  return { removed };
 }
 
 export { basename };

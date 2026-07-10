@@ -16,6 +16,7 @@ import {
   finalizeApprovalDeny,
   isConflictFile,
   createMarkdownSource,
+  markdownDescriptor,
   ensureBlankSend,
   blankSendLine,
   matchSentMarker,
@@ -542,6 +543,18 @@ describe("createMarkdownSource (통합)", () => {
     return fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length;
   }
 
+  /** 오늘(로컬) 날짜 폴더명 — moveToDecided/아카이브(결정·기록 시점 로컬일 파생, FR-002·FR-003) 검증용. */
+  function todayDateStr(): string {
+    const d = new Date();
+    const p = (n: number): string => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  /** 전송 스탬프(YYYYMMDD-HHmmss)에서 날짜 폴더명(YYYY-MM-DD) 파생 — renderOut 파티션 검증용(FR-001). */
+  function dateFolderFromStamp(stamp: string): string {
+    return `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}`;
+  }
+
   beforeEach(() => {
     tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-markdown-"));
     rootDir = path.join(tmpBase, "Notes");
@@ -831,8 +844,9 @@ describe("createMarkdownSource (통합)", () => {
     await waitFor(() => decisions.includes("req-allow:allow"));
     expect(decisions).toContain("req-allow:allow");
 
-    // 종단(allow)된 파일은 .decided/ 로 이관되고 top-level 에선 사라진다(M6 — pending 만 스캔).
-    const decidedFile = path.join(rootDir, "approvals", ".decided", "req-allow.md");
+    // 종단(allow)된 파일은 .decided/<날짜>/ 로 이관되고 top-level 에선 사라진다(M6 — pending 만
+    // 스캔, FR-002 결정 시점 날짜 파티셔닝).
+    const decidedFile = path.join(rootDir, "approvals", ".decided", todayDateStr(), "req-allow.md");
     await waitFor(() => fs.existsSync(decidedFile));
     expect(fs.readFileSync(decidedFile, "utf8")).toContain("status=allow");
     expect(fs.existsSync(reqFile)).toBe(false);
@@ -864,7 +878,7 @@ describe("createMarkdownSource (통합)", () => {
     fs.writeFileSync(reqFile, cur.replace("- [ ] deny", "- [x] deny"));
 
     await waitFor(() => decisions.includes("req-deny:deny"));
-    const decidedFile = path.join(rootDir, "approvals", ".decided", "req-deny.md");
+    const decidedFile = path.join(rootDir, "approvals", ".decided", todayDateStr(), "req-deny.md");
     await waitFor(() => fs.existsSync(decidedFile));
     expect(fs.readFileSync(decidedFile, "utf8")).toContain("status=deny");
     expect(fs.existsSync(reqFile)).toBe(false);
@@ -896,10 +910,11 @@ describe("createMarkdownSource (통합)", () => {
     source = makeSource();
     await source.start();
 
-    await waitFor(() => fs.existsSync(path.join(approvals, ".decided", "req-term.md")));
+    const decidedDate = todayDateStr();
+    await waitFor(() => fs.existsSync(path.join(approvals, ".decided", decidedDate, "req-term.md")));
     expect(fs.existsSync(path.join(approvals, "req-term.md"))).toBe(false); // 종단분 이동됨
     expect(fs.existsSync(path.join(approvals, "req-pend.md"))).toBe(true); // pending 유지(무결성)
-    expect(fs.existsSync(path.join(approvals, ".decided", "req-pend.md"))).toBe(false);
+    expect(fs.existsSync(path.join(approvals, ".decided", decidedDate, "req-pend.md"))).toBe(false);
   });
 
   it("경로 탈출 req.id 는 fail-closed throw — approvals 밖 쓰기 차단(방어심화)", async () => {
@@ -1056,8 +1071,11 @@ describe("createMarkdownSource (통합)", () => {
 
     await source.renderOut(env.id);
 
-    // 링크 텍스트 그대로가 노트 파일명이어야 링크가 해소된다
-    expect(fs.existsSync(path.join(rootDir, "out", `${link}.md`))).toBe(true);
+    // 링크 텍스트 그대로가 노트 파일명이어야 링크가 해소된다 — 파일은 stamp 파생 날짜 폴더 아래(FR-001).
+    const stamp = link.split(" ")[0]!;
+    expect(
+      fs.existsSync(path.join(rootDir, "out", dateFolderFromStamp(stamp), `${link}.md`)),
+    ).toBe(true);
   });
 
   it("renderOut: origin_ts sidecar → 스탬프 파일명 + 질문·시각 헤더", async () => {
@@ -1080,8 +1098,14 @@ describe("createMarkdownSource (통합)", () => {
 
     await source.renderOut("msg-2");
 
-    // 파일명 = sent 위키링크 텍스트(outNoteBase)와 동일 — 링크 해소 계약
-    const notePath = path.join(rootDir, "out", `${outNoteBase("20260703-162045", "msg-2")}.md`);
+    // 파일명 = sent 위키링크 텍스트(outNoteBase)와 동일 — 링크 해소 계약. 경로는 stamp 파생
+    // 날짜 폴더(2026-07-03) 아래(FR-001·ADR-002).
+    const notePath = path.join(
+      rootDir,
+      "out",
+      "2026-07-03",
+      `${outNoteBase("20260703-162045", "msg-2")}.md`,
+    );
     expect(fs.existsSync(notePath)).toBe(true);
     const note = fs.readFileSync(notePath, "utf8");
     expect(note).toContain("분석 결과입니다");
@@ -1091,7 +1115,12 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   // ── M8 2b-2: sent 세그먼트 아카이브 이관 ──────────────────────────────────
-  const archivePath = (): string => path.join(rootDir, "sent-archive.md");
+  // ADR-003: `markdown.archive` 는 파일이 아니라 전용 디렉터리로 해석되고, 그 안에 아카이브
+  // 시점 로컬일(YYYY-MM-DD.md) 파일이 생긴다(FR-003). archive 미설정(config off) 시 기본
+  // 디렉터리명은 `sent-archive`(A-02 기본값, `.md` 없음) — conf.markdown.archive 지정 시엔
+  // 그 값 자체가 디렉터리명이 된다(예: "sent-archive.md" 라는 이름의 디렉터리).
+  const archiveDirPath = (): string => path.join(rootDir, conf.markdown?.archive ?? "sent-archive");
+  const archiveFilePath = (): string => path.join(archiveDirPath(), `${todayDateStr()}.md`);
 
   it("자동(config on): 전송 시점에 본문을 아카이브로 이관하고 inbox 엔 sent 마커만 남긴다", async () => {
     conf.markdown!.archive = "sent-archive.md";
@@ -1102,13 +1131,13 @@ describe("createMarkdownSource (통합)", () => {
     await source.start();
 
     await waitFor(() => /sent \[\[.+\]\]/.test(fs.readFileSync(inboxPath, "utf8")));
-    await waitFor(() => fs.existsSync(archivePath()));
+    await waitFor(() => fs.existsSync(archiveFilePath()));
 
     const inbox = fs.readFileSync(inboxPath, "utf8");
     expect(inbox).not.toContain("이관될 본문입니다"); // 본문 제거
     expect(inbox).toMatch(/sent \[\[.+\]\]/); // 마커는 잔존
     expect(inbox.split("\n").filter((l) => l === blankSendLine())).toHaveLength(1);
-    expect(fs.readFileSync(archivePath(), "utf8")).toContain("이관될 본문입니다"); // 본문은 아카이브에
+    expect(fs.readFileSync(archiveFilePath(), "utf8")).toContain("이관될 본문입니다"); // 본문은 아카이브에
     expect(msgCount()).toBe(1); // enqueue 는 정상 1회
   });
 
@@ -1125,7 +1154,7 @@ describe("createMarkdownSource (통합)", () => {
     const inbox = fs.readFileSync(inboxPath, "utf8");
     expect(inbox).toContain("미완성 초안"); // 초안 보존
     expect(msgCount()).toBe(0); // enqueue 없음
-    expect(fs.existsSync(archivePath())).toBe(false); // 조용한 턴 → 아카이브 write 없음(no-op)
+    expect(fs.existsSync(archiveFilePath())).toBe(false); // 조용한 턴 → 아카이브 write 없음(no-op)
   });
 
   // SC-010: 자동 아카이브 ON 상태에서 앵커 없는 사용자 초안은 아카이브 이관·inbox 삭제 대상이 되지 않는다.
@@ -1141,7 +1170,7 @@ describe("createMarkdownSource (통합)", () => {
     const inbox = fs.readFileSync(inboxPath, "utf8");
     expect(inbox).toContain("사용자 초안 텍스트"); // inbox 잔존(삭제 아님)
     expect(inbox).toContain("sending report to boss"); // 원문 라인 파괴 없음
-    expect(fs.existsSync(archivePath())).toBe(false); // 아카이브 이관 없음(대상 미수집)
+    expect(fs.existsSync(archiveFilePath())).toBe(false); // 아카이브 이관 없음(대상 미수집)
     expect(msgCount()).toBe(0); // 경계·액션 미생성 → enqueue 도 없음
   });
 
@@ -1158,7 +1187,7 @@ describe("createMarkdownSource (통합)", () => {
     expect(inbox).toContain(`sent [[${outNoteBase(STAMP, "old")}]]`); // 마커 잔존
     expect(inbox).toMatch(/🗄️ archived 1 \d{8}-\d{6}$/m); // 종단 표기 · auto 없음(config off)
     expect(inbox).not.toContain("· auto");
-    expect(fs.readFileSync(archivePath(), "utf8")).toContain("지난 본문");
+    expect(fs.readFileSync(archiveFilePath(), "utf8")).toContain("지난 본문");
     expect(msgCount()).toBe(0); // 아카이브는 enqueue 미대상
   });
 
@@ -1178,7 +1207,7 @@ describe("createMarkdownSource (통합)", () => {
     expect(inbox).toContain("· auto"); // 자동 활성 표기
     expect(inbox).not.toContain("옛 본문"); // sent 세그먼트 본문 이관
     expect(inbox).toContain("작성중 초안"); // sent 아닌 진행 초안 보존
-    expect(fs.readFileSync(archivePath(), "utf8")).toContain("옛 본문");
+    expect(fs.readFileSync(archiveFilePath(), "utf8")).toContain("옛 본문");
   });
 
   it("크래시 멱등(Order X): 아카이브 append 후 inbox 미갱신 재기동 — 재전송 없이 본문 이관 수렴", async () => {
@@ -1187,7 +1216,8 @@ describe("createMarkdownSource (통합)", () => {
     // 크래시 재현: sending + 본문 잔존, out/<id>.out 존재(이미 enqueue/완료), 아카이브엔 이미 append 됨.
     fs.writeFileSync(inboxPath, "복구 본문\n" + sendingLine("crash-2", STAMP) + "\n");
     fs.writeFileSync(path.join(paths.outDir, "crash-2.out"), "응답");
-    fs.writeFileSync(archivePath(), `\n## [[${outNoteBase(STAMP, "crash-2")}]]\n\n복구 본문\n`);
+    fs.mkdirSync(archiveDirPath(), { recursive: true });
+    fs.writeFileSync(archiveFilePath(), `\n## [[${outNoteBase(STAMP, "crash-2")}]]\n\n복구 본문\n`);
 
     source = makeSource();
     await source.start();
@@ -1197,7 +1227,7 @@ describe("createMarkdownSource (통합)", () => {
     expect(inbox).not.toContain("복구 본문"); // 본문 제거 수렴
     expect(msgCount()).toBe(0); // 재enqueue 없음(hasId dedup)
     // 아카이브엔 본문 존재(재append 로 중복 가능 — 무해)
-    expect(fs.readFileSync(archivePath(), "utf8")).toContain("복구 본문");
+    expect(fs.readFileSync(archiveFilePath(), "utf8")).toContain("복구 본문");
   });
 
   it("자동: 한 턴 두 세그먼트 — 둘 다 이관·마커 잔존·빈 send 하나(경계·bottom-up splice)", async () => {
@@ -1210,7 +1240,7 @@ describe("createMarkdownSource (통합)", () => {
 
     await waitFor(() => msgCount() >= 2);
     await waitFor(() => {
-      const a = fs.existsSync(archivePath()) ? fs.readFileSync(archivePath(), "utf8") : "";
+      const a = fs.existsSync(archiveFilePath()) ? fs.readFileSync(archiveFilePath(), "utf8") : "";
       return a.includes("본문하나") && a.includes("본문둘");
     });
 
@@ -1220,7 +1250,7 @@ describe("createMarkdownSource (통합)", () => {
     expect(inbox.match(/sent \[\[.+\]\]/g)).toHaveLength(2); // 마커 둘 잔존
     expect(inbox.split("\n").filter((l) => l === blankSendLine())).toHaveLength(1);
     // 문서 순서로 아카이브(본문하나 먼저).
-    const archive = fs.readFileSync(archivePath(), "utf8");
+    const archive = fs.readFileSync(archiveFilePath(), "utf8");
     expect(archive.indexOf("본문하나")).toBeLessThan(archive.indexOf("본문둘"));
   });
 
@@ -1232,7 +1262,8 @@ describe("createMarkdownSource (통합)", () => {
     source = makeSource();
     await expect(source!.start()).resolves.toBeUndefined();
 
-    const nested = path.join(rootDir, "logs", "sent-archive.md");
+    // archive=디렉터리 해석(ADR-003) — logs/sent-archive.md 자체가 디렉터리, 그 아래 날짜 파일.
+    const nested = path.join(rootDir, "logs", "sent-archive.md", `${todayDateStr()}.md`);
     await waitFor(
       () => fs.existsSync(nested) && fs.readFileSync(nested, "utf8").includes("중첩 경로 본문"),
     );
@@ -1250,13 +1281,13 @@ describe("createMarkdownSource (통합)", () => {
 
     await waitFor(
       () =>
-        fs.existsSync(archivePath()) &&
-        fs.readFileSync(archivePath(), "utf8").includes("멱등 본문"),
+        fs.existsSync(archiveFilePath()) &&
+        fs.readFileSync(archiveFilePath(), "utf8").includes("멱등 본문"),
     );
-    const after1 = fs.readFileSync(archivePath(), "utf8");
+    const after1 = fs.readFileSync(archiveFilePath(), "utf8");
     // 조용한 재스캔 유도 + 자기쓰기 echo 가드로 재처리 없음 → 아카이브 불변.
     await new Promise((r) => setTimeout(r, 250));
-    expect(fs.readFileSync(archivePath(), "utf8")).toBe(after1); // 재append 없음
+    expect(fs.readFileSync(archiveFilePath(), "utf8")).toBe(after1); // 재append 없음
     // 본문은 정확히 한 번만 아카이브.
     expect(after1.split("멱등 본문")).toHaveLength(2);
   });
@@ -1266,5 +1297,185 @@ describe("createMarkdownSource (통합)", () => {
     conf.markdown!.archive = "approvals/sent-archive.md";
     source = makeSource();
     await expect(source!.start()).rejects.toThrow();
+  });
+
+  // ── Part A 파티셔닝 — 재기록 멱등 (FR-001) ──────────────────────────────
+  // Happy-path 폴더 배치 자체는 위 "renderOut: origin_ts sidecar" 등 마이그레이션된 baseline 이
+  // 이미 커버 — 여기선 재기록 시 중복 폴더가 생기지 않는 멱등성만 추가로 검증한다.
+  it("renderOut 재호출(같은 origin_ts)은 같은 날짜 폴더의 같은 파일을 갱신하고 중복 폴더를 만들지 않는다", async () => {
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
+    source = makeSource();
+    await source.start();
+
+    const originIso = "2026-07-05T09:00:00.000Z";
+    fs.writeFileSync(
+      path.join(paths.outDir, "msg-r.out.json"),
+      JSON.stringify({ reply_ref: { channel_msg_id: "msg-r" }, origin_ts: originIso }),
+    );
+    fs.writeFileSync(path.join(paths.outDir, "msg-r.out"), "응답 v1");
+    await source.renderOut("msg-r");
+
+    fs.writeFileSync(path.join(paths.outDir, "msg-r.out"), "응답 v2(재렌더)");
+    await source.renderOut("msg-r");
+
+    const outboxDir = path.join(rootDir, "out");
+    const dateDirs = fs
+      .readdirSync(outboxDir)
+      .filter((f) => /^\d{4}-\d{2}-\d{2}$/.test(f) && fs.statSync(path.join(outboxDir, f)).isDirectory());
+    expect(dateDirs).toEqual(["2026-07-05"]); // 재렌더로 다른 날짜 폴더가 새로 생기지 않음
+    const files = fs.readdirSync(path.join(outboxDir, "2026-07-05"));
+    expect(files).toHaveLength(1); // 같은 파일 갱신 — 중복 노트 없음
+    expect(fs.readFileSync(path.join(outboxDir, "2026-07-05", files[0]!), "utf8")).toContain(
+      "응답 v2(재렌더)",
+    );
+  });
+
+  // ── 설정 opt-in·기본값 (FR-020·FR-021, SC-017 통합측 — conf.test.ts 는 파싱측) ──────────
+  it("backup 미설정 시 이관 기능은 관측 가능한 결과(스캔·전송)에 영향이 없다(NFR-005·SC-025, GAP-001 해석)", async () => {
+    // 권장 해석(GAP-001): "산출물 위치 불변"이 아니라 "미설정 시 처리 결과 불변" — 파티셔닝 자체는
+    // FR-001~003 대로 상시 적용되되, backup 미설정이 스캔 대상(outbox/.decided)·전송 결과에 영향을
+    // 주지 않음을 검증한다(이관 job 미동작이 곧 처리 결과 불변으로 이어짐).
+    const inboxPath = path.join(rootDir, "inbox.md");
+    fs.writeFileSync(inboxPath, "질문\n- [x] 📤 send\n");
+    // conf.markdown 에 backup 관련 키를 일부러 넣지 않는다(opt-in 미설정 상태) — A-01 반영 후
+    // 타입에 필드가 생기면 아래 주석을 해제해 실제로 undefined 를 단언한다.
+    source = makeSource();
+    await source.start();
+
+    await waitFor(() => msgCount() >= 1);
+    expect(msgCount()).toBe(1); // 처리(enqueue) 결과 불변
+    await waitFor(() => /sent \[\[.+\]\]/.test(fs.readFileSync(inboxPath, "utf8")));
+  });
+});
+
+// ── 백업/정리 설정 검증 (SC-018·SC-019·SC-021·SC-028 markdown 측) ───────────────
+// SC-002(결정완료만 이동)·SC-023(pending·라이브 inbox 제외)은 위 "createMarkdownSource (통합)"
+// 마이그레이션된 baseline(.decided 이관 스위트)이 이미 커버 — 중복 신규 작성 안 함.
+describe("백업 경로·안전창·제공자 기동 검증 (A-02·C-01 확정 시그니처 대상)", () => {
+  let tmpBase: string;
+  let rootDir: string;
+  let paths: ReturnType<typeof lanePaths>;
+  let conf: LaneConf;
+  let source: Source | null = null;
+
+  function makeSource(): Source {
+    return createMarkdownSource({ lane: "L", proj: "myproj", engine: "claude", paths, conf });
+  }
+
+  beforeEach(() => {
+    tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-md-retention-conf-"));
+    rootDir = path.join(tmpBase, "Notes");
+    fs.mkdirSync(rootDir, { recursive: true });
+    paths = lanePaths(tmpBase, "myproj", "L");
+    fs.mkdirSync(paths.outDir, { recursive: true });
+    fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
+    conf = {
+      source: "markdown",
+      backend: "acp",
+      engine: "claude",
+      perm_tier: "acp",
+      acp_version: "v1",
+      allowlist: [],
+      denylist: [],
+      hard_deny: [],
+      auto_relaunch: true,
+      markdown: { root: rootDir, inbox: "inbox.md" },
+    };
+  });
+
+  afterEach(() => {
+    if (source) source.stop();
+    source = null;
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  });
+
+  it("SC-018: 백업 경로가 outbox 와 겹치면 start 거부", async () => {
+    conf.markdown!.backup = path.join(rootDir, "out"); // 기본 outboxDir 과 동일 경로(중첩)
+    source = makeSource();
+    await expect(source!.start()).rejects.toThrow();
+  });
+
+  it("SC-018: vault 밖 절대경로·타 볼륨류 백업 경로는 허용된다(정상 기동)", async () => {
+    conf.markdown!.backup = path.join(tmpBase, "ExternalBackup"); // vault(rootDir) 밖
+    source = makeSource();
+    await expect(source!.start()).resolves.toBeUndefined();
+  });
+
+  it("SC-019: backup 활성 + archive 미설정이면 validate 가 경고를 반환한다(침묵 금지)", () => {
+    conf.markdown!.backup = path.join(tmpBase, "ExternalBackup");
+    const result = markdownDescriptor.validate!({ conf, opts: {} });
+    expect(result.errors).toEqual([]); // 경고이지 하드 오류 아님(생성 자체는 허용)
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("SC-019: backup+archive 둘 다 설정되면 미설정 경고가 나오지 않는다", () => {
+    conf.markdown!.backup = path.join(tmpBase, "ExternalBackup");
+    conf.markdown!.archive = "sent-archive.md";
+    const result = markdownDescriptor.validate!({ conf, opts: {} });
+    // root 미존재 등 무관 경고와 섞이지 않도록 backup/archive 문구만 느슨히 확인.
+    expect(result.warnings.some((w) => /backup/i.test(w) && /archive/i.test(w))).toBe(false);
+  });
+
+  it("SC-021: out_retention_days 가 retention_days+1 미만이면 start 거부", async () => {
+    conf.markdown!.retention_days = 2;
+    conf.markdown!.out_retention_days = 2; // 2 >= 2+1 아님 → 위배
+    source = makeSource();
+    await expect(source!.start()).rejects.toThrow();
+  });
+
+  it("SC-021: 안전창 부등식(out_retention_days >= retention_days+1)을 충족하면 정상 기동", async () => {
+    conf.markdown!.retention_days = 2;
+    conf.markdown!.out_retention_days = 3; // K=1 부등식 충족(ADR-006)
+    source = makeSource();
+    await expect(source!.start()).resolves.toBeUndefined();
+  });
+
+  it("SC-028: sync_provider 허용값(icloud)은 정상 수용된다", async () => {
+    conf.markdown!.sync_provider = "icloud";
+    source = makeSource();
+    await expect(source!.start()).resolves.toBeUndefined();
+  });
+
+  it("SC-028: 미지원 sync_provider 값(gdrive)은 start 거부(fail-closed) + 사유 표기", async () => {
+    conf.markdown!.sync_provider = "gdrive";
+    source = makeSource();
+    await expect(source!.start()).rejects.toThrow();
+  });
+
+  it("SC-028: sync_provider 미설정은 거부 없이 정상 기동(local 간주)", async () => {
+    source = makeSource();
+    await expect(source!.start()).resolves.toBeUndefined();
+  });
+});
+
+// ── relocateOldFolders — 라이브 inbox·비날짜 항목 제외 (SC-005) ────────────────
+// FR-006: 라이브 inbox 단일 파일은 파티셔닝·이관 대상이 아니다. relocateOldFolders 는 날짜명
+// (YYYY-MM-DD) 폴더만 이관 대상으로 판정하므로, 같은 루트에 놓인 inbox 파일(비날짜명)은 readdir
+// 목록엔 잡히되 날짜 정규식 미매치로 자연히 대상에서 제외되어야 한다(FR-004 레거시 flat 파일과 동일
+// 메커니즘 — 구현 로직 공유, 별도 화이트리스트 불요).
+describe("relocateOldFolders — 라이브 inbox 파일은 이관 대상 집합에 포함되지 않는다", () => {
+  it("SC-005: vaultDir 에 놓인 inbox.md(비날짜명)는 이관 후에도 원위치에 남는다", async () => {
+    const { relocateOldFolders } = await import("../../src/src-adapters/markdown-retention.js");
+    const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-md-inbox-excl-"));
+    try {
+      const vaultDir = path.join(tmpBase, "Notes");
+      const backupDir = path.join(tmpBase, "Backup");
+      fs.mkdirSync(vaultDir, { recursive: true });
+      fs.writeFileSync(path.join(vaultDir, "inbox.md"), "라이브 인박스 본문");
+      fs.mkdirSync(path.join(vaultDir, "2026-07-01"), { recursive: true });
+      fs.writeFileSync(path.join(vaultDir, "2026-07-01", "note.md"), "옛 노트");
+
+      await relocateOldFolders({
+        roots: [{ vaultDir, backupDir, unit: "folder" }],
+        cutoffDate: "2026-07-08",
+        materialize: async () => "ready",
+      });
+
+      expect(fs.existsSync(path.join(vaultDir, "inbox.md"))).toBe(true);
+      expect(fs.readFileSync(path.join(vaultDir, "inbox.md"), "utf8")).toBe("라이브 인박스 본문");
+      expect(fs.existsSync(path.join(backupDir, "inbox.md"))).toBe(false);
+    } finally {
+      fs.rmSync(tmpBase, { recursive: true, force: true });
+    }
   });
 });

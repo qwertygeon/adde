@@ -72,6 +72,23 @@ function setupMdLane(
   return { base: tmpBase, rootDir };
 }
 
+/**
+ * outbox 출력노트 탐색 — stamp 파생 날짜 폴더 파티셔닝(FR-001) 이후엔 top-level 이 아니라
+ * `<outboxDir>/<YYYY-MM-DD>/` 하위에 놓이므로 1단계 하위까지 탐색한다(알림류 `_*.md` 제외).
+ */
+function findOutNote(outDir: string): string | null {
+  if (!fs.existsSync(outDir)) return null;
+  for (const entry of fs.readdirSync(outDir)) {
+    const full = path.join(outDir, entry);
+    if (entry.endsWith(".md") && !entry.startsWith("_")) return full;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(entry) && fs.statSync(full).isDirectory()) {
+      const nested = fs.readdirSync(full).find((f) => f.endsWith(".md") && !f.startsWith("_"));
+      if (nested) return path.join(full, nested);
+    }
+  }
+  return null;
+}
+
 describe("SC-002: 크래시 → 백오프 → resumeSession 재기동 후 인바운드 정상 처리", () => {
   it("동일 세션·구독을 승계한 채 재기동되어 재기동 후 도착 인바운드가 정상 처리된다", async () => {
     const proj = "recoverproj";
@@ -91,14 +108,8 @@ describe("SC-002: 크래시 → 백오프 → resumeSession 재기동 후 인바
     // 재기동 후 도착 인바운드 — 승계된 구독자가 응답을 수신해 out 노트로 렌더된다.
     const outDir = path.join(rootDir, "out");
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "복구 후 문의\n- [x] send\n");
-    await waitFor(
-      () =>
-        fs.existsSync(outDir) &&
-        fs.readdirSync(outDir).some((f) => f.endsWith(".md") && !f.startsWith("_")),
-      { timeoutMs: 8000 },
-    );
-    const note = fs.readdirSync(outDir).find((f) => f.endsWith(".md") && !f.startsWith("_"))!;
-    expect(fs.readFileSync(path.join(outDir, note), "utf8")).toContain("pong");
+    await waitFor(() => findOutNote(outDir) !== null, { timeoutMs: 8000 });
+    expect(fs.readFileSync(findOutNote(outDir)!, "utf8")).toContain("pong");
   }, 20000); // 실 백오프(초기 1s) + I/O 왕복 — 부하 시 vitest 기본 5s 타임아웃 여유 확보.
 });
 

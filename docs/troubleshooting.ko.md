@@ -168,5 +168,10 @@ adde restart <proj>                # 데몬 재기동으로 회수
 | 레인이 안 뜸                  | `root` 절대경로가 실제 존재하는지(없으면 fail-closed) · inbox/approvals/outbox 경로가 서로 겹치지 않는지(같거나 포함 관계면 기동 거부) |
 | 기동이 거부됨(제어 노트 위치) | inbox·approvals·outbox 가 `cwd` **밖**에 있는지(안에 있으면 자기승인 위험으로 거부)                                                    |
 | 응답 노트가 안 보임           | `outbox` 경로 확인, AI 턴이 끝났는지(idle)                                                                                             |
+| 출력노트·결정된 승인이 예상 위치에 없음 | 그 아래 `YYYY-MM-DD/` 하위 폴더 확인(전송/결정 시각 기준 날짜 파티셔닝, `markdown.backup` 미설정에도 항상 적용) — `markdown.backup` 설정 시엔 `retention_days` 보다 오래된 것은 백업 폴더에서 확인 |
+| 기동이 거부됨("backup path overlaps ...") | `markdown.backup` 이 vault 또는 ADDE 내부 상태 폴더와 겹침 — vault 밖(공통 상위 경로 없는 곳)으로 지정 변경 |
+| 기동이 거부됨("unsupported sync_provider") | `markdown.sync_provider` 는 `local` 또는 `icloud` 만 허용(미설정 시 `local`) |
+| 기동이 거부됨("out_retention_days ... must be >= retention_days ...") | `markdown.out_retention_days` 를 `retention_days + 1` 이상으로 올리거나 미설정 |
+| "backup relocation is on but archive is not configured" 경고 | `markdown.backup` 은 켜져 있는데 `markdown.archive` 가 없음 — 전송 본문도 이관하려면 아카이브 디렉터리를 함께 설정(아니면 inbox 본문은 계속 쌓임) |
 
-상세 셋업: [마크다운 가이드](markdown.ko.md).
+상세 셋업: [마크다운 가이드](markdown.ko.md#vault-가볍게-유지하기-이관-기준일백업-이관).

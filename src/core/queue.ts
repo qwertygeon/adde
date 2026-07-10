@@ -344,11 +344,13 @@ async function markerAgeDays(filePath: string, now: Date): Promise<number> {
 }
 
 /**
- * state out/ 의 dedup 앵커를 정리(prune)한다. 종단 그룹(`.sent`/`.aborted`/`.failed` 중 하나 이상
- * 존재)만 대상이며, 전송 진행 중(`.sending`) id 는 절대 제외한다. 안전창(safeWindowDays) 경과분만
- * id 단위 원자 그룹(`.out`/`.out.json`/`.sent`/`.aborted`/`.failed` 동시 unlink, 부재는 무시)으로
- * 삭제한다. flat 유지 — isDone/hasId 의 O(1) access 계약을 깨지 않는다. 재실행은 no-op(대상 파일이
- * 이미 없으므로 자연히 idempotent).
+ * state out/ 의 dedup 앵커를 정리(prune)한다. 종단 그룹(`.sent`/`.aborted` 중 하나 이상 존재 —
+ * findUnsent 의 종단 정의와 동일 집합)만 대상이며, 전송 진행 중(`.sending`) id 는 절대 제외한다.
+ * `.failed` 는 종단이 아니다 — `.out`+`.failed`(전송 실패·재전송 대기) id 는 flushUnsent 재시도
+ * 대상이므로 삭제하면 미전달 응답 파괴 + dedup 앵커 소실이 된다(보존). 안전창(safeWindowDays)
+ * 경과분만 id 단위 원자 그룹(`.out`/`.out.json`/`.sent`/`.aborted`/`.failed` 동시 unlink — `.failed`
+ * 는 종단 판정엔 안 쓰이나 종단 그룹의 잔여 가시성 파일로서 함께 정리, 부재는 무시)으로 삭제한다.
+ * flat 유지 — isDone/hasId 의 O(1) access 계약을 깨지 않는다. 재실행은 no-op(idempotent).
  */
 export async function pruneOut(
   paths: LanePaths,
@@ -376,7 +378,7 @@ export async function pruneOut(
   for (const id of ids) {
     if (await isSending(paths, id)) continue; // 진행 중 — 절대 제외(권한 게이트·미전송 메시지 보호)
 
-    const terminalSuffixes = [".sent", ".aborted", ".failed"] as const;
+    const terminalSuffixes = [".sent", ".aborted"] as const;
     let latestAge: number | null = null;
     for (const suf of terminalSuffixes) {
       try {

@@ -61,16 +61,42 @@ describe("pruneOut — 종단 그룹 id 원자 삭제·안전창 경과분만 (S
     expect(result.removed).not.toContain("recent-done");
   });
 
-  it("경과한 .aborted·.failed 종단 그룹도 동일하게 원자 삭제된다", async () => {
+  it("경과한 .aborted 종단 그룹도 동일하게 원자 삭제된다", async () => {
     const oldIso = "2026-06-01T00:00:00.000Z";
     fs.writeFileSync(path.join(paths.outDir, "old-aborted.out"), "응답");
     fs.writeFileSync(path.join(paths.outDir, "old-aborted.aborted"), oldIso);
-    fs.writeFileSync(path.join(paths.outDir, "old-failed.failed"), oldIso);
 
     await pruneOut(paths, 5, NOW);
 
     expect(anyOutFileExists("old-aborted")).toBe(false);
-    expect(anyOutFileExists("old-failed")).toBe(false);
+  });
+
+  it(".failed 는 종단이 아니다 — .out+.failed(전송 실패·재전송 대기) id 는 안전창 경과여도 보존된다", async () => {
+    // findUnsent 종단 정의(.sent/.aborted)와 동일 집합이어야 한다 — .failed 를 종단으로 오분류하면
+    // 재전송 대기 중인 미전달 응답의 .out(dedup 앵커)이 파괴된다(PR #44 독립 리뷰 발견).
+    const oldTime = new Date("2026-06-01T00:00:00.000Z");
+    fs.writeFileSync(path.join(paths.outDir, "undelivered.out"), "미전달 응답");
+    fs.writeFileSync(path.join(paths.outDir, "undelivered.out.json"), "{}");
+    fs.writeFileSync(path.join(paths.outDir, "undelivered.failed"), "deliver 실패 기록");
+    for (const f of ["undelivered.out", "undelivered.out.json", "undelivered.failed"]) {
+      fs.utimesSync(path.join(paths.outDir, f), oldTime, oldTime);
+    }
+
+    const result = await pruneOut(paths, 5, NOW);
+
+    expect(anyOutFileExists("undelivered")).toBe(true); // 전 파일 보존(재전송 경로 유지)
+    expect(result.removed).not.toContain("undelivered");
+  });
+
+  it("종단 그룹 삭제 시 잔여 .failed 가시성 파일은 그룹과 함께 정리된다", async () => {
+    const oldIso = "2026-06-01T00:00:00.000Z";
+    fs.writeFileSync(path.join(paths.outDir, "done-with-failed.out"), "응답");
+    fs.writeFileSync(path.join(paths.outDir, "done-with-failed.sent"), oldIso);
+    fs.writeFileSync(path.join(paths.outDir, "done-with-failed.failed"), "과거 실패 후 성공");
+
+    await pruneOut(paths, 5, NOW);
+
+    expect(anyOutFileExists("done-with-failed")).toBe(false); // .failed 포함 그룹 전체 정리
   });
 
   it("진행 중(.sending) 마커가 있는 id 는 안전창 경과 여부와 무관하게 삭제되지 않는다(FR-028)", async () => {

@@ -1071,7 +1071,21 @@ export function createMarkdownSource(cfg: SourceContext): Source {
    * fail-open — 실패해도 폴·메시지 파이프라인은 지속되며, last-run 은 성공·실패 무관하게 갱신해
    * 같은 날 반복 재시도로 로그가 쌓이는 것을 막는다(다음 날 다시 시도).
    */
-  async function runRetentionMaintenance(): Promise<void> {
+  // 재진입 가드 — poll tick(기본 2초)·start() 가 fire-and-forget 으로 겹쳐 호출해도 동시 실행을
+  // 차단한다. 첫 활성화 대량 이관·icloud dataless 유계 대기(파일당 수 초)에서는 한 실행이 다음
+  // tick 보다 오래 걸리는 게 일상 케이스라, 가드 없이는 동일 src/dst 에 대한 동시 copy+unlink 가
+  // 겹쳐 크래시 시 원본·사본 모두 잃는 창이 열린다(safeMove 무손실 불변식 훼손 — PR #44 재리뷰).
+  // 재진입 호출은 진행 중 실행의 핸들을 그대로 반환 → stop() 의 retentionOp 대기가 실 실행을 가리킨다.
+  let retentionInFlight: Promise<void> | null = null;
+  function runRetentionMaintenance(): Promise<void> {
+    if (retentionInFlight) return retentionInFlight;
+    retentionInFlight = doRetentionMaintenance().finally(() => {
+      retentionInFlight = null;
+    });
+    return retentionInFlight;
+  }
+
+  async function doRetentionMaintenance(): Promise<void> {
     if (backupDir === undefined && outRetentionDays === undefined) return;
     const now = new Date();
     const todayStr = formatDateFolder(now);

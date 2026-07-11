@@ -182,6 +182,7 @@ lane add 옵션:
       whatEngine: "engine 로그",
       whatTranscript: "transcript",
       badCount: '줄수 "{{raw}}" 는 유효하지 않습니다(양의 정수만 가능) — 기본값 50 으로 대체합니다.',
+      watchError: "경고: 로그 변경 감시 실패({{msg}}) — 1초 폴링으로 계속 추적합니다.",
       notFound:
         "{{what}} 없음: {{path}}\n  ↳ 조치: 레인이 아직 활동하지 않았거나 기동되지 않았습니다. adde status {{proj}} 로 상태를 확인하세요.",
       daemonNotFound:

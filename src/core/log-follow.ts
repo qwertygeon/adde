@@ -20,10 +20,12 @@ export interface FollowDeps {
   stat?: (p: string) => Promise<{ ino: number; size: number } | null>;
   /** offset..offset+length 바이트 범위를 Buffer 로 읽는다(디코드는 코어가 StringDecoder 로 소유). */
   read?: (p: string, offset: number, length: number) => Promise<Buffer>;
-  /** 상위 디렉터리 변경 알림 주입점. eventType 은 플랫폼 간 신뢰 불가하므로 관측 트리거로만 쓴다. */
+  /** 상위 디렉터리 변경 알림 주입점. eventType 은 플랫폼 간 신뢰 불가하므로 관측 트리거로만 쓴다.
+   * onError(선택)는 감시 자체의 오류(감시 디렉터리 소실 등) 통지 — 기본 구현은 통지 후 감시를 내린다. */
   watch?: (
     path: string,
     listener: (eventType: string, filename: string | null) => void,
+    onError?: (err: unknown) => void,
   ) => { close(): void };
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
@@ -36,6 +38,8 @@ export interface FollowOptions {
   signal: AbortSignal;
   /** 안전망 폴링 주기 ms(기본 SAFETY_NET_POLL_MS) — fs.watch 는 1차 트리거이고 이 값은 최종 보루 주기. */
   pollMs?: number;
+  /** 변경 감시 자체가 오류로 끊겼을 때 1회 통지(선택) — 추적은 안전망 폴링으로 계속된다. */
+  onWatchError?: (err: unknown) => void;
   deps?: FollowDeps;
   /** 초기 스냅샷 이후 이어읽기 시작 오프셋(호출 시점 파일 끝). */
   startOffset: number;
@@ -64,12 +68,15 @@ const defaultRead: NonNullable<FollowDeps["read"]> = async (p, offset, length) =
   }
 };
 
-const defaultWatch: NonNullable<FollowDeps["watch"]> = (path, listener) => {
+const defaultWatch: NonNullable<FollowDeps["watch"]> = (path, listener, onError) => {
   const watcher = fsWatch(path, (eventType, filename) => listener(eventType, filename));
   // watcher 오류(감시 디렉터리 소실 등)는 크래시 사유가 아니다 — error 리스너 부재 시
-  // EventEmitter 가 throw 하므로 여기서 흡수하고 감시만 내린다. 추적은 상시 병행 중인
-  // 안전망 stat 폴링이 이어간다(조용한 멈춤 없음).
-  watcher.on("error", () => watcher.close());
+  // EventEmitter 가 throw 하므로 여기서 통지(보조 실패 = 로그 후 흡수는 호출측 몫) 후
+  // 감시만 내린다. 추적은 상시 병행 중인 안전망 stat 폴링이 이어간다(조용한 멈춤 없음).
+  watcher.on("error", (err) => {
+    onError?.(err);
+    watcher.close();
+  });
   return watcher;
 };
 
@@ -154,7 +161,9 @@ export function followFile(target: string, opts: FollowOptions): Promise<void> {
       if (filename !== null && filename !== targetName) return;
       void observe().catch(() => {});
     };
-    const watcher = watch(dirname(target), watchListener);
+    const watcher = watch(dirname(target), watchListener, (err) => {
+      if (!stopped) opts.onWatchError?.(err);
+    });
 
     const timer = setIntervalFn(() => {
       void observe().catch(() => {});

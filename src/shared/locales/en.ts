@@ -182,6 +182,8 @@ lane add options:
       whatTranscript: "transcript",
       badCount:
         'invalid line count "{{raw}}" (must be a positive integer) — falling back to 50.',
+      watchError:
+        "warning: log change watch failed ({{msg}}) — continuing to track via 1s polling.",
       notFound:
         "{{what}} not found: {{path}}\n  ↳ action: the lane has not been active or started yet. Check with adde status {{proj}}.",
       daemonNotFound:

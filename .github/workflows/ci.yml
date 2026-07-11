@@ -1,7 +1,6 @@
 name: CI
 
 # 브랜치 정책상 develop push 는 미실행, develop→main PR 과 main push 시점에 게이트 검증.
-# 근거: docs/_internal/design/08 §5 (cctg 와 동형).
 on:
   push:
     branches: [main]
@@ -28,5 +27,9 @@ jobs:
       - run: pnpm run lint
 
       - run: pnpm run i18n:check
+
+      # 실 프로세스 spawn 통합 테스트는 dist 산출물을 실행한다 — 빌드 없이 test 를 돌리면
+      # 그 스위트가 스킵된 채 green 이 되므로 반드시 선행한다.
+      - run: pnpm run build
 
       - run: pnpm test

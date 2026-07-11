@@ -430,6 +430,9 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
       signal: abort.signal,
       startOffset: result.endOffset,
       startIno: result.startIno,
+      onWatchError: (err) => {
+        process.stderr.write(t("ops.logs.watchError", { msg: errMsg(err) }) + "\n");
+      },
     });
     return 0;
   } finally {

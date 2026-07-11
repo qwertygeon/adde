@@ -19,6 +19,14 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const distEntry = path.join(repoRoot, "dist", "cli", "adde.js");
 const distAvailable = fs.existsSync(distEntry);
 
+if (!distAvailable) {
+  // 조용한 스킵 방지 — 이 스위트가 빠지면 실 프로세스 회귀 5건이 미실행인 채 green 이 된다.
+  // console.warn 은 vitest 수집 단계에서 노출되지 않아 stderr 에 직접 쓴다.
+  process.stderr.write(
+    "[logs-follow-spawn] dist 미존재 — 실 프로세스 spawn 회귀 5건을 스킵합니다. `pnpm build` 후 재실행하세요.\n",
+  );
+}
+
 let tmpBase: string;
 
 beforeEach(() => {

@@ -28,7 +28,7 @@
 ### Changed
 
 - **[behavior-change] 전역 플래그(`-v`/`--version`, `-h`/`--help`) 위치 무관 인식** — 기존에는 `argv` 첫 위치에서만 인식돼 `adde up --version` 이 `--version` 을 프로젝트명으로 오인해 그대로 진행했다. 이제는 위치 무관하게 어느 자리에서든 버전을 출력하고 정상 종료(exit 0)한다. `-h`/`--help` 도 동일하게 위치 무관 — 알려진 명령이 선행하면 그 명령의 usage 를, 아니면 전역 usage 를 출력한다.
-- **[behavior-change] 미지원 플래그 거부** — 각 명령이 선언한 플래그 목록에 없는 `--flag`(및 미지원 단축 플래그)는 이제 오류 메시지와 해당 명령의 usage 를 stderr 에 함께 출력하고 exit 1 로 종료한다(기존: 다수 명령이 미지원 플래그를 조용히 무시하고 정상 진행). 종료 코드는 기존 exit 1 규약을 유지한다(exit 2 분리는 범위 외).
+- **[behavior-change] 미지원 플래그 거부** — 각 명령이 선언한 플래그 목록에 없는 `--flag`(및 미지원 단축 플래그)는 이제 오류 메시지와 해당 명령의 usage 를 stderr 에 함께 출력하고 exit 1 로 종료한다(기존: 다수 명령이 미지원 플래그를 조용히 무시하고 정상 진행). 종료 코드는 기존 exit 1 규약을 유지한다(exit 2 분리는 범위 외). 같은 맥락에서, 값이 필요한 플래그 바로 뒤에 플래그형 토큰(`--foo`·`-x`)이 오면 값으로 소비하지 않고 값-누락 오류로 거부한다(기존 `lane add` 파서는 다음 토큰을 무조건 값으로 소비 — 예: `--source --force` 가 `source="--force"` 로 수용됐다). 숫자 접두 토큰(`-5`, `-100…`)은 플래그로 보지 않아 음수 값·위치인자는 기존대로 동작한다.
 - **[behavior-change] `adde doctor`/`adde sessions` 의 `--json`, `adde logs` 의 `--follow`/`-f` 가 셸 자동완성·명령별 usage 선언에 정식 반영된다** — 실제로는 지원되던 플래그가 선언 누락(drift)으로 탭 자동완성에서 빠져 있던 문제를 해소한다(관측 동작 자체는 불변, 완성·usage 노출 범위만 교정).
 - **[behavior-change] `adde restart` 종료 코드 변경** — 기동 실패 레인이 1개 이상이면 이제 exit code 1 을 반환한다(기존: launchctl 재적재 자체가 예외를 던지지 않는 한 항상 exit 0 이라, 레인 기동 실패가 성공처럼 보였다). 전 레인 기동 성공 시에는 기존처럼 exit 0.
 - **[BREAKING] `adde status --json` 최상위 출력 구조 재구성** — 기존 레인 배열(`LaneStatusRow[]`)에서 `{ "lanes": [...], "halt": ... }` 객체로 바뀐다(`halt` 는 크래시루프 자가정지 상태를 프로젝트 단위로 담는다). **마이그레이션**: 기존 최상위 배열 참조를 `.lanes` 로 바꿔라 — 예: `adde status --json | jq '.[]'` → `jq '.lanes[]'`(단일 프로젝트 뷰는 `halt: HaltRecord|null`, 인자 없는 집계 뷰는 `halt: {"<proj>": HaltRecord|null, ...}`). 텍스트(비-JSON) 출력 형식은 불변.

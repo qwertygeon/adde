@@ -12,7 +12,14 @@ import {
 } from "../core/lane-config.js";
 import type { LaneAddOptions } from "../core/lane-config.js";
 import { collectStatus } from "../core/diagnostics.js";
-import { USAGE, buildLaneUsage, cmdError, laneError, unknownLaneSub } from "../core/messages.js";
+import {
+  USAGE,
+  buildLaneUsage,
+  cmdError,
+  laneError,
+  unknownLaneSub,
+  flagErrorText,
+} from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
@@ -20,60 +27,14 @@ import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
 import { SOURCE_IDS, SOURCE_REGISTRY } from "../src-adapters/index.js";
 import { createPrompter } from "./prompt.js";
 import type { Ask } from "./prompt.js";
+import { findSub, valueKeys } from "./spec.js";
+import { parseCommand } from "./parse.js";
+import type { ParseResult } from "./parse.js";
 
 export type { Ask } from "./prompt.js";
 
-/** `--key value` / `--flag` 혼합 파싱. 값이 필요한 키는 valueKeys 로 지정. */
-interface ParsedArgs {
-  positional: string[];
-  flags: Record<string, string | true>;
-}
-
-function parseArgs(argv: readonly string[], valueKeys: ReadonlySet<string>): ParsedArgs {
-  const positional: string[] = [];
-  const flags: Record<string, string | true> = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === undefined) continue;
-    if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const eq = key.indexOf("=");
-      if (eq !== -1) {
-        flags[key.slice(0, eq)] = key.slice(eq + 1);
-      } else if (valueKeys.has(key)) {
-        const next = argv[i + 1];
-        if (next === undefined) throw new LaneConfigError(t("lane.valueRequired", { key }));
-        flags[key] = next;
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else {
-      positional.push(arg);
-    }
-  }
-  return { positional, flags };
-}
-
-const ADD_VALUE_KEYS = new Set([
-  "source",
-  "engine",
-  "backend",
-  "perm-tier",
-  "acp-version",
-  "cwd",
-  "allowlist",
-  "denylist",
-  "hard-deny",
-  "chat-id",
-  "allow-from",
-  "file-mode",
-  "lang",
-  "root",
-  "inbox",
-  "approvals",
-  "outbox",
-]);
+/** `lane add` 값 플래그 키(`--` 제거) — spec.ts 의 SubSpec 선언에서 파생(SSOT). */
+const laneAddValueKeys = valueKeys(findSub("lane", "add")!.flags);
 
 /**
  * 대화형 여부 결정 — 명시 `--interactive`, 또는 (`--no-interactive` 아님 && 필드 플래그 없음 && TTY).
@@ -84,7 +45,7 @@ export function shouldRunInteractive(
   isTTY: boolean,
 ): boolean {
   const fieldFlagsGiven =
-    [...ADD_VALUE_KEYS].some((k) => flags[k] !== undefined) ||
+    [...laneAddValueKeys].some((k) => flags[k] !== undefined) ||
     flags["safe-defaults"] === true ||
     flags["token-stdin"] === true;
   return (
@@ -179,8 +140,8 @@ export async function collectInteractive(
   return opts;
 }
 
-async function handleAdd(rest: readonly string[]): Promise<number> {
-  const { positional, flags } = parseArgs(rest, ADD_VALUE_KEYS);
+async function handleAdd(p: ParseResult): Promise<number> {
+  const { positional, flags } = p;
   const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneAdd + "\n");
@@ -267,9 +228,8 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
   return 0;
 }
 
-async function handleList(rest: readonly string[]): Promise<number> {
-  const { positional } = parseArgs(rest, new Set());
-  const [proj] = positional;
+async function handleList(p: ParseResult): Promise<number> {
+  const [proj] = p.positional;
   if (!proj) {
     process.stderr.write(USAGE.laneLs + "\n");
     return 1;
@@ -280,9 +240,8 @@ async function handleList(rest: readonly string[]): Promise<number> {
   return 0;
 }
 
-async function handleShow(rest: readonly string[]): Promise<number> {
-  const { positional } = parseArgs(rest, new Set());
-  const [proj, lane] = positional;
+async function handleShow(p: ParseResult): Promise<number> {
+  const [proj, lane] = p.positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneShow + "\n");
     return 1;
@@ -292,8 +251,8 @@ async function handleShow(rest: readonly string[]): Promise<number> {
   return 0;
 }
 
-async function handleRemove(rest: readonly string[]): Promise<number> {
-  const { positional, flags } = parseArgs(rest, new Set());
+async function handleRemove(p: ParseResult): Promise<number> {
+  const { positional, flags } = p;
   const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneRm + "\n");
@@ -353,29 +312,36 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
 export async function runLane(argv: readonly string[]): Promise<number> {
   const [sub, ...rest] = argv;
   // `adde lane <sub> --help` — 전체 lane 옵션 도움말(하위 명령 인자 검증보다 우선).
-  if (sub !== undefined && sub !== "help" && (rest.includes("--help") || rest.includes("-h"))) {
+  if (sub !== undefined && sub !== "help" && parseCommand({ flags: [] }, rest).help) {
     process.stdout.write(`${buildLaneUsage()}\n`);
     return 0;
   }
+  if (sub === undefined || sub === "help" || sub === "--help" || sub === "-h") {
+    process.stdout.write(`${buildLaneUsage()}\n`);
+    return 0;
+  }
+  const subSpec = findSub("lane", sub);
+  if (!subSpec) {
+    process.stderr.write(unknownLaneSub(sub) + "\n");
+    return 1;
+  }
   try {
-    switch (sub) {
+    const p = parseCommand(subSpec, rest);
+    if (p.error) {
+      process.stderr.write(`${laneError(flagErrorText(p.error))}\n\n${buildLaneUsage()}\n`);
+      return 1;
+    }
+    switch (subSpec.name) {
       case "add":
-        return await handleAdd(rest);
+        return await handleAdd(p);
       case "ls":
-      case "list":
-        return await handleList(rest);
+        return await handleList(p);
       case "show":
-        return await handleShow(rest);
+        return await handleShow(p);
       case "rm":
-      case "remove":
-        return await handleRemove(rest);
-      case undefined:
-      case "help":
-      case "--help":
-      case "-h":
-        process.stdout.write(`${buildLaneUsage()}\n`);
-        return 0;
+        return await handleRemove(p);
       default:
+        // 도달하지 않음(lane subs 는 add/ls/show/rm/help 로 한정) — 방어.
         process.stderr.write(unknownLaneSub(sub) + "\n");
         return 1;
     }

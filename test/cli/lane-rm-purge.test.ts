@@ -44,3 +44,28 @@ describe("adde lane rm --purge — 활성 레인 가드", () => {
     expect(laneRemove).toHaveBeenCalledWith("demo", "main", { purge: true });
   });
 });
+
+// GAP-003 (SC-012 보충): 위 활성-레인 가드(error 상태)와는 별개의, 더 뒤에 있는 확인 게이트
+// (이름 재입력/비TTY --force 요구) 자체를 검증한다. 활성-레인 가드를 통과시키기 위해 상태를
+// "stopped"(비활성)로 고정해야 이 게이트 분기에 실제로 도달한다.
+describe("adde lane rm --purge — 확인 게이트(이름 재입력/비TTY --force)", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  it("활성 아닌 레인 + 비TTY + --force 없음 → purgeNeedForce 로 거부", async () => {
+    collectStatus.mockResolvedValue([{ lane: "main", status: "stopped" }]);
+    const errs: string[] = [];
+    const spyErr = vi.spyOn(process.stderr, "write").mockImplementation((s: unknown) => {
+      errs.push(String(s));
+      return true;
+    });
+    // process.stdin.isTTY 는 vitest 기본 실행에서 이미 falsy — 비TTY 분기로 자연 진입한다.
+    const code = await runLane(["rm", "demo", "main", "--purge"]);
+    spyErr.mockRestore();
+    expect(code).toBe(1);
+    expect(laneRemove).not.toHaveBeenCalled();
+    // "확인 없이" 문구로 확인 게이트(purgeNeedForce) 도달을 확정 — 활성-레인 거부(purgeRunning,
+    // "안전하게 정리할 수 없습니다")와 구분해 이 테스트가 실제로 다른 분기를 검증함을 보장한다.
+    expect(errs.join("")).toContain("확인 없이");
+    expect(errs.join("")).not.toContain("안전하게 정리할 수 없습니다");
+  });
+});

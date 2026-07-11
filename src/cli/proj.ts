@@ -5,13 +5,16 @@
  */
 import { projRemove, LaneConfigError } from "../core/lane-config.js";
 import { listRegisteredProjects, collectStatus } from "../core/diagnostics.js";
-import { buildProjUsage, unknownProjSub, cmdError } from "../core/messages.js";
+import { buildProjUsage, unknownProjSub, cmdError, flagErrorText } from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
 import { t } from "../shared/i18n.js";
 import { defaultBase, assertSafeSegment } from "../shared/paths.js";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { createPrompter } from "./prompt.js";
+import { findSub } from "./spec.js";
+import { parseCommand } from "./parse.js";
+import type { ParseResult } from "./parse.js";
 
 /** 경로 존재 여부(throw 없이). */
 async function pathExists(p: string): Promise<boolean> {
@@ -29,8 +32,8 @@ interface ProjRow {
   running: number;
 }
 
-async function handleProjList(rest: readonly string[]): Promise<number> {
-  const json = rest.includes("--json");
+async function handleProjList(p: ParseResult): Promise<number> {
+  const json = p.flags.json === true;
   const projs = await listRegisteredProjects();
   const rows: ProjRow[] = [];
   for (const proj of projs) {
@@ -59,9 +62,9 @@ async function handleProjList(rest: readonly string[]): Promise<number> {
   return 0;
 }
 
-async function handleProjRemove(rest: readonly string[]): Promise<number> {
-  const force = rest.includes("--force");
-  const proj = rest.find((a) => !a.startsWith("--"));
+async function handleProjRemove(p: ParseResult): Promise<number> {
+  const force = p.flags.force === true;
+  const proj = p.positional[0];
   if (!proj) {
     process.stderr.write(buildProjUsage() + "\n");
     return 1;
@@ -128,25 +131,32 @@ async function handleProjRemove(rest: readonly string[]): Promise<number> {
  */
 export async function runProj(argv: readonly string[]): Promise<number> {
   const [sub, ...rest] = argv;
-  if (sub !== undefined && sub !== "help" && (rest.includes("--help") || rest.includes("-h"))) {
+  if (sub !== undefined && sub !== "help" && parseCommand({ flags: [] }, rest).help) {
     process.stdout.write(`${buildProjUsage()}\n`);
     return 0;
   }
+  if (sub === undefined || sub === "help" || sub === "--help" || sub === "-h") {
+    process.stdout.write(`${buildProjUsage()}\n`);
+    return 0;
+  }
+  const subSpec = findSub("proj", sub);
+  if (!subSpec) {
+    process.stderr.write(unknownProjSub(sub) + "\n");
+    return 1;
+  }
   try {
-    switch (sub) {
+    const p = parseCommand(subSpec, rest);
+    if (p.error) {
+      process.stderr.write(`${cmdError("proj", flagErrorText(p.error))}\n\n${buildProjUsage()}\n`);
+      return 1;
+    }
+    switch (subSpec.name) {
       case "ls":
-      case "list":
-        return await handleProjList(rest);
+        return await handleProjList(p);
       case "rm":
-      case "remove":
-        return await handleProjRemove(rest);
-      case undefined:
-      case "help":
-      case "--help":
-      case "-h":
-        process.stdout.write(`${buildProjUsage()}\n`);
-        return 0;
+        return await handleProjRemove(p);
       default:
+        // 도달하지 않음(proj subs 는 ls/rm/help 로 한정) — 방어.
         process.stderr.write(unknownProjSub(sub) + "\n");
         return 1;
     }

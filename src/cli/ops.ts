@@ -7,13 +7,21 @@ import { checkForUpdate, formatUpdateNotice } from "../core/update-check.js";
 import { errMsg } from "../shared/errors.js";
 import type { LaneStatusRow, AggregatedLaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
 import type { HaltRecord } from "../core/crash-loop.js";
-import { USAGE, cmdError } from "../core/messages.js";
+import { USAGE, cmdError, flagErrorText } from "../core/messages.js";
 import { t } from "../shared/i18n.js";
 import { readLedger, formatWhen } from "../core/session-ledger.js";
 import { lanePaths, defaultBase } from "../shared/paths.js";
 import { daemonLogPaths } from "../core/launchd.js";
 import { readFile } from "node:fs/promises";
 import { followFile } from "../core/log-follow.js";
+import { findCommand } from "./spec.js";
+import { parseCommand } from "./parse.js";
+import type { ParseResult } from "./parse.js";
+
+const STATUS_SPEC = findCommand("status")!;
+const DOCTOR_SPEC = findCommand("doctor")!;
+const LOGS_SPEC = findCommand("logs")!;
+const SESSIONS_SPEC = findCommand("sessions")!;
 
 /** ms → 사람용 경과시간(예: 1h2m, 3m4s, 12s). */
 function formatUptime(ms: number | null): string {
@@ -89,10 +97,15 @@ async function printUpdateNoticeIfAny(): Promise<void> {
   }
 }
 
-export async function runStatus(rest: readonly string[]): Promise<number> {
-  const json = rest.includes("--json");
-  const all = rest.includes("--all");
-  const proj = rest.find((a) => !a.startsWith("--"));
+export async function runStatus(rest: readonly string[], parsed?: ParseResult): Promise<number> {
+  const p = parsed ?? parseCommand(STATUS_SPEC, rest);
+  if (p.error) {
+    process.stderr.write(`${cmdError("status", flagErrorText(p.error))}\n\n${USAGE.status}\n`);
+    return 1;
+  }
+  const json = p.flags.json === true;
+  const all = p.flags.all === true;
+  const proj = p.positional[0];
 
   // 인자 없음 → 전 프로젝트 집계(CCTG parity). 기본은 실행 중(정지 제외), --all 은 정지 포함 전체.
   if (!proj) {
@@ -215,9 +228,17 @@ function checkSymbol(level: DoctorCheck["level"]): string {
   return level === "PASS" ? "✔" : level === "WARN" ? "▲" : "✘";
 }
 
-export async function runDoctorCli(rest: readonly string[]): Promise<number> {
-  const json = rest.includes("--json");
-  const proj = rest.find((a) => !a.startsWith("--"));
+export async function runDoctorCli(
+  rest: readonly string[],
+  parsed?: ParseResult,
+): Promise<number> {
+  const p = parsed ?? parseCommand(DOCTOR_SPEC, rest);
+  if (p.error) {
+    process.stderr.write(`${cmdError("doctor", flagErrorText(p.error))}\n\n${t("usage.doctor")}\n`);
+    return 1;
+  }
+  const json = p.flags.json === true;
+  const proj = p.positional[0];
   let checks: DoctorCheck[];
   try {
     checks = await runDoctor(proj);
@@ -247,11 +268,19 @@ export async function runDoctorCli(rest: readonly string[]): Promise<number> {
 }
 
 /** `adde sessions <proj> <lane>` — 세션 장부 목록(read-only). 재개는 채널 명령으로 수행. */
-export async function runSessions(rest: readonly string[]): Promise<number> {
-  const json = rest.includes("--json");
-  // `--json` 등 플래그를 proj/lane 값으로 오인하지 않도록 위치인자만 분리해 해석한다.
-  const positional = rest.filter((a) => !a.startsWith("--"));
-  const [proj, lane] = positional;
+export async function runSessions(
+  rest: readonly string[],
+  parsed?: ParseResult,
+): Promise<number> {
+  const p = parsed ?? parseCommand(SESSIONS_SPEC, rest);
+  if (p.error) {
+    process.stderr.write(
+      `${cmdError("sessions", flagErrorText(p.error))}\n\n${USAGE.sessions}\n`,
+    );
+    return 1;
+  }
+  const json = p.flags.json === true;
+  const [proj, lane] = p.positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.sessions + "\n");
     return 1;
@@ -354,13 +383,16 @@ export function parseLineCount(raw: string | undefined): { n: number; warn: bool
   return { n: 50, warn: true };
 }
 
-export async function runLogs(rest: readonly string[]): Promise<number> {
-  const engine = rest.includes("--engine");
-  const daemon = rest.includes("--daemon");
-  const follow = rest.includes("--follow") || rest.includes("-f");
-  // "-f"(단축 follow 플래그)도 "--"로 시작하지 않아 위치인자로 잘못 남을 수 있으므로 함께 제외한다
-  // (미제외 시 `logs <proj> <lane> -f`(N 미지정)가 "-f" 를 줄수로 오인해 spurious 경고 발생).
-  const positional = rest.filter((a) => !a.startsWith("--") && a !== "-f");
+export async function runLogs(rest: readonly string[], parsed?: ParseResult): Promise<number> {
+  const p = parsed ?? parseCommand(LOGS_SPEC, rest);
+  if (p.error) {
+    process.stderr.write(`${cmdError("logs", flagErrorText(p.error))}\n\n${USAGE.logs}\n`);
+    return 1;
+  }
+  const engine = p.flags.engine === true;
+  const daemon = p.flags.daemon === true;
+  const follow = p.flags.follow === true;
+  const positional = p.positional;
   const [proj, lane, nRaw] = positional;
 
   // --daemon 은 레인 무관(프로젝트 데몬 로그) — proj 만 필요, 둘째 위치인자는 N.

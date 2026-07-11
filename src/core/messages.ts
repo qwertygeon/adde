@@ -81,6 +81,19 @@ export function laneError(detail: string): string {
   return t("cli.laneError", { detail });
 }
 
+/**
+ * 파서 오류(kind+token)를 i18n 렌더링 텍스트로 변환 — 값 echo 없이 플래그/키 이름만 포함(A-P003).
+ * run/ops/lane/proj 디스패치가 공유하는 미지원 플래그·값 누락 오류 문구 SSOT.
+ */
+export function flagErrorText(error: {
+  kind: "unknown-flag" | "value-required";
+  token: string;
+}): string {
+  return error.kind === "value-required"
+    ? t("cli.valueRequired", { key: error.token })
+    : t("cli.unknownFlag", { flag: error.token });
+}
+
 /** 알 수 없는 lane 서브커맨드 안내(+ 사용법). */
 export function unknownLaneSub(sub: string): string {
   return `${t("cli.unknownSub", { sub })}\n\n${buildLaneUsage()}`;

@@ -1,19 +1,15 @@
 import { readVersion } from "../core/version.js";
 import { errMsg } from "../shared/errors.js";
-import { COMMANDS, buildUsage, USAGE, cmdError } from "../core/messages.js";
+import { COMMANDS, buildUsage, USAGE, cmdError, flagErrorText } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
 import { findCommand, suggestCommands } from "./spec.js";
+import { parseCommand } from "./parse.js";
 import { completionScript, SUPPORTED_SHELLS } from "./completion.js";
 import { installCrashGuard } from "../core/crash-guard.js";
 import type { ShutdownState } from "../core/crash-guard.js";
 import { createCrashLoopGuard } from "../core/crash-loop.js";
 import { defaultBase } from "../shared/paths.js";
-
-/** -h/--help 플래그가 인자에 있는지. */
-function wantsHelp(argv: readonly string[]): boolean {
-  return argv.includes("--help") || argv.includes("-h");
-}
 
 /**
  * 포그라운드 데몬 워커 로직 — `adde __daemon <proj>` 가 호출한다.
@@ -206,24 +202,46 @@ async function surfaceStartResult(
  * @returns 프로세스 종료 코드.
  */
 export async function run(argv: readonly string[]): Promise<number> {
-  const [first, second] = argv;
-
-  if (first === "--version" || first === "-v") {
-    process.stdout.write(`${COMMANDS.primary} ${readVersion()}\n`);
+  const first = argv[0];
+  if (first === undefined) {
+    process.stdout.write(`${buildUsage()}\n`);
     return 0;
   }
+  const spec = findCommand(first);
 
-  // 서브커맨드별 도움말 — `adde <cmd> --help`. lane 은 runLane 가 자체 처리(하위 명령 도움말).
-  if (first !== undefined && first !== "lane" && wantsHelp(argv.slice(1))) {
-    const spec = findCommand(first);
-    if (spec?.usageKey && !spec.hidden) {
+  // (A) 알려진 명령이 아님 — 미지원 명령·전역 플래그 선두(위치 무관 인식).
+  if (!spec) {
+    const g = parseCommand({ flags: [] }, argv);
+    if (g.version) {
+      process.stdout.write(`${COMMANDS.primary} ${readVersion()}\n`);
+      return 0;
+    }
+    if (g.help || first === "help") {
+      process.stdout.write(`${buildUsage()}\n`);
+      return 0;
+    }
+    if (g.error) {
+      process.stderr.write(`${flagErrorText(g.error)}\n\n${buildUsage()}\n`);
+      return 1;
+    }
+    // 비플래그 토큰 = 미지원 명령 → stderr 로 오류(+오타 추정 힌트) + 사용법(스크립트 오류 은폐 방지).
+    const suggestions = suggestCommands(first);
+    const hint =
+      suggestions.length > 0 ? " " + t("cli.didYouMean", { cmds: suggestions.join(", ") }) : "";
+    process.stderr.write(`${t("cli.unknownCmd", { cmd: first })}${hint}\n\n${buildUsage()}\n`);
+    return 1;
+  }
+
+  // 서브커맨드별 도움말 — `adde <cmd> --help`. lane 은 runLane 이 자체 처리(하위 명령 도움말).
+  if (first !== "lane" && parseCommand({ flags: [] }, argv.slice(1)).help) {
+    if (spec.usageKey && !spec.hidden) {
       process.stdout.write(t(spec.usageKey as never) + "\n");
       return 0;
     }
   }
 
   if (first === "completion") {
-    const shell = second;
+    const shell = argv[1];
     if (!shell) {
       process.stderr.write(USAGE.completion + "\n");
       return 1;
@@ -266,30 +284,10 @@ export async function run(argv: readonly string[]): Promise<number> {
     return runProj(argv.slice(1));
   }
 
-  if (first === "status") {
-    const { runStatus } = await import("./ops.js");
-    return runStatus(argv.slice(1));
-  }
-
-  if (first === "doctor") {
-    const { runDoctorCli } = await import("./ops.js");
-    return runDoctorCli(argv.slice(1));
-  }
-
-  if (first === "logs") {
-    const { runLogs } = await import("./ops.js");
-    return runLogs(argv.slice(1));
-  }
-
-  if (first === "sessions") {
-    const { runSessions } = await import("./ops.js");
-    return runSessions(argv.slice(1));
-  }
-
   // 내부 서브커맨드 — launchd 가 데몬 워커로 기동하는 포그라운드 상주 진입점.
   // 도움말 미노출(최소 표면). 사용자가 직접 부르지 않는 내부 명령.
   if (first === "__daemon") {
-    const proj = second;
+    const proj = argv[1];
     if (!proj) {
       process.stderr.write(t("usage.daemon") + "\n");
       return 1;
@@ -305,8 +303,41 @@ export async function run(argv: readonly string[]): Promise<number> {
     }
   }
 
+  // (C) 파싱형 top-level — up/down/restart/status/doctor/logs/sessions. 단일 parseCommand 호출로
+  // 전역 버전·미지원 플래그를 처리한 뒤 파싱 결과를 각 핸들러에 전달한다.
+  const res = parseCommand(spec, argv.slice(1));
+  if (res.version) {
+    process.stdout.write(`${COMMANDS.primary} ${readVersion()}\n`);
+    return 0;
+  }
+  if (res.error) {
+    const usage = spec.usageKey ? t(spec.usageKey as never) : buildUsage();
+    process.stderr.write(`${cmdError(first, flagErrorText(res.error))}\n\n${usage}\n`);
+    return 1;
+  }
+
+  if (first === "status") {
+    const { runStatus } = await import("./ops.js");
+    return runStatus(argv.slice(1), res);
+  }
+
+  if (first === "doctor") {
+    const { runDoctorCli } = await import("./ops.js");
+    return runDoctorCli(argv.slice(1), res);
+  }
+
+  if (first === "logs") {
+    const { runLogs } = await import("./ops.js");
+    return runLogs(argv.slice(1), res);
+  }
+
+  if (first === "sessions") {
+    const { runSessions } = await import("./ops.js");
+    return runSessions(argv.slice(1), res);
+  }
+
   if (first === "up") {
-    const proj = second;
+    const proj = res.positional[0];
     if (!proj) {
       process.stderr.write(USAGE.up + "\n");
       return 1;
@@ -362,7 +393,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   }
 
   if (first === "down") {
-    const proj = second;
+    const proj = res.positional[0];
     if (!proj) {
       process.stderr.write(USAGE.down + "\n");
       return 1;
@@ -379,7 +410,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   }
 
   if (first === "restart") {
-    const proj = second;
+    const proj = res.positional[0];
     if (!proj) {
       process.stderr.write(USAGE.restart + "\n");
       return 1;
@@ -403,16 +434,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     }
   }
 
-  // 인자 없음·명시적 도움말 → 사용법(정상 종료).
-  if (first === undefined || first === "-h" || first === "--help" || first === "help") {
-    process.stdout.write(`${buildUsage()}\n`);
-    return 0;
-  }
-
-  // 미지원 명령 → stderr 로 오류(+오타 추정 힌트) + 사용법, 비정상 종료(스크립트 오류 은폐 방지).
-  const suggestions = suggestCommands(first);
-  const hint =
-    suggestions.length > 0 ? " " + t("cli.didYouMean", { cmds: suggestions.join(", ") }) : "";
-  process.stderr.write(`${t("cli.unknownCmd", { cmd: first })}${hint}\n\n${buildUsage()}\n`);
+  // 도달하지 않음(COMMAND_SPECS 의 명령 이름을 위에서 모두 처리) — 방어.
+  process.stderr.write(`${buildUsage()}\n`);
   return 1;
 }

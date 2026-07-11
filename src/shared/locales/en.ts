@@ -111,6 +111,8 @@ lane add options:
     unknownSub: "Unknown lane subcommand: {{sub}}",
     unknownCmd: "Unknown command: {{cmd}}",
     didYouMean: "Did you mean: {{cmds}}?",
+    unknownFlag: "unknown option: {{flag}}",
+    valueRequired: "{{key}} requires a value",
   },
   completion: {
     unknownShell: 'unsupported shell "{{shell}}" — one of {{supported}}',
@@ -192,7 +194,6 @@ lane add options:
     },
   },
   lane: {
-    valueRequired: "--{{key}} requires a value",
     retry: {
       chatId: "  chat_id — enter a numeric id (or leave empty)",
       allowFrom: "  allow_from — enter comma-separated numeric ids (or leave empty)",

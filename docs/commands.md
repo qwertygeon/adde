@@ -34,7 +34,9 @@ The full command and option set of the ADDE CLI. The single main entry point is 
 | `-v`, `--version` | Print version |
 | `-h`, `--help`    | Print help    |
 
-Running `adde` with no arguments, or `-h`/`--help`/`help`, prints the overall usage. For a specific command's help, `adde <command> --help` (e.g. `adde status --help`, `adde lane add --help`).
+`-v`/`--version` and `-h`/`--help` are recognized regardless of where they appear in the argument list — e.g. `adde up --version` prints the version instead of being treated as a project name (`[behavior-change]`).
+
+Running `adde` with no arguments, or `-h`/`--help`/`help`, prints the overall usage. For a specific command's help, `adde <command> --help` (e.g. `adde status --help`, `adde lane add --help`) — if a known command precedes `--help`, that command's usage is shown; otherwise the overall usage is shown.
 
 ## init — onboarding wizard
 
@@ -438,6 +440,7 @@ An unsupported shell gives an error + exit code 1.
 
 - `adde <command> --help` (or `-h`) — prints that command's usage and exits with code 0. `adde lane <sub> --help` prints the full lane options.
 - An **unsupported command** (typo, etc.) prints `Unknown command` + a nearest-command guess (`Did you mean: …?`) to stderr and exits with code 1 (prevents a typo from silently succeeding in a script).
+- An **unsupported flag** — one not declared for that command (or subcommand) — prints an error + that command's usage (or the overall usage, if no command was recognized) to stderr and exits with code 1, e.g. `adde doctor --nonsense` (`[behavior-change]` — previously such flags were silently ignored and the command proceeded normally).
 
 ## Exit codes
 

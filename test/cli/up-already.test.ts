@@ -206,6 +206,9 @@ describe("adde up — 이미 기동 중 표면화", () => {
       expect(clearHalt).toHaveBeenCalledWith(expect.anything(), "demo");
     });
 
+    // T011 마이그레이션(§PROC-001): 신 restart 계약(FR-008/FR-009)은 up 과 동형으로
+    // pollUpResult(collectStatus) 로 기동 결과를 확정한다 — running-lane 을 주입해 폴링이 즉시
+    // 수렴하게 한다(미주입 시 collectStatus 가 undefined 를 반환해 rows.some 이 throw 한다).
     it("restart 는 unloadDaemon 전에 clearHalt 를 호출한다", async () => {
       const callOrder: string[] = [];
       clearHalt.mockImplementation(async () => {
@@ -217,6 +220,9 @@ describe("adde up — 이미 기동 중 표면화", () => {
       loadDaemon.mockImplementation(async () => {
         callOrder.push("loadDaemon");
       });
+      collectStatus.mockResolvedValue([
+        { lane: "a", status: "running", error: null, startedAt: "2099-01-01T00:00:00Z" },
+      ]);
 
       const code = await run(["restart", "demo"]);
 

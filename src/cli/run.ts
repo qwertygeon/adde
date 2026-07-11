@@ -375,15 +375,45 @@ export async function run(argv: readonly string[]): Promise<number> {
     }
     try {
       const { unloadDaemon, loadDaemon } = await import("../core/launchd.js");
-      const { clearHalt } = await import("../core/diagnostics.js");
+      const { collectStatus, clearHalt } = await import("../core/diagnostics.js");
       // 사용자 명령(restart) = 명시적 재시도 → halt 초기화.
       await clearHalt(defaultBase(), proj);
       // down 완료 await 후 up — 부분 실패 시 up 오류 표면화.
       await unloadDaemon(proj);
+      // 이번 재기동 기준시각 — up 과 동일하게 이후 남는 error/dead 만 "이번 실패"로 판별.
+      const upStart = Date.now();
       await loadDaemon(proj);
       process.stdout.write(t("run.restartDone", { proj }) + "\n");
+      // up 과 동형 폴링·요약(pollUpResult 재사용) — 재기동 성공/실패 레인을 표면화한다.
+      // 성공처럼 보이며 조용히 끝나는 대신, 실패 레인을 표면화하고 exit code 에 반영한다.
+      const pollEnv = Number(process.env.ADDE_UP_POLL_MS);
+      const pollMs = Number.isFinite(pollEnv) && pollEnv > 0 ? pollEnv : 8000;
+      const summary = await pollUpResult(proj, collectStatus, upStart, pollMs);
+      if (summary.failed.length > 0) {
+        process.stderr.write(
+          t("run.upFailed", {
+            lanes: summary.failed
+              .map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`)
+              .join(", "),
+            proj,
+          }) + "\n",
+        );
+      }
+      const bootUnconfirmed =
+        summary.running === 0 && summary.failed.length === 0 && summary.total > 0;
+      if (bootUnconfirmed) {
+        process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
+        return 1;
+      }
+      process.stdout.write(
+        t("run.upSummary", {
+          running: summary.running,
+          failed: summary.failed.length,
+          pending: summary.pending,
+        }) + "\n",
+      );
       process.stdout.write(t("run.statusHint", { proj }) + "\n");
-      return 0;
+      return summary.failed.length > 0 ? 1 : 0;
     } catch (err) {
       process.stderr.write(cmdError("restart", errMsg(err)) + "\n");
       return 1;

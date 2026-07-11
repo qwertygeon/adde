@@ -6,6 +6,19 @@
 
 ### Added
 
+- **`adde doctor`/`adde sessions` 에 `--json` 기계가독 출력 추가** — 스크립트·모니터링·CI 가 진단 점검 목록(`doctor [<proj>] --json`, 각 점검 name·level·detail·경고/실패 시 hint)과 세션 장부(`sessions <proj> <lane> --json`, id·label·lastActivityAt·현재 세션 여부)를 JSON 으로 파싱할 수 있다. `--json` 모드는 사람용 요약·업데이트 알림 텍스트를 출력에 섞지 않으며, 기존 텍스트 출력·종료 코드는 완전히 불변(additive). `sessions` 의 위치인자 파싱도 정리해 `--json` 플래그가 어느 위치에 있어도 proj/lane 값으로 오인되지 않는다.
+- **`adde logs <proj> <lane> --follow`(단축 `-f`) 라이브 tail** — transcript(기본) 또는 `--engine` 지정 시 engine 로그의 신규 추가 라인을 실시간 출력한다. 로그가 5MB 세대 회전되거나 truncate 되어도 유실·중복 없이 새 파일로 이어서 추적하며, `Ctrl-C`(SIGINT) 수신 시 CPU 를 점유하는 대기 없이 즉시 정지·정상 종료한다(hang 없음). `--daemon` 로그는 follow 대상에서 제외된다(스냅샷만 출력). 대상 로그가 시작 시 없으면 생성을 기다리며 상주하지 않고 부재 안내 후 종료한다. 아울러 `adde logs` 의 줄수 인자가 비숫자이거나 0·음수이면 이제 stderr 경고를 출력하고 기본 50 줄로 폴백한다(기존: 무경고 폴백).
+- **`adde restart` 결과 표면화** — launchctl 재적재 후 각 레인의 기동 결과를 짧게 폴링해 실패 레인 목록과 요약(`N running · M failed · K pending`)을 표시한다(기존: 재적재 성공 여부와 무관하게 조용히 종료해 레인 기동 실패를 알 수 없었다). 폴링 대기 상한은 `adde up` 과 동일하게 `ADDE_UP_POLL_MS`(ms, 양수만 유효, 기본 8000)로 조정 가능(느린 머신 대응).
+- 메인 도움말(`adde` 인자 없이 실행)의 `status` 행에 `--json` 옵션 표기를 추가(기존에 누락돼 있었다).
+
+### Changed
+
+- **[behavior-change] `adde restart` 종료 코드 변경** — 기동 실패 레인이 1개 이상이면 이제 exit code 1 을 반환한다(기존: launchctl 재적재 자체가 예외를 던지지 않는 한 항상 exit 0 이라, 레인 기동 실패가 성공처럼 보였다). 전 레인 기동 성공 시에는 기존처럼 exit 0.
+- **[BREAKING] `adde status --json` 최상위 출력 구조 재구성** — 기존 레인 배열(`LaneStatusRow[]`)에서 `{ "lanes": [...], "halt": ... }` 객체로 바뀐다(`halt` 는 크래시루프 자가정지 상태를 프로젝트 단위로 담는다). **마이그레이션**: 기존 최상위 배열 참조를 `.lanes` 로 바꿔라 — 예: `adde status --json | jq '.[]'` → `jq '.lanes[]'`(단일 프로젝트 뷰는 `halt: HaltRecord|null`, 인자 없는 집계 뷰는 `halt: {"<proj>": HaltRecord|null, ...}`). 텍스트(비-JSON) 출력 형식은 불변.
+- `adde status`(텍스트·`--json` 공통)는 대상에 크래시루프 자가정지(halt) 기록이 있으면 이제 exit code 1 을 반환한다(기존: halt 는 텍스트 경고만 출력하고 종료 코드엔 반영되지 않았다 — `dead`/`stale`/`error` 레인 존재 시의 exit 1 판정은 기존과 동일하게 유지되며 halt 가 그 신호에 더해진다).
+
+### Added
+
 - **markdown 레인 오래된 산출물 자동 백업 이관** — 24시간 상주하는 레인의 vault(동기화 폴더)에 출력노트·결정된 승인 기록·전송 아카이브가 무한히 쌓여 동기화 부담·에디터 색인 비용이 커지던 문제를 해소한다. 레인 conf 에 `markdown.backup=<로컬 폴더 경로>` 를 지정하면(미지정 시 완전히 꺼짐, 옵트인), 지정한 일수(`markdown.retention_days`, 기본 2일)보다 오래된 산출물을 매일 1회 그 폴더로 옮긴다 — 삭제가 아니라 이동이라 필요하면 그대로 다시 열어볼 수 있다. 이관은 사본이 안전하게 완성된 뒤에만 원본을 지우므로, 이동 중 ADDE 가 죽거나 재시작해도 파일이 사라지지 않는다(중단된 이관은 다음 실행에서 이어서 처리). 백업 폴더 경로는 vault 밖 어디든(외장 드라이브 포함) 지정할 수 있으나, 실수로 vault·내부 상태 폴더와 겹치면 기동이 거부된다. **백업 폴더로 옮겨간 노트의 vault 내 위키링크(`[[...]]`)는 더 이상 그 자리에 없어 클릭해도 열리지 않는다** — 자주 참조하는 응답은 `retention_days` 이내에 두거나 백업 폴더에서 직접 연다.
 - iCloud 로 동기화되는 vault 를 위한 `markdown.sync_provider=icloud` 옵션 — 이 기기로 아직 내려받지 않은(placeholder) 파일을 백업 이관 전에 자동으로 다운로드 완료까지 기다리고, 다운로드가 지연·실패하면 그 파일만 건너뛰어 다음 날 다시 시도한다(전체 이관이 멈추지 않는다). 미설정 시(기본 `local`)에는 이런 대기 없이 그대로 이동한다. 새 동기화 서비스를 위한 확장 지점도 함께 마련했다(현재 지원은 `local`·`icloud` 뿐).
 - (옵트인, 기본 off) `markdown.out_retention_days` — 전송 완료 여부를 추적하는 내부 관리 파일(사용자 눈에 보이지 않는 상태 폴더, vault 밖)을 일정 기간 지나면 삭제해 정리하는 옵션. 켜려면 이관 기준일(`retention_days`)보다 최소 하루 더 긴 값을 지정해야 하며(짧으면 기동이 거부됨), 아직 처리 중인 항목은 절대 삭제하지 않는다.

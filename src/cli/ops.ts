@@ -6,12 +6,14 @@ import { collectStatus, collectAllStatus, runDoctor, readLogs, readHalt } from "
 import { checkForUpdate, formatUpdateNotice } from "../core/update-check.js";
 import { errMsg } from "../shared/errors.js";
 import type { LaneStatusRow, AggregatedLaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
+import type { HaltRecord } from "../core/crash-loop.js";
 import { USAGE, cmdError } from "../core/messages.js";
 import { t } from "../shared/i18n.js";
 import { readLedger, formatWhen } from "../core/session-ledger.js";
 import { lanePaths, defaultBase } from "../shared/paths.js";
 import { daemonLogPaths } from "../core/launchd.js";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { followFile } from "../core/log-follow.js";
 
 /** ms → 사람용 경과시간(예: 1h2m, 3m4s, 12s). */
 function formatUptime(ms: number | null): string {
@@ -96,8 +98,15 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
   if (!proj) {
     const allRows = await collectAllStatus();
     const rows = all ? allRows : allRows.filter((r) => r.status !== "stopped");
+    // halt 조회를 json/text 분기 밖으로 리프트 — 두 모드·종료 코드 모두 halt 를 반영한다.
+    const base = defaultBase();
+    const haltMap: Record<string, HaltRecord | null> = {};
+    for (const p of [...new Set(rows.map((r) => r.proj))]) {
+      haltMap[p] = await readHalt(base, p);
+    }
     if (json) {
-      process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+      // BREAKING — 최상위 배열 대신 {lanes, halt} 객체(halt 는 프로젝트별 상태를 담는 자리).
+      process.stdout.write(JSON.stringify({ lanes: rows, halt: haltMap }, null, 2) + "\n");
     } else {
       process.stdout.write(statusTableAggregate(rows, all) + "\n");
       const dead = rows.filter((r) => r.status === "dead");
@@ -132,19 +141,17 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
             "\n",
         );
       }
-      // 크래시루프 자가 정지 표면화 — 집계 뷰에 등장한 프로젝트마다 halt 기록 확인.
-      const base = defaultBase();
-      for (const proj of [...new Set(rows.map((r) => r.proj))]) {
-        const halt = await readHalt(base, proj);
-        if (halt) {
-          process.stdout.write("\n" + t("ops.status.haltWarn", { proj }) + "\n");
-        }
+      // 크래시루프 자가 정지 표면화 — 집계 뷰에 등장한 프로젝트마다 halt 기록.
+      for (const [p, halt] of Object.entries(haltMap)) {
+        if (halt) process.stdout.write("\n" + t("ops.status.haltWarn", { proj: p }) + "\n");
       }
       await printUpdateNoticeIfAny();
     }
-    return rows.some((r) => r.status === "dead" || r.status === "stale" || r.status === "error")
-      ? 1
-      : 0;
+    const laneBad = rows.some(
+      (r) => r.status === "dead" || r.status === "stale" || r.status === "error",
+    );
+    // halt(크래시루프 자가정지) 존재도 exit 1 신호에 반영 — 기존 laneBad 판정에 더함.
+    return laneBad || Object.values(haltMap).some((h) => h !== null) ? 1 : 0;
   }
 
   let rows: LaneStatusRow[];
@@ -155,8 +162,11 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
     process.stderr.write(cmdError("status", errMsg(err)) + "\n");
     return 1;
   }
+  // halt 조회를 json/text 분기 밖으로 리프트(중복 조회 없음) — 두 모드·종료 코드 모두 반영.
+  const halt = await readHalt(defaultBase(), proj);
   if (json) {
-    process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+    // BREAKING — 최상위 배열 대신 {lanes, halt} 객체.
+    process.stdout.write(JSON.stringify({ lanes: rows, halt }, null, 2) + "\n");
   } else {
     process.stdout.write(statusTable(rows) + "\n");
     const dead = rows.filter((r) => r.status === "dead");
@@ -186,17 +196,17 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
           "\n",
       );
     }
-    // 크래시루프 자가 정지 표면화.
-    const halt = await readHalt(defaultBase(), proj);
+    // 크래시루프 자가 정지 표면화(경고 텍스트 유지).
     if (halt) {
       process.stdout.write("\n" + t("ops.status.haltWarn", { proj }) + "\n");
     }
     await printUpdateNoticeIfAny();
   }
-  // 비정상(error 기동실패·dead 크래시·stale 행) 잔존을 종료 코드로 신호 — 모니터링 친화.
-  return rows.some((r) => r.status === "dead" || r.status === "stale" || r.status === "error")
-    ? 1
-    : 0;
+  // 비정상(error 기동실패·dead 크래시·stale 행) 또는 halt 잔존을 종료 코드로 신호 — 모니터링 친화.
+  const laneBad = rows.some(
+    (r) => r.status === "dead" || r.status === "stale" || r.status === "error",
+  );
+  return laneBad || halt !== null ? 1 : 0;
 }
 
 function checkSymbol(level: DoctorCheck["level"]): string {
@@ -204,6 +214,7 @@ function checkSymbol(level: DoctorCheck["level"]): string {
 }
 
 export async function runDoctorCli(rest: readonly string[]): Promise<number> {
+  const json = rest.includes("--json");
   const proj = rest.find((a) => !a.startsWith("--"));
   let checks: DoctorCheck[];
   try {
@@ -213,11 +224,16 @@ export async function runDoctorCli(rest: readonly string[]): Promise<number> {
     process.stderr.write(cmdError("doctor", errMsg(err)) + "\n");
     return 1;
   }
+  const fails = checks.filter((c) => c.level === "FAIL").length;
+  if (json) {
+    // 기계가독 모드 — 사람용 심볼 루프·요약·업데이트 알림은 억제(텍스트 미혼입).
+    process.stdout.write(JSON.stringify(checks, null, 2) + "\n");
+    return fails > 0 ? 1 : 0;
+  }
   for (const c of checks) {
     process.stdout.write(`${checkSymbol(c.level)} [${c.level}] ${c.name}: ${c.detail}\n`);
     if (c.hint) process.stdout.write(t("ops.doctor.hint", { hint: c.hint }) + "\n");
   }
-  const fails = checks.filter((c) => c.level === "FAIL").length;
   const warns = checks.filter((c) => c.level === "WARN").length;
   process.stdout.write(
     "\n" +
@@ -230,7 +246,10 @@ export async function runDoctorCli(rest: readonly string[]): Promise<number> {
 
 /** `adde sessions <proj> <lane>` — 세션 장부 목록(read-only). 재개는 채널 명령으로 수행. */
 export async function runSessions(rest: readonly string[]): Promise<number> {
-  const [proj, lane] = rest;
+  const json = rest.includes("--json");
+  // `--json` 등 플래그를 proj/lane 값으로 오인하지 않도록 위치인자만 분리해 해석한다.
+  const positional = rest.filter((a) => !a.startsWith("--"));
+  const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.sessions + "\n");
     return 1;
@@ -244,7 +263,11 @@ export async function runSessions(rest: readonly string[]): Promise<number> {
   }
   const entries = await readLedger(paths);
   if (entries.length === 0) {
-    process.stdout.write(t("injector.control.sessionsEmpty") + "\n");
+    if (json) {
+      process.stdout.write(JSON.stringify([], null, 2) + "\n");
+    } else {
+      process.stdout.write(t("injector.control.sessionsEmpty") + "\n");
+    }
     return 0;
   }
   let current: string | null = null;
@@ -252,6 +275,17 @@ export async function runSessions(rest: readonly string[]): Promise<number> {
     current = (await readFile(paths.sessionIdFile, "utf8")).trim() || null;
   } catch {
     // 세션 파일 부재 — 현재 표시 생략
+  }
+  if (json) {
+    const items = entries.map((e) => ({
+      id: e.id,
+      label: e.label ?? null,
+      createdAt: e.createdAt,
+      lastActivityAt: e.lastActivityAt,
+      current: e.id === current,
+    }));
+    process.stdout.write(JSON.stringify(items, null, 2) + "\n");
+    return 0;
   }
   const lines = entries.map((e, i) => {
     const label = e.label ?? t("injector.control.sessionsNoLabel");
@@ -308,13 +342,27 @@ async function runDaemonLogs(proj: string, n: number): Promise<number> {
   return 0;
 }
 
+/**
+ * `logs` 줄수 인자 파싱 — 미지정(undefined)은 무경고 기본 50(불변). 지정됐으나 비숫자·0·음수면
+ * 경고(warn=true)와 함께 기본 50 폴백. 유효(정수>0)면 그 값을 그대로 쓴다.
+ */
+export function parseLineCount(raw: string | undefined): { n: number; warn: boolean } {
+  if (raw === undefined) return { n: 50, warn: false };
+  if (/^\d+$/.test(raw) && Number(raw) > 0) return { n: Number(raw), warn: false };
+  return { n: 50, warn: true };
+}
+
 export async function runLogs(rest: readonly string[]): Promise<number> {
   const engine = rest.includes("--engine");
   const daemon = rest.includes("--daemon");
-  const positional = rest.filter((a) => !a.startsWith("--"));
+  const follow = rest.includes("--follow") || rest.includes("-f");
+  // "-f"(단축 follow 플래그)도 "--"로 시작하지 않아 위치인자로 잘못 남을 수 있으므로 함께 제외한다
+  // (미제외 시 `logs <proj> <lane> -f`(N 미지정)가 "-f" 를 줄수로 오인해 spurious 경고 발생).
+  const positional = rest.filter((a) => !a.startsWith("--") && a !== "-f");
   const [proj, lane, nRaw] = positional;
 
   // --daemon 은 레인 무관(프로젝트 데몬 로그) — proj 만 필요, 둘째 위치인자는 N.
+  // daemon 로그는 launchd 소유·제자리 트림이라 follow 대상이 아니다(-f 는 무시하고 스냅샷만 출력).
   if (daemon) {
     if (!proj) {
       process.stderr.write(USAGE.logs + "\n");
@@ -330,7 +378,10 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
     process.stderr.write(USAGE.logs + "\n");
     return 1;
   }
-  const n = nRaw !== undefined && /^\d+$/.test(nRaw) ? Number(nRaw) : 50;
+  const { n, warn } = parseLineCount(nRaw);
+  if (warn && nRaw !== undefined) {
+    process.stderr.write(t("ops.logs.badCount", { raw: nRaw }) + "\n");
+  }
   let result;
   try {
     result = await readLogs(proj, lane, n, { engine });
@@ -340,14 +391,33 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
     return 1;
   }
   if (!result.exists) {
+    // follow 요청이어도 시작 시 부재면 생성 대기 상주하지 않는다.
     const what = engine ? t("ops.logs.whatEngine") : t("ops.logs.whatTranscript");
     process.stdout.write(t("ops.logs.notFound", { what, path: result.path, proj }) + "\n");
     return 0;
   }
   if (result.lines.length === 0) {
     process.stdout.write(t("ops.logs.empty", { path: result.path }) + "\n");
+  } else {
+    process.stdout.write(result.lines.join("\n") + "\n");
+  }
+  if (!follow) return 0;
+
+  // follow 진입 — 스냅샷 직후 파일 끝을 시작 오프셋으로(신규 추가 라인만 방출).
+  // 스냅샷·이 stat 사이 극단적 경합으로 파일이 사라지면 상주하지 않고 조용히 종료(재시도는 사용자 몫).
+  let st;
+  try {
+    st = await stat(result.path);
+  } catch {
     return 0;
   }
-  process.stdout.write(result.lines.join("\n") + "\n");
+  const ac = new AbortController();
+  process.once("SIGINT", () => ac.abort());
+  await followFile(result.path, {
+    onData: (chunk) => process.stdout.write(chunk),
+    signal: ac.signal,
+    startOffset: st.size,
+    startIno: st.ino,
+  });
   return 0;
 }

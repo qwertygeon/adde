@@ -15,7 +15,7 @@ export const ko = {
   up <proj>                프로젝트의 모든 레인 백그라운드 데몬으로 기동
   down <proj>              데몬 종료 (어느 터미널에서든 동작)
   restart <proj>           데몬 재기동 (down + up)
-  status [<proj>] [--all]  레인 상태 조회 (<proj> 생략 시 실행 중 전체, --all 정지 포함)
+  status [<proj>] [--all] [--json]  레인 상태 조회 (<proj> 생략 시 실행 중 전체, --all 정지 포함)
   doctor [<proj>]          환경·설정 정적 점검(상태 비의존)
   logs <proj> <lane> [N]   레인 transcript 최근 N줄(기본 50, --engine 시 엔진 stderr)
   sessions <proj> <lane>   기록된 엔진 세션 목록(재개는 채널에서: /resume 또는 resume 체크박스)
@@ -176,6 +176,7 @@ lane add 옵션:
     logs: {
       whatEngine: "engine 로그",
       whatTranscript: "transcript",
+      badCount: '줄수 "{{raw}}" 는 유효하지 않습니다(양의 정수만 가능) — 기본값 50 으로 대체합니다.',
       notFound:
         "{{what}} 없음: {{path}}\n  ↳ 조치: 레인이 아직 활동하지 않았거나 기동되지 않았습니다. adde status {{proj}} 로 상태를 확인하세요.",
       daemonNotFound:

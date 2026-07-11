@@ -14,7 +14,7 @@ Commands:
   up <proj>                start all lanes of the project as a background daemon
   down <proj>              stop the daemon (works from any terminal)
   restart <proj>           restart the daemon (down + up)
-  status [<proj>] [--all]  lane status (all running projects if <proj> omitted, --all includes stopped)
+  status [<proj>] [--all] [--json]  lane status (all running projects if <proj> omitted, --all includes stopped)
   doctor [<proj>]          static environment/config checks (state-independent)
   logs <proj> <lane> [N]   last N lines of the lane transcript (default 50, engine stderr with --engine)
   sessions <proj> <lane>   list recorded engine sessions (resume via channel: /resume or resume checkbox)
@@ -175,6 +175,8 @@ lane add options:
     logs: {
       whatEngine: "engine log",
       whatTranscript: "transcript",
+      badCount:
+        'invalid line count "{{raw}}" (must be a positive integer) — falling back to 50.',
       notFound:
         "{{what}} not found: {{path}}\n  ↳ action: the lane has not been active or started yet. Check with adde status {{proj}}.",
       daemonNotFound:

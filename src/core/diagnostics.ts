@@ -3,7 +3,7 @@
  * CLI 계층(cli/ops.ts)이 결과를 표/JSON/텍스트로 표면화한다.
  */
 import { t } from "../shared/i18n.js";
-import { readFile, stat, readdir, unlink } from "node:fs/promises";
+import { readFile, stat, readdir, unlink, open } from "node:fs/promises";
 import { join } from "node:path";
 import { laneList, resolveFileMode } from "./lane-config.js";
 import { resolveAdapterBin } from "./supervisor.js";
@@ -457,6 +457,10 @@ export interface LogsResult {
   exists: boolean;
   /** 최근 N줄(파일 끝 기준). */
   lines: string[];
+  /** 스냅샷이 실제로 읽은 바이트 종료 오프셋(follow 이어읽기 시작점). !exists 시 0. */
+  endOffset: number;
+  /** 스냅샷 파일 inode(회전 감지 기준점). !exists 시 0. */
+  startIno: number;
 }
 
 export interface ReadLogsOptions extends DiagBaseOptions {
@@ -464,7 +468,11 @@ export interface ReadLogsOptions extends DiagBaseOptions {
   engine?: boolean;
 }
 
-/** 레인 로그(transcript.log 기본, engine 옵션 시 engine.log)의 최근 n줄을 반환한다. 파일 없으면 exists=false. */
+/**
+ * 레인 로그(transcript.log 기본, engine 옵션 시 engine.log)의 최근 n줄을 반환한다. 파일 없으면
+ * exists=false. open→fstat(ino+size)→read 로 원자 취득해 endOffset(실제 읽은 바이트)·startIno(inode)를
+ * 함께 반환한다 — follow 가 이 오프셋에서 정확히 이어받아 스냅샷↔follow 사이 append 유실 창을 닫는다.
+ */
 export async function readLogs(
   proj: string,
   lane: string,
@@ -474,12 +482,29 @@ export async function readLogs(
   const base = opts.base ?? defaultBase();
   const paths = lanePaths(base, proj, lane);
   const target = opts.engine ? paths.engineLog : paths.transcriptLog;
-  let text: string;
+  let fh;
   try {
-    text = await readFile(target, "utf8");
+    fh = await open(target, "r");
   } catch {
-    return { path: target, exists: false, lines: [] };
+    return { path: target, exists: false, lines: [], endOffset: 0, startIno: 0 };
   }
-  const all = text.split("\n").filter((l) => l.length > 0);
-  return { path: target, exists: true, lines: all.slice(-Math.max(1, n)) };
+  let buf: Buffer;
+  let ino: number;
+  try {
+    const fstat = await fh.stat();
+    ino = fstat.ino;
+    buf = Buffer.alloc(fstat.size);
+    const { bytesRead } = await fh.read(buf, 0, fstat.size, 0);
+    buf = buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
+  const all = buf.toString("utf8").split("\n").filter((l) => l.length > 0);
+  return {
+    path: target,
+    exists: true,
+    lines: all.slice(-Math.max(1, n)),
+    endOffset: buf.length,
+    startIno: ino,
+  };
 }

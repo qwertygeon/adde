@@ -122,7 +122,7 @@ adde up <proj>
 
 - **터미널 독립**: 터미널을 닫아도 데몬이 계속 동작합니다.
 - **크래시 전용 자동 재기동**: launchd 는 크래시(비정상 종료 코드 또는 치명적 시그널) 시에만 데몬을 재기동하며, 최소 60초 간격으로 제한됩니다. macOS 재부팅·로그아웃 후에는 (`proj.conf` 의 `auto_restart` 값과 무관하게) 항상 재기동됩니다(`RunAtLoad`). 의도적 정지(`adde down`, 또는 graceful shutdown 을 완주한 `SIGTERM`)는 정상 종료로 귀결되어 **재기동되지 않으며**, 상주할 이유가 없는 결정적 부팅 실패(예: 기동된 레인 0개)도 무한 재시도 없이 정상 종료합니다 — 실패는 그대로 표면화되며(아래 참조) 자동 재시도만 하지 않습니다. 끄는 방법은 [`proj.conf`](#projconf--데몬-크래시-자동-재기동) 참조, 자가 정지 안전망은 [크래시 안전·로그 회전](troubleshooting.ko.md#크래시-안전--로그-회전) 참조.
-- **기동 결과 표기**: 등록 후 `adde up` 이 각 레인 상태를 잠깐 폴링해 요약을 출력합니다(`실행 중 N · 실패 M · 기동 중 K`). **기동 실패한 레인**은 사유와 함께 나열하고 `adde up` 이 비정상 종료코드로 끝나, `adde status` 를 따로 확인하지 않아도 실패를 바로 알 수 있습니다(실패는 `error` 상태로도 기록 — 데몬 레벨 원인은 `adde logs <proj> --daemon`). 대기 시간 내에 **어떤 레인도 기동되지 못하면**(데몬이 부팅에 실패했을 가능성) 이를 알리고 `adde logs <proj> --daemon` 포인터와 함께 비정상 종료합니다. 느린 머신에서는 `ADDE_UP_POLL_MS`(ms) 환경변수로 대기 시간을 늘릴 수 있습니다.
+- **기동 결과 표기**: 등록 후 `adde up` 이 각 레인 상태를 잠깐 폴링해 요약을 출력합니다(`실행 중 N · 실패 M · 기동 중 K`). **기동 실패한 레인**은 사유와 함께 나열하고 `adde up` 이 비정상 종료코드로 끝나, `adde status` 를 따로 확인하지 않아도 실패를 바로 알 수 있습니다(실패는 `error` 상태로도 기록 — 데몬 레벨 원인은 `adde logs <proj> --daemon`). 대기 시간 내에 **어떤 레인도 기동되지 못하면**(데몬이 부팅에 실패했을 가능성) 이를 알리고 `adde logs <proj> --daemon` 포인터와 함께 비정상 종료합니다. 느린 머신에서는 `ADDE_UP_POLL_MS`(ms) 환경변수로 대기 시간을 늘릴 수 있습니다 — 기본값은 `8000`이며 **양수** 정수만 유효합니다(숫자가 아니거나 0·음수면 조용히 기본값으로 대체됩니다). `adde restart` 도 재적재 결과를 동일한 방식으로 폴링하며 같은 환경변수를 따릅니다.
 - **이미 기동 중 안내**: 데몬이 이미 등록돼 있고 **실행 중인 레인이 하나 이상**이면 `adde up` 은 재등록(=already loaded 실패)하지 않고, 실행 중/전체 레인 수와 함께 "이미 기동 중" 을 안내합니다(확인 `adde status`, 설정 반영 `adde restart`, 종료 `adde down`). 현재 비정상 레인(`error`/`dead`/`stale`)이 있으면 여기서도 나열하고 비정상 종료합니다. 등록은 남아 있는데 **실행 중인 레인이 하나도 없으면**(예: 결정적 부팅 실패 후 정상 종료된 경우) `adde up` 은 단순히 "이미 기동 중"으로 보고하지 않고, 데몬을 재적재(unload+load)해 복구한 뒤 신규 기동처럼 폴링합니다.
 - **중복 기동 가드**: 데몬 내부에서 이미 실행 중인 레인은 경고와 함께 스킵합니다(데몬 로그에 기록). 이중 기동은 발생하지 않습니다.
 - **macOS 전용**: launchd 기능은 macOS에서만 동작합니다. 상세는 [macOS 전용 기능](#macos-전용-기능)을 참조하세요.
@@ -146,6 +146,7 @@ adde restart <proj>
 `down` 후 `up`을 순서대로 수행합니다. 설정 변경 후 데몬을 다시 기동하거나, 데몬 상태를 초기화할 때 사용합니다.
 
 - `down` 성공 후 `up` 실패 시, `up` 오류를 표면화하고 종료 코드 1을 반환합니다.
+- **[behavior-change] 기동 결과 표기**: 재등록 후 `up` 과 동일하게 각 레인 상태를 폴링해 요약(`실행 중 N · 실패 M · 기동 중 K`)을 출력합니다. **기동 실패한 레인**은 사유와 함께 나열하고, 실패 레인이 하나 이상이면 `restart` 가 이제 **종료 코드 1** 을 반환합니다(기존: launchctl 재등록 자체가 예외를 던지지 않는 한 항상 0 이라 레인 기동 실패가 성공처럼 보였습니다). 전 레인 기동 성공 시에는 여전히 exit 0. 대기 시간은 `up` 과 동일한 `ADDE_UP_POLL_MS` 환경변수를 따릅니다([`up`](#up--레인-기동-데몬) 참조).
 - plist 는 매 `restart`(및 매 `up`)마다 처음부터 다시 렌더링되므로 [`proj.conf`](#projconf--데몬-크래시-자동-재기동) 의 `auto_restart` 값을 항상 즉시 반영합니다 — 별도 마이그레이션 절차가 없습니다.
 - `restart` 는 크래시 루프 자가 정지 마커도 초기화합니다(명시적 재시도이므로 — [크래시 안전·로그 회전](troubleshooting.ko.md#크래시-안전--로그-회전) 참조).
 
@@ -184,20 +185,21 @@ adde status [<proj>] [--all] [--json]
 - **`--all`**(`<proj>` 생략 시): 정지(`stopped`) 포함 전 레인을 표시.
 - `dead`·`stale`·`error` 레인이 있으면 조치 안내를 덧붙입니다(`SEEN` = 마지막 하트비트 경과; `error` 는 기동 실패 사유와 `adde logs <proj> --daemon`/`--engine` 포인터).
 - 하트비트: `adde up` 이 주기적으로 상태 파일 mtime 을 갱신합니다. pid 가 살아있어도 갱신이 임계 시간 멈추면 `stale`(행) 로 판정합니다.
-- `--json`: 레인 객체 배열(모니터링/스크립트용, `lastSeenAt` 포함; 집계 시 `proj` 부기).
+- **크래시루프 자가 정지(`halt`)**: 데몬이 짧은-수명 크래시 반복으로 자가 정지했으면([크래시 안전·로그 회전](troubleshooting.ko.md#크래시-안전--로그-회전) 참조) `status` 가 해당 프로젝트에 경고를 출력하고 **이제 종료 코드도 1** 을 반환합니다(기존: `halt` 는 경고 텍스트만 출력하고 종료 코드엔 반영되지 않았습니다 — 기존 `dead`/`stale`/`error` → exit 1 규칙은 그대로 유지됩니다). 인자 없는 집계 뷰는 화면에 표시되는 레인 목록이 아니라 대상 프로젝트 전체를 기준으로 halt 를 판정합니다 — 어떤 프로젝트의 모든 레인이 `stopped` 라 기본 집계 표에서 제외되더라도, 그 프로젝트의 halt 경고와 exit 1 은 그대로 반영됩니다.
+- **[BREAKING] `--json`**: 최상위 JSON 출력이 배열이 아니라 **`{ "lanes": [...], "halt": ... }` 객체**입니다(기존에는 `adde status --json` 이 레인 객체 배열을 최상위로 출력했습니다). `lanes` 는 기존과 동일한 레인별 객체를 담습니다(`lastSeenAt` 포함, 집계 시 `proj` 부기). `halt` 는 크래시루프 자가정지 상태를 담습니다 — 단일 `<proj>` 뷰는 `HaltRecord | null`, 인자 없는 집계 뷰는 `{ "<proj>": HaltRecord | null, ... }`. **마이그레이션**: 기존 최상위 배열 참조를 `.lanes` 로 바꾸세요 — 예: `adde status --json | jq '.[]'` → `jq '.lanes[]'`. 텍스트(비-JSON) 출력은 변경 없습니다.
 - **업데이트 안내**: npm 에 새 버전이 있으면 안내 한 줄(`npm i -g adde-acp@latest` … 후 `adde restart`)을 덧붙입니다. 24시간 캐시(설정 base 하위)를 쓰며, 대화형 터미널(TTY)에서만 네트워크를 조회하고, `ADDE_NO_UPDATE_CHECK` 환경변수로 끌 수 있습니다.
 - 읽기 전용(부수효과 없음).
 
 ```bash
 adde status myproj          # 한 프로젝트의 레인별 표(정지 포함)
 adde status --all           # 전 프로젝트, 정지 레인 포함
-adde status myproj --json   # 기계 판독 배열(모니터링/스크립트)
+adde status myproj --json   # 기계 판독 {lanes, halt} 객체(모니터링/스크립트)
 ```
 
 ## doctor — 환경 점검
 
 ```bash
-adde doctor [<proj>]
+adde doctor [<proj>] [--json]
 ```
 
 상태와 무관한 정적 점검을 수행하고 각 항목을 `PASS` / `WARN` / `FAIL` 로 보고합니다. 실패·경고에는 조치 힌트(`↳ 조치:`)가 붙습니다.
@@ -206,34 +208,49 @@ adde doctor [<proj>]
 - `<proj>` 지정 시 레인별: source 유효성 · `cwd` 존재 · (telegram) `.env` 토큰 존재.
 - **파일 권한 점검**(`<proj>` 지정 시 레인별): `state/<lane>/.env` 가 그룹/기타 사용자에게 열려 있으면(기대 0600 — 봇 토큰 노출 위험) `WARN`, `file_mode=private` 인데 `state/<lane>` 디렉터리가 그룹/기타 사용자에게 열려 있으면(기대 0700) `WARN` 하고 `chmod`/`adde restart` 힌트를 붙입니다. `file_mode=shared` 는 의도된 선택으로 보고 경고하지 않습니다.
 - `<proj>` 지정 시 macOS에서는 launchd 데몬 등록 상태도 점검합니다 — plist 존재 여부와 launchctl 등록 여부를 교차 확인하고, 불일치(plist는 있으나 launchd 미등록, 또는 그 역)를 `WARN`으로 표면화합니다.
-- **업데이트 안내**: `status` 와 동일하게, npm 에 새 버전이 있으면 안내 한 줄을 표시합니다(24시간 캐시·TTY 에서만 조회·`ADDE_NO_UPDATE_CHECK` 로 비활성).
+- **`--json`**: 점검 목록을 사람용 심볼 목록 대신 JSON 배열로 출력합니다(각 항목의 `name`/`level`/`detail`, `WARN`/`FAIL` 시 `hint` 포함)하고, 요약 줄·업데이트 안내는 억제합니다(기계가독 출력만). 종료 코드 의미는 불변(`FAIL` 존재 → 1, 아니면 0 — 텍스트 모드와 동일). `--json` 없이 호출하면 기존과 완전히 동일합니다(additive).
+- **업데이트 안내**: `status` 와 동일하게, npm 에 새 버전이 있으면 안내 한 줄을 표시합니다(24시간 캐시·TTY 에서만 조회·`ADDE_NO_UPDATE_CHECK` 로 비활성) — `--json` 모드에서는 억제됩니다(위 참조).
 - 읽기 전용. 기동 전 "왜 안 뜨나"를 자가 진단하는 용도입니다.
+
+```bash
+adde doctor myproj --json   # 기계 판독 점검 목록(CI/모니터링)
+```
 
 ## logs — 최근 활동
 
 ```bash
-adde logs <proj> <lane> [N] [--engine]
+adde logs <proj> <lane> [N] [--engine] [--follow|-f]
 adde logs <proj> --daemon [N]
 ```
 
 해당 레인의 `transcript.log`(ACP 세션 이벤트 기록) 최근 `N` 줄을 출력합니다(기본 50). 파일이 없으면 안내를 출력합니다.
 
-- `N`: 출력할 마지막 줄 수(기본 50).
+- `N`: 출력할 마지막 줄 수(기본 50). 지정했으나 양의 정수가 아니면(비숫자·`0`·음수) stderr 에 경고를 출력하고 기본값 50 으로 폴백합니다(기존: 무경고 폴백) — 이 검증은 `--daemon` 경로에서도 동일하게 적용됩니다.
 - `--engine`: transcript 대신 `engine.log`(엔진 서브프로세스 stderr 캡처)를 출력합니다. 엔진 자체의 진단 출력을 볼 때 사용합니다(`stale`/기동 실패 원인 추적 등).
 - `--daemon`: 프로젝트의 **launchd 데몬 로그**(`~/Library/Logs/adde/<proj>.err.log`)를 출력합니다(`<lane>` 불필요). 데몬(분리 프로세스)의 출력, 특히 **기동 실패 원인**이 여기 쌓이며, 레인 transcript/engine 로그로는 볼 수 없습니다.
+- **`--follow`/`-f`**: 초기 스냅샷 출력 후 종료하지 않고 상주하며 신규 추가 라인을 실시간 출력합니다(`tail -f` 와 유사) — 기본 transcript, `--engine` 지정 시 engine 로그, 스냅샷이 읽은 지점에서 정확히 이어받아 추적합니다(공백·중복 없음). OS 변경 알림(상위 디렉터리 `fs.watch`)을 1차 트리거로 삼고, 알림이 미지원이거나 이벤트를 놓치는 상황에 대비해 저빈도(1초) stat 폴링을 안전망으로 상시 병행해 추적이 조용히 멈추지 않게 합니다. 로그 회전(5MB 크기 기반 세대 회전)은 물론, 동일 inode 로 truncate 된 직후 재성장하는 경우(`copytruncate` 류 회전)에도 유실·중복·어긋남 없이 투명하게 추적하며, 한글 등 멀티바이트 문자가 읽기 경계에서 분할돼도 깨지지 않고 온전하게 출력됩니다. `Ctrl-C`(`SIGINT`) 로 즉시 정지합니다(hang·busy-poll 없음). 시작 시 대상 로그가 아직 없으면 기존과 동일한 "부재" 안내를 출력하고 종료합니다(생성 대기 상주하지 않음). `--daemon` 로그는 follow 대상이 아닙니다 — `--daemon` 에서는 `-f` 가 무시되고 스냅샷만 출력됩니다.
 
 ```bash
 adde logs myproj tg-claude 100 --engine   # 엔진 stderr 로그 마지막 100줄
 adde logs myproj --daemon                 # 데몬 로그(레인 기동 실패 원인)
+adde logs myproj tg-claude -f             # transcript 라이브 tail
+adde logs myproj tg-claude --engine -f    # engine 로그 라이브 tail
 ```
 
 ## sessions — 세션 목록
 
 ```bash
-adde sessions <proj> <lane>
+adde sessions <proj> <lane> [--json]
 ```
 
 레인의 엔진 세션 장부를 출력합니다 — 번호·첫 프롬프트 발췌·**마지막 대화 시각**·세션 id(현재 세션은 `◀` 표시). 세션 재개·초기화는 채널에서 수행합니다(아래 "세션 제어 (채널 명령)").
+
+- 위치인자(`<proj>`/`<lane>`)와 `--json` 은 순서 무관하게 어디에 있어도 됩니다 — `--json` 이 `<proj>`/`<lane>` 값으로 오인되지 않습니다.
+- **`--json`**: 장부를 JSON 배열로 출력합니다. 각 항목은 `id`/`label`/`createdAt`/`lastActivityAt`/`current`(현재 세션이면 `true`)를 담습니다. 빈 장부는 유효한 빈 배열 `[]` 을 출력합니다(exit 0). `--json` 없이 호출하면 출력·종료 코드가 기존과 동일합니다.
+
+```bash
+adde sessions myproj tg-claude --json   # 기계 판독 장부(모니터링/스크립트)
+```
 
 ## 세션 제어 (채널 명령)
 
@@ -428,9 +445,9 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 | ------------ | -------------------------------- | ------------------------------------ |
 | `up`         | 데몬 등록 성공                   | launchd 등록 실패·인자 누락          |
 | `down`       | 데몬 종료 성공(이미 없어도 0)    | 오류 발생                            |
-| `restart`    | down+up 모두 성공                | down 또는 up 실패                    |
-| `status`     | 모두 정상                        | `dead`(크래시)·`stale`(행) 레인 존재 |
-| `doctor`     | FAIL 없음                        | FAIL 항목 존재                       |
+| `restart`    | down+up 성공 + 전 레인 기동 성공 | down/up 실패, 또는 레인 1개 이상 기동 실패(`[behavior-change]` — 기존: 재등록 자체가 예외를 던지지 않으면 항상 0) |
+| `status`     | 모두 정상                        | `dead`(크래시)·`stale`(행)·`error` 레인 존재, **또는 프로젝트가 크래시루프 자가정지(`halt`) 상태** |
+| `doctor`     | FAIL 없음(`--json` 도 동일)      | FAIL 항목 존재(`--json` 도 동일)     |
 | `logs`       | 읽기 성공(파일 없어도 안내 후 0) | proj/lane 인자 누락·경로 검증 오류   |
 | `init`       | 마법사 완료                      | 비TTY·인자 누락·검증/생성 오류       |
 | `alias`      | 별칭 설치·이미 설정 확인         | `adde` PATH 미발견·설치 실패         |

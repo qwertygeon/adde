@@ -122,7 +122,7 @@ Starts every `*.conf` lane in `~/.config/adde/<proj>/lanes.d/` as a **macOS laun
 
 - **Terminal-independent**: the daemon keeps running even after you close the terminal.
 - **Crash-only auto-restart**: launchd restarts the daemon on a crash (non-zero exit or a fatal signal), throttled to at most once every 60 seconds, and always relaunches it after a macOS reboot/logout (`RunAtLoad`). A deliberate stop (`adde down`, or a `SIGTERM` that completes its graceful shutdown) exits cleanly and is **not** restarted, and a deterministic boot failure (e.g. zero lanes configured, or a boot-time config error) also exits cleanly instead of looping forever — the failure is still surfaced (see below), it just isn't retried automatically. See [`proj.conf` — daemon crash auto-restart](#projconf--daemon-crash-auto-restart) to opt out, and [crash safety & log rotation](troubleshooting.md#crash-safety--log-rotation) for the crash-loop self-halt safety net.
-- **Startup result**: after registering, `adde up` briefly polls each lane's state and prints a summary (`N running · M failed · K still starting`). Any lane that **failed to start** is listed with its reason, and `adde up` exits non-zero — so you learn about failures immediately instead of having to check `adde status`. (The failure is also recorded as `error` state; see `adde logs <proj> --daemon` for the daemon-level cause.) If **no lane** comes up within the wait window (the daemon likely failed to boot), `adde up` reports it and exits non-zero with a pointer to `adde logs <proj> --daemon`. The wait window can be extended on slow machines via the `ADDE_UP_POLL_MS` (milliseconds) env var.
+- **Startup result**: after registering, `adde up` briefly polls each lane's state and prints a summary (`N running · M failed · K still starting`). Any lane that **failed to start** is listed with its reason, and `adde up` exits non-zero — so you learn about failures immediately instead of having to check `adde status`. (The failure is also recorded as `error` state; see `adde logs <proj> --daemon` for the daemon-level cause.) If **no lane** comes up within the wait window (the daemon likely failed to boot), `adde up` reports it and exits non-zero with a pointer to `adde logs <proj> --daemon`. The wait window can be extended on slow machines via the `ADDE_UP_POLL_MS` (milliseconds) env var — default `8000`; only a **positive** integer is honored (non-numeric, zero, or negative values fall back to the default silently). `adde restart` polls its own re-launch result the same way and honors the same env var.
 - **Already-up notice**: if the daemon is already registered *and* has at least one running lane, `adde up` does not re-register (which would fail as "already loaded"). Instead it prints an "already up" line with the running/total lane count and hints (`adde status` to view, `adde restart` to apply conf changes, `adde down` to stop). If any lane is currently unhealthy (`error`/`dead`/`stale`), it is listed and `adde up` exits non-zero here too. If the registration is present but **no lane is actually running** (e.g. after a deterministic boot failure that exited cleanly), `adde up` does not just report "already up" — it re-registers the daemon (unload+load) to recover it, then polls as a fresh start.
 - **Double-start guard**: within the daemon, an already-running lane is skipped with a warning (recorded in the daemon log). Double starts do not happen.
 - **macOS only**: the launchd feature works only on macOS. See [macOS-only features](#macos-only-features) for details.
@@ -146,6 +146,7 @@ adde restart <proj>
 Performs `down` then `up`, in order. Use it to restart the daemon after a config change, or to reset the daemon state.
 
 - If `up` fails after `down` succeeds, it surfaces the `up` error and returns exit code 1.
+- **[behavior-change] Startup result surfacing**: after re-registering, `restart` polls each lane's state the same way `up` does and prints a summary (`N running · M failed · K still starting`). Any lane that **failed to start** is listed with its reason, and `restart` now returns **exit code 1** if one or more lanes failed (previously it always returned 0 as long as the launchctl re-registration itself didn't throw — a lane startup failure could look like success). All lanes starting successfully still returns exit 0. The wait window is the same `ADDE_UP_POLL_MS` env var used by `up` (see [`up`](#up--start-lanes-daemon)).
 - The plist is re-rendered from scratch on every `restart` (and every `up`), so it always picks up the current [`proj.conf`](#projconf--daemon-crash-auto-restart) `auto_restart` value — there is no separate migration step after editing it.
 - `restart` also clears the crash-loop self-halt marker (see [crash safety & log rotation](troubleshooting.md#crash-safety--log-rotation)), since running it is an explicit retry.
 
@@ -184,20 +185,21 @@ Scans each lane in `lanes.d` and determines its status.
 - **`--all`** (when `<proj>` is omitted): show all lanes including stopped (`stopped`).
 - If there are `dead`/`stale`/`error` lanes, remedy guidance is appended (`SEEN` = time since the last heartbeat; for `error`, the start-failure reason and a pointer to `adde logs <proj> --daemon`/`--engine`).
 - Heartbeat: `adde up` periodically refreshes the state-file mtime. Even if the pid is alive, if the refresh stops past a threshold it is judged `stale` (hung).
-- `--json`: an array of lane objects (for monitoring/scripts, including `lastSeenAt`; annotated with `proj` when aggregating).
+- **Crash-loop self-halt (`halt`)**: if the daemon self-halted after repeated short-lived crashes (see [crash safety & log rotation](troubleshooting.md#crash-safety--log-rotation)), `status` prints a warning for the affected project **and now also returns exit code 1** for it (previously `halt` only produced the warning text and did not affect the exit code — the same `dead`/`stale`/`error` → exit 1 rule already applied and still applies). The aggregate (no-`<proj>`) view detects `halt` against the full set of projects, not just the lanes shown in the table — a project whose lanes are all `stopped` (and therefore filtered out of the default aggregate table) still surfaces its `halt` warning and exit code 1.
+- **[BREAKING] `--json`**: the top-level JSON output is an **object** `{ "lanes": [...], "halt": ... }`, not a bare array (previously `adde status --json` printed a top-level array of lane objects). `lanes` holds the same per-lane objects as before (including `lastSeenAt`; annotated with `proj` when aggregating). `halt` carries the crash-loop self-halt state: `HaltRecord | null` for a single `<proj>` view, or `{ "<proj>": HaltRecord | null, ... }` for the aggregated (no-`<proj>`) view. **Migration**: change a top-level array reference to `.lanes` — e.g. `adde status --json | jq '.[]'` → `jq '.lanes[]'`. The non-JSON (text) output is unchanged.
 - **Update notice**: if a newer version is available on npm, a one-line notice is appended (`npm i -g adde-acp@latest` … then `adde restart`). It uses a 24-hour cache (under the config base), only hits the network in an interactive terminal (TTY), and can be disabled with the `ADDE_NO_UPDATE_CHECK` env var.
 - Read-only (no side effects).
 
 ```bash
 adde status myproj          # per-lane table for one project (includes stopped)
 adde status --all           # every project, including stopped lanes
-adde status myproj --json   # machine-readable array (monitoring/scripts)
+adde status myproj --json   # machine-readable {lanes, halt} object (monitoring/scripts)
 ```
 
 ## doctor — environment check
 
 ```bash
-adde doctor [<proj>]
+adde doctor [<proj>] [--json]
 ```
 
 Performs a static check independent of status and reports each item as `PASS` / `WARN` / `FAIL`. Failures/warnings carry a remedy hint (`↳ action:`).
@@ -206,34 +208,49 @@ Performs a static check independent of status and reports each item as `PASS` / 
 - With `<proj>`, per lane: source validity · `cwd` existence · (telegram) `.env` token presence.
 - **File-permission audit** (with `<proj>`, per lane): `WARN` if `state/<lane>/.env` is group/other-accessible (expects 0600 — bot-token exposure risk), and `WARN` if `file_mode=private` but the `state/<lane>` directory is group/other-accessible (expects 0700), with a `chmod`/`adde restart` hint. `file_mode=shared` is treated as an intentional choice and not warned.
 - With `<proj>`, on macOS it also checks the launchd daemon registration state — it cross-checks plist existence against launchctl registration and surfaces a mismatch (plist present but not registered with launchd, or vice versa) as `WARN`.
-- **Update notice**: like `status`, if a newer version is available on npm it prints a one-line notice (24-hour cache · network only in TTY · disable with `ADDE_NO_UPDATE_CHECK`).
+- **`--json`**: prints the check list as a JSON array (each item's `name`/`level`/`detail`, plus `hint` when `WARN`/`FAIL`) instead of the human-readable symbol list, and suppresses the summary line and the update notice (machine-readable output only). The exit code meaning is unchanged (`FAIL` present → 1, otherwise 0 — same as the text mode). Without `--json`, output and exit code are exactly as before (additive change).
+- **Update notice**: like `status`, if a newer version is available on npm it prints a one-line notice (24-hour cache · network only in TTY · disable with `ADDE_NO_UPDATE_CHECK`) — suppressed in `--json` mode (see above).
 - Read-only. It's for self-diagnosing "why won't it start" before startup.
+
+```bash
+adde doctor myproj --json   # machine-readable check list (CI/monitoring)
+```
 
 ## logs — recent activity
 
 ```bash
-adde logs <proj> <lane> [N] [--engine]
+adde logs <proj> <lane> [N] [--engine] [--follow|-f]
 adde logs <proj> --daemon [N]
 ```
 
 Prints the last `N` lines of that lane's `transcript.log` (ACP session event record) (default 50). If the file doesn't exist, prints an informational message.
 
-- `N`: how many trailing lines to print (default 50).
+- `N`: how many trailing lines to print (default 50). If it's given but isn't a positive integer (non-numeric, `0`, or negative), `logs` prints a warning to stderr and falls back to the default 50 (previously it fell back silently with no warning) — this validation applies the same way with `--daemon`.
 - `--engine`: prints `engine.log` (the engine subprocess's captured stderr) instead of the transcript. Use it to see the engine's own diagnostic output (tracing `stale`/startup-failure causes, etc.).
 - `--daemon`: prints the **launchd daemon log** for the project (`~/Library/Logs/adde/<proj>.err.log`) — `<lane>` is not needed. This is where the background daemon's own output (including **startup-failure causes**) lands, which the per-lane transcript/engine logs don't capture.
+- **`--follow`/`-f`**: after printing the initial snapshot, stays running and prints new lines as they're appended (like `tail -f`) — transcript by default, or the engine log with `--engine`, resuming exactly where the snapshot left off (no gap, no duplicate lines). It's driven by an OS file-change notification (`fs.watch` on the containing directory) as the primary trigger, with a low-frequency (1s) stat poll running alongside as a safety net in case notifications are unsupported or an event is missed — so tailing doesn't silently stall. It follows transparently across log rotation (the 5MB size-based rotation) and across a same-inode truncate immediately followed by regrowth (e.g. `copytruncate`-style rotation), with no lost, duplicated, or misaligned lines; multi-byte characters (e.g. Korean) split across a read boundary are decoded intact (no mangled output). Press `Ctrl-C` (`SIGINT`) to stop immediately (no hang, no busy-polling). If the target log doesn't exist yet when you start, it prints the usual "not found" message and exits rather than waiting around for it to be created. `--daemon` logs are **not** followable — `-f` is ignored for `--daemon` and it just prints the snapshot.
 
 ```bash
 adde logs myproj tg-claude 100 --engine   # last 100 lines of the engine stderr log
 adde logs myproj --daemon                 # daemon log (why lanes failed to start)
+adde logs myproj tg-claude -f             # live-tail the transcript
+adde logs myproj tg-claude --engine -f    # live-tail the engine log
 ```
 
 ## sessions — session list
 
 ```bash
-adde sessions <proj> <lane>
+adde sessions <proj> <lane> [--json]
 ```
 
 Prints the lane's engine session ledger — number, first-prompt excerpt, **last conversation time**, and session id (the current session marked with `◀`). Resuming/resetting sessions is done from the channel (see "Session control (channel commands)" below).
+
+- Positional arguments (`<proj>`/`<lane>`) and `--json` can appear in any order — `--json` is never mistaken for a `<proj>`/`<lane>` value.
+- **`--json`**: prints the ledger as a JSON array, each entry with `id`/`label`/`createdAt`/`lastActivityAt`/`current` (`true` for the active session). An empty ledger prints a valid empty array `[]` (exit 0). Without `--json`, output and exit code are unchanged.
+
+```bash
+adde sessions myproj tg-claude --json   # machine-readable ledger (monitoring/scripts)
+```
 
 ## Session control (channel commands)
 
@@ -428,9 +445,9 @@ An unsupported shell gives an error + exit code 1.
 | ------------ | ------------------------------------------------------- | ------------------------------------------------------ |
 | `up`         | Daemon registration succeeded                           | launchd registration failure · missing argument        |
 | `down`       | Daemon stop succeeded (0 even if already gone)          | Error occurred                                         |
-| `restart`    | Both down+up succeeded                                  | down or up failed                                      |
-| `status`     | All healthy                                             | A `dead` (crash) / `stale` (hung) lane exists          |
-| `doctor`     | No FAIL                                                 | A FAIL item exists                                     |
+| `restart`    | down+up succeeded and every lane started                | down/up failed, or one or more lanes failed to start (`[behavior-change]` — previously always 0 as long as re-registration itself didn't throw) |
+| `status`     | All healthy                                             | A `dead` (crash) / `stale` (hung) / `error` lane exists, **or the project has a crash-loop self-halt (`halt`)** |
+| `doctor`     | No FAIL (same with `--json`)                            | A FAIL item exists (same with `--json`)                 |
 | `logs`       | Read succeeded (0 with an info message even if no file) | Missing project/lane argument · path-validation error  |
 | `init`       | Wizard completed                                        | Non-TTY · missing argument · validation/creation error |
 | `alias`      | Aliases installed · already-set confirmed               | `adde` not found in PATH · install failed              |

@@ -329,6 +329,37 @@ describe("readLogs (SC4)", () => {
   });
 });
 
+// readLogs — 스냅샷 종료 바이트 오프셋·inode 반환(코어 파트) — SC-104. ops.ts runLogs 의 follow
+// 진입이 이 값을 그대로 startOffset·startIno 로 이어받아 별도 stat 경합 창을 없앤다(ADR-004).
+describe("readLogs — endOffset·startIno 반환 (SC-104 코어)", () => {
+  it("endOffset 은 스냅샷이 읽은 바이트 종료 오프셋, startIno 는 파일 inode 다", async () => {
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.writeFileSync(lp.transcriptLog, "a\nb\nc\n");
+    const res = await readLogs("p", "lane1", 50, { base: tmpBase });
+    const st = fs.statSync(lp.transcriptLog);
+    expect(res.endOffset).toBe(st.size);
+    expect(res.startIno).toBe(st.ino);
+  });
+
+  it("파일 부재 시 endOffset·startIno 는 0", async () => {
+    const res = await readLogs("p", "ghost", 50, { base: tmpBase });
+    expect(res.endOffset).toBe(0);
+    expect(res.startIno).toBe(0);
+  });
+
+  it("--engine 옵션 시 engine.log 기준 endOffset·startIno 를 반환한다", async () => {
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.writeFileSync(lp.transcriptLog, "transcript-line\n");
+    fs.writeFileSync(lp.engineLog, ["err1", "err2"].join("\n") + "\n");
+    const res = await readLogs("p", "lane1", 50, { base: tmpBase, engine: true });
+    const st = fs.statSync(lp.engineLog);
+    expect(res.endOffset).toBe(st.size);
+    expect(res.startIno).toBe(st.ino);
+  });
+});
+
 // ── runDoctor daemon 등록 점검 (SC-008/009/014/015) ─────────────────────
 // fake launchctlExec 주입 — CI 에서 실 launchctl 미접촉
 

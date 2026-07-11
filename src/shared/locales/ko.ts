@@ -15,10 +15,10 @@ export const ko = {
   up <proj>                프로젝트의 모든 레인 백그라운드 데몬으로 기동
   down <proj>              데몬 종료 (어느 터미널에서든 동작)
   restart <proj>           데몬 재기동 (down + up)
-  status [<proj>] [--all]  레인 상태 조회 (<proj> 생략 시 실행 중 전체, --all 정지 포함)
-  doctor [<proj>]          환경·설정 정적 점검(상태 비의존)
-  logs <proj> <lane> [N]   레인 transcript 최근 N줄(기본 50, --engine 시 엔진 stderr)
-  sessions <proj> <lane>   기록된 엔진 세션 목록(재개는 채널에서: /resume 또는 resume 체크박스)
+  status [<proj>] [--all] [--json]  레인 상태 조회 (<proj> 생략 시 실행 중 전체, --all 정지 포함)
+  doctor [<proj>] [--json]  환경·설정 정적 점검(상태 비의존)
+  logs <proj> <lane> [N] [-f|--follow]  레인 transcript 최근 N줄(기본 50, --engine 시 엔진 stderr; -f/--follow 로 실시간 추적)
+  sessions <proj> <lane> [--json]  기록된 엔진 세션 목록(재개는 채널에서: /resume 또는 resume 체크박스)
   lane add <proj> <lane>   레인 conf 생성
   lane ls <proj>           레인 목록
   lane show <proj> <lane>  레인 conf 출력
@@ -37,17 +37,22 @@ export const ko = {
     down: "사용법: adde down <proj>",
     restart: "사용법: adde restart <proj>",
     status: "사용법: adde status [<proj>] [--all] [--json]",
-    doctor: "사용법: adde doctor [<proj>]",
-    logs: `사용법: adde logs <proj> <lane> [N] [--engine] [--daemon]
+    doctor: `사용법: adde doctor [<proj>] [--json]
+
+환경·설정 정적 점검(상태 비의존).
+  --json       기계가독 출력(checks 배열; 요약 줄·업데이트 알림 없음)`,
+    logs: `사용법: adde logs <proj> <lane> [N] [--engine] [--daemon] [-f|--follow]
 
 레인 로그의 최근 N줄(기본 50)을 출력합니다.
   (기본)       레인 transcript(메시지·결정·알림)
   --engine     엔진 stderr 캡처(engine.log) — 엔진 크래시 진단
-  --daemon     <proj> launchd 데몬 로그(기동 실패 원인이 여기 쌓임; <lane> 불필요)`,
-    sessions: `사용법: adde sessions <proj> <lane>
+  --daemon     <proj> launchd 데몬 로그(기동 실패 원인이 여기 쌓임; <lane> 불필요)
+  -f, --follow 실시간 추적 — 종료 없이 계속 실행하며 신규 라인을 방출(Ctrl-C 로 정지)`,
+    sessions: `사용법: adde sessions <proj> <lane> [--json]
 
 레인에 기록된 엔진 세션 목록(번호·첫 프롬프트 발췌·마지막 활동·id; 현재 세션 ◀ 표시).
-읽기 전용 — 세션 재개·초기화는 CLI 가 아니라 채널에서 합니다(/resume <n> 또는 resume 체크박스).`,
+읽기 전용 — 세션 재개·초기화는 CLI 가 아니라 채널에서 합니다(/resume <n> 또는 resume 체크박스).
+  --json       기계가독 출력(세션 배열)`,
     completion: `사용법: adde completion <bash|zsh>
 
 셸 자동완성 스크립트를 stdout 으로 출력합니다 — 설치는 하지 않습니다(installer 아님).
@@ -176,6 +181,8 @@ lane add 옵션:
     logs: {
       whatEngine: "engine 로그",
       whatTranscript: "transcript",
+      badCount: '줄수 "{{raw}}" 는 유효하지 않습니다(양의 정수만 가능) — 기본값 50 으로 대체합니다.',
+      watchError: "경고: 로그 변경 감시 실패({{msg}}) — 1초 폴링으로 계속 추적합니다.",
       notFound:
         "{{what}} 없음: {{path}}\n  ↳ 조치: 레인이 아직 활동하지 않았거나 기동되지 않았습니다. adde status {{proj}} 로 상태를 확인하세요.",
       daemonNotFound:

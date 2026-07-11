@@ -14,10 +14,10 @@ Commands:
   up <proj>                start all lanes of the project as a background daemon
   down <proj>              stop the daemon (works from any terminal)
   restart <proj>           restart the daemon (down + up)
-  status [<proj>] [--all]  lane status (all running projects if <proj> omitted, --all includes stopped)
-  doctor [<proj>]          static environment/config checks (state-independent)
-  logs <proj> <lane> [N]   last N lines of the lane transcript (default 50, engine stderr with --engine)
-  sessions <proj> <lane>   list recorded engine sessions (resume via channel: /resume or resume checkbox)
+  status [<proj>] [--all] [--json]  lane status (all running projects if <proj> omitted, --all includes stopped)
+  doctor [<proj>] [--json]  static environment/config checks (state-independent)
+  logs <proj> <lane> [N] [-f|--follow]  last N lines of the lane transcript (default 50, engine stderr with --engine; -f/--follow to tail live)
+  sessions <proj> <lane> [--json]  list recorded engine sessions (resume via channel: /resume or resume checkbox)
   lane add <proj> <lane>   create a lane conf
   lane ls <proj>           list lanes
   lane show <proj> <lane>  print a lane conf
@@ -36,17 +36,22 @@ Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help
     down: "Usage: adde down <proj>",
     restart: "Usage: adde restart <proj>",
     status: "Usage: adde status [<proj>] [--all] [--json]",
-    doctor: "Usage: adde doctor [<proj>]",
-    logs: `Usage: adde logs <proj> <lane> [N] [--engine] [--daemon]
+    doctor: `Usage: adde doctor [<proj>] [--json]
+
+Static environment/config checks (state-independent).
+  --json       machine-readable output (checks array; no summary line/update notice)`,
+    logs: `Usage: adde logs <proj> <lane> [N] [--engine] [--daemon] [-f|--follow]
 
 Prints the last N lines (default 50) of a lane's log.
   (default)    the lane transcript (messages, decisions, notices)
   --engine     the engine's stderr capture (engine.log) — for engine crashes
-  --daemon     the launchd daemon log for <proj> (startup failures land here; <lane> optional)`,
-    sessions: `Usage: adde sessions <proj> <lane>
+  --daemon     the launchd daemon log for <proj> (startup failures land here; <lane> optional)
+  -f, --follow live tail — keeps running and prints new lines as they're appended (Ctrl-C to stop)`,
+    sessions: `Usage: adde sessions <proj> <lane> [--json]
 
 Lists the engine sessions recorded for a lane (number, first-prompt excerpt, last activity, id; current marked ◀).
-Read-only — resuming/resetting a session is done from the channel (/resume <n> or the resume checkbox), not the CLI.`,
+Read-only — resuming/resetting a session is done from the channel (/resume <n> or the resume checkbox), not the CLI.
+  --json       machine-readable output (array of sessions)`,
     completion: `Usage: adde completion <bash|zsh>
 
 Prints a shell completion script to stdout — it does NOT install anything.
@@ -175,6 +180,10 @@ lane add options:
     logs: {
       whatEngine: "engine log",
       whatTranscript: "transcript",
+      badCount:
+        'invalid line count "{{raw}}" (must be a positive integer) — falling back to 50.',
+      watchError:
+        "warning: log change watch failed ({{msg}}) — continuing to track via 1s polling.",
       notFound:
         "{{what}} not found: {{path}}\n  ↳ action: the lane has not been active or started yet. Check with adde status {{proj}}.",
       daemonNotFound:

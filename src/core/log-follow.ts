@@ -64,8 +64,14 @@ const defaultRead: NonNullable<FollowDeps["read"]> = async (p, offset, length) =
   }
 };
 
-const defaultWatch: NonNullable<FollowDeps["watch"]> = (path, listener) =>
-  fsWatch(path, (eventType, filename) => listener(eventType, filename));
+const defaultWatch: NonNullable<FollowDeps["watch"]> = (path, listener) => {
+  const watcher = fsWatch(path, (eventType, filename) => listener(eventType, filename));
+  // watcher 오류(감시 디렉터리 소실 등)는 크래시 사유가 아니다 — error 리스너 부재 시
+  // EventEmitter 가 throw 하므로 여기서 흡수하고 감시만 내린다. 추적은 상시 병행 중인
+  // 안전망 stat 폴링이 이어간다(조용한 멈춤 없음).
+  watcher.on("error", () => watcher.close());
+  return watcher;
+};
 
 /**
  * 대상 파일을 fs.watch(상위 디렉터리) + 저빈도 stat 폴링(안전망)으로 추적하며 신규 라인을

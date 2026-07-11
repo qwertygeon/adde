@@ -390,36 +390,51 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
   if (warn && nRaw !== undefined) {
     process.stderr.write(t("ops.logs.badCount", { raw: nRaw }) + "\n");
   }
-  let result;
+  // follow 의 SIGINT graceful 종료 계약은 스냅샷 출력 창을 포함한다 — 핸들러를 스냅샷 출력
+  // 전에 등록해, 그 창에 도착한 SIGINT 가 기본 처분(시그널 종료)으로 새지 않게 한다.
+  // 비-follow 경로는 등록하지 않는다(기본 처분 유지 — 최소 표면).
+  let abort: AbortController | null = null;
+  let onSigint: (() => void) | null = null;
+  if (follow) {
+    const ctrl = new AbortController();
+    abort = ctrl;
+    onSigint = () => ctrl.abort();
+    process.once("SIGINT", onSigint);
+  }
   try {
-    result = await readLogs(proj, lane, n, { engine });
-  } catch (err) {
-    // proj/lane 검증 실패(경로 탈출 차단 등) — 친절한 메시지 후 비정상 종료코드.
-    process.stderr.write(errMsg(err) + "\n");
-    return 1;
-  }
-  if (!result.exists) {
-    // follow 요청이어도 시작 시 부재면 생성 대기 상주하지 않는다.
-    const what = engine ? t("ops.logs.whatEngine") : t("ops.logs.whatTranscript");
-    process.stdout.write(t("ops.logs.notFound", { what, path: result.path, proj }) + "\n");
-    return 0;
-  }
-  if (result.lines.length === 0) {
-    process.stdout.write(t("ops.logs.empty", { path: result.path }) + "\n");
-  } else {
-    process.stdout.write(result.lines.join("\n") + "\n");
-  }
-  if (!follow) return 0;
+    let result;
+    try {
+      result = await readLogs(proj, lane, n, { engine });
+    } catch (err) {
+      // proj/lane 검증 실패(경로 탈출 차단 등) — 친절한 메시지 후 비정상 종료코드.
+      process.stderr.write(errMsg(err) + "\n");
+      return 1;
+    }
+    if (!result.exists) {
+      // follow 요청이어도 시작 시 부재면 생성 대기 상주하지 않는다.
+      const what = engine ? t("ops.logs.whatEngine") : t("ops.logs.whatTranscript");
+      process.stdout.write(t("ops.logs.notFound", { what, path: result.path, proj }) + "\n");
+      return 0;
+    }
+    if (result.lines.length === 0) {
+      process.stdout.write(t("ops.logs.empty", { path: result.path }) + "\n");
+    } else {
+      process.stdout.write(result.lines.join("\n") + "\n");
+    }
+    if (!follow || abort === null) return 0;
 
-  // follow 진입 — 스냅샷이 실제로 읽은 지점(endOffset/startIno)에서 정확히 이어 추적한다.
-  // 별도 stat 재조회 없이 readLogs 의 원자 취득 결과를 그대로 이어받아 L-2 유실 창을 닫는다.
-  const ac = new AbortController();
-  process.once("SIGINT", () => ac.abort());
-  await followFile(result.path, {
-    onData: (chunk) => process.stdout.write(chunk),
-    signal: ac.signal,
-    startOffset: result.endOffset,
-    startIno: result.startIno,
-  });
-  return 0;
+    // follow 진입 — 스냅샷이 실제로 읽은 지점(endOffset/startIno)에서 정확히 이어 추적한다.
+    // 별도 stat 재조회 없이 readLogs 의 원자 취득 결과를 그대로 이어받아 L-2 유실 창을 닫는다.
+    await followFile(result.path, {
+      onData: (chunk) => process.stdout.write(chunk),
+      signal: abort.signal,
+      startOffset: result.endOffset,
+      startIno: result.startIno,
+    });
+    return 0;
+  } finally {
+    // 조기 return(검증 실패·부재) 포함 전 경로에서 once-핸들러를 해제 — 한 프로세스에서
+    // 반복 호출되는 환경(vitest 워커 등)의 리스너 누적을 막는다.
+    if (onSigint !== null) process.off("SIGINT", onSigint);
+  }
 }

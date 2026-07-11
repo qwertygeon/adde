@@ -157,6 +157,51 @@ async function pollUpResult(
 }
 
 /**
+ * `up`/`restart` 공통 결과-표면화 경로 — 데몬(분리 프로세스)이 각 레인 상태를 runtime.json 에
+ * 남길 때까지 폴링(`pollUpResult`)한 뒤 실패 레인·기동 미확정·요약을 동일하게 표면화한다. 두 명령의
+ * 차이(등록 분기/unload 등 선행 단계, `upDone`/`restartDone` 완료 메시지)는 호출측이 처리하고,
+ * 이 함수는 그 이후의 폴링·요약·종료코드만 담당한다(중복 blocks 제거).
+ */
+async function surfaceStartResult(
+  proj: string,
+  collectStatus: (p: string) => Promise<UpLaneRow[]>,
+  upStart: number,
+): Promise<number> {
+  // 폴링 대기 상한(ms). 느린 머신에서 기동이 8s 이상 걸리면 ADDE_UP_POLL_MS 로 늘릴 수 있다.
+  // 양수만 유효 — 0·음수·비수치는 기본 8000(음수를 그대로 쓰면 폴링을 건너뛰어 오탐을 유발).
+  const pollEnv = Number(process.env.ADDE_UP_POLL_MS);
+  const pollMs = Number.isFinite(pollEnv) && pollEnv > 0 ? pollEnv : 8000;
+  const summary = await pollUpResult(proj, collectStatus, upStart, pollMs);
+  if (summary.failed.length > 0) {
+    process.stderr.write(
+      t("run.upFailed", {
+        lanes: summary.failed.map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`).join(", "),
+        proj,
+      }) + "\n",
+    );
+  }
+  // 데드라인까지 아무 레인도 running/error 를 남기지 않았다(전부 stopped/미확정)면 데몬 프로세스가
+  // 부팅 중 크래시했을 수 있다(launchctl load 는 등록만 성공, 프로세스 크래시는 감지 못 함).
+  // 하드 실패를 성공(exit 0)으로 오인하지 않도록 upSummary("기동 중") 대신 데몬 로그 확인을 안내하고
+  // 비정상 종료한다(요약을 먼저 찍으면 "기동 중 K" 와 "기동된 레인 없음" 이 모순돼 보인다).
+  const bootUnconfirmed =
+    summary.running === 0 && summary.failed.length === 0 && summary.total > 0;
+  if (bootUnconfirmed) {
+    process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
+    return 1;
+  }
+  process.stdout.write(
+    t("run.upSummary", {
+      running: summary.running,
+      failed: summary.failed.length,
+      pending: summary.pending,
+    }) + "\n",
+  );
+  process.stdout.write(t("run.statusHint", { proj }) + "\n");
+  return summary.failed.length > 0 ? 1 : 0;
+}
+
+/**
  * CLI 진입 로직. adde / add 양쪽 진입점이 공유한다.
  * @returns 프로세스 종료 코드.
  */
@@ -308,42 +353,8 @@ export async function run(argv: readonly string[]): Promise<number> {
       const upStart = Date.now();
       await loadDaemon(proj);
       process.stdout.write(t("run.upDone", { proj }) + "\n");
-      // 기동 결과를 바로 표면화 — 데몬(분리 프로세스)이 각 레인의 running/error 를 runtime.json 에
-      // 남길 때까지 짧게 폴링해 성공/실패 레인을 이 터미널에 요약한다(요청: up 에서 즉시 실패 레인 표기).
-      // 폴링 대기 상한(ms). 느린 머신에서 기동이 8s 이상 걸리면 ADDE_UP_POLL_MS 로 늘릴 수 있다.
-      // 양수만 유효 — 0·음수·비수치는 기본 8000(음수를 그대로 쓰면 폴링을 건너뛰어 오탐을 유발).
-      const pollEnv = Number(process.env.ADDE_UP_POLL_MS);
-      const pollMs = Number.isFinite(pollEnv) && pollEnv > 0 ? pollEnv : 8000;
-      const summary = await pollUpResult(proj, collectStatus, upStart, pollMs);
-      if (summary.failed.length > 0) {
-        process.stderr.write(
-          t("run.upFailed", {
-            lanes: summary.failed
-              .map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`)
-              .join(", "),
-            proj,
-          }) + "\n",
-        );
-      }
-      // 데드라인까지 아무 레인도 running/error 를 남기지 않았다(전부 stopped/미확정)면 데몬 프로세스가
-      // 부팅 중 크래시했을 수 있다(launchctl load 는 등록만 성공, 프로세스 크래시는 감지 못 함).
-      // 하드 실패를 성공(exit 0)으로 오인하지 않도록 upSummary("기동 중") 대신 데몬 로그 확인을 안내하고
-      // 비정상 종료한다(요약을 먼저 찍으면 "기동 중 K" 와 "기동된 레인 없음" 이 모순돼 보인다).
-      const bootUnconfirmed =
-        summary.running === 0 && summary.failed.length === 0 && summary.total > 0;
-      if (bootUnconfirmed) {
-        process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
-        return 1;
-      }
-      process.stdout.write(
-        t("run.upSummary", {
-          running: summary.running,
-          failed: summary.failed.length,
-          pending: summary.pending,
-        }) + "\n",
-      );
-      process.stdout.write(t("run.statusHint", { proj }) + "\n");
-      return summary.failed.length > 0 ? 1 : 0;
+      // 기동 결과를 바로 표면화 — restart 와 동일한 공유 경로(surfaceStartResult, N-1).
+      return await surfaceStartResult(proj, collectStatus, upStart);
     } catch (err) {
       process.stderr.write(cmdError("up", errMsg(err)) + "\n");
       return 1;
@@ -384,36 +395,8 @@ export async function run(argv: readonly string[]): Promise<number> {
       const upStart = Date.now();
       await loadDaemon(proj);
       process.stdout.write(t("run.restartDone", { proj }) + "\n");
-      // up 과 동형 폴링·요약(pollUpResult 재사용) — 재기동 성공/실패 레인을 표면화한다.
-      // 성공처럼 보이며 조용히 끝나는 대신, 실패 레인을 표면화하고 exit code 에 반영한다.
-      const pollEnv = Number(process.env.ADDE_UP_POLL_MS);
-      const pollMs = Number.isFinite(pollEnv) && pollEnv > 0 ? pollEnv : 8000;
-      const summary = await pollUpResult(proj, collectStatus, upStart, pollMs);
-      if (summary.failed.length > 0) {
-        process.stderr.write(
-          t("run.upFailed", {
-            lanes: summary.failed
-              .map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`)
-              .join(", "),
-            proj,
-          }) + "\n",
-        );
-      }
-      const bootUnconfirmed =
-        summary.running === 0 && summary.failed.length === 0 && summary.total > 0;
-      if (bootUnconfirmed) {
-        process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
-        return 1;
-      }
-      process.stdout.write(
-        t("run.upSummary", {
-          running: summary.running,
-          failed: summary.failed.length,
-          pending: summary.pending,
-        }) + "\n",
-      );
-      process.stdout.write(t("run.statusHint", { proj }) + "\n");
-      return summary.failed.length > 0 ? 1 : 0;
+      // up 과 동일한 공유 경로(surfaceStartResult, N-1) — 재기동 성공/실패 레인을 동등하게 표면화한다.
+      return await surfaceStartResult(proj, collectStatus, upStart);
     } catch (err) {
       process.stderr.write(cmdError("restart", errMsg(err)) + "\n");
       return 1;

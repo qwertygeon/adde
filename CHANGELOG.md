@@ -7,15 +7,15 @@
 ### Added
 
 - **`adde doctor`/`adde sessions` 에 `--json` 기계가독 출력 추가** — 스크립트·모니터링·CI 가 진단 점검 목록(`doctor [<proj>] --json`, 각 점검 name·level·detail·경고/실패 시 hint)과 세션 장부(`sessions <proj> <lane> --json`, id·label·lastActivityAt·현재 세션 여부)를 JSON 으로 파싱할 수 있다. `--json` 모드는 사람용 요약·업데이트 알림 텍스트를 출력에 섞지 않으며, 기존 텍스트 출력·종료 코드는 완전히 불변(additive). `sessions` 의 위치인자 파싱도 정리해 `--json` 플래그가 어느 위치에 있어도 proj/lane 값으로 오인되지 않는다.
-- **`adde logs <proj> <lane> --follow`(단축 `-f`) 라이브 tail** — transcript(기본) 또는 `--engine` 지정 시 engine 로그의 신규 추가 라인을 실시간 출력한다. 로그가 5MB 세대 회전되거나 truncate 되어도 유실·중복 없이 새 파일로 이어서 추적하며, `Ctrl-C`(SIGINT) 수신 시 CPU 를 점유하는 대기 없이 즉시 정지·정상 종료한다(hang 없음). `--daemon` 로그는 follow 대상에서 제외된다(스냅샷만 출력). 대상 로그가 시작 시 없으면 생성을 기다리며 상주하지 않고 부재 안내 후 종료한다. 아울러 `adde logs` 의 줄수 인자가 비숫자이거나 0·음수이면 이제 stderr 경고를 출력하고 기본 50 줄로 폴백한다(기존: 무경고 폴백).
-- **`adde restart` 결과 표면화** — launchctl 재적재 후 각 레인의 기동 결과를 짧게 폴링해 실패 레인 목록과 요약(`N running · M failed · K pending`)을 표시한다(기존: 재적재 성공 여부와 무관하게 조용히 종료해 레인 기동 실패를 알 수 없었다). 폴링 대기 상한은 `adde up` 과 동일하게 `ADDE_UP_POLL_MS`(ms, 양수만 유효, 기본 8000)로 조정 가능(느린 머신 대응).
-- 메인 도움말(`adde` 인자 없이 실행)의 `status` 행에 `--json` 옵션 표기를 추가(기존에 누락돼 있었다).
+- **`adde logs <proj> <lane> --follow`(단축 `-f`) 라이브 tail** — transcript(기본) 또는 `--engine` 지정 시 engine 로그의 신규 추가 라인을 실시간 출력한다. OS 변경 알림(`fs.watch`, 상위 디렉터리 감시)을 1차 트리거로 삼고 저빈도(1초) stat 폴링을 안전망으로 상시 병행해, 변경 알림이 미지원이거나 이벤트를 놓치는 상황에서도 추적이 조용히 멈추지 않는다. 로그가 5MB 세대 회전되거나 동일 inode 로 truncate 된 뒤 곧바로 재성장해도 유실·중복·어긋남 없이 새 내용을 추적하며, 초기 스냅샷과 추적 시작 사이에 추가된 라인도 유실·중복 없이 정확히 1회 방출된다. 한글 등 멀티바이트 문자가 읽기 경계에서 분할돼도 깨지지 않고 온전한 문자로 출력된다. `Ctrl-C`(SIGINT) 수신 시 CPU 를 점유하는 대기 없이 즉시 정지·정상 종료한다(hang 없음). `--daemon` 로그는 follow 대상에서 제외된다(스냅샷만 출력). 대상 로그가 시작 시 없으면 생성을 기다리며 상주하지 않고 부재 안내 후 종료한다. 아울러 `adde logs` 의 줄수 인자가 비숫자이거나 0·음수이면(`--daemon` 경로도 동일하게 검증) stderr 경고를 출력하고 기본 50 줄로 폴백한다(기존: 무경고 폴백).
+- **`adde restart` 결과 표면화** — launchctl 재적재 후 각 레인의 기동 결과를 짧게 폴링해 실패 레인 목록과 요약(`N running · M failed · K pending`)을 표시한다(기존: 재적재 성공 여부와 무관하게 조용히 종료해 레인 기동 실패를 알 수 없었다). 폴링 대기 상한은 `adde up` 과 동일하게 `ADDE_UP_POLL_MS`(ms, 양수만 유효, 기본 8000)로 조정 가능(느린 머신 대응). `up`·`restart` 는 이 폴링·요약·종료코드 로직을 단일 경로로 공유한다.
+- 메인 도움말(`adde` 인자 없이 실행)의 `status`·`logs`·`doctor`·`sessions` 행에 각각 `--json`(status/doctor/sessions)·`-f|--follow`(logs) 옵션 표기를 추가(기존에 누락돼 있었다).
 
 ### Changed
 
 - **[behavior-change] `adde restart` 종료 코드 변경** — 기동 실패 레인이 1개 이상이면 이제 exit code 1 을 반환한다(기존: launchctl 재적재 자체가 예외를 던지지 않는 한 항상 exit 0 이라, 레인 기동 실패가 성공처럼 보였다). 전 레인 기동 성공 시에는 기존처럼 exit 0.
 - **[BREAKING] `adde status --json` 최상위 출력 구조 재구성** — 기존 레인 배열(`LaneStatusRow[]`)에서 `{ "lanes": [...], "halt": ... }` 객체로 바뀐다(`halt` 는 크래시루프 자가정지 상태를 프로젝트 단위로 담는다). **마이그레이션**: 기존 최상위 배열 참조를 `.lanes` 로 바꿔라 — 예: `adde status --json | jq '.[]'` → `jq '.lanes[]'`(단일 프로젝트 뷰는 `halt: HaltRecord|null`, 인자 없는 집계 뷰는 `halt: {"<proj>": HaltRecord|null, ...}`). 텍스트(비-JSON) 출력 형식은 불변.
-- `adde status`(텍스트·`--json` 공통)는 대상에 크래시루프 자가정지(halt) 기록이 있으면 이제 exit code 1 을 반환한다(기존: halt 는 텍스트 경고만 출력하고 종료 코드엔 반영되지 않았다 — `dead`/`stale`/`error` 레인 존재 시의 exit 1 판정은 기존과 동일하게 유지되며 halt 가 그 신호에 더해진다).
+- `adde status`(텍스트·`--json` 공통)는 대상에 크래시루프 자가정지(halt) 기록이 있으면 이제 exit code 1 을 반환한다(기존: halt 는 텍스트 경고만 출력하고 종료 코드엔 반영되지 않았다 — `dead`/`stale`/`error` 레인 존재 시의 exit 1 판정은 기존과 동일하게 유지되며 halt 가 그 신호에 더해진다). 인자 없는 집계 뷰(`--all` 아님)의 halt 감지는 화면 표시 필터가 아니라 대상 프로젝트 전체를 기준으로 판정한다 — 그 프로젝트의 모든 레인이 stopped 라 기본 뷰 표에서 제외되어도 halt 경고와 exit 1 은 그대로 반영된다.
 
 ### Added
 

@@ -12,7 +12,7 @@ import { t } from "../shared/i18n.js";
 import { readLedger, formatWhen } from "../core/session-ledger.js";
 import { lanePaths, defaultBase } from "../shared/paths.js";
 import { daemonLogPaths } from "../core/launchd.js";
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { followFile } from "../core/log-follow.js";
 
 /** ms → 사람용 경과시간(예: 1h2m, 3m4s, 12s). */
@@ -99,9 +99,11 @@ export async function runStatus(rest: readonly string[]): Promise<number> {
     const allRows = await collectAllStatus();
     const rows = all ? allRows : allRows.filter((r) => r.status !== "stopped");
     // halt 조회를 json/text 분기 밖으로 리프트 — 두 모드·종료 코드 모두 halt 를 반영한다.
+    // 대상 프로젝트 집합은 비필터 allRows 에서 파생한다 — 표시 필터(rows)로 파생하면 전 레인
+    // stopped 인 halt 프로젝트가 기본 뷰에서 빠져 halt 가 누락된다.
     const base = defaultBase();
     const haltMap: Record<string, HaltRecord | null> = {};
-    for (const p of [...new Set(rows.map((r) => r.proj))]) {
+    for (const p of [...new Set(allRows.map((r) => r.proj))]) {
       haltMap[p] = await readHalt(base, p);
     }
     if (json) {
@@ -368,9 +370,15 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
       process.stderr.write(USAGE.logs + "\n");
       return 1;
     }
-    // N 은 proj 뒤 첫 숫자 위치인자 — `logs proj --daemon 100` / `logs proj lane --daemon 100` 모두 수용.
-    const dRaw = positional.slice(1).find((p) => /^\d+$/.test(p));
-    const dn = dRaw !== undefined ? Number(dRaw) : 50;
+    // N 은 proj 뒤 마지막 위치인자 — `logs proj --daemon 100` / `logs proj lane --daemon 100` 모두
+    // 수용(후자는 lane 이 무시되고 마지막 인자가 N). 비daemon 과 동일하게 parseLineCount 를 경유해
+    // 비숫자·0·음수를 무경고 흡수하지 않는다.
+    const dCandidates = positional.slice(1);
+    const dRaw = dCandidates.length > 0 ? dCandidates[dCandidates.length - 1] : undefined;
+    const { n: dn, warn: dWarn } = parseLineCount(dRaw);
+    if (dWarn && dRaw !== undefined) {
+      process.stderr.write(t("ops.logs.badCount", { raw: dRaw }) + "\n");
+    }
     return runDaemonLogs(proj, dn);
   }
 
@@ -403,21 +411,15 @@ export async function runLogs(rest: readonly string[]): Promise<number> {
   }
   if (!follow) return 0;
 
-  // follow 진입 — 스냅샷 직후 파일 끝을 시작 오프셋으로(신규 추가 라인만 방출).
-  // 스냅샷·이 stat 사이 극단적 경합으로 파일이 사라지면 상주하지 않고 조용히 종료(재시도는 사용자 몫).
-  let st;
-  try {
-    st = await stat(result.path);
-  } catch {
-    return 0;
-  }
+  // follow 진입 — 스냅샷이 실제로 읽은 지점(endOffset/startIno)에서 정확히 이어 추적한다.
+  // 별도 stat 재조회 없이 readLogs 의 원자 취득 결과를 그대로 이어받아 L-2 유실 창을 닫는다.
   const ac = new AbortController();
   process.once("SIGINT", () => ac.abort());
   await followFile(result.path, {
     onData: (chunk) => process.stdout.write(chunk),
     signal: ac.signal,
-    startOffset: st.size,
-    startIno: st.ino,
+    startOffset: result.endOffset,
+    startIno: result.startIno,
   });
   return 0;
 }

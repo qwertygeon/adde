@@ -112,6 +112,8 @@ lane add 옵션:
     unknownSub: "알 수 없는 lane 서브커맨드: {{sub}}",
     unknownCmd: "알 수 없는 명령: {{cmd}}",
     didYouMean: "이것을 찾으셨나요: {{cmds}}?",
+    unknownFlag: "알 수 없는 옵션: {{flag}}",
+    valueRequired: "{{key}} 에 값이 필요합니다",
   },
   completion: {
     unknownShell: '미지원 셸 "{{shell}}" — {{supported}} 중 하나',
@@ -191,7 +193,6 @@ lane add 옵션:
     },
   },
   lane: {
-    valueRequired: "--{{key}} 에 값이 필요합니다",
     retry: {
       chatId: "  chat_id — 숫자 id 를 입력하세요(없으면 비움)",
       allowFrom: "  allow_from — 콤마 구분 숫자 id 를 입력하세요(없으면 비움)",

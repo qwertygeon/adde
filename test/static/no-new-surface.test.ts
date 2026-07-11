@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LANE_ADD_FLAGS, FLAG_VALUES } from "../../src/cli/spec.js";
+import { FLAG_VALUES, subFlagNames } from "../../src/cli/spec.js";
 
 // SC-022 (NFR-005): telegram 기동 연결 확인 상한(10초, FR-011)은 고정 모듈 상수이며, 이를 위한
 // 신규 CLI 플래그·conf 키를 추가하지 않는다(최소 명령 표면). 구조(static) 검증 — 명령·설정
@@ -13,8 +13,8 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const SURFACE_SUSPECT_RE = /timeout|probe/i;
 
 describe("SC-022: 기동 연결 확인 상한을 위한 신규 CLI 플래그가 없다", () => {
-  it("LANE_ADD_FLAGS 에 상한(timeout/probe) 관련 플래그가 없다", () => {
-    const suspects = LANE_ADD_FLAGS.filter((f) => SURFACE_SUSPECT_RE.test(f));
+  it("lane add 플래그(subFlagNames 파생)에 상한(timeout/probe) 관련 플래그가 없다", () => {
+    const suspects = subFlagNames("lane", "add").filter((f) => SURFACE_SUSPECT_RE.test(f));
     expect(suspects).toEqual([]);
   });
 

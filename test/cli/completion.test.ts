@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { completionScript, SUPPORTED_SHELLS } from "../../src/cli/completion.js";
-import { LANE_ADD_FLAGS, visibleCommands } from "../../src/cli/spec.js";
+import { visibleCommands, subFlagNames } from "../../src/cli/spec.js";
 
 // 셸 자동완성 스크립트 — 스펙(SSOT)에서 명령·플래그 파생.
 
@@ -47,7 +47,7 @@ describe("completionScript", () => {
     expect(s).toContain("compdef _adde adde ad add");
     // _describe 명령 설명(desc)
     expect(s).toContain("'init:guided setup'");
-    for (const f of LANE_ADD_FLAGS) expect(s).toContain(f);
+    for (const f of subFlagNames("lane", "add")) expect(s).toContain(f);
   });
 
   it("lane add 레인이름 슬롯에서 옵션 플래그를 제안하지 않는다 (bash·zsh 정합)", () => {
@@ -63,5 +63,44 @@ describe("completionScript", () => {
     for (const shell of SUPPORTED_SHELLS) {
       expect(completionScript(shell)).toBeTruthy();
     }
+  });
+});
+
+// drift 교정(SC-003 Happy) — doctor·sessions 의 --json, logs 의 --follow/-f 가 자동완성에 노출된다.
+// 해당 명령의 case 블록만 좁혀 확인해 status 등 무관 명령의 --json 잔존과 오탐되지 않게 한다.
+function commandBlock(script: string, name: string): string {
+  const lines = script.split("\n");
+  const startIdx = lines.findIndex((l) => l.trim() === `${name})`);
+  expect(startIdx, `${name}) 블록을 찾을 수 없음`).toBeGreaterThanOrEqual(0);
+  const rest = lines.slice(startIdx + 1);
+  const endOffset = rest.findIndex((l) => /^ {4}\S.*\)/.test(l) || l.trim() === "esac");
+  return lines.slice(startIdx, startIdx + 1 + (endOffset === -1 ? rest.length : endOffset)).join("\n");
+}
+
+describe("drift 교정 — doctor·sessions --json, logs --follow/-f 완성 노출 (SC-003 Happy)", () => {
+  it("bash: doctor·sessions case 블록에 --json 이 포함된다", () => {
+    const bash = completionScript("bash") as string;
+    expect(commandBlock(bash, "doctor")).toContain("--json");
+    expect(commandBlock(bash, "sessions")).toContain("--json");
+  });
+
+  it("bash: logs case 블록에 --follow 와 -f 가 포함된다", () => {
+    const bash = completionScript("bash") as string;
+    const block = commandBlock(bash, "logs");
+    expect(block).toContain("--follow");
+    expect(block).toContain("-f");
+  });
+
+  it("zsh: doctor·sessions case 블록에 --json 이 포함된다", () => {
+    const zsh = completionScript("zsh") as string;
+    expect(commandBlock(zsh, "doctor")).toContain("--json");
+    expect(commandBlock(zsh, "sessions")).toContain("--json");
+  });
+
+  it("zsh: logs case 블록에 --follow 와 -f 가 포함된다", () => {
+    const zsh = completionScript("zsh") as string;
+    const block = commandBlock(zsh, "logs");
+    expect(block).toContain("--follow");
+    expect(block).toContain("-f");
   });
 });

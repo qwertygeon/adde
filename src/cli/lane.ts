@@ -105,10 +105,7 @@ export async function collectInteractive(
 
   const source = await askEnum(ask, t("lane.prompt.source"), [...SOURCE_IDS], "markdown");
   opts.source = source;
-  opts.engine = await ask("engine", "claude-agent-acp");
-  opts.backend = await ask("backend", "acp");
   opts.perm_tier = await askEnum(ask, t("lane.prompt.permTier"), ["acp", "autopass"], "acp");
-  opts.acp_version = await ask("acp_version", "v1");
 
   const allow = await ask(t("lane.prompt.allowlist"), "");
   if (allow) opts.allowlist = parseCsv(allow);
@@ -125,6 +122,9 @@ export async function collectInteractive(
 
   const cwd = await askPath(t("lane.prompt.cwd"), "");
   if (cwd) opts.cwd = cwd;
+
+  const engineArgs = await ask(t("lane.prompt.engineArgs"), "");
+  if (engineArgs) opts.engine_args = engineArgs;
 
   // 공통 파일모드 프롬프트를 소스별 위저드보다 먼저 — 리팩터 전 프롬프트 순서(파일모드 → 소스별
   // 토큰 등) 보존. 소스별 위저드가 시크릿(토큰) 프롬프트를 포함하므로 순서 역전 방지.
@@ -172,14 +172,10 @@ async function handleAdd(p: ParseResult): Promise<number> {
     opts = {};
     const source = flagStr(flags, "source");
     if (source !== undefined) opts.source = source;
-    const engine = flagStr(flags, "engine");
-    if (engine !== undefined) opts.engine = engine;
-    const backend = flagStr(flags, "backend");
-    if (backend !== undefined) opts.backend = backend;
     const permTier = flagStr(flags, "perm-tier");
     if (permTier !== undefined) opts.perm_tier = permTier;
-    const acpVersion = flagStr(flags, "acp-version");
-    if (acpVersion !== undefined) opts.acp_version = acpVersion;
+    const engineArgs = flagStr(flags, "engine-args");
+    if (engineArgs !== undefined) opts.engine_args = engineArgs;
     const cwd = flagStr(flags, "cwd");
     if (cwd !== undefined) opts.cwd = cwd;
     const lang = flagStr(flags, "lang");

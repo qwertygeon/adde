@@ -85,10 +85,80 @@ export interface LaneConf {
    * 파서가 부재·무효값을 전부 true 로 해석해 상시 채우는 필수 필드(하위호환·forward-compat).
    */
   auto_relaunch: boolean;
+  /**
+   * 레인별 엔진 CLI 인자(raw 문자열, 공백 분리). 미지정 시 엔진 spawn 은 빈 인자.
+   * 따옴표(`"`·`'`) 포함 값은 parseEngineArgs 가 파싱 실패로 거부한다.
+   */
+  engine_args?: string;
 }
 
-/** 공통 optional 키(최상위 평면) — 순서 = 직렬화 순서. */
-const COMMON_OPTIONAL_KEYS = ["cwd", "lang", "file_mode"] as const;
+/** 공통 optional 키(최상위 평면) — 순서 = 직렬화 순서. engine_args 는 신규 추가라 말미. */
+const COMMON_OPTIONAL_KEYS = ["cwd", "lang", "file_mode", "engine_args"] as const;
+
+/**
+ * 엔진/백엔드 배선 SoT — 값 검증·기본값 해석·acp_version 단일 소스.
+ * 2번째 엔진 실착수 계획이 없어 KNOWN_* 는 현재 단일 값만 갖는다(레지스트리 추상화 미도입 — 미사용 확장 배제).
+ */
+export const DEFAULT_ENGINE = "claude-agent-acp";
+export const DEFAULT_BACKEND = "acp";
+export const KNOWN_ENGINES = ["claude-agent-acp"] as const;
+export const KNOWN_BACKENDS = ["acp"] as const;
+/** acp_version 표시 라벨 단일 소스 — `acp.PROTOCOL_VERSION` 파생값과 정적 단언 테스트로 drift 를 잡는다. */
+export const ACP_VERSION = "v1";
+
+/** engine 미지정·빈값 → 안전 기본값(DEFAULT_ENGINE). 생성 계층·기동 계층이 이 헬퍼를 공유해 기본값 모순을 없앤다. */
+export function resolveEngine(engine: string | undefined): string {
+  return engine && engine.length > 0 ? engine : DEFAULT_ENGINE;
+}
+
+/** backend 미지정·빈값 → 안전 기본값(DEFAULT_BACKEND). resolveEngine 과 동일 패턴. */
+export function resolveBackend(backend: string | undefined): string {
+  return backend && backend.length > 0 ? backend : DEFAULT_BACKEND;
+}
+
+/**
+ * engine/backend 화이트리스트 검증(순수 함수, i18n 비의존) — resolveEngine/resolveBackend 적용 후
+ * KNOWN_ENGINES/KNOWN_BACKENDS 에 없으면 위반 코드·값을 반환, 통과하면 null.
+ * 호출자(supervisor·lane-config)가 결과 코드를 i18n 메시지로 포맷한다(기동 시 검증이 권위 지점 — 파서 내부 검증은 forward-compat 철학과 충돌).
+ */
+export function validateEngineWiring(
+  conf: LaneConf,
+): { code: "engine"; value: string } | { code: "backend"; value: string } | null {
+  const engine = resolveEngine(conf.engine);
+  if (!(KNOWN_ENGINES as readonly string[]).includes(engine)) {
+    return { code: "engine", value: engine };
+  }
+  const backend = resolveBackend(conf.backend);
+  if (!(KNOWN_BACKENDS as readonly string[]).includes(backend)) {
+    return { code: "backend", value: backend };
+  }
+  return null;
+}
+
+/** engine_args 파싱 실패(따옴표 포함 등 미지원 형식) — 흡수 금지, 호출자가 spawn 전에 거부한다. */
+export class EngineArgsParseError extends Error {
+  override name = "EngineArgsParseError";
+}
+
+/**
+ * engine_args raw 문자열 → argv 배열(공백 분리). 미지정/빈값/공백-only → `[]`.
+ * 값에 따옴표(`"`·`'`)가 포함되면 조용한 오분할(`"a b"`→`["a`,`b"]`) 대신 거부한다(fail-closed).
+ * 개행·NUL 도 거부한다: conf 는 줄 단위 평면 포맷(값 이스케이프 없음)이라, 개행이 든 값은
+ * serialize→재파싱 시 뒷부분이 별개 conf 키(hard_deny/perm_tier 등)로 주입돼 권한 게이트를 우회한다.
+ */
+export function parseEngineArgs(raw: string | undefined): string[] {
+  if (raw === undefined) return [];
+  if (/[\n\r\0]/.test(raw)) {
+    // 값을 에러 메시지에 담지 않는다(주입 페이로드 로그 노출 방지).
+    throw new EngineArgsParseError("engine_args contains unsupported control characters (newline/NUL)");
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return [];
+  if (trimmed.includes('"') || trimmed.includes("'")) {
+    throw new EngineArgsParseError(`engine_args contains unsupported quote characters: ${trimmed}`);
+  }
+  return trimmed.split(/\s+/).filter(Boolean);
+}
 
 /**
  * 어댑터 네임스페이스별 필드 목록(`<ns>.<field>`). 파서·직렬화 공용 SoT.
@@ -158,7 +228,7 @@ export function parseLaneConf(text: string): LaneConf {
     backend: conf["backend"] ?? "",
     engine: conf["engine"] ?? "",
     perm_tier: conf["perm_tier"] ?? "acp",
-    acp_version: conf["acp_version"] ?? "v1",
+    acp_version: conf["acp_version"] ?? ACP_VERSION,
     allowlist: parseToolList(conf["allowlist"] ?? ""),
     denylist: parseToolList(conf["denylist"] ?? ""),
     hard_deny: parseToolList(conf["hard_deny"] ?? ""),

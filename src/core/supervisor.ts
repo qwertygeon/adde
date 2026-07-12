@@ -9,7 +9,15 @@ import { errMsg } from "../shared/errors.js";
 import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
+import {
+  parseLaneConf,
+  detectLegacyAdapterKeys,
+  validateEngineWiring,
+  parseEngineArgs,
+  resolveEngine,
+  KNOWN_ENGINES,
+  KNOWN_BACKENDS,
+} from "../shared/conf.js";
 import type { LaneConf } from "../shared/conf.js";
 import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 import { secureLaneDirs } from "../shared/fs-atomic.js";
@@ -208,6 +216,53 @@ async function assembleLane(
   // 채널 라벨 = 소스 id 그대로(권한 요청 표기용). 미지 소스를 telegram 으로 오분류하지 않는다.
   const channel: string = conf.source;
 
+  // spawn 전 거부 — 위반·파싱 실패를 이 레인만 status:"error"(마스킹)로 격리하고
+  // 나머지 레인 기동은 계속한다(고아 자원 없음 — 아직 backend/source 를 생성하지 않은 시점).
+  const rejectBeforeSpawn = async (reason: string): Promise<{ result: LaneStatus }> => {
+    console.error(t("log.supervisor.laneStartFail", { lane, reason }));
+    await writeErrorRuntime(paths, {
+      lane,
+      source: conf.source || channel,
+      backend: conf.backend || "acp",
+      engine: resolveEngine(conf.engine),
+      error: maskSecrets(reason),
+    }).catch((e: unknown) =>
+      console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(e) })),
+    );
+    return { result: { lane, status: "error", error: reason } };
+  };
+
+  // 화이트리스트 검증 — 미지원/오타 engine·backend 는 spawn 전 거부.
+  const wiringViolation = validateEngineWiring(conf);
+  if (wiringViolation) {
+    const reason =
+      wiringViolation.code === "engine"
+        ? t("supervisor.engineWiring.unknownEngine", {
+            value: wiringViolation.value,
+            known: KNOWN_ENGINES.join("|"),
+          })
+        : t("supervisor.engineWiring.unknownBackend", {
+            value: wiringViolation.value,
+            known: KNOWN_BACKENDS.join("|"),
+          });
+    return rejectBeforeSpawn(reason);
+  }
+
+  // engine_args 파싱 — 따옴표 포함 등 파싱 불가 형식은 spawn 전 거부. 오류 메시지는
+  // conf 원문을 마스킹해 구성한다(예외 자체의 메시지가 아니라 emission 지점에서 마스킹).
+  let engineArgs: string[];
+  try {
+    engineArgs = parseEngineArgs(conf.engine_args);
+  } catch {
+    return rejectBeforeSpawn(
+      t("supervisor.engineArgs.parseFail", { detail: maskSecrets(conf.engine_args ?? "") }),
+    );
+  }
+  // 마스킹된 기동 로그 — engine_args 지정 레인만 1줄 관측.
+  if (engineArgs.length > 0) {
+    console.log(`[supervisor] lane=${lane} engine args: ${maskSecrets(conf.engine_args ?? "")}`);
+  }
+
   // 생성순서 시간결합 보존 — `source` 는 아래(descriptor.factory)에서 할당되므로, 이를 지연
   // 참조하는 channelWarn·watcher.notify·injector 콜백보다 먼저 선언한다.
   let source: Source;
@@ -239,13 +294,14 @@ async function assembleLane(
       channel,
       channelWarn,
       lang: conf.lang,
+      engineArgs,
     });
     backend = impl;
   }
 
   const pendingDecisions = new Map<string, (decision: "allow" | "deny") => void>();
 
-  const engine = conf.engine || "claude";
+  const engine = resolveEngine(conf.engine);
 
   // 자가 회복(self-recovery) watcher — 크래시 시 유계 백오프 재기동(ON) 또는 즉시 error 확정(OFF).
   // deps 는 전부 클로저 — arm()·backend.onExit 배선은 launch 성공 후(아래)에 이뤄진다.

@@ -84,11 +84,10 @@ Only works on a global install (needs a writable bin dir next to adde on PATH); 
 
 lane add options:
   --source <markdown|telegram>  (default markdown)
-  --engine <name>               (default claude-agent-acp)
-  --backend <name>              (default acp)
   --perm-tier <acp|autopass>    (default acp — channel approval for every tool / autopass — auto-allow except denylist)
-  --acp-version <v>             (default v1)
   --cwd <abs-path>              lane working directory (project mapping)
+  --engine-args <args>          extra CLI args for the engine process, space-separated (e.g. "--model opus")
+                                (not for secrets/tokens — visible in the OS process list; quoted values unsupported)
   --allowlist <a,b,c>           auto-allowed tools (gate kept, for perm_tier=acp)
   --denylist <entries,...>      tools/patterns that fall back to channel approval under autopass
                                 (e.g. "Bash,Write(/etc/*)" · built-in default list if omitted: blocks sudo, rm -rf, forced git changes, credential reads)
@@ -184,8 +183,7 @@ lane add options:
     logs: {
       whatEngine: "engine log",
       whatTranscript: "transcript",
-      badCount:
-        'invalid line count "{{raw}}" (must be a positive integer) — falling back to 50.',
+      badCount: 'invalid line count "{{raw}}" (must be a positive integer) — falling back to 50.',
       watchError:
         "warning: log change watch failed ({{msg}}) — continuing to track via 1s polling.",
       notFound:
@@ -211,6 +209,8 @@ lane add options:
       lang: "lang (channel message locale, empty for global)",
       token: "telegram bot token (hidden input, empty to set later)",
       cwd: "cwd (absolute lane working directory, empty to skip)",
+      engineArgs:
+        "engine_args (extra CLI args for the engine process, space-separated, empty to skip — not a place for secrets: engine args become visible in the OS process list)",
       chatId: "chat_id (reply target + authorizes that chat for inbound, empty to skip)",
       allowFrom: "allow_from (extra authorized sender ids, comma-separated, empty to skip)",
       fileMode:
@@ -412,6 +412,9 @@ lane add options:
       emptyIdent: "{{kind}} is empty",
       badIdent: '{{kind}} "{{value}}" is invalid — only letters/digits/_/- allowed',
       badSource: 'source "{{source}}" unsupported — one of {{supported}}',
+      unknownEngine: 'engine "{{value}}" unsupported — one of {{known}}',
+      unknownBackend: 'backend "{{value}}" unsupported — one of {{known}}',
+      invalidEngineArgs: "engine_args is invalid: {{reason}}",
       badChatId: 'chat_id "{{chatId}}" is not a number',
       tokenOnlyTelegram: "token is only used for source=telegram lanes",
       allowFromOnlyTelegram: "allow_from is only used for source=telegram lanes",
@@ -456,7 +459,7 @@ lane add options:
     outMeta: "🕒 sent {{sent}} · done {{done}}",
     approvalMeta: "🕒 requested {{requested}} · auto-deny at {{deadline}} if no response",
     backupPathOverlap:
-      '[markdown] backup path overlaps {{name}}({{path}}): {{backup}} — refusing startup to avoid corrupting vault/state.',
+      "[markdown] backup path overlaps {{name}}({{path}}): {{backup}} — refusing startup to avoid corrupting vault/state.",
     syncProviderUnsupported:
       '[markdown] unsupported sync_provider "{{value}}" — supported: {{supported}}',
     outRetentionTooLow:
@@ -483,6 +486,16 @@ lane add options:
     source: {
       unknown:
         'unknown source "{{source}}" — not a registered source. Fix source= in lanes.d/<lane>.conf (see adde doctor for supported sources).',
+    },
+    engineWiring: {
+      unknownEngine:
+        'unsupported engine "{{value}}" (known: {{known}}) — fix engine= in lanes.d/<lane>.conf.',
+      unknownBackend:
+        'unsupported backend "{{value}}" (known: {{known}}) — fix backend= in lanes.d/<lane>.conf.',
+    },
+    engineArgs: {
+      parseFail:
+        "engine_args parsing failed: {{detail}} — quoted values are not supported (space-separated only); fix engine_args= in lanes.d/<lane>.conf.",
     },
     selfRecovery: {
       attempt: "⚠️ engine crashed on lane {{lane}} — attempting auto-recovery (backoff)…",
@@ -648,16 +661,22 @@ lane add options:
       pollError: "[markdown] polling error: {{error}}",
       decidedMoveError: "[markdown] failed to archive decided approval {{file}}: {{error}}",
       backupWarnNotifyFail: "[markdown] failed to write backup/archive warning notice: {{error}}",
-      legacyArchiveMoveError: "[markdown] failed to relocate legacy archive file {{path}}: {{error}}",
+      legacyArchiveMoveError:
+        "[markdown] failed to relocate legacy archive file {{path}}: {{error}}",
     },
     markdownRetention: {
-      relocateFail: "[markdown-retention] relocate failed {{src}} -> {{dst}}: {{error}} (fail-open, continuing)",
-      migrateOutboxFail: "[markdown-retention] outbox migration failed {{name}}: {{error}} (fail-open)",
+      relocateFail:
+        "[markdown-retention] relocate failed {{src}} -> {{dst}}: {{error}} (fail-open, continuing)",
+      migrateOutboxFail:
+        "[markdown-retention] outbox migration failed {{name}}: {{error}} (fail-open)",
       migrateDecidedMtimeFail:
         "[markdown-retention] decided mtime lookup failed {{name}}: {{error}} (fail-open)",
-      migrateDecidedFail: "[markdown-retention] decided migration failed {{name}}: {{error}} (fail-open)",
-      maintenanceFail: "[markdown-retention] lane={{lane}} maintenance run failed: {{error}} (fail-open)",
-      lastRunWriteFail: "[markdown-retention] lane={{lane}} failed to persist retention-last-run: {{error}}",
+      migrateDecidedFail:
+        "[markdown-retention] decided migration failed {{name}}: {{error}} (fail-open)",
+      maintenanceFail:
+        "[markdown-retention] lane={{lane}} maintenance run failed: {{error}} (fail-open)",
+      lastRunWriteFail:
+        "[markdown-retention] lane={{lane}} failed to persist retention-last-run: {{error}}",
     },
     transcript: {
       auditAppendFail:

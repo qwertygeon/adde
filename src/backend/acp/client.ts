@@ -27,6 +27,7 @@ import type { SessionEvent } from "../../core/transcript.js";
 import type { PermRequest, PermResponse } from "../../gate/gate.js";
 import type { AddePolicy, EngineEffective } from "./perm-diff.js";
 import { maskSecrets } from "../../shared/mask.js";
+import { ACP_VERSION } from "../../shared/conf.js";
 import { comparePerm, formatWarn } from "./perm-diff.js";
 import { formatException, formatWarnNote } from "../../shared/notify.js";
 import { matchesDenylist } from "../../shared/deny-match.js";
@@ -192,7 +193,7 @@ export interface AcpBackend {
     plane: "acp";
     perm_tier: string;
     supports_attachments: boolean;
-    acp_version: "v1";
+    acp_version: string;
   };
   /** resumed: resumeSessionId 요청이 실제로 복귀에 성공했는지(실패 시 새 세션 폴백 + false). */
   launch(lane: string, opts?: LaunchOpts): Promise<{ sessionId: string; resumed?: boolean }>;
@@ -231,6 +232,8 @@ interface LaneConfig {
   channel?: string | undefined;
   /** 채널 메시지 로케일(LaneConf.lang). 미지정 시 전역 로케일. */
   lang?: string | undefined;
+  /** 엔진 spawn argv 로 전달할 CLI 인자(parseEngineArgs 결과). 미설정 시 spawn 은 빈 인자. */
+  engineArgs?: string[];
 }
 
 interface LaneState {
@@ -311,13 +314,13 @@ export class AcpBackendImpl implements AcpBackend {
     plane: "acp";
     perm_tier: string;
     supports_attachments: boolean;
-    acp_version: "v1";
+    acp_version: string;
   } {
     return {
       plane: "acp",
       perm_tier: "acp",
       supports_attachments: false,
-      acp_version: "v1",
+      acp_version: ACP_VERSION,
     };
   }
 
@@ -333,7 +336,7 @@ export class AcpBackendImpl implements AcpBackend {
     // paths 가 있으면 엔진 stderr 를 레인 engine.log 로 캡처(없으면 inherit — 테스트/레거시).
     const child = spawnEngine(
       this.adapterBin,
-      [],
+      config?.engineArgs ?? [],
       paths
         ? {
             stderrPath: paths.engineLog,

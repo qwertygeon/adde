@@ -6,7 +6,18 @@
 import { t, SUPPORTED_LOCALES } from "../shared/i18n.js";
 import { readdir, readFile, mkdir, unlink, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { parseLaneConf, serializeLaneConf } from "../shared/conf.js";
+import {
+  parseLaneConf,
+  serializeLaneConf,
+  validateEngineWiring,
+  parseEngineArgs,
+  EngineArgsParseError,
+  DEFAULT_ENGINE,
+  DEFAULT_BACKEND,
+  ACP_VERSION,
+  KNOWN_ENGINES,
+  KNOWN_BACKENDS,
+} from "../shared/conf.js";
 import type { LaneConf } from "../shared/conf.js";
 import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 import { parseDenyEntry, DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
@@ -63,6 +74,8 @@ export interface LaneAddOptions extends LaneCommandBaseOptions {
   lang?: string;
   /** telegram 인바운드 허용 발신자(CSV, 숫자 user/chat id). */
   allow_from?: string;
+  /** 레인별 엔진 CLI 인자(raw 문자열, 공백 분리). CLI `--engine-args` 매핑. */
+  engine_args?: string;
   /** 상태·출력·큐 디렉터리 권한(private|shared). 미지정 시 private. */
   file_mode?: string;
   /** 봇 토큰(telegram). 주어지면 state/<lane>/.env 에 0600 으로 기록. */
@@ -249,10 +262,10 @@ export async function laneAdd(
   const permTier = opts.perm_tier ?? "acp";
   const conf: LaneConf = {
     source,
-    backend: opts.backend ?? "acp",
-    engine: opts.engine ?? "claude-agent-acp",
+    backend: opts.backend ?? DEFAULT_BACKEND,
+    engine: opts.engine ?? DEFAULT_ENGINE,
     perm_tier: permTier,
-    acp_version: opts.acp_version ?? "v1",
+    acp_version: opts.acp_version ?? ACP_VERSION,
     allowlist: opts.allowlist ?? [],
     // autopass 인데 denylist 미지정 → 내장 기본 denylist. conf 에 구체 목록을
     // 명시 기록한다(암묵 기본값이 파일에 안 보이는 상태 회피). 명시 지정(빈 배열 포함)이 우선.
@@ -268,6 +281,19 @@ export async function laneAdd(
   if (opts.cwd) conf.cwd = opts.cwd;
   if (opts.lang) conf.lang = opts.lang;
   if (opts.file_mode) conf.file_mode = opts.file_mode;
+  if (opts.engine_args) {
+    // 생성 시점 fail-closed 검증 — 잘못된 engine_args(개행·따옴표)를 conf 에 기록하지 않는다.
+    // 개행이 든 값은 평면 conf 에 raw 로 직렬화되면 재파싱 시 별개 키(hard_deny 등)로 주입될 수 있다.
+    try {
+      parseEngineArgs(opts.engine_args);
+    } catch (err) {
+      if (err instanceof EngineArgsParseError) {
+        throw new LaneConfigError(t("laneConfig.err.invalidEngineArgs", { reason: err.message }));
+      }
+      throw err;
+    }
+    conf.engine_args = opts.engine_args;
+  }
   // 어댑터 전용 설정은 네임스페이스 서브객체로 — 관련 필드가 하나라도 있을 때만 생성.
   const markdown: NonNullable<LaneConf["markdown"]> = {};
   if (opts.root) markdown.root = opts.root;
@@ -279,6 +305,23 @@ export async function laneAdd(
   if (opts.chat_id) telegram.chat_id = opts.chat_id;
   if (opts.allow_from) telegram.allow_from = opts.allow_from;
   if (Object.keys(telegram).length > 0) conf.telegram = telegram;
+
+  // 화이트리스트 검증(fail-fast, 방어) — CLI 는 항상 기본값을 기록하므로(플래그 노출 없음)
+  // 실질 트리거는 laneAdd 를 직접 호출하는 프로그래밍 API/hand-edited override 경로다.
+  const wiringViolation = validateEngineWiring(conf);
+  if (wiringViolation) {
+    throw new LaneConfigError(
+      wiringViolation.code === "engine"
+        ? t("laneConfig.err.unknownEngine", {
+            value: wiringViolation.value,
+            known: KNOWN_ENGINES.join("|"),
+          })
+        : t("laneConfig.err.unknownBackend", {
+            value: wiringViolation.value,
+            known: KNOWN_BACKENDS.join("|"),
+          }),
+    );
+  }
 
   // 소스별 conf 검증 위임 — 훅 미제공 소스는 오류 없이 생략(공통 처리만).
   // 검증 통과 후에만 디스크에 쓴다(validate-then-commit, 파일 상단 원칙) — 쓰기 이전에 호출.

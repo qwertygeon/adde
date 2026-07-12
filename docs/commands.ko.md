@@ -73,23 +73,21 @@ adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
 source (번호 또는 값 입력)
   1) markdown
   2) telegram [markdown]: 2
-engine [claude-agent-acp]:
-backend [acp]:
 perm_tier (acp = 도구마다 채널 승인 / autopass = denylist 외 자동 허용)
   1) acp
   2) autopass [acp]:
-acp_version [v1]:
 allowlist (콤마 구분, 없으면 비움): Read,Grep
 방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N) [y]: y
 lang (채널 메시지 로케일, 전역은 비움)
   1) en
   2) ko:
 cwd (레인 작업 폴더 절대경로, 없으면 비움): /Users/me/work/my-project
-chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움): 12345678
-allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움):
+engine_args (엔진 프로세스에 전달할 추가 CLI 인자, 공백 분리, 없으면 비움 — 시크릿은 넣지 마세요: OS 프로세스 목록에 노출됩니다):
 file_mode (private=소유자 전용 0700 / shared=umask 기본 유지, 통상 타 사용자 열람)
   1) private
   2) shared [private]:
+chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움): 12345678
+allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움):
 telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입력 숨김⟩
 
 레인 "tg-claude" 생성: ~/.config/adde/myproj/lanes.d/tg-claude.conf
@@ -99,7 +97,7 @@ telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입
 기동: adde up myproj
 ```
 
-빈 응답은 표시된 기본값(`[…]`)을 채택합니다. `engine`·`backend`·`acp_version` 프롬프트는 로케일과 무관하게 영문으로 표시됩니다. 토큰을 비워 두면 마지막 두 줄이 `토큰 기록` 대신 `다음: 봇 토큰을 …/.env 에 TELEGRAM_BOT_TOKEN=... 으로 두세요` 안내가 됩니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`/`approvals`/`outbox` 로 바뀝니다.
+빈 응답은 표시된 기본값(`[…]`)을 채택합니다. 토큰을 비워 두면 마지막 두 줄이 `토큰 기록` 대신 `다음: 봇 토큰을 …/.env 에 TELEGRAM_BOT_TOKEN=... 으로 두세요` 안내가 됩니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`/`approvals`/`outbox` 로 바뀝니다.
 
 ## alias — 단축 별칭 설치
 
@@ -287,30 +285,30 @@ adde lane help                       # 전체 옵션
 
 ### lane add 옵션
 
-| 옵션                                                 | 기본값                                             | 설명                                                                                                                          |
-| ---------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `--source <markdown\|telegram>`                      | `markdown`                                         | 채널 소스                                                                                                                     |
-| `--engine <name>`                                    | `claude-agent-acp`                                 | ACP 엔진 프로필                                                                                                               |
-| `--backend <name>`                                   | `acp`                                              | 백엔드                                                                                                                        |
-| `--perm-tier <acp\|autopass>`                        | `acp`                                              | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인)                                                 |
-| `--acp-version <v>`                                  | `v1`                                               | ACP 버전                                                                                                                      |
-| `--cwd <abs-path>`                                   | (supervisor cwd)                                   | 이 레인 AI 의 작업 폴더(프로젝트 매핑)                                                                                        |
-| `--allowlist <a,b,c>`                                | (없음)                                             | 자동 허용 도구(게이트는 유지, `perm_tier=acp` 용)                                                                             |
-| `--denylist <항목,...>`                              | autopass 시 내장 기본 목록(아래 **기본 denylist**) | `autopass` 에서 채널 승인으로 폴백할 도구·패턴 — `Bash`(도구 전체) 또는 `"Bash(git push*)"`(대표 인자 글롭)                   |
-| `--hard-deny <항목,...>`                             | (없음)                                             | 티어와 무관하게 **즉시 거부**할 도구·패턴(채널 프롬프트조차 없음, conf 키 `hard_deny=`) — `--denylist` 와 같은 형식           |
-| `--safe-defaults`                                    | —                                                  | hard-deny 를 내장 위험 목록으로 채움(명시한 `--hard-deny` 와 합집합). 대화형 `lane add`/`init` 이 활성화 여부를 물음(기본 예) |
-| `--lang <en\|ko>`                                    | (전역 로케일)                                      | 이 레인의 **채널 메시지** 언어(권한 프롬프트·경고 배너·알림 노트)                                                             |
-| `--chat-id <id>`                                     | (없음)                                             | telegram 회신 대상. **개인 chat**(양수)이면 인바운드 자동 허용(그룹=음수는 회신만, 멤버는 `allow_from`)                       |
-| `--allow-from <ids>`                                 | (없음)                                             | telegram 인바운드 허용 발신자 user id(콤마 구분). 개인 `chat_id` 와 합쳐 인증(그룹 멤버 인증에 필수)                          |
-| `--file-mode <private\|shared>`                      | `private`                                          | state/out/queue 디렉터리 권한. `private`=0700(소유자 전용) / `shared`=잠그지 않음(umask 기본, 통상 타 사용자 열람 가능)       |
-| `--token-stdin`                                      | —                                                  | telegram 봇 토큰을 stdin 에서 읽어 `.env`(0600) 기록                                                                          |
-| `--root <abs-path>`                                  | (없음)                                             | markdown 루트(예: Obsidian vault)                                                                                             |
-| `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | —                                                  | markdown 노트 경로(root 상대)                                                                                                 |
-| `--force`                                            | —                                                  | 기존 conf 덮어쓰기                                                                                                            |
-| `--interactive`                                      | —                                                  | 대화형 마법사 강제(TTY 전용 — 비TTY 에서는 오류)                                                                              |
-| `--no-interactive`                                   | —                                                  | 비대화형 강제(플래그·기본값 사용, 프롬프트 없음) — 스크립트·CI 용                                                             |
+| 옵션                                                 | 기본값                                             | 설명                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--source <markdown\|telegram>`                      | `markdown`                                         | 채널 소스                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `--perm-tier <acp\|autopass>`                        | `acp`                                              | 권한 티어. `acp`=전 도구 채널 승인 / `autopass`=denylist 외 자동 허용(옵트인)                                                                                                                                                                                                                                                                                                                                          |
+| `--cwd <abs-path>`                                   | (supervisor cwd)                                   | 이 레인 AI 의 작업 폴더(프로젝트 매핑)                                                                                                                                                                                                                                                                                                                                                                                 |
+| `--engine-args <args>`                               | (없음)                                             | 엔진 프로세스 spawn 시 전달할 추가 CLI 인자, 공백 분리(예: `--model opus`) — 따옴표·공백 포함 값은 지원하지 않으며(값에 따옴표가 있으면 레인 기동이 거부됨) 엔진 자식 프로세스의 argv 가 되므로 **시크릿·토큰을 담는 용도가 아닙니다**: argv 는 OS 프로세스 목록(`ps` 등)을 볼 수 있는 누구에게나 노출되며, ADDE 의 자체 시크릿 마스킹은 로그·runtime·트랜스크립트만 커버할 뿐 OS 프로세스 목록까지는 가리지 못합니다. |
+| `--allowlist <a,b,c>`                                | (없음)                                             | 자동 허용 도구(게이트는 유지, `perm_tier=acp` 용)                                                                                                                                                                                                                                                                                                                                                                      |
+| `--denylist <항목,...>`                              | autopass 시 내장 기본 목록(아래 **기본 denylist**) | `autopass` 에서 채널 승인으로 폴백할 도구·패턴 — `Bash`(도구 전체) 또는 `"Bash(git push*)"`(대표 인자 글롭)                                                                                                                                                                                                                                                                                                            |
+| `--hard-deny <항목,...>`                             | (없음)                                             | 티어와 무관하게 **즉시 거부**할 도구·패턴(채널 프롬프트조차 없음, conf 키 `hard_deny=`) — `--denylist` 와 같은 형식                                                                                                                                                                                                                                                                                                    |
+| `--safe-defaults`                                    | —                                                  | hard-deny 를 내장 위험 목록으로 채움(명시한 `--hard-deny` 와 합집합). 대화형 `lane add`/`init` 이 활성화 여부를 물음(기본 예)                                                                                                                                                                                                                                                                                          |
+| `--lang <en\|ko>`                                    | (전역 로케일)                                      | 이 레인의 **채널 메시지** 언어(권한 프롬프트·경고 배너·알림 노트)                                                                                                                                                                                                                                                                                                                                                      |
+| `--chat-id <id>`                                     | (없음)                                             | telegram 회신 대상. **개인 chat**(양수)이면 인바운드 자동 허용(그룹=음수는 회신만, 멤버는 `allow_from`)                                                                                                                                                                                                                                                                                                                |
+| `--allow-from <ids>`                                 | (없음)                                             | telegram 인바운드 허용 발신자 user id(콤마 구분). 개인 `chat_id` 와 합쳐 인증(그룹 멤버 인증에 필수)                                                                                                                                                                                                                                                                                                                   |
+| `--file-mode <private\|shared>`                      | `private`                                          | state/out/queue 디렉터리 권한. `private`=0700(소유자 전용) / `shared`=잠그지 않음(umask 기본, 통상 타 사용자 열람 가능)                                                                                                                                                                                                                                                                                                |
+| `--token-stdin`                                      | —                                                  | telegram 봇 토큰을 stdin 에서 읽어 `.env`(0600) 기록                                                                                                                                                                                                                                                                                                                                                                   |
+| `--root <abs-path>`                                  | (없음)                                             | markdown 루트(예: Obsidian vault)                                                                                                                                                                                                                                                                                                                                                                                      |
+| `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | —                                                  | markdown 노트 경로(root 상대)                                                                                                                                                                                                                                                                                                                                                                                          |
+| `--force`                                            | —                                                  | 기존 conf 덮어쓰기                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `--interactive`                                      | —                                                  | 대화형 마법사 강제(TTY 전용 — 비TTY 에서는 오류)                                                                                                                                                                                                                                                                                                                                                                       |
+| `--no-interactive`                                   | —                                                  | 비대화형 강제(플래그·기본값 사용, 프롬프트 없음) — 스크립트·CI 용                                                                                                                                                                                                                                                                                                                                                      |
 
-**기본 대화형**: TTY 에서 `adde lane add <proj> <lane>` 를 **필드 플래그 없이** 실행하면 대화형 마법사가 자동으로 뜹니다 — `--interactive` 불요. 필드 플래그(`--source`·`--engine`·`--backend`·`--perm-tier`·`--acp-version`·`--cwd`·`--allowlist`·`--denylist`·`--hard-deny`·`--safe-defaults`·`--lang`·`--chat-id`·`--allow-from`·`--file-mode`·`--root`·`--inbox`·`--approvals`·`--outbox`·`--token-stdin`) 중 하나라도 주거나, `--no-interactive` 를 주거나, stdin 이 TTY 가 아니면(스크립트·CI) 비대화형이 됩니다. `--interactive` 는 대화형을 강제하고(비TTY 에서는 오류), `--no-interactive` 는 비대화형을 강제합니다. `<proj>`·`<lane>` 은 항상 필수 위치 인자입니다.
+**기본 대화형**: TTY 에서 `adde lane add <proj> <lane>` 를 **필드 플래그 없이** 실행하면 대화형 마법사가 자동으로 뜹니다 — `--interactive` 불요. 필드 플래그(`--source`·`--perm-tier`·`--cwd`·`--engine-args`·`--allowlist`·`--denylist`·`--hard-deny`·`--safe-defaults`·`--lang`·`--chat-id`·`--allow-from`·`--file-mode`·`--root`·`--inbox`·`--approvals`·`--outbox`·`--token-stdin`) 중 하나라도 주거나, `--no-interactive` 를 주거나, stdin 이 TTY 가 아니면(스크립트·CI) 비대화형이 됩니다. `--interactive` 는 대화형을 강제하고(비TTY 에서는 오류), `--no-interactive` 는 비대화형을 강제합니다. `<proj>`·`<lane>` 은 항상 필수 위치 인자입니다.
+
+**engine/backend 는 고정값이며 플래그가 아닙니다**: ADDE 는 현재 단일 엔진(`claude-agent-acp`)을 단일 백엔드(`acp`)로만 구동하므로, `lane add` 에는 더 이상 `--engine`/`--backend`/`--acp-version` 플래그가 없습니다(제거됨 — 지원 값이 하나뿐인 노브를 묻는 것은 아무 것도 바꾸지 못하면서 소음만 더했습니다). 레인 conf 의 `engine=`/`backend=`/`acp_version=` 키 자체는 그대로 있으며 레인 기동 시 검증됩니다 — 오타나 미지원 값(conf 수기 편집으로만 가능)은 조용히 무시되는 대신, 미지원 값과 지원 목록을 알리는 오류와 함께 엔진 spawn 전에 거부됩니다.
 
 마법사에서 telegram 봇 토큰은 **마지막에 가려진 입력**(키 입력 비에코)으로 받아 `.env`(0600)에 기록하며, 비워 두면 나중으로 미룹니다(`--token-stdin` 또는 `.env` 직접 편집). 마법사는 `--safe-defaults`(hard-deny 위험 목록) 활성화 여부도 묻습니다(기본 예). **enum 필드는 번호 메뉴로 표시**되어 **번호**(`1`·`2`…)로 답하거나 값을 직접 입력할 수 있습니다 — `source`·`perm_tier`·`file_mode`·`lang` 이 그렇습니다. **경로 필드(`cwd`·`root` 등)는 Tab 디렉터리 자동완성**을 지원합니다. 숫자 필드(`chat_id`·`allow_from`)는 입력 시점에 검증되어 잘못되면 재질의합니다. 생성 시 `cwd` 부재·markdown `root` 부재·telegram 토큰 형식 이상은 **경고**로 안내하되 생성은 진행됩니다.
 
@@ -321,13 +319,10 @@ $ adde lane add myproj tg-claude
 source (번호 또는 값 입력)
   1) markdown
   2) telegram [markdown]: 2
-engine [claude-agent-acp]:
-backend [acp]:
 channel [telegram]:
 perm_tier (acp = 도구마다 채널 승인 / autopass = denylist 외 자동 허용)
   1) acp
   2) autopass [acp]: 2
-acp_version [v1]:
 allowlist (콤마 구분, 없으면 비움): Read,Grep
 denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분) [Bash(sudo *),…]:
 방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (y/N) [y]: y
@@ -335,11 +330,12 @@ lang (채널 메시지 로케일, 전역은 비움)
   1) en
   2) ko: 2
 cwd (레인 작업 폴더 절대경로, 없으면 비움): /Users/me/work/my-project    # Tab 으로 경로 완성
-chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움): 12345678
-allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움):
+engine_args (엔진 프로세스에 전달할 추가 CLI 인자, 공백 분리, 없으면 비움 — 시크릿은 넣지 마세요: OS 프로세스 목록에 노출됩니다):
 file_mode (private=소유자 전용 0700 / shared=umask 기본 유지, 통상 타 사용자 열람)
   1) private
   2) shared [private]:
+chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움): 12345678
+allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움):
 telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입력 숨김⟩
 
 레인 "tg-claude" 생성: ~/.config/adde/myproj/lanes.d/tg-claude.conf
@@ -347,7 +343,7 @@ telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입
 기동: adde up myproj
 ```
 
-(`denylist` 프롬프트는 `perm_tier=autopass` 일 때만 나옵니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`(기본 `inbox.md`)/`approvals`/`outbox` 로 바뀝니다. `engine`·`backend`·`acp_version` 프롬프트는 로케일과 무관하게 영문입니다.)
+(`denylist` 프롬프트는 `perm_tier=autopass` 일 때만 나옵니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`(기본 `inbox.md`)/`approvals`/`outbox` 로 바뀝니다.)
 
 **예시: 스크립트** (비대화형, 모든 값을 플래그로, 토큰은 stdin 으로 — 프롬프트 없음):
 
@@ -384,7 +380,7 @@ printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude \
 
 > **파일 권한(`--file-mode`)**: 기본 `private` 는 레인의 state/out/queue/lanes.d 디렉터리를 0700(소유자 전용)으로 잠가 다중 사용자 호스트에서 타 로컬 사용자의 대화·응답·설정 메타 열람을 차단합니다. `shared` 는 이 잠금을 하지 않는 옵트인(기존 umask 기본 권한 유지 — 통상 0755)으로, 열람 공유가 필요한 경우에만 사용하세요. (봇 토큰 `.env` 는 모드와 무관하게 항상 0600.)
 >
-> **엔진 크래시 자가 회복(`auto_relaunch`)**: `lane add` 플래그가 아니라 레인 `.conf` 파일에 직접 설정합니다(`auto_relaunch=false`), 이후 `adde restart <proj>`. 기본값은 ON — 핸드셰이크 이후 레인 엔진 프로세스가 크래시하면 ADDE 가 유계 지수 백오프로 재기동하며 동일 세션·구독자·권한 핸들러를 승계합니다. `auto_relaunch=false` 는 **자동 재기동만** 비활성화합니다 — 크래시 감지, 즉시 `error` 상태 표기, 크래시 시점에 대기 중이던 권한 요청의 거부 종결, 채널 통지 1회는 그대로 수행됩니다. [문제해결](troubleshooting.ko.md#엔진-크래시--자가-회복) 참조. (이는 *엔진* 프로세스에 대한 레인별 설정이며, *데몬* 프로세스 자체에 대응하는 프로젝트별 설정은 [`proj.conf` 의 `auto_restart`](#projconf--데몬-크래시-자동-재기동)입니다.)
+> **엔진 크래시 자가 회복(`auto_relaunch`)**: `lane add` 플래그가 아니라 레인 `.conf` 파일에 직접 설정합니다(`auto_relaunch=false`), 이후 `adde restart <proj>`. 기본값은 ON — 핸드셰이크 이후 레인 엔진 프로세스가 크래시하면 ADDE 가 유계 지수 백오프로 재기동하며 동일 세션·구독자·권한 핸들러를 승계합니다. `auto_relaunch=false` 는 **자동 재기동만** 비활성화합니다 — 크래시 감지, 즉시 `error` 상태 표기, 크래시 시점에 대기 중이던 권한 요청의 거부 종결, 채널 통지 1회는 그대로 수행됩니다. [문제해결](troubleshooting.ko.md#엔진-크래시--자가-회복) 참조. (이는 _엔진_ 프로세스에 대한 레인별 설정이며, _데몬_ 프로세스 자체에 대응하는 프로젝트별 설정은 [`proj.conf` 의 `auto_restart`](#projconf--데몬-크래시-자동-재기동)입니다.)
 
 ## proj — 프로젝트 목록·삭제
 
@@ -444,18 +440,18 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 
 ## 종료 코드
 
-| 명령         | 0                                | 1                                    |
-| ------------ | -------------------------------- | ------------------------------------ |
-| `up`         | 데몬 등록 성공                   | launchd 등록 실패·인자 누락          |
-| `down`       | 데몬 종료 성공(이미 없어도 0)    | 오류 발생                            |
+| 명령         | 0                                | 1                                                                                                                 |
+| ------------ | -------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `up`         | 데몬 등록 성공                   | launchd 등록 실패·인자 누락                                                                                       |
+| `down`       | 데몬 종료 성공(이미 없어도 0)    | 오류 발생                                                                                                         |
 | `restart`    | down+up 성공 + 전 레인 기동 성공 | down/up 실패, 또는 레인 1개 이상 기동 실패(`[behavior-change]` — 기존: 재등록 자체가 예외를 던지지 않으면 항상 0) |
-| `status`     | 모두 정상                        | `dead`(크래시)·`stale`(행)·`error` 레인 존재, **또는 프로젝트가 크래시루프 자가정지(`halt`) 상태** |
-| `doctor`     | FAIL 없음(`--json` 도 동일)      | FAIL 항목 존재(`--json` 도 동일)     |
-| `logs`       | 읽기 성공(파일 없어도 안내 후 0) | proj/lane 인자 누락·경로 검증 오류   |
-| `init`       | 마법사 완료                      | 비TTY·인자 누락·검증/생성 오류       |
-| `alias`      | 별칭 설치·이미 설정 확인         | `adde` PATH 미발견·설치 실패         |
-| `lane *`     | 성공                             | 인자 누락·검증 오류                  |
-| `completion` | 스크립트 출력                    | 셸 인자 누락·미지원 셸               |
+| `status`     | 모두 정상                        | `dead`(크래시)·`stale`(행)·`error` 레인 존재, **또는 프로젝트가 크래시루프 자가정지(`halt`) 상태**                |
+| `doctor`     | FAIL 없음(`--json` 도 동일)      | FAIL 항목 존재(`--json` 도 동일)                                                                                  |
+| `logs`       | 읽기 성공(파일 없어도 안내 후 0) | proj/lane 인자 누락·경로 검증 오류                                                                                |
+| `init`       | 마법사 완료                      | 비TTY·인자 누락·검증/생성 오류                                                                                    |
+| `alias`      | 별칭 설치·이미 설정 확인         | `adde` PATH 미발견·설치 실패                                                                                      |
+| `lane *`     | 성공                             | 인자 누락·검증 오류                                                                                               |
+| `completion` | 스크립트 출력                    | 셸 인자 누락·미지원 셸                                                                                            |
 
 인자 없이 실행하거나 `-h`/`--help`/`help` 는 사용법을 출력하고 `0` 을 반환합니다. **미지원 명령**(오타 등)은 stderr 에 `Unknown command` 를 출력하고 `1` 을 반환합니다(스크립트에서 오타가 조용히 성공으로 처리되는 것을 막음).
 

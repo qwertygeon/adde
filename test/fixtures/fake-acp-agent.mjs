@@ -6,6 +6,18 @@
  */
 /* global process */
 import readline from "node:readline";
+import { writeFileSync } from "node:fs";
+
+// engineArgs 가 spawn argv 로 실제 전달되는지 검증하기 위해,
+// 지정 시(FAKE_ACP_ARGV_DUMP) 자신의 argv(바이너리·스크립트 경로 제외분)를 파일로 덤프한다.
+// 미지정 시 기존 동작 무변경(옵트인 — 다른 fixture 소비 테스트에 영향 없음).
+if (process.env.FAKE_ACP_ARGV_DUMP) {
+  try {
+    writeFileSync(process.env.FAKE_ACP_ARGV_DUMP, JSON.stringify(process.argv.slice(2)));
+  } catch {
+    // best-effort — 덤프 실패가 에이전트 더블 본연 동작(핸드셰이크)을 막지 않는다.
+  }
+}
 
 const rl = readline.createInterface({ input: process.stdin });
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");

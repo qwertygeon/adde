@@ -1259,6 +1259,12 @@ describe("createMarkdownSource (통합)", () => {
       const a = fs.existsSync(archiveFilePath()) ? fs.readFileSync(archiveFilePath(), "utf8") : "";
       return a.includes("본문하나") && a.includes("본문둘");
     });
+    // 아카이브 append 는 inbox 재기록보다 먼저다(ORDER 불변식) — 아카이브 내용만으로 read 하면
+    // inbox 가 아직 Phase A(sending+본문 잔존) 창에 걸릴 수 있다. inbox 수렴(sent 마커 2개)까지 대기.
+    await waitFor(() => {
+      const i = fs.readFileSync(inboxPath, "utf8");
+      return (i.match(/sent \[\[.+\]\]/g) ?? []).length === 2;
+    });
 
     const inbox = fs.readFileSync(inboxPath, "utf8");
     expect(inbox).not.toContain("본문하나");

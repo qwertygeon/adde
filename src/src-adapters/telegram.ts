@@ -11,8 +11,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
-import { enqueue, readSidecar } from "../core/queue.js";
-import type { RenderHint } from "../core/queue.js";
+import { enqueue } from "../core/queue.js";
+import { readSidecar } from "../core/out-ledger.js";
+import type { RenderHint } from "../core/out-ledger.js";
 import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
@@ -632,7 +633,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     );
   }
 
-  /** out/<id>.out (+ sidecar) → quote-reply 전송. injector 가 writeOut 직후 in-process 호출. */
+  /** out/<id>.out (+ sidecar) → quote-reply 전송. injector 가 writeOutBody+setDone 직후 in-process 호출. */
   async function renderOut(id: string, hint?: RenderHint): Promise<void> {
     const defaultChatId = cfg.chatId ?? 0;
     if (!defaultChatId) return; // 회신 대상 미지정 시 렌더 생략

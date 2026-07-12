@@ -16,8 +16,9 @@ import { randomUUID } from "node:crypto";
 import { isPathInside, normCasePath, pathsOverlap, expandTilde } from "../shared/paths.js";
 import { atomicWrite as atomicWriteFile } from "../shared/fs-atomic.js";
 import type { LaneConf } from "../shared/conf.js";
-import { enqueue, hasId, readSidecar, pruneOut } from "../core/queue.js";
-import type { RenderHint } from "../core/queue.js";
+import { enqueue } from "../core/queue.js";
+import { hasId, readSidecar, pruneOut } from "../core/out-ledger.js";
+import type { RenderHint } from "../core/out-ledger.js";
 import {
   SYNC_PROVIDER_REGISTRY,
   SYNC_PROVIDER_IDS,
@@ -1136,7 +1137,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     }
   }
 
-  /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOut 직후 in-process 호출. */
+  /** out/<id>.out (+ sidecar) → 출력 노트. injector 가 writeOutBody+setDone 직후 in-process 호출. */
   /** enqueue 연속 실패 임계 도달 시 outbox 에 1회 액션형 알림 노트. 채널이 파일이라 outbox 로 표면화. */
   async function alertEnqueueFailure(count: number): Promise<void> {
     const note = formatException(

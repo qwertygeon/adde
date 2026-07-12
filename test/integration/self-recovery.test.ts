@@ -8,6 +8,7 @@ import { lanePaths } from "../../src/shared/paths.js";
 import { createInjector } from "../../src/core/injector.js";
 import { createLaneWatcher } from "../../src/core/lane-watcher.js";
 import { enqueue } from "../../src/core/queue.js";
+import { getEntry } from "../../src/core/out-ledger.js";
 import { makeCrashableAcpFactory } from "../helpers/fake-crashable-acp.js";
 import { FAKE_ACP_CAPS } from "../helpers/fake-acp.js";
 import { makeEnvelope } from "../helpers/envelope.js";
@@ -246,8 +247,9 @@ describe("SC-010: 무손실·무중복 — 재기동 전후 dedup·큐·processi
     fs.mkdirSync(paths.outDir, { recursive: true });
     fs.mkdirSync(paths.stateDir, { recursive: true });
 
-    // 1) turn 중간 크래시로 인한 inject 실패 상태를 실제 injector 로 구성 — 실패 시 .failed 기록 +
-    //    processing 보존은 기존 injector 계약(변경 없음, test/core/injector.test.ts 가 이미 커버).
+    // 1) turn 중간 크래시로 인한 inject 실패 상태를 실제 injector 로 구성 — 실패 시 ledger
+    //    state="failed" 기록 + processing 보존은 기존 injector 계약(013-out-state-ledger 이전,
+    //    test/core/injector.test.ts 가 이미 커버).
     let injectBehavior: "crash" | "ok" = "crash";
     const backend = {
       caps: () => FAKE_ACP_CAPS,
@@ -266,7 +268,7 @@ describe("SC-010: 무손실·무중복 — 재기동 전후 dedup·큐·processi
     const injector = createInjector(paths, lane, backend);
     await injector.start();
 
-    expect(fs.existsSync(path.join(paths.outDir, `${id}.failed`))).toBe(true);
+    expect((await getEntry(paths, id))?.state).toBe("failed");
     expect(fs.existsSync(path.join(paths.processingDir, `${id}.msg`))).toBe(true); // 원문 보존
     expect(fs.existsSync(path.join(paths.outDir, `${id}.out`))).toBe(false); // 성공 마커 아직 없음
 

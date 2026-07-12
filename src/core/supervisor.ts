@@ -382,7 +382,7 @@ export async function supervisorUp(
         console.warn(t("log.supervisor.ledgerFail", { lane, error: errMsg(err) })),
       );
 
-      // 엔진 세션 이벤트 → injector(응답 누적). injector 가 turn 종료에 writeOut + renderOut(B).
+      // 엔진 세션 이벤트 → injector(응답 누적). injector 가 turn 종료에 writeOutBody+setDone + renderOut(B).
       backend.subscribe(lane, (e) => injector.onSessionEvent(e));
 
       backend.onPermissionRequest(lane, async (req) => {

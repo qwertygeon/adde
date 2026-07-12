@@ -138,6 +138,28 @@ function setupFetchMock(responder: BotApiResponder): ReturnType<typeof vi.fn> {
 let tmpBase: string;
 let paths: ReturnType<typeof lanePaths>;
 
+/**
+ * out-ledger sidecar 픽스처 직접 기록(013-out-state-ledger 이전 — `.out.json` 대체).
+ * renderOut 이 hint 없이 디스크에서 sidecar 를 읽는 flush 경로를 재현하려면 ledger.json 에
+ * state="done" entry 를 둬야 한다(other out-ledger.test.ts 의 writeLedgerFixture 와 동일 관례).
+ */
+function writeLedgerSidecar(id: string, replyRefId: string): void {
+  fs.mkdirSync(path.dirname(paths.outLedgerFile), { recursive: true });
+  fs.writeFileSync(
+    paths.outLedgerFile,
+    JSON.stringify({
+      v: 1,
+      entries: {
+        [id]: {
+          state: "done",
+          ts: new Date().toISOString(),
+          reply_ref: { channel_msg_id: replyRefId },
+        },
+      },
+    }),
+  );
+}
+
 beforeEach(() => {
   tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-telegram-"));
   paths = lanePaths(tmpBase, "myproj", "test-lane");
@@ -271,10 +293,7 @@ describe("TelegramSource out→quote-reply (SC-015)", () => {
       chatId: 99,
     });
 
-    fs.writeFileSync(
-      path.join(paths.outDir, "m1.out.json"),
-      JSON.stringify({ reply_ref: { channel_msg_id: "42" } }),
-    );
+    writeLedgerSidecar("m1", "42");
     fs.writeFileSync(path.join(paths.outDir, "m1.out"), "응답 텍스트");
 
     await source.renderOut("m1");
@@ -304,10 +323,7 @@ describe("TelegramSource out→quote-reply (SC-015)", () => {
       chatId: 99,
     });
 
-    fs.writeFileSync(
-      path.join(paths.outDir, "nan.out.json"),
-      JSON.stringify({ reply_ref: { channel_msg_id: "not-a-number" } }),
-    );
+    writeLedgerSidecar("nan", "not-a-number");
     fs.writeFileSync(path.join(paths.outDir, "nan.out"), "응답");
 
     await source.renderOut("nan");
@@ -569,10 +585,7 @@ describe("callBotApi 429 레이트리밋 재시도 (012-P)", () => {
       paths,
       chatId: 99,
     });
-    fs.writeFileSync(
-      path.join(paths.outDir, "rl.out.json"),
-      JSON.stringify({ reply_ref: { channel_msg_id: "42" } }),
-    );
+    writeLedgerSidecar("rl", "42");
     fs.writeFileSync(path.join(paths.outDir, "rl.out"), "응답");
 
     await source.renderOut("rl");
@@ -601,10 +614,7 @@ describe("renderOut 4096 초과 분할 전송 (011-A)", () => {
       chatId: 99,
     });
 
-    fs.writeFileSync(
-      path.join(paths.outDir, "big.out.json"),
-      JSON.stringify({ reply_ref: { channel_msg_id: "42" } }),
-    );
+    writeLedgerSidecar("big", "42");
     fs.writeFileSync(path.join(paths.outDir, "big.out"), "y".repeat(9000));
 
     await source.renderOut("big");

@@ -514,6 +514,23 @@ lane add options:
     },
     quarantined: "corrupt message quarantined @ {{ts}}: {{detail}}",
   },
+  outLedger: {
+    readFail: {
+      situation: "out-state ledger read failed ({{path}}): {{error}}",
+      action:
+        "Check disk/permission issues. Treated as an empty ledger for this operation (conservative — non-idempotent lanes will not resend in-flight messages until the file is restored).",
+    },
+    corrupt: {
+      situation: "out-state ledger parse failed ({{path}}): {{error}}",
+      action:
+        "The file may be externally corrupted (disk error, manual edit, sync conflict). Treated as an empty ledger for this operation (in-flight non-idempotent lane responses may not be resent — duplicate-avoidance direction). Restore from a backup if available.",
+    },
+    unknownVersion: {
+      situation: "out-state ledger schema version unrecognized ({{path}}, v={{v}})",
+      action:
+        "This may be a file from a newer ADDE version. Known fields are read on a best-effort basis; verify behavior after a downgrade.",
+    },
+  },
   injector: {
     injectFailed: "inject failed @ {{ts}}: {{detail}}",
     control: {

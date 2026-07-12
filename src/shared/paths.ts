@@ -104,6 +104,12 @@ export function daemonHaltPath(base: string, proj: string): string {
   return join(base, proj, "daemon-halt.json");
 }
 
+/** `<base>/<proj>/daemon-boot-report.json` — 최신 부팅 리포트(데몬 단일 writer, CLI reader). */
+export function daemonBootReportPath(base: string, proj: string): string {
+  assertSafeSegment("proj", proj);
+  return join(base, proj, "daemon-boot-report.json");
+}
+
 export function lanePaths(base: string, proj: string, lane: string): LanePaths {
   assertSafeSegment("proj", proj);
   assertSafeSegment("lane", lane);

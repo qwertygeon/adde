@@ -10,6 +10,8 @@ import { installCrashGuard } from "../core/crash-guard.js";
 import type { ShutdownState } from "../core/crash-guard.js";
 import { createCrashLoopGuard } from "../core/crash-loop.js";
 import { defaultBase } from "../shared/paths.js";
+import { readBootReport, writeBootReport } from "../core/boot-report.js";
+import type { BootReport } from "../core/boot-report.js";
 
 /**
  * 포그라운드 데몬 워커 로직 — `adde __daemon <proj>` 가 호출한다.
@@ -36,6 +38,11 @@ async function runDaemonForeground(proj: string): Promise<number> {
   if (halt) return 0;
 
   const result = await supervisorUp(proj);
+  // 리포트가 유일한 판정 신호이므로 쓰기 실패를 침묵 흡수하지 않고 데몬 stderr 로 로그한다
+  // (레인 기동은 계속 진행 — CLI 는 리포트 부재로 타임아웃-크래시 오판할 수 있음, 인정되는 한계).
+  await writeBootReport(defaultBase(), proj, result.lanes).catch((err: unknown) =>
+    process.stderr.write(`[boot-report] write failed: ${errMsg(err)}\n`),
+  );
   process.stdout.write(`${result.message}\n`);
 
   // 기동 실패 레인은 원인 + 조치(doctor/logs)를 인라인 표면화.
@@ -104,97 +111,62 @@ async function runDaemonForeground(proj: string): Promise<number> {
   return 0; // 도달하지 않음
 }
 
-interface UpLaneRow {
-  lane: string;
-  status: string;
-  error: string | null;
-  startedAt: string | null;
-}
-
 /**
- * `adde up` 기동 결과 요약 — 데몬(분리 프로세스)이 각 레인 상태를 runtime.json 에 남길 때까지
- * 짧게 폴링한 뒤 집계한다. 아직 손대지 않은 레인은 stopped 로 보이므로 전부 확정(또는 타임아웃)될
- * 때까지 대기한다.
- *
- * sinceMs = 이번 up 시작 시각. **이전 기동에서 남은 stale error/dead 레코드**(down 은 실패 레인
- * runtime.json 을 정리하지 않는다)를 이번 실패로 오인하지 않도록, startedAt 이 sinceMs 이후인
- * error/dead 만 "이번 기동 실패"로 센다. stale(오래된) error/dead 는 미확정(pending)으로 보고 계속
- * 대기 — 새 데몬의 중복기동 가드가 dead-pid 레코드를 정리하고 재기동하면 running 으로 수렴한다.
- * 반환: running 수·이번 실패 레인(사유)·pending(미확정) 수·총 수.
+ * `bootId > baselineBootId` 인 부팅 리포트가 나타날 때까지 대기(300ms tick). up/restart 가
+ * baseline 개시 이전에 읽어둔 boot id 를 넘겨, 자신이 개시한 부팅의 리포트만 소비한다
+ * (strict-greater — 잔존 리포트를 이번 결과로 오인하지 않음). 상한(`waitMs`) 초과 시 null.
  */
-async function pollUpResult(
+async function waitForBootReport(
   proj: string,
-  collectStatus: (p: string) => Promise<UpLaneRow[]>,
-  sinceMs: number,
-  deadlineMs = 8000,
-): Promise<{
-  running: number;
-  failed: { lane: string; error: string | null }[];
-  pending: number;
-  total: number;
-}> {
+  baselineBootId: number,
+  waitMs: number,
+  readReport: (proj: string) => Promise<BootReport | null>,
+): Promise<BootReport | null> {
   const start = Date.now();
-  const freshFail = (r: UpLaneRow): boolean =>
-    (r.status === "error" || r.status === "dead") &&
-    r.startedAt != null &&
-    Date.parse(r.startedAt) >= sinceMs;
-  // 미확정 = stopped(아직 미기동) 또는 stale error/dead(이전 기동 잔존, 새 데몬이 정리 중).
-  const unresolved = (r: UpLaneRow): boolean =>
-    r.status === "stopped" || ((r.status === "error" || r.status === "dead") && !freshFail(r));
-  let rows = await collectStatus(proj);
-  while (Date.now() - start < deadlineMs && rows.some(unresolved)) {
+  let report = await readReport(proj);
+  while (!(report && report.bootId > baselineBootId) && Date.now() - start < waitMs) {
     await new Promise((r) => setTimeout(r, 300));
-    rows = await collectStatus(proj);
+    report = await readReport(proj);
   }
-  const running = rows.filter((r) => r.status === "running").length;
-  const failed = rows.filter(freshFail).map((r) => ({ lane: r.lane, error: r.error }));
-  const pending = rows.filter(unresolved).length;
-  return { running, failed, pending, total: rows.length };
+  return report && report.bootId > baselineBootId ? report : null;
 }
 
 /**
- * `up`/`restart` 공통 결과-표면화 경로 — 데몬(분리 프로세스)이 각 레인 상태를 runtime.json 에
- * 남길 때까지 폴링(`pollUpResult`)한 뒤 실패 레인·기동 미확정·요약을 동일하게 표면화한다. 두 명령의
- * 차이(등록 분기/unload 등 선행 단계, `upDone`/`restartDone` 완료 메시지)는 호출측이 처리하고,
- * 이 함수는 그 이후의 폴링·요약·종료코드만 담당한다(중복 blocks 제거).
+ * `up`/`restart` 공통 결과-표면화 경로 — 자신이 개시한 부팅(`baseline` 초과 boot id)의 리포트를
+ * 대기해 실패 레인·크래시(리포트 없음)·요약을 동일하게 표면화한다. 두 명령의 차이(등록 분기/unload
+ * 등 선행 단계, `upDone`/`restartDone` 완료 메시지)는 호출측이 처리하고, 이 함수는 그 이후의
+ * 리포트 대기·요약·종료코드만 담당한다(중복 blocks 제거).
  */
-async function surfaceStartResult(
-  proj: string,
-  collectStatus: (p: string) => Promise<UpLaneRow[]>,
-  upStart: number,
-): Promise<number> {
-  // 폴링 대기 상한(ms). 느린 머신에서 기동이 8s 이상 걸리면 ADDE_UP_POLL_MS 로 늘릴 수 있다.
-  // 양수만 유효 — 0·음수·비수치는 기본 8000(음수를 그대로 쓰면 폴링을 건너뛰어 오탐을 유발).
-  const pollEnv = Number(process.env.ADDE_UP_POLL_MS);
-  const pollMs = Number.isFinite(pollEnv) && pollEnv > 0 ? pollEnv : 8000;
-  const summary = await pollUpResult(proj, collectStatus, upStart, pollMs);
-  if (summary.failed.length > 0) {
+async function surfaceStartResult(proj: string, baseline: number): Promise<number> {
+  // 대기 상한(ms). 느린 머신에서 기동이 8s 이상 걸리면 ADDE_UP_WAIT_MS 로 늘릴 수 있다.
+  // 양수만 유효 — 0·음수·비수치는 기본 8000(음수를 그대로 쓰면 대기를 건너뛰어 오탐을 유발).
+  const waitEnv = Number(process.env.ADDE_UP_WAIT_MS);
+  const waitMs = Number.isFinite(waitEnv) && waitEnv > 0 ? waitEnv : 8000;
+  if (process.env.ADDE_UP_POLL_MS !== undefined) {
+    process.stderr.write(t("run.pollMsDeprecated") + "\n");
+  }
+  const report = await waitForBootReport(proj, baseline, waitMs, (p) =>
+    readBootReport(defaultBase(), p),
+  );
+  // 대응 리포트 미기록(타임아웃) = 부팅 크래시로 간주 — 리포트 부재를 성공으로 오인하지 않는다.
+  if (report === null) {
+    process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
+    return 1;
+  }
+  const failed = report.lanes.filter((l) => l.status === "error");
+  if (failed.length > 0) {
     process.stderr.write(
       t("run.upFailed", {
-        lanes: summary.failed.map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`).join(", "),
+        lanes: failed.map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`).join(", "),
         proj,
       }) + "\n",
     );
   }
-  // 데드라인까지 아무 레인도 running/error 를 남기지 않았다(전부 stopped/미확정)면 데몬 프로세스가
-  // 부팅 중 크래시했을 수 있다(launchctl load 는 등록만 성공, 프로세스 크래시는 감지 못 함).
-  // 하드 실패를 성공(exit 0)으로 오인하지 않도록 upSummary("기동 중") 대신 데몬 로그 확인을 안내하고
-  // 비정상 종료한다(요약을 먼저 찍으면 "기동 중 K" 와 "기동된 레인 없음" 이 모순돼 보인다).
-  const bootUnconfirmed =
-    summary.running === 0 && summary.failed.length === 0 && summary.total > 0;
-  if (bootUnconfirmed) {
-    process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
-    return 1;
-  }
   process.stdout.write(
-    t("run.upSummary", {
-      running: summary.running,
-      failed: summary.failed.length,
-      pending: summary.pending,
-    }) + "\n",
+    t("run.upSummary", { running: report.running, failed: failed.length }) + "\n",
   );
   process.stdout.write(t("run.statusHint", { proj }) + "\n");
-  return summary.failed.length > 0 ? 1 : 0;
+  return failed.length > 0 ? 1 : 0;
 }
 
 /**
@@ -380,12 +352,13 @@ export async function run(argv: readonly string[]): Promise<number> {
           return unhealthy.length > 0 ? 1 : 0;
         }
       }
-      // 이번 기동 기준시각 — 이후 데몬이 남기는 error/dead 만 "이번 실패"로 판별(stale 레코드 배제).
-      const upStart = Date.now();
+      // baseline — 이번 부팅이 개시되기 전 리포트의 boot id. 이후 이 값보다 큰 bootId 리포트만
+      // 이번 기동 결과로 소비한다(잔존 리포트를 이번 결과로 오인하지 않도록).
+      const baseline = (await readBootReport(defaultBase(), proj))?.bootId ?? 0;
       await loadDaemon(proj);
       process.stdout.write(t("run.upDone", { proj }) + "\n");
       // 기동 결과를 바로 표면화 — restart 와 동일한 공유 경로(surfaceStartResult, N-1).
-      return await surfaceStartResult(proj, collectStatus, upStart);
+      return await surfaceStartResult(proj, baseline);
     } catch (err) {
       process.stderr.write(cmdError("up", errMsg(err)) + "\n");
       return 1;
@@ -417,17 +390,18 @@ export async function run(argv: readonly string[]): Promise<number> {
     }
     try {
       const { unloadDaemon, loadDaemon } = await import("../core/launchd.js");
-      const { collectStatus, clearHalt } = await import("../core/diagnostics.js");
+      const { clearHalt } = await import("../core/diagnostics.js");
       // 사용자 명령(restart) = 명시적 재시도 → halt 초기화.
       await clearHalt(defaultBase(), proj);
       // down 완료 await 후 up — 부분 실패 시 up 오류 표면화.
       await unloadDaemon(proj);
-      // 이번 재기동 기준시각 — up 과 동일하게 이후 남는 error/dead 만 "이번 실패"로 판별.
-      const upStart = Date.now();
+      // baseline — up 과 동일하게 이번 부팅 개시 전 리포트의 boot id 를 읽어 이후 이보다
+      // 큰 bootId 리포트만 이번 재기동 결과로 소비한다.
+      const baseline = (await readBootReport(defaultBase(), proj))?.bootId ?? 0;
       await loadDaemon(proj);
       process.stdout.write(t("run.restartDone", { proj }) + "\n");
       // up 과 동일한 공유 경로(surfaceStartResult, N-1) — 재기동 성공/실패 레인을 동등하게 표면화한다.
-      return await surfaceStartResult(proj, collectStatus, upStart);
+      return await surfaceStartResult(proj, baseline);
     } catch (err) {
       process.stderr.write(cmdError("restart", errMsg(err)) + "\n");
       return 1;

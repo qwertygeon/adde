@@ -3,9 +3,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// SC-016·SC-021·SC-023 (정적 — [env:static]): restart exit code behavior-change·status --json
-// BREAKING/마이그레이션 안내·ADDE_UP_POLL_MS 문서화. 산출 주체는 6단계 Docs Agent(tasks.md T014) —
-// 5b(6단계 이전) 시점에는 미산출로 RED 가 예상 상태다(PROC-R15). main 이 6단계 완료 후 재확인한다.
+// SC-016·SC-021(불변, 이전 cycle 회귀 가드) + SC-023(env 개명 반영 마이그레이션) + SC-014(신규,
+// NFR-005) — 정적([env:static]) CHANGELOG/문서 검증. SC-014·SC-023 은 산출 주체가 6단계 Docs
+// Agent(CHANGELOG.md·docs/commands*.md)라 5b(6단계 이전) 시점에는 미산출로 RED 가 예상 상태다
+// (PROC-R15/PROC-R17 — 순서 유예). main 이 6단계 완료 후 이 파일만 재확인한다.
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const changelogPath = path.join(repoRoot, "CHANGELOG.md");
@@ -42,16 +43,35 @@ describe("status --json BREAKING + 마이그레이션 안내 (SC-021)", () => {
   });
 });
 
-describe("ADDE_UP_POLL_MS 문서화 (SC-023)", () => {
-  it("도움말 또는 프로젝트 문서에 env 명·의미(폴링 상한 ms·양수만 유효·기본 8000)가 기재되어 있다", () => {
+describe("ADDE_UP_WAIT_MS 문서화 (SC-023, env 개명 반영)", () => {
+  it("도움말 또는 프로젝트 문서에 신 env 명·의미(대기 상한 ms·양수만 유효·기본 8000)가 기재되어 있다", () => {
     const docsDir = path.join(repoRoot, "docs");
     const candidates = ["commands.md", "commands.ko.md"].map((f) => path.join(docsDir, f));
     const hits = candidates.filter(
-      (f) => fs.existsSync(f) && fs.readFileSync(f, "utf8").includes("ADDE_UP_POLL_MS"),
+      (f) => fs.existsSync(f) && fs.readFileSync(f, "utf8").includes("ADDE_UP_WAIT_MS"),
     );
-    expect(hits.length, "ADDE_UP_POLL_MS 를 언급하는 문서가 없음").toBeGreaterThan(0);
+    expect(hits.length, "ADDE_UP_WAIT_MS 를 언급하는 문서가 없음").toBeGreaterThan(0);
     const combined = hits.map((f) => fs.readFileSync(f, "utf8")).join("\n");
     expect(combined).toMatch(/8000/); // 기본값 명시
     expect(combined).toMatch(/양수|positive/i); // 양수만 유효 명시
+  });
+});
+
+describe("env 개명·판정 대체 관측 변화 CHANGELOG 기재 (SC-014, NFR-005)", () => {
+  it("CHANGELOG 에 ADDE_UP_POLL_MS → ADDE_UP_WAIT_MS 개명 항목이 기재되어 있다", () => {
+    const hasCombinedLine = changelog
+      .split("\n")
+      .some((line) => /ADDE_UP_POLL_MS/.test(line) && /ADDE_UP_WAIT_MS/.test(line));
+    expect(
+      hasCombinedLine,
+      "env 개명(ADDE_UP_POLL_MS→ADDE_UP_WAIT_MS) 기재 항목을 찾을 수 없음",
+    ).toBe(true);
+  });
+
+  it("CHANGELOG 에 기동 판정을 데몬 부팅 리포트 대기로 대체했다는 항목이 기재되어 있다", () => {
+    const hasCombinedLine = changelog
+      .split("\n")
+      .some((line) => /(부팅|boot)\s*(리포트|report)/i.test(line) && /(up|restart)/i.test(line));
+    expect(hasCombinedLine, "부팅 리포트 대기 판정 대체 기재 항목을 찾을 수 없음").toBe(true);
   });
 });

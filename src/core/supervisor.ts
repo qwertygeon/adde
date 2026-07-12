@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
+import type { LaneConf } from "../shared/conf.js";
 import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
 import { secureLaneDirs } from "../shared/fs-atomic.js";
 import { resolveFileMode } from "./lane-config.js";
@@ -137,6 +138,383 @@ function disarmHeartbeat(proj: string): void {
 }
 
 /**
+ * per-lane 조립 컨텍스트 — supervisorUp 이 conf 파싱·경로·adapterBin 해석 후 레인별로 구성해
+ * assembleLane 에 주입한다(모듈 내부, 비-export — 신규 공개 표면 무증가).
+ */
+interface LaneAssemblyCtx {
+  lane: string;
+  proj: string;
+  adapterBin: string;
+  conf: LaneConf;
+  confText: string;
+  paths: LanePaths;
+  acpFactory?: AcpFactory;
+}
+
+/**
+ * per-lane 조립(중복 기동 가드 → channelWarn → backend 생성 → watcher/injector 배선 →
+ * try{...}catch{고아정리}) 을 한 함수로 캡슐화한 모듈 내부 빌더(모듈 내부, 비-export).
+ * supervisorUp 의 for-loop 이 conf 파일마다 이 함수를 호출한다.
+ * 반환: 중복 스킵 시 `{ result: {running} }`(handle 없음, 현행 `continue` 대응) / 정상 조립 시
+ * `{ handle, result: {running} }` / 조립 중 실패 시 함수 내부 catch 가 고아정리 후 `{ result: {error} }`.
+ * try/catch 는 이 함수 안에 유지한다(분할 금지 — 고아정리 회귀 방지, 정리 대상 지역변수가 이 함수
+ * 스코프에 있어야 함).
+ */
+async function assembleLane(
+  ctx: LaneAssemblyCtx,
+): Promise<{ handle?: LaneHandle; result: LaneStatus }> {
+  const { lane, proj, adapterBin, conf, confText, paths, acpFactory } = ctx;
+
+  // 구 평면 어댑터 키(root=·chat_id= 등) 감지 — 포맷이 `<source>.<key>` 로 변경됨. 파서가 구 키를
+  // 무시하므로(값 미반영) 경고로 가시화한다(markdown 레인은 root 누락으로 error 가 되지만 원인을 명시).
+  const legacyKeys = detectLegacyAdapterKeys(confText);
+  if (legacyKeys.length > 0) {
+    console.warn(t("log.supervisor.legacyKeys", { lane, keys: legacyKeys.join(", ") }));
+  }
+
+  // 사용자 입력 경로의 ~ 확장 (Node 는 자동 확장 안 함).
+  if (conf.cwd) conf.cwd = expandTilde(conf.cwd);
+  if (conf.markdown?.root) conf.markdown.root = expandTilde(conf.markdown.root);
+
+  // 상태·출력·큐 디렉터리 권한 잠금(private=0700 / shared=no-op). chmod 실패는 보조
+  // 하드닝 신호 — warn 후 흡수(기동 자체는 진행, 권한 미적용은 로그로 가시화).
+  await secureLaneDirs(
+    [paths.stateDir, paths.outDir, paths.queueDir, paths.processingDir, paths.lanesDir],
+    resolveFileMode(conf.file_mode),
+  ).catch((err: unknown) =>
+    console.warn(t("log.supervisor.securePermsFail", { lane, error: errMsg(err) })),
+  );
+
+  // 중복 기동 가드 — backend 생성 전 runtime.json + pid 생존 확인.
+  // status:"error" 레코드는 이전 기동 실패 잔존(down 이 정리하지 않음) — pid 는 죽은 이전 데몬이거나
+  // 재사용됐을 수 있으므로 신뢰하지 않고 항상 정리 후 재기동한다(pid 재사용 오탐 방지).
+  const existingRuntime = await readRuntime(paths);
+  if (existingRuntime !== null) {
+    if (existingRuntime.status !== "error" && isPidAlive(existingRuntime.pid)) {
+      // 이미 running — 경고+스킵.
+      process.stderr.write(
+        t("supervisor.alreadyRunning", { lane, pid: existingRuntime.pid, proj }) + "\n",
+      );
+      return { result: { lane, status: "running" } };
+    } else {
+      // dead 레인 또는 이전 error 잔존 — runtime.json 정리 후 정상 기동.
+      // 자식 pid 는 runtime.json 에 미기록(스키마 한계) — removeRuntime 으로 파일만 정리.
+      await removeRuntime(paths).catch((err: unknown) =>
+        console.warn(t("log.supervisor.deadCleanupFail", { lane, error: errMsg(err) })),
+      );
+    }
+  }
+
+  // 채널 라벨 = 소스 id 그대로(권한 요청 표기용). 미지 소스를 telegram 으로 오분류하지 않는다.
+  const channel: string = conf.source;
+
+  // 생성순서 시간결합 보존 — `source` 는 아래(descriptor.factory)에서 할당되므로, 이를 지연
+  // 참조하는 channelWarn·watcher.notify·injector 콜백보다 먼저 선언한다.
+  let source: Source;
+
+  // 권한 경고(perm-diff 등)를 채널로도 표면화 — source 는 아래에서 생성되므로 지연 참조.
+  // 알림은 보조 신호: 전송 실패는 warn 후 흡수(레인 동작에 영향 없음).
+  const channelWarn = (msg: string): void => {
+    void source
+      .notify(msg)
+      .catch((err: unknown) =>
+        console.warn(t("log.supervisor.channelWarnFail", { lane, error: errMsg(err) })),
+      );
+  };
+
+  let backend: AcpBackend;
+  if (acpFactory) {
+    backend = acpFactory(lane, adapterBin);
+  } else {
+    const impl = new AcpBackendImpl(adapterBin);
+    impl.configureLane(lane, {
+      paths,
+      addePolicy: {
+        perm_tier: conf.perm_tier,
+        allowlist: conf.allowlist,
+        denylist: conf.denylist,
+        hard_deny: conf.hard_deny,
+      },
+      cwd: conf.cwd,
+      channel,
+      channelWarn,
+      lang: conf.lang,
+    });
+    backend = impl;
+  }
+
+  const pendingDecisions = new Map<string, (decision: "allow" | "deny") => void>();
+
+  const engine = conf.engine || "claude";
+
+  // 자가 회복(self-recovery) watcher — 크래시 시 유계 백오프 재기동(ON) 또는 즉시 error 확정(OFF).
+  // deps 는 전부 클로저 — arm()·backend.onExit 배선은 launch 성공 후(아래)에 이뤄진다.
+  const watcher = createLaneWatcher({
+    lane,
+    autoRelaunch: conf.auto_relaunch,
+    resumeSession: (sid) =>
+      backend.resumeSession
+        ? backend.resumeSession(lane, sid)
+        : Promise.reject(new Error(`[lane-watcher] lane "${lane}" backend has no resumeSession`)),
+    isAlive: () => backend.isAlive?.(lane) ?? false,
+    lastSessionId: async () => {
+      try {
+        return (await readFile(paths.sessionIdFile, "utf8")).trim();
+      } catch {
+        return "";
+      }
+    },
+    denyPending: () => {
+      for (const resolveFn of [...pendingDecisions.values()]) resolveFn("deny");
+    },
+    // LaneHandle.isHealthy 는 watcher.isHealthy() 를 직접 참조(아래 handle 반환) — 별도 상태 보관 불요.
+    setHealth: () => {},
+    writeError: () =>
+      writeErrorRuntime(paths, {
+        lane,
+        source: conf.source || channel,
+        backend: conf.backend || "acp",
+        engine,
+        error: "engine crashed; self-recovery did not keep the lane running",
+      }).catch((err: unknown) =>
+        console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(err) })),
+      ),
+    onSessionUpdated: async (sid) => {
+      await writeRuntime(paths, {
+        v: 1,
+        pid: process.pid,
+        lane,
+        sessionId: sid,
+        startedAt: new Date().toISOString(),
+        source: conf.source || channel,
+        backend: conf.backend || "acp",
+        engine,
+      }).catch((err: unknown) =>
+        console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(err) })),
+      );
+    },
+    notify: (kind, wctx) => {
+      const tl = tFor(conf.lang);
+      if (kind === "attempt") {
+        channelWarn(tl("supervisor.selfRecovery.attempt", { lane }));
+      } else if (kind === "disabled") {
+        channelWarn(tl("supervisor.selfRecovery.disabled", { lane, proj }));
+      } else {
+        const attempts = typeof wctx?.["attempts"] === "number" ? wctx["attempts"] : 0;
+        channelWarn(tl("supervisor.selfRecovery.abandoned", { lane, attempts, proj }));
+      }
+    },
+  });
+
+  // injector 를 source 보다 먼저 생성 — render 는 source 를 지연 참조(closure, turn 종료 시 호출).
+  // in-process 배선: source.onInbound → injector.notify, injector.render → source.renderOut.
+  // 주입 실패도 채널로 표면화(onFail → source.notify) — 채널 언어(레인 로케일)로 렌더.
+  const laneT = tFor(conf.lang);
+  // 전송 멱등성: descriptor 선언값(markdown=true) 파생. 미선언/미등록 = 비멱등(중복 회피 fail-safe) →
+  // injector 가 .sending 저널로 재시작 중복 전송을 차단한다. (unknown 소스 throw 는 아래 try 에서.)
+  const idempotentDelivery = SOURCE_REGISTRY[conf.source]?.deliveryIdempotent ?? false;
+  const injector = createInjector(
+    paths,
+    lane,
+    backend,
+    (id, hint) => source.renderOut(id, hint),
+    (id, detail) =>
+      // 채널 egress 는 마스킹 일관 적용 — 엔진 예외 메시지에 시크릿이 섞일 수 있다
+      // (.failed/콘솔 등 로컬 경로는 기존대로 원문 유지).
+      source.notify(
+        formatException(
+          {
+            situation: laneT("injector.failNote.situation", { id, detail: maskSecrets(detail) }),
+            action: laneT("injector.failNote.action"),
+          },
+          laneT,
+        ),
+      ),
+    laneT,
+    {
+      idempotent: idempotentDelivery,
+      // 전달 불확실 종단 시 채널 통지(보조) — 레인 로케일. 실패는 injector 가 로그 후 흡수.
+      onUncertain: (id) => source.notify(laneT("injector.deliverUncertain", { id })),
+    },
+  );
+  const onInbound = () => injector.notify();
+
+  // backend.launch 이후 실패(예: source.start() reject — telegram getMe probe 실패)가 stop 핸들
+  // 등록(정상 경로) 전에 발생하면, 이미 spawn 된 엔진 child·armed watcher 가 정리되지 않아 고아로 남는다.
+  // 실패 경로에서 명시 정리하기 위해 launch 여부를 추적한다.
+  let launched = false;
+  // 실패 정리용 — factory 로 생성된 소스 핸들(catch 에서 stop). `source`(let, 확정할당)는 catch
+  // 에서 미할당 가능성 때문에 직접 참조 불가 → 별도 nullable 핸들로 추적.
+  let createdSource: Source | undefined;
+
+  try {
+    // 소스 생성을 try 안에서 — 팩토리가 오구성(markdown root/inbox 누락 등)에 던지면 이 레인만
+    // status:"error" 로 격리하고 나머지 레인·up 은 계속한다(전체 크래시 방지).
+    // 미등록 소스도 조용히 폴백하지 않고 여기서 던져 fail-closed 로 격리한다(telegram 오분류 없음).
+    // 어댑터별 설정(telegram 인증셋 등)은 팩토리가 conf 에서 self-resolve 한다.
+    const descriptor = SOURCE_REGISTRY[conf.source];
+    if (!descriptor) {
+      throw new Error(t("supervisor.source.unknown", { source: conf.source }));
+    }
+    source = descriptor.factory({ lane, proj, engine, paths, conf, onInbound });
+    createdSource = source;
+
+    source.onDecision((reqId, decision) => {
+      const resolve = pendingDecisions.get(reqId);
+      if (resolve) {
+        pendingDecisions.delete(reqId);
+        resolve(decision);
+      }
+    });
+
+    // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
+    const { sessionId } = await backend.launch(lane);
+    launched = true;
+
+    // 세션 장부 기록(보조 — /resume 목록·마지막 대화 시각). 실패는 로그 후 흡수.
+    await recordSession(paths, sessionId).catch((err: unknown) =>
+      console.warn(t("log.supervisor.ledgerFail", { lane, error: errMsg(err) })),
+    );
+
+    // 엔진 세션 이벤트 → injector(응답 누적). injector 가 turn 종료에 writeOutBody+setDone + renderOut(B).
+    backend.subscribe(lane, (e) => injector.onSessionEvent(e));
+
+    backend.onPermissionRequest(lane, async (req) => {
+      // pendingDecisions 등록을 sendPermPrompt(비동기 채널 전송) 이전에 동기적으로 선행한다 —
+      // 크래시가 전송 중(아직 waitForDecision 미호출) 구간에 발생해도 denyPending 이 이 요청을
+      // 찾아 deny 종결할 수 있게 한다(그 반대 순서면 전송-대기 사이 창에서 크래시가 놓친다).
+      let resolveDecision!: (decision: "allow" | "deny") => void;
+      const decisionPromise = new Promise<"allow" | "deny">((resolveFn) => {
+        resolveDecision = resolveFn;
+      });
+      pendingDecisions.set(req.id, resolveDecision);
+      const waitForDecision = () => decisionPromise;
+
+      const sendPermPrompt = async () => {
+        await source.requestPermission(req);
+      };
+
+      try {
+        return await gateRequestDecision(req, {
+          sendPermPrompt,
+          waitForDecision,
+          // 옵트인 conf 재정의(초→ms). 미지정 시 게이트 기본(600초) 사용.
+          ...(conf.gate_timeout_sec !== undefined
+            ? { timeoutMs: conf.gate_timeout_sec * 1000 }
+            : {}),
+        });
+      } finally {
+        // 모든 종결 경로(timeout·전송오류·정상결정)에서 대기자 정리 — timeout 시 영구 잔존 누수 제거.
+        // 늦게 도착한 콜백은 빈 맵에서 no-op(무해).
+        pendingDecisions.delete(req.id);
+      }
+    });
+
+    // 자가 회복 watcher 배선 — onExit 등록은 ON/OFF 공통(크래시 감지는 항상 수행).
+    // arm() 은 ON 에서만(OFF 는 재기동 트리거 자체를 비활성 — 감지 후 즉시 error 확정).
+    if (conf.auto_relaunch) watcher.arm();
+    backend.onExit?.(lane, (_l, info) => watcher.onCrash(info));
+
+    // 인젝터 기동은 비차단(첫 inject 가 turn 종료까지 블록될 수 있어 await 하지 않음).
+    // fire-and-forget 이므로 rejection 은 unhandled 가 되지 않도록 로깅한다.
+    void injector.start().catch((err: unknown) => {
+      console.error(
+        t("log.supervisor.injectorStartFail", {
+          lane,
+          error: errMsg(err),
+        }),
+      );
+    });
+    await source.start();
+
+    // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(no-silent).
+    if (conf.perm_tier === "autopass") {
+      const tl = tFor(conf.lang);
+      const denyDesc =
+        conf.denylist.length > 0
+          ? tl("supervisor.autopassDenySome", { tools: conf.denylist.join(", ") })
+          : tl("supervisor.autopassDenyEmpty");
+      const banner = formatWarnNote(
+        {
+          situation: tl("supervisor.autopassBanner.situation", { denyDesc }),
+          action: tl("supervisor.autopassBanner.action", { lane, proj }),
+        },
+        tl,
+      );
+      console.warn(`[supervisor] lane=${lane} ${banner}`);
+      channelWarn(banner);
+    }
+
+    // 라이브니스 상태 파일 — status 가 교차 프로세스로 읽는다. 기동 성공 후 기록.
+    // 기록 실패는 보조(가시성 저하일 뿐 기동 자체는 성공) → warn 후 흡수.
+    await writeRuntime(paths, {
+      v: 1,
+      pid: process.pid,
+      lane,
+      sessionId,
+      startedAt: new Date().toISOString(),
+      source: conf.source || channel,
+      backend: conf.backend || "acp",
+      engine,
+    }).catch((err: unknown) =>
+      console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(err) })),
+    );
+
+    console.log(`[supervisor] lane=${lane} running`);
+
+    const handle: LaneHandle = {
+      lane,
+      paths,
+      isHealthy: () => watcher.isHealthy(),
+      // 정지 순서: watcher disarm(잔존 백오프 타이머 정리) → 소스(신규 인바운드·turn 차단) →
+      // 백엔드 child 정리 → 상태 파일 제거.
+      async stop() {
+        watcher.disarm();
+        await source.stop();
+        await backend.close(lane);
+        await removeRuntime(paths).catch((err: unknown) =>
+          console.warn(t("log.supervisor.runtimeRemoveFail", { lane, error: errMsg(err) })),
+        );
+      },
+    };
+
+    return { handle, result: { lane, status: "running" } };
+  } catch (err) {
+    const reason = errMsg(err);
+    console.error(t("log.supervisor.laneStartFail", { lane, reason }));
+    // 실패 경로 정리(고아 방지): stop 핸들이 아직 등록되지 않았으므로 여기서 직접 정리한다.
+    // 정상 stop 핸들과 동일 순서(watcher disarm → source stop → backend close)로, 생성/기동된
+    // 자원을 남기지 않는다 — 안 하면 기동 실패한 레인의 소스 자원·ACP 엔진 자식이 데몬 수명 동안
+    // 고아로 남는다(예: telegram 잘못된 토큰 → probe 실패). 각 정리 실패는 보조라 흡수(로그)한다.
+    watcher.disarm();
+    if (createdSource) {
+      await createdSource
+        .stop()
+        .catch((e: unknown) =>
+          console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),
+        );
+    }
+    if (launched) {
+      await backend.close(lane).catch((e: unknown) =>
+        console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),
+      );
+    }
+    // 실패 상태를 runtime.json 에 남겨 교차 프로세스(adde up·status)가 볼 수 있게 한다 —
+    // 안 남기면 파일 부재라 status 가 stopped(미기동)와 구분 못 한다. 기록 실패는 흡수(보조).
+    await writeErrorRuntime(paths, {
+      lane,
+      source: conf.source || channel,
+      backend: conf.backend || "acp",
+      engine,
+      error: maskSecrets(reason),
+    }).catch((e: unknown) =>
+      console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(e) })),
+    );
+    return { result: { lane, status: "error", error: reason } };
+  }
+}
+
+/**
  * `adde up <proj>` — lanes.d 의 conf 파일 스캔 → 레인별 기동.
  */
 export async function supervisorUp(
@@ -170,354 +548,19 @@ export async function supervisorUp(
     const confPath = join(lanesDir, confFile);
     const confText = await readFile(confPath, "utf8");
     const conf = parseLaneConf(confText);
-
-    // 구 평면 어댑터 키(root=·chat_id= 등) 감지 — 포맷이 `<source>.<key>` 로 변경됨. 파서가 구 키를
-    // 무시하므로(값 미반영) 경고로 가시화한다(markdown 레인은 root 누락으로 error 가 되지만 원인을 명시).
-    const legacyKeys = detectLegacyAdapterKeys(confText);
-    if (legacyKeys.length > 0) {
-      console.warn(t("log.supervisor.legacyKeys", { lane, keys: legacyKeys.join(", ") }));
-    }
-
-    // 사용자 입력 경로의 ~ 확장 (Node 는 자동 확장 안 함).
-    if (conf.cwd) conf.cwd = expandTilde(conf.cwd);
-    if (conf.markdown?.root) conf.markdown.root = expandTilde(conf.markdown.root);
-
     const paths = lanePaths(baseDir, proj, lane);
 
-    // 상태·출력·큐 디렉터리 권한 잠금(private=0700 / shared=no-op). chmod 실패는 보조
-    // 하드닝 신호 — warn 후 흡수(기동 자체는 진행, 권한 미적용은 로그로 가시화).
-    await secureLaneDirs(
-      [paths.stateDir, paths.outDir, paths.queueDir, paths.processingDir, paths.lanesDir],
-      resolveFileMode(conf.file_mode),
-    ).catch((err: unknown) =>
-      console.warn(t("log.supervisor.securePermsFail", { lane, error: errMsg(err) })),
-    );
-
-    // 중복 기동 가드 — backend 생성 전 runtime.json + pid 생존 확인.
-    // status:"error" 레코드는 이전 기동 실패 잔존(down 이 정리하지 않음) — pid 는 죽은 이전 데몬이거나
-    // 재사용됐을 수 있으므로 신뢰하지 않고 항상 정리 후 재기동한다(pid 재사용 오탐 방지).
-    const existingRuntime = await readRuntime(paths);
-    if (existingRuntime !== null) {
-      if (existingRuntime.status !== "error" && isPidAlive(existingRuntime.pid)) {
-        // 이미 running — 경고+스킵.
-        process.stderr.write(
-          t("supervisor.alreadyRunning", { lane, pid: existingRuntime.pid, proj }) + "\n",
-        );
-        results.push({ lane, status: "running" });
-        continue;
-      } else {
-        // dead 레인 또는 이전 error 잔존 — runtime.json 정리 후 정상 기동.
-        // 자식 pid 는 runtime.json 에 미기록(스키마 한계) — removeRuntime 으로 파일만 정리.
-        await removeRuntime(paths).catch((err: unknown) =>
-          console.warn(t("log.supervisor.deadCleanupFail", { lane, error: errMsg(err) })),
-        );
-      }
-    }
-
-    // 채널 라벨 = 소스 id 그대로(권한 요청 표기용). 미지 소스를 telegram 으로 오분류하지 않는다.
-    const channel: string = conf.source;
-
-    // 권한 경고(perm-diff 등)를 채널로도 표면화 — source 는 아래에서 생성되므로 지연 참조.
-    // 알림은 보조 신호: 전송 실패는 warn 후 흡수(레인 동작에 영향 없음).
-    const channelWarn = (msg: string): void => {
-      void source
-        .notify(msg)
-        .catch((err: unknown) =>
-          console.warn(t("log.supervisor.channelWarnFail", { lane, error: errMsg(err) })),
-        );
-    };
-
-    let backend: AcpBackend;
-    if (opts?.acpFactory) {
-      backend = opts.acpFactory(lane, adapterBin);
-    } else {
-      const impl = new AcpBackendImpl(adapterBin);
-      impl.configureLane(lane, {
-        paths,
-        addePolicy: {
-          perm_tier: conf.perm_tier,
-          allowlist: conf.allowlist,
-          denylist: conf.denylist,
-          hard_deny: conf.hard_deny,
-        },
-        cwd: conf.cwd,
-        channel,
-        channelWarn,
-        lang: conf.lang,
-      });
-      backend = impl;
-    }
-
-    const pendingDecisions = new Map<string, (decision: "allow" | "deny") => void>();
-
-    const engine = conf.engine || "claude";
-    let source: Source;
-
-    // 자가 회복(self-recovery) watcher — 크래시 시 유계 백오프 재기동(ON) 또는 즉시 error 확정(OFF).
-    // deps 는 전부 클로저 — arm()·backend.onExit 배선은 launch 성공 후(아래)에 이뤄진다.
-    const watcher = createLaneWatcher({
+    const { handle, result } = await assembleLane({
       lane,
-      autoRelaunch: conf.auto_relaunch,
-      resumeSession: (sid) =>
-        backend.resumeSession
-          ? backend.resumeSession(lane, sid)
-          : Promise.reject(new Error(`[lane-watcher] lane "${lane}" backend has no resumeSession`)),
-      isAlive: () => backend.isAlive?.(lane) ?? false,
-      lastSessionId: async () => {
-        try {
-          return (await readFile(paths.sessionIdFile, "utf8")).trim();
-        } catch {
-          return "";
-        }
-      },
-      denyPending: () => {
-        for (const resolveFn of [...pendingDecisions.values()]) resolveFn("deny");
-      },
-      // LaneHandle.isHealthy 는 watcher.isHealthy() 를 직접 참조(아래 handles.push) — 별도 상태 보관 불요.
-      setHealth: () => {},
-      writeError: () =>
-        writeErrorRuntime(paths, {
-          lane,
-          source: conf.source || channel,
-          backend: conf.backend || "acp",
-          engine,
-          error: "engine crashed; self-recovery did not keep the lane running",
-        }).catch((err: unknown) =>
-          console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(err) })),
-        ),
-      onSessionUpdated: async (sid) => {
-        await writeRuntime(paths, {
-          v: 1,
-          pid: process.pid,
-          lane,
-          sessionId: sid,
-          startedAt: new Date().toISOString(),
-          source: conf.source || channel,
-          backend: conf.backend || "acp",
-          engine,
-        }).catch((err: unknown) =>
-          console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(err) })),
-        );
-      },
-      notify: (kind, ctx) => {
-        const tl = tFor(conf.lang);
-        if (kind === "attempt") {
-          channelWarn(tl("supervisor.selfRecovery.attempt", { lane }));
-        } else if (kind === "disabled") {
-          channelWarn(tl("supervisor.selfRecovery.disabled", { lane, proj }));
-        } else {
-          const attempts = typeof ctx?.["attempts"] === "number" ? ctx["attempts"] : 0;
-          channelWarn(tl("supervisor.selfRecovery.abandoned", { lane, attempts, proj }));
-        }
-      },
-    });
-
-    // injector 를 source 보다 먼저 생성 — render 는 source 를 지연 참조(closure, turn 종료 시 호출).
-    // in-process 배선: source.onInbound → injector.notify, injector.render → source.renderOut.
-    // 주입 실패도 채널로 표면화(onFail → source.notify) — 채널 언어(레인 로케일)로 렌더.
-    const laneT = tFor(conf.lang);
-    // 전송 멱등성: descriptor 선언값(markdown=true) 파생. 미선언/미등록 = 비멱등(중복 회피 fail-safe) →
-    // injector 가 .sending 저널로 재시작 중복 전송을 차단한다. (unknown 소스 throw 는 아래 try 에서.)
-    const idempotentDelivery = SOURCE_REGISTRY[conf.source]?.deliveryIdempotent ?? false;
-    const injector = createInjector(
+      proj,
+      adapterBin,
+      conf,
+      confText,
       paths,
-      lane,
-      backend,
-      (id, hint) => source.renderOut(id, hint),
-      (id, detail) =>
-        // 채널 egress 는 마스킹 일관 적용 — 엔진 예외 메시지에 시크릿이 섞일 수 있다
-        // (.failed/콘솔 등 로컬 경로는 기존대로 원문 유지).
-        source.notify(
-          formatException(
-            {
-              situation: laneT("injector.failNote.situation", { id, detail: maskSecrets(detail) }),
-              action: laneT("injector.failNote.action"),
-            },
-            laneT,
-          ),
-        ),
-      laneT,
-      {
-        idempotent: idempotentDelivery,
-        // 전달 불확실 종단 시 채널 통지(보조) — 레인 로케일. 실패는 injector 가 로그 후 흡수.
-        onUncertain: (id) => source.notify(laneT("injector.deliverUncertain", { id })),
-      },
-    );
-    const onInbound = () => injector.notify();
-
-    // backend.launch 이후 실패(예: source.start() reject — telegram getMe probe 실패)가 stop 핸들
-    // 등록(정상 경로) 전에 발생하면, 이미 spawn 된 엔진 child·armed watcher 가 정리되지 않아 고아로 남는다.
-    // 실패 경로에서 명시 정리하기 위해 launch 여부를 추적한다.
-    let launched = false;
-    // 실패 정리용 — factory 로 생성된 소스 핸들(catch 에서 stop). `source`(let, 확정할당)는 catch
-    // 에서 미할당 가능성 때문에 직접 참조 불가 → 별도 nullable 핸들로 추적.
-    let createdSource: Source | undefined;
-
-    try {
-      // 소스 생성을 try 안에서 — 팩토리가 오구성(markdown root/inbox 누락 등)에 던지면 이 레인만
-      // status:"error" 로 격리하고 나머지 레인·up 은 계속한다(전체 크래시 방지).
-      // 미등록 소스도 조용히 폴백하지 않고 여기서 던져 fail-closed 로 격리한다(telegram 오분류 없음).
-      // 어댑터별 설정(telegram 인증셋 등)은 팩토리가 conf 에서 self-resolve 한다.
-      const descriptor = SOURCE_REGISTRY[conf.source];
-      if (!descriptor) {
-        throw new Error(t("supervisor.source.unknown", { source: conf.source }));
-      }
-      source = descriptor.factory({ lane, proj, engine, paths, conf, onInbound });
-      createdSource = source;
-
-      source.onDecision((reqId, decision) => {
-        const resolve = pendingDecisions.get(reqId);
-        if (resolve) {
-          pendingDecisions.delete(reqId);
-          resolve(decision);
-        }
-      });
-
-      // launch 가 레인 state 를 생성한다 — 구독·권한 핸들러 등록은 launch 이후라야 한다.
-      const { sessionId } = await backend.launch(lane);
-      launched = true;
-
-      // 세션 장부 기록(보조 — /resume 목록·마지막 대화 시각). 실패는 로그 후 흡수.
-      await recordSession(paths, sessionId).catch((err: unknown) =>
-        console.warn(t("log.supervisor.ledgerFail", { lane, error: errMsg(err) })),
-      );
-
-      // 엔진 세션 이벤트 → injector(응답 누적). injector 가 turn 종료에 writeOutBody+setDone + renderOut(B).
-      backend.subscribe(lane, (e) => injector.onSessionEvent(e));
-
-      backend.onPermissionRequest(lane, async (req) => {
-        // pendingDecisions 등록을 sendPermPrompt(비동기 채널 전송) 이전에 동기적으로 선행한다 —
-        // 크래시가 전송 중(아직 waitForDecision 미호출) 구간에 발생해도 denyPending 이 이 요청을
-        // 찾아 deny 종결할 수 있게 한다(그 반대 순서면 전송-대기 사이 창에서 크래시가 놓친다).
-        let resolveDecision!: (decision: "allow" | "deny") => void;
-        const decisionPromise = new Promise<"allow" | "deny">((resolveFn) => {
-          resolveDecision = resolveFn;
-        });
-        pendingDecisions.set(req.id, resolveDecision);
-        const waitForDecision = () => decisionPromise;
-
-        const sendPermPrompt = async () => {
-          await source.requestPermission(req);
-        };
-
-        try {
-          return await gateRequestDecision(req, {
-            sendPermPrompt,
-            waitForDecision,
-            // 옵트인 conf 재정의(초→ms). 미지정 시 게이트 기본(600초) 사용.
-            ...(conf.gate_timeout_sec !== undefined
-              ? { timeoutMs: conf.gate_timeout_sec * 1000 }
-              : {}),
-          });
-        } finally {
-          // 모든 종결 경로(timeout·전송오류·정상결정)에서 대기자 정리 — timeout 시 영구 잔존 누수 제거.
-          // 늦게 도착한 콜백은 빈 맵에서 no-op(무해).
-          pendingDecisions.delete(req.id);
-        }
-      });
-
-      // 자가 회복 watcher 배선 — onExit 등록은 ON/OFF 공통(크래시 감지는 항상 수행).
-      // arm() 은 ON 에서만(OFF 는 재기동 트리거 자체를 비활성 — 감지 후 즉시 error 확정).
-      if (conf.auto_relaunch) watcher.arm();
-      backend.onExit?.(lane, (_l, info) => watcher.onCrash(info));
-
-      // 인젝터 기동은 비차단(첫 inject 가 turn 종료까지 블록될 수 있어 await 하지 않음).
-      // fire-and-forget 이므로 rejection 은 unhandled 가 되지 않도록 로깅한다.
-      void injector.start().catch((err: unknown) => {
-        console.error(
-          t("log.supervisor.injectorStartFail", {
-            lane,
-            error: errMsg(err),
-          }),
-        );
-      });
-      await source.start();
-
-      // autopass 레인 기동 배너 — 자동 허용 모드임을 채널에 명시(no-silent).
-      if (conf.perm_tier === "autopass") {
-        const tl = tFor(conf.lang);
-        const denyDesc =
-          conf.denylist.length > 0
-            ? tl("supervisor.autopassDenySome", { tools: conf.denylist.join(", ") })
-            : tl("supervisor.autopassDenyEmpty");
-        const banner = formatWarnNote(
-          {
-            situation: tl("supervisor.autopassBanner.situation", { denyDesc }),
-            action: tl("supervisor.autopassBanner.action", { lane, proj }),
-          },
-          tl,
-        );
-        console.warn(`[supervisor] lane=${lane} ${banner}`);
-        channelWarn(banner);
-      }
-
-      // 라이브니스 상태 파일 — status 가 교차 프로세스로 읽는다. 기동 성공 후 기록.
-      // 기록 실패는 보조(가시성 저하일 뿐 기동 자체는 성공) → warn 후 흡수.
-      await writeRuntime(paths, {
-        v: 1,
-        pid: process.pid,
-        lane,
-        sessionId,
-        startedAt: new Date().toISOString(),
-        source: conf.source || channel,
-        backend: conf.backend || "acp",
-        engine,
-      }).catch((err: unknown) =>
-        console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(err) })),
-      );
-
-      console.log(`[supervisor] lane=${lane} running`);
-
-      handles.push({
-        lane,
-        paths,
-        isHealthy: () => watcher.isHealthy(),
-        // 정지 순서: watcher disarm(잔존 백오프 타이머 정리) → 소스(신규 인바운드·turn 차단) →
-        // 백엔드 child 정리 → 상태 파일 제거.
-        async stop() {
-          watcher.disarm();
-          await source.stop();
-          await backend.close(lane);
-          await removeRuntime(paths).catch((err: unknown) =>
-            console.warn(t("log.supervisor.runtimeRemoveFail", { lane, error: errMsg(err) })),
-          );
-        },
-      });
-
-      results.push({ lane, status: "running" });
-    } catch (err) {
-      const reason = errMsg(err);
-      console.error(t("log.supervisor.laneStartFail", { lane, reason }));
-      // 실패 경로 정리(고아 방지): stop 핸들이 아직 등록되지 않았으므로 여기서 직접 정리한다.
-      // 정상 stop 핸들과 동일 순서(watcher disarm → source stop → backend close)로, 생성/기동된
-      // 자원을 남기지 않는다 — 안 하면 기동 실패한 레인의 소스 자원·ACP 엔진 자식이 데몬 수명 동안
-      // 고아로 남는다(예: telegram 잘못된 토큰 → probe 실패). 각 정리 실패는 보조라 흡수(로그)한다.
-      watcher.disarm();
-      if (createdSource) {
-        await createdSource
-          .stop()
-          .catch((e: unknown) =>
-            console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),
-          );
-      }
-      if (launched) {
-        await backend.close(lane).catch((e: unknown) =>
-          console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),
-        );
-      }
-      // 실패 상태를 runtime.json 에 남겨 교차 프로세스(adde up·status)가 볼 수 있게 한다 —
-      // 안 남기면 파일 부재라 status 가 stopped(미기동)와 구분 못 한다. 기록 실패는 흡수(보조).
-      await writeErrorRuntime(paths, {
-        lane,
-        source: conf.source || channel,
-        backend: conf.backend || "acp",
-        engine,
-        error: maskSecrets(reason),
-      }).catch((e: unknown) =>
-        console.warn(t("log.supervisor.runtimeWriteFail", { lane, error: errMsg(e) })),
-      );
-      results.push({ lane, status: "error", error: reason });
-    }
+      ...(opts?.acpFactory !== undefined ? { acpFactory: opts.acpFactory } : {}),
+    });
+    if (handle) handles.push(handle);
+    results.push(result);
   }
 
   const existing = activeLanes.get(proj) ?? [];

@@ -87,6 +87,19 @@ describe("readBootReport fail-safe — 손상/스키마 불일치 시 null", () 
     const bootId = await writeBootReport(tmpBase, "proj5", [{ lane: "a", status: "running" }]);
     expect(bootId).toBe(1); // 손상된 prev 를 null 로 보아 (prev?.bootId ?? 0) + 1 = 1
   });
+
+  it("부재/손상이 아닌 fs 오류(EACCES 등)는 null 로 흡수하지 않고 전파한다 — 유효 잔존 리포트를 baseline=0 으로 오소비(fail-open)하지 않도록", async () => {
+    // root 로 돌면 chmod 000 도 읽혀 EACCES 를 재현할 수 없다 — 환경 한정 스킵.
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    await writeBootReport(tmpBase, "proj6", [{ lane: "a", status: "running" }]);
+    const p = daemonBootReportPath(tmpBase, "proj6");
+    fs.chmodSync(p, 0o000);
+    try {
+      await expect(readBootReport(tmpBase, "proj6")).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      fs.chmodSync(p, 0o600); // afterEach rmSync 가 실패하지 않도록 복원
+    }
+  });
 });
 
 describe("사유 마스킹 (SC-011 Error)", () => {

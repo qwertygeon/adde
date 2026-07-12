@@ -30,14 +30,23 @@ export interface BootReport {
 }
 
 /**
- * 현재 부팅 리포트를 읽는다. 파일 부재·파싱 실패·스키마 불일치(`v!==1`)는 `null`
+ * 현재 부팅 리포트를 읽는다. 파일 부재(ENOENT)·파싱 실패·스키마 불일치(`v!==1`)만 `null`
  * (이 판독에 한정된 fail-safe — 손상 리포트가 baseline=0 처리로 이어져도 다음 부팅이
- * bootId=1 을 발급하므로 정상 판정을 막지 않는다).
+ * bootId=1 을 발급하므로 정상 판정을 막지 않는다). 그 외 fs 오류(EMFILE/EACCES 등 일시·환경
+ * 오류)는 부재와 의미가 다르므로 흡수하지 않고 전파한다 — null 로 뭉개면 CLI baseline 이 0 이
+ * 되어 잔존 리포트를 이번 부팅 결과로 오소비(fail-open)하거나, 데몬 prev 판독 실패가 bootId 를
+ * 1 로 리셋해 건강한 부팅을 거짓 크래시로 보고할 수 있다.
  */
 export async function readBootReport(base: string, proj: string): Promise<BootReport | null> {
   const path = daemonBootReportPath(base, proj);
+  let raw: string;
   try {
-    const raw = await readFile(path, "utf8");
+    raw = await readFile(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  try {
     const parsed: unknown = JSON.parse(raw);
     if (
       typeof parsed !== "object" ||

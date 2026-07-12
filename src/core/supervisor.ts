@@ -144,7 +144,6 @@ function disarmHeartbeat(proj: string): void {
 interface LaneAssemblyCtx {
   lane: string;
   proj: string;
-  baseDir: string;
   adapterBin: string;
   conf: LaneConf;
   confText: string;
@@ -554,7 +553,6 @@ export async function supervisorUp(
     const { handle, result } = await assembleLane({
       lane,
       proj,
-      baseDir,
       adapterBin,
       conf,
       confText,

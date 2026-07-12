@@ -17,6 +17,8 @@ export interface LanePaths {
   queueDir: string;
   processingDir: string;
   outDir: string;
+  /** out-상태 구조화 레코드(013-out-state-ledger) — id → {state, sidecar} 단일 파일. */
+  outLedgerFile: string;
   stateDir: string;
   envFile: string;
   sessionIdFile: string;
@@ -112,6 +114,7 @@ export function lanePaths(base: string, proj: string, lane: string): LanePaths {
     queueDir: join(root, "queue", lane),
     processingDir: join(root, "processing", lane),
     outDir: join(root, "out", lane),
+    outLedgerFile: join(root, "out", lane, "ledger.json"),
     stateDir,
     envFile: join(stateDir, ".env"),
     sessionIdFile: join(stateDir, "session.id"),

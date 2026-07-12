@@ -507,6 +507,23 @@ lane add 옵션:
     },
     quarantined: "손상 메시지 격리 @ {{ts}}: {{detail}}",
   },
+  outLedger: {
+    readFail: {
+      situation: "out-상태 ledger 읽기 실패({{path}}): {{error}}",
+      action:
+        "디스크/권한 문제를 확인하세요. 이번 호출은 빈 ledger 로 처리됩니다(보수적 — 파일이 복구되기 전까지 비멱등 레인은 미전송 메시지를 재전송하지 않습니다).",
+    },
+    corrupt: {
+      situation: "out-상태 ledger 파싱 실패({{path}}): {{error}}",
+      action:
+        "파일이 외부 원인(디스크 오류·수동 편집·동기화 충돌)으로 손상됐을 수 있습니다. 이번 호출은 빈 ledger 로 처리됩니다(비멱등 레인의 in-flight 응답이 재전송되지 않을 수 있음 — 무중복 방향). 가능하면 백업에서 복원하세요.",
+    },
+    unknownVersion: {
+      situation: "out-상태 ledger 스키마 버전 인식 불가({{path}}, v={{v}})",
+      action:
+        "더 최신 ADDE 버전에서 생성된 파일일 수 있습니다. 알려진 필드만 best-effort 로 읽습니다 — 다운그레이드 후 동작을 확인하세요.",
+    },
+  },
   injector: {
     injectFailed: "inject 실패 @ {{ts}}: {{detail}}",
     control: {

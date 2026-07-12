@@ -6,7 +6,7 @@
 import type { PermRequest } from "../gate/gate.js";
 import type { LanePaths } from "../shared/paths.js";
 import type { LaneConf } from "../shared/conf.js";
-import type { RenderHint } from "../core/queue.js";
+import type { RenderHint } from "../core/out-ledger.js";
 import type { LaneAddOptions, LaneAddResult } from "../core/lane-config.js";
 import type { DoctorCheck } from "../core/diagnostics.js";
 import type { Ask } from "../cli/prompt.js";
@@ -102,7 +102,7 @@ export interface Source {
   onDecision(cb: DecisionCallback): void;
   /**
    * out/<id>.out (+ sidecar) 를 채널로 렌더한다(telegram=sendMessage, markdown=출력 노트).
-   * in-process 호출(injector 가 writeOut 직후) — out/ fs.watch 를 대체. hint 가 있으면 방금
+   * in-process 호출(injector 가 writeOutBody+setDone 직후) — out/ fs.watch 를 대체. hint 가 있으면 방금
    * 메모리에서 쓴 텍스트·sidecar 를 써서 디스크 재read 를 생략하고, 없으면(크래시 flush) 디스크에서 읽는다.
    */
   renderOut(id: string, hint?: RenderHint): Promise<void>;

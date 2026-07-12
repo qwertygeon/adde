@@ -555,6 +555,30 @@ describe("createMarkdownSource (통합)", () => {
     return `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}`;
   }
 
+  /**
+   * out-ledger entry 직접 기록 — renderOut 픽스처용(013-out-state-ledger 이전).
+   * setDone 은 전이 시각(now)을 ts 로 고정하므로, 결정적 과거 ts/origin_ts 를 검증하려면
+   * ledger.json 을 직접 기록한다(out-ledger.test.ts 의 writeLedgerFixture 와 동일 관례).
+   */
+  function writeLedgerEntry(
+    id: string,
+    entry: {
+      reply_ref?: { channel_msg_id: string };
+      ts?: string;
+      origin_ts?: string;
+      question?: string;
+    },
+  ): void {
+    const ledgerPath = paths.outLedgerFile;
+    let ledger: { v: number; entries: Record<string, unknown> } = { v: 1, entries: {} };
+    if (fs.existsSync(ledgerPath)) {
+      ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as typeof ledger;
+    }
+    ledger.entries[id] = { state: "done", ...entry };
+    fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    fs.writeFileSync(ledgerPath, JSON.stringify(ledger));
+  }
+
   beforeEach(() => {
     tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-markdown-"));
     rootDir = path.join(tmpBase, "Notes");
@@ -978,11 +1002,8 @@ describe("createMarkdownSource (통합)", () => {
     source = makeSource();
     await source.start();
 
-    // injector 가 writeOut 후 in-process 로 renderOut 호출(out/ watch 제거)
-    fs.writeFileSync(
-      path.join(paths.outDir, "msg-1.out.json"),
-      JSON.stringify({ reply_ref: { channel_msg_id: "orig-9" } }),
-    );
+    // injector 가 writeOutBody+setDone 후 in-process 로 renderOut 호출(out/ watch 제거)
+    writeLedgerEntry("msg-1", { reply_ref: { channel_msg_id: "orig-9" } });
     fs.writeFileSync(path.join(paths.outDir, "msg-1.out"), "에이전트 응답입니다");
 
     await source.renderOut("msg-1");
@@ -1057,16 +1078,13 @@ describe("createMarkdownSource (통합)", () => {
     await waitFor(() => /sent \[\[.+\]\]/.test(fs.readFileSync(inboxPath, "utf8")));
     const link = /sent \[\[(.+)\]\]/.exec(fs.readFileSync(inboxPath, "utf8"))![1]!;
 
-    // 큐 envelope 로 injector 의 writeOut 을 재현(origin_ts = envelope.ts)
+    // 큐 envelope 로 injector 의 writeOutBody+setDone 을 재현(origin_ts = envelope.ts)
     const qFile = fs.readdirSync(paths.queueDir).find((f) => f.endsWith(".msg"))!;
     const env = JSON.parse(fs.readFileSync(path.join(paths.queueDir, qFile), "utf8")) as {
       id: string;
       ts: string;
     };
-    fs.writeFileSync(
-      path.join(paths.outDir, `${env.id}.out.json`),
-      JSON.stringify({ reply_ref: { channel_msg_id: env.id }, origin_ts: env.ts }),
-    );
+    writeLedgerEntry(env.id, { reply_ref: { channel_msg_id: env.id }, origin_ts: env.ts });
     fs.writeFileSync(path.join(paths.outDir, `${env.id}.out`), "응답");
 
     await source.renderOut(env.id);
@@ -1085,15 +1103,12 @@ describe("createMarkdownSource (통합)", () => {
 
     const originIso = isoFromStamp("20260703-162045")!;
     const doneIso = isoFromStamp("20260703-162130")!;
-    fs.writeFileSync(
-      path.join(paths.outDir, "msg-2.out.json"),
-      JSON.stringify({
-        reply_ref: { channel_msg_id: "msg-2" },
-        origin_ts: originIso,
-        ts: doneIso,
-        question: "빌드 오류 원인 분석해줘",
-      }),
-    );
+    writeLedgerEntry("msg-2", {
+      reply_ref: { channel_msg_id: "msg-2" },
+      origin_ts: originIso,
+      ts: doneIso,
+      question: "빌드 오류 원인 분석해줘",
+    });
     fs.writeFileSync(path.join(paths.outDir, "msg-2.out"), "분석 결과입니다");
 
     await source.renderOut("msg-2");
@@ -1213,9 +1228,10 @@ describe("createMarkdownSource (통합)", () => {
   it("크래시 멱등(Order X): 아카이브 append 후 inbox 미갱신 재기동 — 재전송 없이 본문 이관 수렴", async () => {
     conf.markdown!.archive = "sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
-    // 크래시 재현: sending + 본문 잔존, out/<id>.out 존재(이미 enqueue/완료), 아카이브엔 이미 append 됨.
+    // 크래시 재현: sending + 본문 잔존, ledger done entry 존재(이미 enqueue/완료), 아카이브엔 이미 append 됨.
     fs.writeFileSync(inboxPath, "복구 본문\n" + sendingLine("crash-2", STAMP) + "\n");
     fs.writeFileSync(path.join(paths.outDir, "crash-2.out"), "응답");
+    writeLedgerEntry("crash-2", {});
     fs.mkdirSync(archiveDirPath(), { recursive: true });
     fs.writeFileSync(archiveFilePath(), `\n## [[${outNoteBase(STAMP, "crash-2")}]]\n\n복구 본문\n`);
 
@@ -1299,19 +1315,18 @@ describe("createMarkdownSource (통합)", () => {
     await expect(source!.start()).rejects.toThrow();
   });
 
-  // ── Part A 파티셔닝 — 재기록 멱등 (FR-001) ──────────────────────────────
+  // ── Part A 파티셔닝 — 재기록 멱등 (FR-001, SC-009) ──────────────────────────────
   // Happy-path 폴더 배치 자체는 위 "renderOut: origin_ts sidecar" 등 마이그레이션된 baseline 이
   // 이미 커버 — 여기선 재기록 시 중복 폴더가 생기지 않는 멱등성만 추가로 검증한다.
+  // SC-009: render 실패 후 재전송되는 markdown 메시지도 동일 origin_ts 로 재호출되므로, 이 재호출이
+  // 채널 노트를 중복 생성하지 않음을 확인하는 것이 곧 "소스 dedup 앵커가 채널 중복을 방지" 의 증거다.
   it("renderOut 재호출(같은 origin_ts)은 같은 날짜 폴더의 같은 파일을 갱신하고 중복 폴더를 만들지 않는다", async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
     await source.start();
 
     const originIso = "2026-07-05T09:00:00.000Z";
-    fs.writeFileSync(
-      path.join(paths.outDir, "msg-r.out.json"),
-      JSON.stringify({ reply_ref: { channel_msg_id: "msg-r" }, origin_ts: originIso }),
-    );
+    writeLedgerEntry("msg-r", { reply_ref: { channel_msg_id: "msg-r" }, origin_ts: originIso });
     fs.writeFileSync(path.join(paths.outDir, "msg-r.out"), "응답 v1");
     await source.renderOut("msg-r");
 

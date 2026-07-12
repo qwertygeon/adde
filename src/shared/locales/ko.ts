@@ -148,9 +148,11 @@ lane add 옵션:
       "[adde] {{proj}} 는 등록되어 있으나 상주 중인 레인이 없습니다(데몬이 죽음) — 재적재합니다...",
     upFailed:
       "[adde] 기동 실패 레인: {{lanes}}\n  ↳ 조치: adde logs {{proj}} <lane> --engine 또는 데몬 로그 adde logs {{proj}} --daemon 으로 확인 후 adde restart {{proj}}.",
-    upSummary: "  실행 중 {{running}} · 실패 {{failed}} · 기동 중 {{pending}}",
+    upSummary: "  실행 중 {{running}} · 실패 {{failed}}",
     upInconclusive:
       "[adde] 대기 시간 내에 기동된 레인이 없습니다 — 데몬이 부팅에 실패했을 수 있습니다.\n  ↳ 조치: adde logs {{proj}} --daemon 으로 데몬 로그를 확인한 뒤 adde restart {{proj}}.",
+    pollMsDeprecated:
+      "[adde] ADDE_UP_POLL_MS 는 더 이상 해석되지 않습니다 — ADDE_UP_WAIT_MS 로 이관하세요(미설정 시 기본 8000ms 는 그대로 유지).",
     statusHint: "  상태 확인: adde status {{proj}}",
     downDone: "[adde] {{proj}} 데몬 종료 완료.",
     restartDone: "[adde] {{proj}} 재기동 완료. 백그라운드에서 레인이 기동됩니다.",

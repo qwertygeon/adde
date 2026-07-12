@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// restart 결과 표면화 + exit code (FR-008·FR-009) — SC-014·SC-015.
-// launchctl/diagnostics 부작용을 피하려고 launchd·diagnostics 를 모킹한다(로케일은 test/setup.ts 가 ko 고정).
+// restart 결과 표면화 + exit code (FR-008·FR-009) — 판정 메커니즘을 collectStatus 폴링에서
+// 리포트 대기 판정(boot id 비교)으로 마이그레이션한다. launchctl/diagnostics 부작용을 피하려고
+// launchd·diagnostics 를 모킹한다(로케일은 test/setup.ts 가 ko 고정).
 
 const { loadDaemon, unloadDaemon, collectStatus, clearHalt } = vi.hoisted(() => ({
   loadDaemon: vi.fn(),
@@ -9,9 +10,11 @@ const { loadDaemon, unloadDaemon, collectStatus, clearHalt } = vi.hoisted(() => 
   collectStatus: vi.fn(),
   clearHalt: vi.fn(),
 }));
+const { readBootReport } = vi.hoisted(() => ({ readBootReport: vi.fn() }));
 
 vi.mock("../../src/core/launchd.js", () => ({ loadDaemon, unloadDaemon }));
 vi.mock("../../src/core/diagnostics.js", () => ({ collectStatus, clearHalt }));
+vi.mock("../../src/core/boot-report.js", () => ({ readBootReport }));
 
 import { run } from "../../src/cli/run.js";
 
@@ -33,23 +36,23 @@ function captureStderr(): { err: () => string; restore: () => void } {
   return { err: () => chunks.join(""), restore: () => spy.mockRestore() };
 }
 
-describe("adde restart — 실패 레인 표면화 (SC-014)", () => {
+describe("adde restart — 실패 레인 표면화 (SC-014, 리포트 기반)", () => {
   afterEach(() => vi.clearAllMocks());
 
-  it("collectStatus 주입 상태에 실패 레인이 포함되면 요약에 표면화되고 exit 0 으로 조용히 끝나지 않는다", async () => {
+  it("판정 리포트에 실패 레인이 포함되면 요약에 표면화되고 exit 0 으로 조용히 끝나지 않는다", async () => {
     clearHalt.mockResolvedValue(undefined);
     unloadDaemon.mockResolvedValue(undefined);
     loadDaemon.mockResolvedValue(undefined);
-    // startedAt 을 미래로 주입해 "이번 재기동의 신선한 실패"로 즉시 확정(폴링 대기 없이 수렴).
-    collectStatus.mockResolvedValue([
-      { lane: "ok", status: "running", error: null, startedAt: "2099-01-01T00:00:00Z" },
-      {
-        lane: "bad",
-        status: "error",
-        error: "engine spawn ENOENT",
-        startedAt: "2099-01-01T00:00:00Z",
-      },
-    ]);
+    readBootReport.mockResolvedValueOnce(null).mockResolvedValue({
+      v: 1,
+      bootId: 1,
+      bootedAt: "x",
+      lanes: [
+        { lane: "ok", status: "running" },
+        { lane: "bad", status: "error", error: "engine spawn ENOENT" },
+      ],
+      running: 1,
+    });
     const errCap = captureStderr();
     const cap = captureStdout();
     const code = await run(["restart", "demo"]);
@@ -68,9 +71,13 @@ describe("adde restart — exit code (SC-015)", () => {
     clearHalt.mockResolvedValue(undefined);
     unloadDaemon.mockResolvedValue(undefined);
     loadDaemon.mockResolvedValue(undefined);
-    collectStatus.mockResolvedValue([
-      { lane: "bad", status: "error", error: "boom", startedAt: "2099-01-01T00:00:00Z" },
-    ]);
+    readBootReport.mockResolvedValueOnce(null).mockResolvedValue({
+      v: 1,
+      bootId: 1,
+      bootedAt: "x",
+      lanes: [{ lane: "bad", status: "error", error: "boom" }],
+      running: 0,
+    });
     const cap = captureStdout();
     const errCap = captureStderr();
     const code = await run(["restart", "demo"]);
@@ -83,9 +90,13 @@ describe("adde restart — exit code (SC-015)", () => {
     clearHalt.mockResolvedValue(undefined);
     unloadDaemon.mockResolvedValue(undefined);
     loadDaemon.mockResolvedValue(undefined);
-    collectStatus.mockResolvedValue([
-      { lane: "a", status: "running", error: null, startedAt: "2099-01-01T00:00:00Z" },
-    ]);
+    readBootReport.mockResolvedValueOnce(null).mockResolvedValue({
+      v: 1,
+      bootId: 1,
+      bootedAt: "x",
+      lanes: [{ lane: "a", status: "running" }],
+      running: 1,
+    });
     const cap = captureStdout();
     const code = await run(["restart", "demo"]);
     cap.restore();

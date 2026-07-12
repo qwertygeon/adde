@@ -147,9 +147,11 @@ lane add options:
       "[adde] {{proj}} is registered but no lane is running (the daemon died) — reloading it...",
     upFailed:
       "[adde] lane(s) failed to start: {{lanes}}\n  ↳ action: inspect with adde logs {{proj}} <lane> --engine, or the daemon log with adde logs {{proj}} --daemon; then adde restart {{proj}}.",
-    upSummary: "  {{running}} running · {{failed}} failed · {{pending}} still starting",
+    upSummary: "  {{running}} running · {{failed}} failed",
     upInconclusive:
       "[adde] no lane came up within the wait window — the daemon may have failed to boot.\n  ↳ action: check the daemon log with adde logs {{proj}} --daemon, then adde restart {{proj}}.",
+    pollMsDeprecated:
+      "[adde] ADDE_UP_POLL_MS is no longer read — set ADDE_UP_WAIT_MS instead (default 8000ms unchanged if unset).",
     statusHint: "  Check status: adde status {{proj}}",
     downDone: "[adde] {{proj}} daemon stopped.",
     restartDone: "[adde] {{proj}} restarted. Lanes are starting in the background.",

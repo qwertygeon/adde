@@ -10,6 +10,17 @@ import {
   parseProjConf,
   readProjConf,
 } from "../../src/shared/conf.js";
+import type { LaneConf } from "../../src/shared/conf.js";
+
+/**
+ * 화이트리스트 검증·파싱 헬퍼(validateEngineWiring, resolveEngine, resolveBackend, parseEngineArgs,
+ * EngineArgsParseError, DEFAULT_ENGINE 등, KNOWN_ENGINES 등, ACP_VERSION)는 PPG-1 병렬 중 4단계가
+ * 아직 착지하지 않았을 수 있는 신규 심볼이다. 정적 import 로 묶으면 미착지 시 파일 전체 수집이
+ * 무너지므로, 각 테스트가 동적 import 로 개별 격리한다(미착지 구간만 해당 테스트 RED).
+ */
+async function loadConfModule() {
+  return import("../../src/shared/conf.js");
+}
 
 // parseLaneConf: ini 형식 레인 설정 파싱 — FR-001/021
 
@@ -378,5 +389,167 @@ describe("readProjConf (SC-017 — (a) 파일 부재)", () => {
 
     const conf = await readProjConf(tmpBase, "myproj");
     expect(conf.auto_restart).toBe(true);
+  });
+});
+
+// ── 016-engine-wiring ────────────────────────────────────────────────────
+
+describe("engine_args 필드 파싱·직렬화", () => {
+  const base =
+    "source=telegram\nbackend=acp\nengine=claude-agent-acp\nperm_tier=acp\nacp_version=v1\n";
+
+  it("engine_args 를 raw 문자열 그대로 보존한다", () => {
+    const result = parseLaneConf(base + "engine_args=--model opus\n");
+    expect(result.engine_args).toBe("--model opus");
+  });
+
+  it("engine_args 미지정 시 undefined 다", () => {
+    expect(parseLaneConf(base).engine_args).toBeUndefined();
+  });
+
+  it("engine_args 부재 conf 는 직렬화에 라인을 출력하지 않는다(churn 0)", () => {
+    const original = parseLaneConf(base);
+    expect(serializeLaneConf(original)).not.toContain("engine_args=");
+  });
+
+  it("engine_args 는 COMMON_OPTIONAL_KEYS 중 마지막에 직렬화된다(cwd 뒤)", () => {
+    const original = parseLaneConf(base + "cwd=/abs/p\nengine_args=--model opus\n");
+    const text = serializeLaneConf(original);
+    expect(text.indexOf("cwd=")).toBeGreaterThan(-1);
+    expect(text.indexOf("engine_args=")).toBeGreaterThan(text.indexOf("cwd="));
+  });
+
+  it("engine_args 부재/포함 양쪽 모두 round-trip 이 동치이다", () => {
+    const withoutArgs = parseLaneConf(base);
+    expect(parseLaneConf(serializeLaneConf(withoutArgs))).toEqual(withoutArgs);
+
+    const withArgs = parseLaneConf(base + "engine_args=--model opus --temperature 0.2\n");
+    expect(parseLaneConf(serializeLaneConf(withArgs))).toEqual(withArgs);
+    expect(parseLaneConf(serializeLaneConf(withArgs)).engine_args).toBe(
+      "--model opus --temperature 0.2",
+    );
+  });
+});
+
+describe("validateEngineWiring — engine 화이트리스트 (SC-001/SC-002)", () => {
+  const makeConf = (overrides: Partial<LaneConf> = {}): LaneConf => ({
+    source: "telegram",
+    backend: "acp",
+    engine: "claude-agent-acp",
+    perm_tier: "acp",
+    acp_version: "v1",
+    allowlist: [],
+    denylist: [],
+    hard_deny: [],
+    auto_relaunch: true,
+    ...overrides,
+  });
+
+  it("미지원/오타 engine 은 {code:'engine', value} 위반을 반환한다 (SC-001 Error)", async () => {
+    const { validateEngineWiring } = await loadConfModule();
+    expect(validateEngineWiring(makeConf({ engine: "codex-acp" }))).toEqual({
+      code: "engine",
+      value: "codex-acp",
+    });
+    expect(validateEngineWiring(makeConf({ engine: "clade" }))).toEqual({
+      code: "engine",
+      value: "clade",
+    });
+  });
+
+  it("알려진 engine(claude-agent-acp)은 null 을 반환한다 (SC-002 Happy)", async () => {
+    const { validateEngineWiring } = await loadConfModule();
+    expect(validateEngineWiring(makeConf({ engine: "claude-agent-acp" }))).toBeNull();
+  });
+});
+
+describe("validateEngineWiring — backend 화이트리스트 (SC-003/SC-004)", () => {
+  const makeConf = (overrides: Partial<LaneConf> = {}): LaneConf => ({
+    source: "telegram",
+    backend: "acp",
+    engine: "claude-agent-acp",
+    perm_tier: "acp",
+    acp_version: "v1",
+    allowlist: [],
+    denylist: [],
+    hard_deny: [],
+    auto_relaunch: true,
+    ...overrides,
+  });
+
+  it("미지원/오타 backend 는 {code:'backend', value} 위반을 반환한다 (SC-003 Error)", async () => {
+    const { validateEngineWiring } = await loadConfModule();
+    expect(validateEngineWiring(makeConf({ backend: "rest" }))).toEqual({
+      code: "backend",
+      value: "rest",
+    });
+  });
+
+  it("알려진 backend(acp)는 null 을 반환한다 (SC-004 Happy)", async () => {
+    const { validateEngineWiring } = await loadConfModule();
+    expect(validateEngineWiring(makeConf({ backend: "acp" }))).toBeNull();
+  });
+});
+
+describe("resolveEngine/resolveBackend 기본값 해석 — 두 계층 단일화 근거 (SC-005)", () => {
+  it("resolveEngine(undefined|빈값) 는 DEFAULT_ENGINE 이다", async () => {
+    const { resolveEngine, DEFAULT_ENGINE } = await loadConfModule();
+    expect(resolveEngine(undefined)).toBe(DEFAULT_ENGINE);
+    expect(resolveEngine("")).toBe(DEFAULT_ENGINE);
+  });
+
+  it("resolveEngine(값)은 비어있지 않으면 그 값을 그대로 반환한다", async () => {
+    const { resolveEngine } = await loadConfModule();
+    expect(resolveEngine("claude-agent-acp")).toBe("claude-agent-acp");
+    expect(resolveEngine("codex-acp")).toBe("codex-acp"); // 검증은 validateEngineWiring 책임 — resolve 는 판정하지 않음
+  });
+
+  it("resolveBackend(undefined|빈값) 는 DEFAULT_BACKEND 이다", async () => {
+    const { resolveBackend, DEFAULT_BACKEND } = await loadConfModule();
+    expect(resolveBackend(undefined)).toBe(DEFAULT_BACKEND);
+    expect(resolveBackend("")).toBe(DEFAULT_BACKEND);
+  });
+
+  it("DEFAULT_ENGINE·DEFAULT_BACKEND 는 각각 KNOWN_ENGINES·KNOWN_BACKENDS 에 포함된다(자기정합)", async () => {
+    const { DEFAULT_ENGINE, DEFAULT_BACKEND, KNOWN_ENGINES, KNOWN_BACKENDS } =
+      await loadConfModule();
+    expect(KNOWN_ENGINES).toContain(DEFAULT_ENGINE);
+    expect(KNOWN_BACKENDS).toContain(DEFAULT_BACKEND);
+  });
+});
+
+describe("parseEngineArgs — 공백 분리 파싱 (SC-008 Happy·SC-010 Edge·SC-011 Error)", () => {
+  it("공백 분리 문자열을 인자 배열로 파싱한다 (SC-008 Happy)", async () => {
+    const { parseEngineArgs } = await loadConfModule();
+    expect(parseEngineArgs("--model opus")).toEqual(["--model", "opus"]);
+    expect(parseEngineArgs("--verbose")).toEqual(["--verbose"]);
+  });
+
+  it("미지정/빈값/공백-only 는 빈 배열이다 (SC-010 Edge)", async () => {
+    const { parseEngineArgs } = await loadConfModule();
+    expect(parseEngineArgs(undefined)).toEqual([]);
+    expect(parseEngineArgs("")).toEqual([]);
+    expect(parseEngineArgs("   ")).toEqual([]);
+  });
+
+  it("따옴표(\"·') 포함 값은 EngineArgsParseError 를 던진다 (SC-011 Error — 조용한 오분할 대신 거부)", async () => {
+    const { parseEngineArgs, EngineArgsParseError } = await loadConfModule();
+    expect(() => parseEngineArgs('--x "a b"')).toThrow(EngineArgsParseError);
+    expect(() => parseEngineArgs("--x 'a b'")).toThrow(EngineArgsParseError);
+  });
+
+  it("개행·NUL 포함 값은 EngineArgsParseError 를 던진다 (conf 키 주입 방지 — fail-closed)", async () => {
+    const { parseEngineArgs, EngineArgsParseError } = await loadConfModule();
+    // 평면 conf 재파싱 시 뒷 줄이 별개 키(hard_deny 등)로 주입되는 것을 차단.
+    expect(() => parseEngineArgs("--model opus\nhard_deny=rm")).toThrow(EngineArgsParseError);
+    expect(() => parseEngineArgs("--model opus\rhard_deny=rm")).toThrow(EngineArgsParseError);
+    expect(() => parseEngineArgs("--model\0opus")).toThrow(EngineArgsParseError);
+    // 주입 페이로드가 에러 메시지에 노출되지 않는다.
+    try {
+      parseEngineArgs("--model opus\nhard_deny=rm");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect((err as Error).message).not.toContain("hard_deny");
+    }
   });
 });

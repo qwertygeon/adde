@@ -85,11 +85,10 @@ adde 실행 파일 옆에 짧은 별칭(심링크)을 설치해 \`adde up <proj>
 
 lane add 옵션:
   --source <markdown|telegram>  (기본 markdown)
-  --engine <name>               (기본 claude-agent-acp)
-  --backend <name>              (기본 acp)
   --perm-tier <acp|autopass>    (기본 acp — 전 도구 채널 승인 / autopass — denylist 외 자동 허용)
-  --acp-version <v>             (기본 v1)
   --cwd <abs-path>              레인 작업 폴더(프로젝트 매핑)
+  --engine-args <args>          엔진 프로세스에 전달할 추가 CLI 인자, 공백 분리(예: "--model opus")
+                                (시크릿·토큰 금지 — OS 프로세스 목록에 노출됨; 따옴표 포함 값 미지원)
   --allowlist <a,b,c>           자동 허용 도구(게이트 유지, perm_tier=acp 용)
   --denylist <항목,...>         autopass 에서 채널 승인으로 폴백할 도구·패턴
                                 (예: "Bash,Write(/etc/*)" · 미지정 시 내장 기본 목록: sudo·rm -rf·git 강제 변경·자격증명 읽기 차단)
@@ -185,7 +184,8 @@ lane add 옵션:
     logs: {
       whatEngine: "engine 로그",
       whatTranscript: "transcript",
-      badCount: '줄수 "{{raw}}" 는 유효하지 않습니다(양의 정수만 가능) — 기본값 50 으로 대체합니다.',
+      badCount:
+        '줄수 "{{raw}}" 는 유효하지 않습니다(양의 정수만 가능) — 기본값 50 으로 대체합니다.',
       watchError: "경고: 로그 변경 감시 실패({{msg}}) — 1초 폴링으로 계속 추적합니다.",
       notFound:
         "{{what}} 없음: {{path}}\n  ↳ 조치: 레인이 아직 활동하지 않았거나 기동되지 않았습니다. adde status {{proj}} 로 상태를 확인하세요.",
@@ -209,6 +209,8 @@ lane add 옵션:
       lang: "lang (채널 메시지 로케일, 전역은 비움)",
       token: "telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움)",
       cwd: "cwd (레인 작업 폴더 절대경로, 없으면 비움)",
+      engineArgs:
+        "engine_args (엔진 프로세스에 전달할 추가 CLI 인자, 공백 분리, 없으면 비움 — 시크릿은 넣지 마세요: OS 프로세스 목록에 노출됩니다)",
       chatId: "chat_id (회신 대상 + 해당 chat 인바운드 허용, 없으면 비움)",
       allowFrom: "allow_from (추가 허용 발신자 id, 콤마 구분, 없으면 비움)",
       fileMode:
@@ -408,6 +410,9 @@ lane add 옵션:
       emptyIdent: "{{kind}} 가 비어있습니다",
       badIdent: '{{kind}} "{{value}}" 가 올바르지 않습니다 — 영문/숫자/_/- 만 허용',
       badSource: 'source "{{source}}" 미지원 — {{supported}} 중 하나',
+      unknownEngine: 'engine "{{value}}" 미지원 — {{known}} 중 하나',
+      unknownBackend: 'backend "{{value}}" 미지원 — {{known}} 중 하나',
+      invalidEngineArgs: "engine_args 가 올바르지 않습니다: {{reason}}",
       badChatId: 'chat_id "{{chatId}}" 가 숫자가 아닙니다',
       tokenOnlyTelegram: "token 은 source=telegram 레인에서만 사용합니다",
       allowFromOnlyTelegram: "allow_from 은 source=telegram 레인에서만 사용합니다",
@@ -451,8 +456,7 @@ lane add 옵션:
     approvalMeta: "🕒 요청 {{requested}} · 무응답 시 {{deadline}} 자동 거부",
     backupPathOverlap:
       "[markdown] 백업 경로가 {{name}}({{path}})와 겹칩니다: {{backup}} — vault/state 손상 위험으로 기동을 거부합니다.",
-    syncProviderUnsupported:
-      '[markdown] 미지원 sync_provider "{{value}}" — 지원값: {{supported}}',
+    syncProviderUnsupported: '[markdown] 미지원 sync_provider "{{value}}" — 지원값: {{supported}}',
     outRetentionTooLow:
       "[markdown] out_retention_days({{outRetentionDays}}) 는 retention_days({{retentionDays}}) + {{margin}} 이상이어야 합니다 — 기동을 거부합니다.",
     backupNoArchiveWarn:
@@ -476,6 +480,16 @@ lane add 옵션:
     source: {
       unknown:
         '알 수 없는 소스 "{{source}}" — 등록되지 않은 소스입니다. lanes.d/<lane>.conf 의 source= 를 수정하세요(지원 소스는 adde doctor 참조).',
+    },
+    engineWiring: {
+      unknownEngine:
+        '미지원 engine "{{value}}"(알려진 값: {{known}}) — lanes.d/<lane>.conf 의 engine= 을 수정하세요.',
+      unknownBackend:
+        '미지원 backend "{{value}}"(알려진 값: {{known}}) — lanes.d/<lane>.conf 의 backend= 을 수정하세요.',
+    },
+    engineArgs: {
+      parseFail:
+        "engine_args 파싱 실패: {{detail}} — 따옴표 포함 값은 지원하지 않습니다(공백 분리만 가능). lanes.d/<lane>.conf 의 engine_args= 를 수정하세요.",
     },
     selfRecovery: {
       attempt: "⚠️ 레인 {{lane}} 엔진이 크래시됐습니다 — 자가 회복(백오프) 시도 중…",
@@ -632,13 +646,18 @@ lane add 옵션:
       legacyArchiveMoveError: "[markdown] 구버전 단일 아카이브 파일 이관 실패 {{path}}: {{error}}",
     },
     markdownRetention: {
-      relocateFail: "[markdown-retention] 이관 실패 {{src}} -> {{dst}}: {{error}} (fail-open, 계속 진행)",
-      migrateOutboxFail: "[markdown-retention] outbox 마이그레이션 실패 {{name}}: {{error}} (fail-open)",
+      relocateFail:
+        "[markdown-retention] 이관 실패 {{src}} -> {{dst}}: {{error}} (fail-open, 계속 진행)",
+      migrateOutboxFail:
+        "[markdown-retention] outbox 마이그레이션 실패 {{name}}: {{error}} (fail-open)",
       migrateDecidedMtimeFail:
         "[markdown-retention] decided mtime 조회 실패 {{name}}: {{error}} (fail-open)",
-      migrateDecidedFail: "[markdown-retention] decided 마이그레이션 실패 {{name}}: {{error}} (fail-open)",
-      maintenanceFail: "[markdown-retention] lane={{lane}} 유지작업 실행 실패: {{error}} (fail-open)",
-      lastRunWriteFail: "[markdown-retention] lane={{lane}} retention-last-run 기록 실패: {{error}}",
+      migrateDecidedFail:
+        "[markdown-retention] decided 마이그레이션 실패 {{name}}: {{error}} (fail-open)",
+      maintenanceFail:
+        "[markdown-retention] lane={{lane}} 유지작업 실행 실패: {{error}} (fail-open)",
+      lastRunWriteFail:
+        "[markdown-retention] lane={{lane}} retention-last-run 기록 실패: {{error}}",
     },
     transcript: {
       auditAppendFail:

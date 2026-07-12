@@ -598,3 +598,46 @@ describe("SC-021: 토큰 값이 메시지에 노출되지 않는다 (lane-config
     }
   });
 });
+
+// ── 016-engine-wiring ────────────────────────────────────────────────────
+
+describe("SC-005: engine 기본값이 resolveEngine 과 laneAdd 기록값 사이에 단일화된다", () => {
+  it("engine 미지정 laneAdd 는 conf.engine 에 DEFAULT_ENGINE 을 기록하고, resolveEngine(undefined) 와 동일하다", async () => {
+    // DEFAULT_ENGINE 은 shared/conf.ts 신규 export — 동적 import 로 개별 격리(PPG-1 병렬 미착지 대비).
+    const { DEFAULT_ENGINE, resolveEngine } = await import("../../src/shared/conf.js");
+    expect(resolveEngine(undefined)).toBe(DEFAULT_ENGINE);
+
+    const res = await laneAdd("proj", "sc005-engine", { base });
+    const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(conf.engine).toBe(DEFAULT_ENGINE);
+  });
+});
+
+describe("SC-009: laneAdd 는 engine_args 옵션을 conf 에 기록한다", () => {
+  it("engine_args 옵션이 conf.engine_args 로 기록되고 라운드트립 파싱된다", async () => {
+    const res = await laneAdd("proj", "sc009-args", {
+      base,
+      engine_args: "--model opus",
+    } as Parameters<typeof laneAdd>[2]);
+    const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(conf.engine_args).toBe("--model opus");
+  });
+
+  it("engine_args 미지정이면 conf 에 기록하지 않는다(기본 동작 불변)", async () => {
+    const res = await laneAdd("proj", "sc009-noargs", { base });
+    const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(conf.engine_args).toBeUndefined();
+  });
+
+  it("engine_args 에 개행이 든 conf-키 주입 시도는 생성 시점에 거부되고 conf 를 쓰지 않는다 (fail-closed)", async () => {
+    // 개행 뒤에 hard_deny 를 주입해 권한 게이트를 약화시키려는 시도.
+    await expect(
+      laneAdd("proj", "sc009-inject", {
+        base,
+        engine_args: "--model opus\nhard_deny=",
+      } as Parameters<typeof laneAdd>[2]),
+    ).rejects.toThrow(LaneConfigError);
+    // conf 파일 자체가 생성되지 않아야 한다(validate-then-commit).
+    expect(fs.existsSync(lanePaths(base, "proj", "sc009-inject").confFile)).toBe(false);
+  });
+});

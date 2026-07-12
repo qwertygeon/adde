@@ -513,3 +513,100 @@ describe("supervisorUp — telegram 기동 연결 확인 실패 → status:error
     expect(info.status).toBe("error");
   });
 });
+
+// ── 016-engine-wiring ────────────────────────────────────────────────────
+
+describe("supervisorUp — 미지원/오타 engine·backend 거부 (SC-001/SC-003)", () => {
+  it("미지원 engine(codex-acp)은 spawn 전 거부되고 status:error 다 (SC-001 Error)", async () => {
+    const conf = minimalConf.replace("engine=claude-agent-acp", "engine=codex-acp");
+    const { base } = setupProject("badengineproj", { "bad-lane": conf });
+    const result = await runUp("badengineproj", { base, acpFactory: makeFakeAcpFactory() });
+    expect(result.lanes[0]?.status).toBe("error");
+    expect(result.lanes[0]?.error).toContain("codex-acp");
+  });
+
+  it("오타 engine(clade)도 동일하게 거부된다 (SC-001 Error)", async () => {
+    const conf = minimalConf.replace("engine=claude-agent-acp", "engine=clade");
+    const { base } = setupProject("typoengineproj", { "typo-lane": conf });
+    const result = await runUp("typoengineproj", { base, acpFactory: makeFakeAcpFactory() });
+    expect(result.lanes[0]?.status).toBe("error");
+    expect(result.lanes[0]?.error).toContain("clade");
+  });
+
+  it("미지원 backend(rest)는 spawn 전 거부되고 status:error 다 (SC-003 Error)", async () => {
+    const conf = minimalConf.replace("backend=acp", "backend=rest");
+    const { base } = setupProject("badbackendproj", { "bad-lane": conf });
+    const result = await runUp("badbackendproj", { base, acpFactory: makeFakeAcpFactory() });
+    expect(result.lanes[0]?.status).toBe("error");
+    expect(result.lanes[0]?.error).toContain("rest");
+  });
+});
+
+describe("supervisorUp — engine 미지정/빈 값은 안전 기본 엔진으로 기동한다 (SC-006)", () => {
+  it("engine 라인이 아예 없는 conf 도 기본 엔진으로 기동한다 (Happy, 관측 불변)", async () => {
+    const conf = "source=telegram\nbackend=acp\nperm_tier=acp\nacp_version=v1\n"; // engine 라인 부재
+    const { base } = setupProject("noengineproj", { "lane1": conf });
+    const result = await runUp("noengineproj", { base, acpFactory: makeFakeAcpFactory() });
+    expect(result.lanes[0]?.status).toBe("running");
+
+    const { DEFAULT_ENGINE } = await import("../../src/shared/conf.js");
+    const lp = lanePaths(base, "noengineproj", "lane1");
+    const info = JSON.parse(fs.readFileSync(lp.runtimeJson, "utf8")) as { engine?: string };
+    expect(info.engine).toBe(DEFAULT_ENGINE);
+  });
+
+  it("engine=(빈 값)도 동일하게 기본 엔진으로 처리한다 (Edge)", async () => {
+    const conf = "source=telegram\nbackend=acp\nengine=\nperm_tier=acp\nacp_version=v1\n";
+    const { base } = setupProject("emptyengineproj", { "lane1": conf });
+    const result = await runUp("emptyengineproj", { base, acpFactory: makeFakeAcpFactory() });
+    expect(result.lanes[0]?.status).toBe("running");
+
+    const { DEFAULT_ENGINE } = await import("../../src/shared/conf.js");
+    const lp = lanePaths(base, "emptyengineproj", "lane1");
+    const info = JSON.parse(fs.readFileSync(lp.runtimeJson, "utf8")) as { engine?: string };
+    expect(info.engine).toBe(DEFAULT_ENGINE);
+  });
+});
+
+describe("supervisorUp — engine_args 파싱 실패 거부 (SC-011)", () => {
+  it("따옴표 포함 engine_args 는 spawn 전 거부되고 status:error 다", async () => {
+    const conf = minimalConf + `engine_args=--x "a b"\n`;
+    const { base } = setupProject("badargsproj", { "bad-lane": conf });
+    const result = await runUp("badargsproj", { base, acpFactory: makeFakeAcpFactory() });
+    expect(result.lanes[0]?.status).toBe("error");
+  });
+});
+
+describe("supervisorUp — engine_args 관측 지점 마스킹 (SC-012)", () => {
+  // mask.test.ts 의 봇 토큰 패턴(\d{5,}:[A-Za-z0-9_-]{30,})과 정합하는 토큰류 문자열 재사용.
+  const TOKEN_LIKE = "123456789:AAECBAUGBwgJCgsMDQ4PEBESExQVFhcYGRob";
+
+  it("engine_args 에 토큰류 문자열이 있으면 기동 로그가 마스킹되어 평문 노출이 없다", async () => {
+    const conf = minimalConf + `engine_args=--token ${TOKEN_LIKE}\n`;
+    const { base } = setupProject("maskproj", { "mask-lane": conf });
+    const logSpy = vi.spyOn(console, "log");
+    try {
+      const result = await runUp("maskproj", { base, acpFactory: makeFakeAcpFactory() });
+      expect(result.lanes[0]?.status).toBe("running");
+
+      const engineArgsLogs = logSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((l) => l.includes("engine args"));
+      expect(engineArgsLogs.length).toBeGreaterThan(0);
+      for (const line of engineArgsLogs) {
+        expect(line).not.toContain(TOKEN_LIKE);
+        expect(line).toContain("***");
+      }
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("engine_args 파싱 실패 시 오류 메시지도 마스킹된다(평문 노출 0)", async () => {
+    const conf = minimalConf + `engine_args=--x "${TOKEN_LIKE} a b"\n`;
+    const { base } = setupProject("maskfailproj", { "mask-lane": conf });
+    const result = await runUp("maskfailproj", { base, acpFactory: makeFakeAcpFactory() });
+    expect(result.lanes[0]?.status).toBe("error");
+    expect(result.lanes[0]?.error).not.toContain(TOKEN_LIKE);
+  });
+});

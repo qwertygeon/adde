@@ -71,10 +71,8 @@ export const GLOBAL_FLAGS = ["-h", "--help", "-v", "--version"] as const;
 /** `lane add` 하위 명령 플래그(값 플래그는 takesValue:true). */
 const LANE_ADD_FLAGS: readonly FlagSpec[] = [
   { name: "--source", takesValue: true },
-  { name: "--engine", takesValue: true },
-  { name: "--backend", takesValue: true },
   { name: "--perm-tier", takesValue: true },
-  { name: "--acp-version", takesValue: true },
+  { name: "--engine-args", takesValue: true },
   { name: "--cwd", takesValue: true },
   { name: "--allowlist", takesValue: true },
   { name: "--denylist", takesValue: true },

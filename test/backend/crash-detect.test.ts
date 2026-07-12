@@ -21,12 +21,11 @@ let tmpBase: string;
 let backend: AcpBackendImpl;
 
 /**
- * AcpBackendImpl 은 child 를 private Map(lanes)에 캡슐화한다 — 테스트는 실 child 에 직접 신호를
- * 보내기 위해 내부 상태에 리플렉션으로 접근한다(F11 test 의 mintPermId 접근과 동일 관례).
+ * AcpBackendImpl 은 child 를 private 단일 필드(laneState)에 캡슐화한다 — 테스트는 실 child 에
+ * 직접 신호를 보내기 위해 내부 상태에 리플렉션으로 접근한다(F11 test 의 mintPermId 접근과 동일 관례).
  */
 function currentChild(impl: AcpBackendImpl, lane: string): ChildProcess {
-  const lanes = (impl as unknown as { lanes: Map<string, { child: ChildProcess }> }).lanes;
-  const state = lanes.get(lane);
+  const state = (impl as unknown as { laneState: { child: ChildProcess } | null }).laneState;
   if (!state) throw new Error(`lane "${lane}" not launched`);
   return state.child;
 }

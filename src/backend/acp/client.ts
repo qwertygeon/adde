@@ -262,13 +262,13 @@ export function formatPermId(sessionId: string, seq: number): string {
 
 export class AcpBackendImpl implements AcpBackend {
   private readonly adapterBin: string;
-  private readonly lanes = new Map<string, LaneState>();
-  private readonly laneConfigs = new Map<string, LaneConfig>();
+  private laneState: LaneState | null = null;
+  private laneConfig: LaneConfig | null = null;
   /**
    * relaunch → launch 로 전달되는 승계분(구독자·권한 핸들러) — launch 가 상태 생성 시 1회 소비.
-   * 인스턴스당 단일 슬롯이라 **한 impl = 한 레인** 불변식에 의존한다(supervisor 가 레인마다
-   * 별도 AcpBackendImpl 생성). 한 인스턴스가 다중 레인을 동시 relaunch 하면 승계가 레인 간
-   * 오염될 수 있으므로, 그 경우 Map<lane> 으로 키잉해야 한다.
+   * 인스턴스당 단일 슬롯 — **한 impl = 한 레인** 불변식이 `laneState`/`laneConfig` 자체가 단일
+   * nullable 필드(Map 아님)로 타입 수준에서 강제된다. 한 인스턴스가 다중 레인을 동시 relaunch 하는
+   * 경로는 이 필드 형태상 존재하지 않는다.
    */
   private pendingInherit: {
     subscribers: Array<(e: SessionEvent) => void>;
@@ -303,8 +303,8 @@ export class AcpBackendImpl implements AcpBackend {
    * launch 전 레인별 경로·정책 설정.
    * AcpBackend 인터페이스 계약 외부 — 구체 타입(AcpBackendImpl) 사용자만 호출.
    */
-  configureLane(lane: string, config: LaneConfig): void {
-    this.laneConfigs.set(lane, config);
+  configureLane(_lane: string, config: LaneConfig): void {
+    this.laneConfig = config;
   }
 
   caps(): {
@@ -322,7 +322,7 @@ export class AcpBackendImpl implements AcpBackend {
   }
 
   async launch(lane: string, opts?: LaunchOpts): Promise<{ sessionId: string; resumed?: boolean }> {
-    const config = this.laneConfigs.get(lane);
+    const config = this.laneConfig;
     const paths = config?.paths;
     const addePolicy = config?.addePolicy;
     const channelWarn = config?.channelWarn;
@@ -628,8 +628,8 @@ export class AcpBackendImpl implements AcpBackend {
     // 억제한다(double-spawn 방지) — 별도 intentional-close 플래그 불요.
     const thisChild = child;
     thisChild.on("exit", (code, signal) => {
-      if (this.lanes.get(lane)?.child !== thisChild) return;
-      this.lanes.get(lane)?.onExitHandler?.(lane, { code, signal });
+      if (this.laneState?.child !== thisChild) return;
+      this.laneState?.onExitHandler?.(lane, { code, signal });
     });
 
     const sessionId = sessionResp.sessionId;
@@ -655,7 +655,7 @@ export class AcpBackendImpl implements AcpBackend {
       onExitHandler: inherit?.onExitHandler ?? null,
     };
     laneRef.state = state;
-    this.lanes.set(lane, state);
+    this.laneState = state;
 
     if (paths && addePolicy) {
       const engineEffective = await this.fetchEngineEffective(lane);
@@ -717,7 +717,7 @@ export class AcpBackendImpl implements AcpBackend {
     lane: string,
     resumeSessionId?: string,
   ): Promise<{ sessionId: string; resumed: boolean }> {
-    const old = this.lanes.get(lane);
+    const old = this.laneState;
     this.pendingInherit = {
       subscribers: old ? [...old.subscribers] : [],
       permHandler: old?.permHandler ?? null,
@@ -733,8 +733,8 @@ export class AcpBackendImpl implements AcpBackend {
     }
   }
 
-  private async fetchEngineEffective(lane: string): Promise<EngineEffective | null> {
-    const state = this.lanes.get(lane);
+  private async fetchEngineEffective(_lane: string): Promise<EngineEffective | null> {
+    const state = this.laneState;
     if (!state) return null;
     try {
       const result = await state.conn.extMethod("session/getMode", {
@@ -758,7 +758,7 @@ export class AcpBackendImpl implements AcpBackend {
   }
 
   async inject(lane: string, text: string): Promise<void> {
-    const state = this.lanes.get(lane);
+    const state = this.laneState;
     if (!state) throw new Error(`[acp] lane "${lane}" not launched`);
 
     // prompt 는 turn 종료에 resolve 한다 — injector 는 inject() resolve 로 turn 종료를 감지해 다음 큐를
@@ -770,7 +770,7 @@ export class AcpBackendImpl implements AcpBackend {
   }
 
   subscribe(lane: string, on: (e: SessionEvent) => void): void {
-    const state = this.lanes.get(lane);
+    const state = this.laneState;
     if (!state) {
       throw new Error(`[acp] lane "${lane}" not launched`);
     }
@@ -778,7 +778,7 @@ export class AcpBackendImpl implements AcpBackend {
   }
 
   onPermissionRequest(lane: string, handler: (req: PermRequest) => Promise<PermResponse>): void {
-    const state = this.lanes.get(lane);
+    const state = this.laneState;
     if (!state) throw new Error(`[acp] lane "${lane}" not launched`);
     state.permHandler = handler;
   }
@@ -789,21 +789,21 @@ export class AcpBackendImpl implements AcpBackend {
    * 항상 launch 성공 후에 등록하므로 정상 경로에서는 이 분기를 타지 않는다.
    */
   onExit(
-    lane: string,
+    _lane: string,
     cb: (lane: string, info: { code: number | null; signal: NodeJS.Signals | null }) => void,
   ): void {
-    const state = this.lanes.get(lane);
+    const state = this.laneState;
     if (state) state.onExitHandler = cb;
   }
 
-  isAlive(lane: string): boolean {
-    return this.lanes.get(lane)?.child.exitCode === null;
+  isAlive(_lane: string): boolean {
+    return this.laneState?.child.exitCode === null;
   }
 
   /** 레인 종료 — 엔진 child 정리(SIGTERM→유예→SIGKILL) + 상태 제거. */
-  async close(lane: string): Promise<void> {
-    const state = this.lanes.get(lane);
-    this.lanes.delete(lane);
+  async close(_lane: string): Promise<void> {
+    const state = this.laneState;
+    this.laneState = null;
     if (!state) return;
     await closeChild(state.child, CHILD_GRACE_MS);
   }

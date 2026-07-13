@@ -95,9 +95,44 @@ const LANE_ADD_FLAGS: readonly FlagSpec[] = [
 /** `lane rm` 하위 명령 플래그 — 부수 데이터 정리·확인 생략. */
 const LANE_RM_FLAGS: readonly FlagSpec[] = [{ name: "--purge" }, { name: "--force" }];
 
+/**
+ * `lane set` 하위 명령 플래그 — 편집 가능 필드(LANE_ADD_FLAGS 의 부분집합).
+ * 정체성(--source/--backend/--engine/--acp-version)·--token-stdin·--safe-defaults·--force·
+ * --interactive·--no-interactive 는 제외한다(최소 표면 원칙). 전부 takesValue:true.
+ */
+const LANE_SET_FLAGS: readonly FlagSpec[] = [
+  { name: "--perm-tier", takesValue: true },
+  { name: "--allowlist", takesValue: true },
+  { name: "--denylist", takesValue: true },
+  { name: "--hard-deny", takesValue: true },
+  { name: "--cwd", takesValue: true },
+  { name: "--engine-args", takesValue: true },
+  { name: "--lang", takesValue: true },
+  { name: "--file-mode", takesValue: true },
+  { name: "--chat-id", takesValue: true },
+  { name: "--allow-from", takesValue: true },
+  { name: "--root", takesValue: true },
+  { name: "--inbox", takesValue: true },
+  { name: "--approvals", takesValue: true },
+  { name: "--outbox", takesValue: true },
+];
+
+/**
+ * 레인 정체성 필드(source/backend/engine/acp_version) — `lane set` 에서 편집 불가.
+ * `LANE_SET_FLAGS` 에는 등록하지 않는다(등록하면 자동완성에 노출되고 부분집합 단정도 깨진다) —
+ * `runLane` 이 `parseCommand` 앞단에서 raw argv 를 이 목록으로 pre-scan 해 친절 오류로 차단한다.
+ */
+export const LANE_SET_IDENTITY_FLAGS: readonly string[] = [
+  "--source",
+  "--backend",
+  "--engine",
+  "--acp-version",
+];
+
 /** lane 하위 명령(정식 이름 — list/remove 별칭은 자동완성 미노출, 디스패치만 허용). */
 const LANE_SUBS: readonly SubSpec[] = [
   { name: "add", flags: LANE_ADD_FLAGS, positional: ["proj", "lane"] },
+  { name: "set", flags: LANE_SET_FLAGS, positional: ["proj", "lane"] },
   { name: "ls", aliases: ["list"], flags: [], positional: ["proj"] },
   { name: "show", flags: [], positional: ["proj", "lane"] },
   { name: "rm", aliases: ["remove"], flags: LANE_RM_FLAGS, positional: ["proj", "lane"] },
@@ -125,7 +160,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: "doctor", args: "[<proj>]", flags: [{ name: "--json" }], positional: ["proj"], desc: "environment checks", usageKey: "usage.doctor" }, // prettier-ignore
   { name: "logs", args: "<proj> <lane> [N]", flags: [{ name: "--engine" }, { name: "--daemon" }, { name: "--follow", short: "-f" }], positional: ["proj", "lane"], desc: "lane logs", usageKey: "usage.logs" }, // prettier-ignore
   { name: "sessions", args: "<proj> <lane>", flags: [{ name: "--json" }], positional: ["proj", "lane"], desc: "engine sessions", usageKey: "usage.sessions" }, // prettier-ignore
-  { name: "lane", args: "<add|ls|show|rm>", flags: [], subs: LANE_SUBS, desc: "manage lane configs", usageKey: "usage.lane" }, // prettier-ignore
+  { name: "lane", args: "<add|set|ls|show|rm>", flags: [], subs: LANE_SUBS, desc: "manage lane configs", usageKey: "usage.lane" }, // prettier-ignore
   { name: "proj", args: "<ls|rm>", flags: [], subs: PROJ_SUBS, desc: "list/delete projects", usageKey: "usage.proj" }, // prettier-ignore
   { name: "completion", args: "<bash|zsh>", flags: [], desc: "shell completion", usageKey: "usage.completion" }, // prettier-ignore
   { name: "alias", args: "[names...]", flags: [], desc: "install short aliases", usageKey: "usage.alias" }, // prettier-ignore

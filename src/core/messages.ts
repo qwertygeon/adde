@@ -42,6 +42,9 @@ export const USAGE = {
   get laneAdd(): string {
     return t("usage.laneAdd");
   },
+  get laneSet(): string {
+    return t("usage.laneSet");
+  },
   get laneLs(): string {
     return t("usage.laneLs");
   },

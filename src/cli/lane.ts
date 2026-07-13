@@ -1,16 +1,17 @@
 /**
- * `adde lane <add|ls|show|rm>` 서브커맨드 그룹 — 레인 .conf 설정 CLI.
+ * `adde lane <add|set|ls|show|rm>` 서브커맨드 그룹 — 레인 .conf 설정 CLI.
  * argv 파싱 후 core/lane-config 의 코어 함수에 위임하고, 결과/오류를 stdout/stderr 로 표면화.
  */
 import {
   laneAdd,
+  laneSet,
   laneList,
   laneShow,
   laneRemove,
   LaneConfigError,
   parseCsv,
 } from "../core/lane-config.js";
-import type { LaneAddOptions } from "../core/lane-config.js";
+import type { LaneAddOptions, LaneSetOptions } from "../core/lane-config.js";
 import { collectStatus } from "../core/diagnostics.js";
 import {
   USAGE,
@@ -27,7 +28,7 @@ import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
 import { SOURCE_IDS, SOURCE_REGISTRY } from "../src-adapters/index.js";
 import { createPrompter } from "./prompt.js";
 import type { Ask } from "./prompt.js";
-import { findSub, valueKeys } from "./spec.js";
+import { findSub, valueKeys, LANE_SET_IDENTITY_FLAGS } from "./spec.js";
 import { parseCommand } from "./parse.js";
 import type { ParseResult } from "./parse.js";
 
@@ -224,6 +225,83 @@ async function handleAdd(p: ParseResult): Promise<number> {
   return 0;
 }
 
+/** CSV → 트림·빈값 제거 배열. handleAdd 의 splitTools 와 동일 파싱(allowlist/denylist/hard_deny CLI 입력). */
+function splitTools(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * argv 토큰(`--flag`/`--flag=v` 양형)에서 레인 정체성 플래그(LANE_SET_IDENTITY_FLAGS)를 찾는다.
+ * `parseCommand` 는 이 플래그들을 모르므로(LANE_SET_FLAGS 미등록) 일반 unknown-flag 로
+ * 흘려보내기 전에 먼저 검사해 친절 오류로 안내한다.
+ */
+function scanIdentityFlags(argv: readonly string[]): string | undefined {
+  for (const tok of argv) {
+    if (!tok.startsWith("--")) continue;
+    const eq = tok.indexOf("=");
+    const name = eq === -1 ? tok : tok.slice(0, eq);
+    if (LANE_SET_IDENTITY_FLAGS.includes(name)) return name;
+  }
+  return undefined;
+}
+
+async function handleSet(p: ParseResult): Promise<number> {
+  const { positional, flags } = p;
+  const [proj, lane] = positional;
+  if (!proj || !lane) {
+    process.stderr.write(USAGE.laneSet + "\n");
+    return 1;
+  }
+
+  const edits: LaneSetOptions = {};
+  const permTier = flagStr(flags, "perm-tier");
+  if (permTier !== undefined) edits.perm_tier = permTier;
+  const cwd = flagStr(flags, "cwd");
+  if (cwd !== undefined) edits.cwd = cwd;
+  const engineArgs = flagStr(flags, "engine-args");
+  if (engineArgs !== undefined) edits.engine_args = engineArgs;
+  const lang = flagStr(flags, "lang");
+  if (lang !== undefined) edits.lang = lang;
+  const fileMode = flagStr(flags, "file-mode");
+  if (fileMode !== undefined) edits.file_mode = fileMode;
+  const chatId = flagStr(flags, "chat-id");
+  if (chatId !== undefined) edits.chat_id = chatId;
+  const allowFrom = flagStr(flags, "allow-from");
+  if (allowFrom !== undefined) edits.allow_from = allowFrom;
+  const root = flagStr(flags, "root");
+  if (root !== undefined) edits.root = root;
+  const inbox = flagStr(flags, "inbox");
+  if (inbox !== undefined) edits.inbox = inbox;
+  const approvals = flagStr(flags, "approvals");
+  if (approvals !== undefined) edits.approvals = approvals;
+  const outbox = flagStr(flags, "outbox");
+  if (outbox !== undefined) edits.outbox = outbox;
+  const allowlist = flagStr(flags, "allowlist");
+  if (allowlist !== undefined) edits.allowlist = splitTools(allowlist);
+  const denylist = flagStr(flags, "denylist");
+  if (denylist !== undefined) edits.denylist = splitTools(denylist);
+  const hardDeny = flagStr(flags, "hard-deny");
+  if (hardDeny !== undefined) edits.hard_deny = splitTools(hardDeny);
+
+  // no-op 판정은 core laneSet 가 최종 권위(programmatic API 공유)지만, CLI 는 usage 를 함께
+  // 병기해 안내한다 — laneSet 에 그대로 넘겨도 동일 거부이나 usage 는 CLI 계층 책임.
+  if (Object.keys(edits).length === 0) {
+    process.stderr.write(laneError(t("laneConfig.err.noEdits")) + "\n\n" + USAGE.laneSet + "\n");
+    return 1;
+  }
+
+  const result = await laneSet(proj, lane, edits);
+  for (const w of result.warnings) process.stdout.write(w + "\n");
+  process.stdout.write(
+    t("lane.set.updated", { lane: result.lane, confPath: result.confPath }) + "\n",
+  );
+  process.stdout.write(t("lane.set.restartHint", { proj }) + "\n");
+  return 0;
+}
+
 async function handleList(p: ParseResult): Promise<number> {
   const [proj] = p.positional;
   if (!proj) {
@@ -322,6 +400,17 @@ export async function runLane(argv: readonly string[]): Promise<number> {
     return 1;
   }
   try {
+    // 정체성 필드(source/backend/engine/acp_version) pre-scan — set 은 이 플래그들을 spec 에
+    // 등록하지 않으므로 parseCommand 의 일반 unknown-flag 보다 먼저 친절 오류로 안내한다.
+    if (subSpec.name === "set") {
+      const identityFlag = scanIdentityFlags(rest);
+      if (identityFlag !== undefined) {
+        process.stderr.write(
+          laneError(t("laneConfig.err.identityFieldImmutable", { field: identityFlag })) + "\n",
+        );
+        return 1;
+      }
+    }
     const p = parseCommand(subSpec, rest);
     if (p.error) {
       process.stderr.write(`${laneError(flagErrorText(p.error))}\n\n${buildLaneUsage()}\n`);
@@ -330,6 +419,8 @@ export async function runLane(argv: readonly string[]): Promise<number> {
     switch (subSpec.name) {
       case "add":
         return await handleAdd(p);
+      case "set":
+        return await handleSet(p);
       case "ls":
         return await handleList(p);
       case "show":
@@ -337,7 +428,7 @@ export async function runLane(argv: readonly string[]): Promise<number> {
       case "rm":
         return await handleRemove(p);
       default:
-        // 도달하지 않음(lane subs 는 add/ls/show/rm/help 로 한정) — 방어.
+        // 도달하지 않음(lane subs 는 add/set/ls/show/rm/help 로 한정) — 방어.
         process.stderr.write(unknownLaneSub(sub) + "\n");
         return 1;
     }

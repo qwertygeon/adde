@@ -73,12 +73,14 @@ export const ko = {
 adde 실행 파일 옆에 짧은 별칭(심링크)을 설치해 \`adde up <proj>\` 대신 \`ad up <proj>\` 로 쓸 수 있게 합니다.
 전역 설치에서만 동작(PATH 의 adde 옆 쓰기 가능한 bin 디렉터리 필요)하며, 동명 명령이 이미 있으면 덮어쓰지 않고 건너뜁니다.`,
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
+    laneSet: "사용법: adde lane set <proj> <lane> --<field> <value> ...",
     laneLs: "사용법: adde lane ls <proj>",
     laneShow: "사용법: adde lane show <proj> <lane>",
     laneRm: "사용법: adde lane rm <proj> <lane>",
     daemon: "사용법: adde __daemon <proj> (내부 명령)",
     lane: `사용법:
   adde lane add <proj> <lane> [옵션]   레인 conf 생성
+  adde lane set <proj> <lane> --<field> <value> ...  기존 레인 conf 를 제자리 편집
   adde lane ls <proj>                  레인 목록
   adde lane show <proj> <lane>         레인 conf 출력
   adde lane rm <proj> <lane> [--purge] 레인 conf 삭제 (--purge 시 state/queue/out 데이터도 삭제)
@@ -103,7 +105,22 @@ lane add 옵션:
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown 노트 경로
   --force                       기존 conf 덮어쓰기
   --interactive                 대화형 위저드 강제(TTY 에서 기본; 봇 토큰은 가려진 입력)
-  --no-interactive              대화형 기본을 끄고 플래그/기본값 사용(스크립트용)`,
+  --no-interactive              대화형 기본을 끄고 플래그/기본값 사용(스크립트용)
+
+lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·토큰·safe-defaults 는 편집 불가, 대신 레인을 재생성하세요):
+  --perm-tier <acp|autopass>
+  --allowlist <a,b,c>           전체 치환(병합 아님)
+  --denylist <항목,...>         전체 치환(병합 아님)
+  --hard-deny <항목,...>        전체 치환(병합 아님; 기존 값이 있었으면 경고)
+  --cwd <abs-path>
+  --engine-args <args>
+  --lang <en|ko>
+  --file-mode <private|shared>
+  --chat-id <id>                telegram 레인 전용
+  --allow-from <ids>            telegram 레인 전용
+  --root <abs-path>              markdown 레인 전용
+  --inbox <rel> --approvals <rel> --outbox <rel>   markdown 레인 전용
+지정하지 않은 필드는 기존 값을 유지합니다. 변경은 adde restart <proj> 이후 반영됩니다.`,
   },
   cli: {
     cmdError: "[adde {{cmd}}] 오류: {{detail}}",
@@ -226,6 +243,10 @@ lane add 옵션:
         "플래그로 지정하세요(예: adde lane add <proj> <lane> --source markdown). 옵션 목록은 adde lane help.",
     },
     created: '레인 "{{lane}}" 생성: {{confPath}}',
+    set: {
+      updated: '레인 "{{lane}}" 갱신: {{confPath}}',
+      restartHint: "변경 사항은 adde restart {{proj}} 이후 반영됩니다",
+    },
     noLanes: "{{proj}}: 레인 없음",
     removed: '레인 "{{lane}}" 삭제: {{confPath}}',
     removedPurged: '레인 "{{lane}}" 삭제 + state/queue/out 정리: {{confPath}}',
@@ -405,6 +426,8 @@ lane add 옵션:
         "[경고] telegram 레인에 허용 인바운드 발신자가 없습니다 — 모든 인바운드가 거부됩니다(fail-closed). 개인 chat_id 는 자기 인증되지만, 그룹 chat_id(음수)는 회신 대상일 뿐 멤버를 인증하지 않습니다.\n  ↳ 조치: --chat-id <본인 개인 chat id> 설정, 및/또는 --allow-from <id들> 로 멤버 id 를 지정하세요.",
       mdBackupNoArchive:
         "[경고] backup 이 활성화되어 있으나 archive 가 설정되지 않았습니다 — inbox 내용이 계속 쌓입니다.\n  ↳ 조치: markdown.archive 를 설정해 전송 본문도 함께 이관하세요.",
+      hardDenyReplaced:
+        "[경고] hard_deny 가 치환되었습니다 — 기존 목록은 사라졌습니다(lane set 은 기존 목록과 병합하지 않고 전체 치환합니다).",
     },
     err: {
       emptyIdent: "{{kind}} 가 비어있습니다",
@@ -425,6 +448,10 @@ lane add 옵션:
       tokenEmpty: "token 이 비어있습니다",
       envHasToken: "{{envFile}} 에 이미 토큰이 있습니다 — 덮어쓰려면 --force",
       laneNotFound: '레인 "{{lane}}" 을 찾을 수 없습니다 ({{confFile}})',
+      identityFieldImmutable:
+        "{{field}} 는 lane set 으로 변경할 수 없습니다 — 변경하려면 레인을 재생성하세요(adde lane rm 후 adde lane add).",
+      sourceFieldMismatch: "{{field}} 는 source={{source}} 레인에는 적용되지 않습니다",
+      noEdits: "편집 플래그가 없습니다 — 변경할 내용이 없습니다",
     },
   },
   telegram: {

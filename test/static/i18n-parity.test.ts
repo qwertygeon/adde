@@ -48,6 +48,52 @@ describe("i18n 패리티 — selfRecovery 키 (SC-009)", () => {
   });
 });
 
+// 017-lane-set D4 (5a AUTHORING, SC-020): lane set 신규 키 7종(usage.laneSet·lane.set.updated·
+// lane.set.restartHint·laneConfig.err.identityFieldImmutable·laneConfig.err.sourceFieldMismatch·
+// laneConfig.err.noEdits·laneConfig.warn.hardDenyReplaced) en/ko 패리티. C1(i18n) 착지 전에는
+// 키 부재로 RED 가 예상 상태(PPG-1 병렬 — PROC-R15).
+describe("i18n 패리티 — lane set 키 (SC-020)", () => {
+  it("lane set 신규 키 7종이 en/ko 양쪽에 존재한다", () => {
+    const enFlat = flattenCatalog(en);
+    const koFlat = flattenCatalog(ko);
+    for (const key of [
+      "usage.laneSet",
+      "lane.set.updated",
+      "lane.set.restartHint",
+      "laneConfig.err.identityFieldImmutable",
+      "laneConfig.err.sourceFieldMismatch",
+      "laneConfig.err.noEdits",
+      "laneConfig.warn.hardDenyReplaced",
+    ]) {
+      expect(enFlat.has(key), `en 카탈로그에 ${key} 키가 있어야 한다`).toBe(true);
+      expect(koFlat.has(key), `ko 카탈로그에 ${key} 키가 있어야 한다`).toBe(true);
+    }
+  });
+
+  it("lane.set.updated 는 {{lane}}·{{confPath}}, lane.set.restartHint 는 {{proj}} 플레이스홀더를 갖는다", () => {
+    const enFlat = flattenCatalog(en);
+    expect([...placeholders(enFlat.get("lane.set.updated") ?? "")].sort()).toEqual([
+      "confPath",
+      "lane",
+    ]);
+    expect([...placeholders(enFlat.get("lane.set.restartHint") ?? "")].sort()).toEqual(["proj"]);
+  });
+
+  it("identityFieldImmutable 은 {{field}}, sourceFieldMismatch 는 {{field}}·{{source}} 플레이스홀더를 갖는다", () => {
+    const enFlat = flattenCatalog(en);
+    expect(
+      [...placeholders(enFlat.get("laneConfig.err.identityFieldImmutable") ?? "")].sort(),
+    ).toEqual(["field"]);
+    expect([...placeholders(enFlat.get("laneConfig.err.sourceFieldMismatch") ?? "")].sort()).toEqual(
+      ["field", "source"],
+    );
+  });
+
+  it("lane set 신규 키 포함 전체 i18n:check 통과(패리티 회귀 없음)", () => {
+    expect(runCheck()).toEqual([]);
+  });
+});
+
 describe("i18n 패리티 — 검사기 자체 검증", () => {
   it("누락·잉여 키를 검출한다", () => {
     const base = new Map([

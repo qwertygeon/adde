@@ -43,3 +43,12 @@ describe("미지원 플래그 거부 behavior change 기재 (SC-008 Happy)", () 
     expect(hasLine, "미지원 플래그 거부 변화 기재 항목을 찾을 수 없음").toBe(true);
   });
 });
+
+// 017-lane-set D4 (5a AUTHORING, SC-017): 신규 `lane set` 명령이 [Unreleased] > Added 에
+// 기재되는지 확인한다. C3(CHANGELOG) 착지 전에는 RED 가 예상 상태(PPG-1 병렬 — PROC-R15).
+describe("lane set 명령 CHANGELOG 기재 (SC-017)", () => {
+  it("[Unreleased] 에 'lane set' 언급 항목이 존재한다", () => {
+    const hasLine = unreleased.split("\n").some((line) => /lane\s*set/i.test(line));
+    expect(hasLine, "[Unreleased] 에 lane set 기재 항목을 찾을 수 없음").toBe(true);
+  });
+});

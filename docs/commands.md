@@ -272,11 +272,12 @@ Resetting, compacting, and resuming a conversation session is instructed **from 
 Creates, lists, and deletes a lane conf (`lanes.d/<lane>.conf`). One file = one lane.
 
 ```bash
-adde lane add <proj> <lane> [options]   # create
-adde lane ls <proj>                      # list
-adde lane show <proj> <lane>             # print conf
-adde lane rm <proj> <lane> [--purge]     # delete conf (--purge also removes state/queue/out)
-adde lane help                           # all options
+adde lane add <proj> <lane> [options]           # create
+adde lane set <proj> <lane> --<field> <value>…  # edit an existing conf in place
+adde lane ls <proj>                              # list
+adde lane show <proj> <lane>                     # print conf
+adde lane rm <proj> <lane> [--purge]             # delete conf (--purge also removes state/queue/out)
+adde lane help                                   # all options
 ```
 
 By default `lane rm` deletes only the conf and preserves side data (state/queue/out). `--purge` also removes the lane's `state`/`queue`/`processing`/`out` directories (orphan cleanup). Because `--purge` destroys state (including the bot-token `.env`), it is guarded like `proj rm`: it **refuses if the lane is active** (stop the daemon first, or `--force`), and on a TTY it asks you to re-type the lane name to confirm (non-interactive requires `--force`). Plain `lane rm` (no `--purge`) has no such guard.
@@ -382,6 +383,38 @@ Passing `--token-stdin` (or any field flag) already makes the command non-intera
 >
 > **Engine crash self-recovery (`auto_relaunch`)**: not a `lane add` flag — set directly in the lane's `.conf` file (`auto_relaunch=false`), then `adde restart <proj>`. Defaults to on: if the lane's engine process crashes after the handshake, ADDE relaunches it with a bounded exponential backoff, carrying over the same session, subscribers, and permission handler. `auto_relaunch=false` disables only the automatic relaunch — crash detection, the immediate `error` status, denial of any permission request still pending at crash time, and the one-time channel notice all still happen. See [troubleshooting](troubleshooting.md#engine-crash--self-recovery). (This is a per-lane setting for the _engine_ process; the analogous per-project setting for the _daemon_ process itself is [`proj.conf`'s `auto_restart`](#projconf--daemon-crash-auto-restart).)
 
+### lane set — edit an existing lane conf in place
+
+```bash
+adde lane set <proj> <lane> --<field> <value> …
+```
+
+Edits an existing lane's conf without deleting and recreating it (no state/queue/token loss). Fields left unspecified keep their current value.
+
+| Option                                               | Notes                                                                                     |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `--perm-tier <acp\|autopass>`                        | same as `lane add`                                                                          |
+| `--cwd <abs-path>`                                   | same as `lane add`                                                                          |
+| `--engine-args <args>`                                | same as `lane add` (space-separated, re-validated on edit)                                 |
+| `--allowlist <a,b,c>`                                 | **replaces the whole list** (not merged) — omit to leave unchanged                          |
+| `--denylist <entries,...>`                            | **replaces the whole list** (not merged)                                                    |
+| `--hard-deny <entries,...>`                           | **replaces the whole list** (not merged) — a warning is printed if the previous list was non-empty |
+| `--lang <en\|ko>`                                    | same as `lane add`                                                                          |
+| `--file-mode <private\|shared>`                       | conf value only — the on-disk directory permissions are re-applied on the next `adde restart` (not immediately) |
+| `--chat-id <id>` `--allow-from <ids>`                 | telegram lanes only — rejected on a markdown lane                                          |
+| `--root <abs-path>` `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | markdown lanes only — rejected on a telegram lane                          |
+
+**Not editable**: `--source`/`--backend`/`--engine`/`--acp-version` (lane identity), the bot token, and `--safe-defaults` are not `lane set` flags. Passing an identity flag is rejected with a dedicated "recreate the lane instead" error (not a generic unsupported-flag error); recreate the lane (`adde lane rm`, then `adde lane add`) to change these. To change the hard-deny danger list, edit `--hard-deny` directly instead of `--safe-defaults`.
+
+**Same validation as `lane add`**: the whole edited conf is re-validated (engine/backend wiring, source-specific checks, field formats) before anything is written — if validation fails, the existing conf file is left byte-for-byte unchanged (validate-then-commit, atomic write). Editing `--perm-tier autopass` without also giving `--denylist`, when the lane's denylist is currently empty, auto-fills the built-in default denylist (same as `lane add`) and prints the same autopass warning banner. A field for the wrong source (e.g. `--chat-id` on a markdown lane) is rejected outright.
+
+**Changes require a restart**: because the daemon only loads a lane's conf at startup, edits never apply to a running lane — `lane set` always prints a reminder to run `adde restart <proj>`, regardless of whether the daemon is currently running.
+
+```bash
+adde lane set myproj tg-claude --perm-tier autopass --hard-deny "Bash(sudo *)"
+adde restart myproj
+```
+
 ## proj — project listing and deletion
 
 Project-level view and teardown (complements the lane-oriented `lane`/`status`).
@@ -425,7 +458,7 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 **What it completes**:
 
 - **Top-level commands + global flags** — `up`/`down`/…/`lane`/`completion`, and `-h`/`--help`/`-v`/`--version`. In zsh each command shows a short description next to it.
-- **Subcommands and fixed values** — `lane add|ls|show|rm|help`, `proj ls|rm` (project name after `proj rm`), `completion bash|zsh`, the alias-name suggestions after `alias`, `status --all/--json`, `logs --engine`, and the `lane add` option flags.
+- **Subcommands and fixed values** — `lane add|set|ls|show|rm|help`, `proj ls|rm` (project name after `proj rm`), `completion bash|zsh`, the alias-name suggestions after `alias`, `status --all/--json`, `logs --engine`, and the `lane add`/`lane set` option flags (derived from the same command spec, so `lane set`'s flags complete the same way).
 - **Dynamic project/lane names** — scanned live from `${ADDE_HOME:-~/.config/adde}` (no `adde` process is spawned): a project name at the first position of `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` and `lane ls|show|rm|add` (e.g. `adde up <TAB>`, `adde status <TAB>`), and a lane name at the next position (e.g. `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
 - **Enum flag values** — after `--source` (markdown|telegram), `--perm-tier` (acp|autopass), `--file-mode` (private|shared), `--lang` (en|ko).
 - **Directory paths** — after `--cwd` and `--root`.

@@ -72,12 +72,14 @@ Tip: 'adde init' can walk you through this setup.`,
 Installs short aliases (symlinks) next to the adde binary so you can type e.g. \`ad up <proj>\` instead of \`adde up <proj>\`.
 Only works on a global install (needs a writable bin dir next to adde on PATH); if a command with that name already exists it is skipped, not overwritten.`,
     laneAdd: "Usage: adde lane add <proj> <lane> [options]",
+    laneSet: "Usage: adde lane set <proj> <lane> --<field> <value> ...",
     laneLs: "Usage: adde lane ls <proj>",
     laneShow: "Usage: adde lane show <proj> <lane>",
     laneRm: "Usage: adde lane rm <proj> <lane>",
     daemon: "Usage: adde __daemon <proj> (internal command)",
     lane: `Usage:
   adde lane add <proj> <lane> [options]   create a lane conf
+  adde lane set <proj> <lane> --<field> <value> ...  edit an existing lane conf in place
   adde lane ls <proj>                     list lanes
   adde lane show <proj> <lane>            print a lane conf
   adde lane rm <proj> <lane> [--purge]    delete a lane conf (--purge also removes its state/queue/out data)
@@ -102,7 +104,22 @@ lane add options:
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown note paths
   --force                       overwrite an existing conf
   --interactive                 force the interactive wizard (default on a TTY; the bot token is entered hidden)
-  --no-interactive              disable the interactive default and use flags/defaults (for scripts)`,
+  --no-interactive              disable the interactive default and use flags/defaults (for scripts)
+
+lane set options (edit-only subset of lane add — identity fields, tokens, and safe-defaults are not editable; recreate the lane instead):
+  --perm-tier <acp|autopass>
+  --allowlist <a,b,c>           replaces the whole list (not merged)
+  --denylist <entries,...>      replaces the whole list (not merged)
+  --hard-deny <entries,...>     replaces the whole list (not merged; warns if it had entries before)
+  --cwd <abs-path>
+  --engine-args <args>
+  --lang <en|ko>
+  --file-mode <private|shared>
+  --chat-id <id>                telegram lanes only
+  --allow-from <ids>            telegram lanes only
+  --root <abs-path>              markdown lanes only
+  --inbox <rel> --approvals <rel> --outbox <rel>   markdown lanes only
+Fields left unspecified keep their current value. Changes take effect after adde restart <proj>.`,
   },
   cli: {
     cmdError: "[adde {{cmd}}] error: {{detail}}",
@@ -226,6 +243,10 @@ lane add options:
         "Specify flags instead (e.g. adde lane add <proj> <lane> --source markdown). See adde lane help for the option list.",
     },
     created: 'lane "{{lane}}" created: {{confPath}}',
+    set: {
+      updated: 'lane "{{lane}}" updated: {{confPath}}',
+      restartHint: "Changes take effect after: adde restart {{proj}}",
+    },
     noLanes: "{{proj}}: no lanes",
     removed: 'lane "{{lane}}" removed: {{confPath}}',
     removedPurged: 'lane "{{lane}}" removed with state/queue/out purged: {{confPath}}',
@@ -407,6 +428,8 @@ lane add options:
         "[warning] telegram lane has no authorized inbound sender — all inbound will be rejected (fail-closed). A private chat_id self-authorizes, but a group chat_id (negative) is only a reply target and does NOT authorize its members.\n  ↳ action: set --chat-id <your private chat id>, and/or list member ids with --allow-from <ids>.",
       mdBackupNoArchive:
         "[warning] backup is enabled but archive is not configured — inbox content will keep accumulating.\n  ↳ action: set markdown.archive to relocate sent text as well.",
+      hardDenyReplaced:
+        "[warning] hard_deny was replaced — the previous list is gone (lane set replaces the whole list, it does not merge with the old one).",
     },
     err: {
       emptyIdent: "{{kind}} is empty",
@@ -427,6 +450,10 @@ lane add options:
       tokenEmpty: "token is empty",
       envHasToken: "{{envFile}} already contains a token — use --force to overwrite",
       laneNotFound: 'lane "{{lane}}" not found ({{confFile}})',
+      identityFieldImmutable:
+        "{{field}} cannot be changed with lane set — recreate the lane to change it (adde lane rm, then adde lane add).",
+      sourceFieldMismatch: "{{field}} does not apply to source={{source}} lanes",
+      noEdits: "no edit flags given — nothing to update",
     },
   },
   telegram: {

@@ -63,13 +63,44 @@ describe("local 제공자 — placeholder 특수 처리 없음 (SC-029, FR-030)"
 describe("icloud 제공자 — dataless skip + 재시도 (SC-012, FR-015)", () => {
   it("dataless(미다운로드) 로 판정되면 skip 을 반환하고 예외를 던지지 않는다", async () => {
     const { SYNC_PROVIDER_REGISTRY } = await import("../../src/src-adapters/sync-provider.js");
-    // 실기기 감지 로직은 실측 확정(ASM-002) 대상이라 CI 는 옵션 C(스텁 경로)만 검증한다 —
+    // 감지 휴리스틱(blocks=0·size>0)은 실기기 실측으로 검증 완료(018 analysis.md) — 본 케이스는
     // 존재하지 않는 경로를 넘겨 다운로드 트리거·재검증이 실패로 수렴하는 fail-safe 경로를 유도.
     const result = await SYNC_PROVIDER_REGISTRY["icloud"]!.ensureLocal(
       "/nonexistent/dataless-placeholder.md",
     );
     expect(["ready", "skip"]).toContain(result); // 무손실 degrade — 예외 없이 둘 중 하나로 수렴
   });
+});
+
+describe("icloud read-trigger 물질화 (018 — SC-1/SC-2/SC-3)", () => {
+  it("SC-1: dataless 시그니처(sparse) 파일에서 read 트리거 경로가 즉시 관통한다 — 10초 폴링 대기 없음", async (ctx) => {
+    // sparse 파일은 blocks=0·size>0 으로 dataless 와 동일 stat 시그니처를 가지며, read 로 블록이
+    // 할당되지 않는 quirk 까지 재현한다(실 fs — 더블 아님). read 트리거가 즉시 settle 하므로
+    // 신규 구현은 재검증 1회 후 skip 으로 빠르게 수렴한다(구현 전에는 상한 10초를 전부 대기했다).
+    const { mkdtemp, open, rm, stat } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "adde-sync-sparse-"));
+    const sparsePath = join(dir, "sparse.bin");
+    try {
+      const fh = await open(sparsePath, "w");
+      await fh.truncate(1024 * 1024);
+      await fh.close();
+      const s = await stat(sparsePath);
+      // FS 가 sparse 를 blocks=0 으로 만들지 않으면 전제 불성립 — 조용한 green 이 아니라 skip 표기
+      if (s.blocks !== 0) return ctx.skip();
+      const { SYNC_PROVIDER_REGISTRY } = await import("../../src/src-adapters/sync-provider.js");
+      const start = Date.now();
+      const result = await SYNC_PROVIDER_REGISTRY["icloud"]!.ensureLocal(sparsePath);
+      expect(result).toBe("skip"); // sparse 는 read 후에도 blocks=0 → 재검증이 skip 판정
+      expect(Date.now() - start).toBeLessThan(5_000); // 폴링 상한(10s) 소진 없이 즉시 수렴
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // SC-2(타임아웃 fail-open)·SC-3(open 거부 수렴)은 node:fs/promises 목이 필요해 본 파일의
+  // 최상단 sync-provider 모듈 목과 간섭한다 — sync-provider-read-trigger.test.ts 로 분리.
 });
 
 describe("SC-030: 새 제공자가 기존 코드 수정 없이 확장점 등록만으로 디스패치된다", () => {

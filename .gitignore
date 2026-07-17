@@ -29,3 +29,16 @@ coverage/
 .DS_Store
 Thumbs.db
 *.log
+
+# .claude/ — AI 메타데이터 (기본 전체 비공개; 개별 문서만 opt-in 공개)
+.claude/*
+# 특정 문서만 공개하려면 상위 디렉터리부터 되살린 뒤 파일을 지정:
+# !.claude/docs/
+# !.claude/docs/context.md
+
+# AI workspace (pipeline 실행 로그·기록 — SPEC_ROOT 하위)
+_ai-workspace/
+
+# OS / Tool crash dumps
+*.stackdump
+core.*

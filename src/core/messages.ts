@@ -6,6 +6,13 @@
  */
 import { t } from "../shared/i18n.js";
 
+/**
+ * CLI 종료 코드 3-계약(표면 계약 SSOT) — 전 디스패치(run/ops/lane/proj)가 이 상수를 참조한다.
+ * OK: 정상 완료·`-h/--help`·`-v/--version`. FAIL: 운영 실패(런타임 예외·기동 실패·값 검증 실패·
+ * 미지원 명령/서브커맨드). USAGE: 파서 오류(unknown-flag/value-required) + 필수 위치인자 누락.
+ */
+export const EXIT = { OK: 0, FAIL: 1, USAGE: 2 } as const;
+
 /** CLI 명령 표면. 최소 표면 원칙. */
 export const COMMANDS = {
   /** 주 진입점. */

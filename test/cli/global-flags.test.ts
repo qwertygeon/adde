@@ -1,6 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 
-// 전역 플래그(-v/--version, -h/--help) 위치 무관 인식 — SC-004·SC-005.
+// 전역 플래그(-v/--version, -h/--help) 위치 무관 인식 — SC-004·SC-005(구 번호 — 이전 cycle).
 // up 은 값 플래그가 없어 --version 을 값으로 흡수하지 않는다(ADR-003 version>help>error).
 // loadDaemon 미호출로 "up 미진행"을 확정한다(up-already.test.ts 와 동일한 모킹 관례).
 
@@ -66,5 +69,30 @@ describe("--help 전역 / 인자 없음 — 명령 미포함 help (SC-005 Edge)"
     cap.restore();
     expect(code).toBe(0);
     expect(cap.out()).toMatch(/status|doctor|logs/);
+  });
+});
+
+describe("성공하는 lane ls — 정상 완료 exit 0 유지 (SC-008 Happy)", () => {
+  let tmpBase: string;
+  let prevHome: string | undefined;
+
+  beforeEach(() => {
+    tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-global-flags-lanels-"));
+    prevHome = process.env["ADDE_HOME"];
+    process.env["ADDE_HOME"] = tmpBase;
+  });
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env["ADDE_HOME"];
+    else process.env["ADDE_HOME"] = prevHome;
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  });
+
+  it("adde lane ls <proj> (레인 부재) 는 exit 0", async () => {
+    const { runLane } = await import("../../src/cli/lane.js");
+    const cap = captureStdout();
+    const code = await runLane(["ls", "demo"]);
+    cap.restore();
+    expect(code).toBe(0);
   });
 });

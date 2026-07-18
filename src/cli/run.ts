@@ -1,6 +1,6 @@
 import { readVersion } from "../core/version.js";
 import { errMsg } from "../shared/errors.js";
-import { COMMANDS, buildUsage, USAGE, cmdError, flagErrorText } from "../core/messages.js";
+import { COMMANDS, buildUsage, USAGE, cmdError, flagErrorText, EXIT } from "../core/messages.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
 import { findCommand, suggestCommands } from "./spec.js";
@@ -35,7 +35,7 @@ async function runDaemonForeground(proj: string): Promise<number> {
   // halt 기록 후 확정 종료(exit 0)로 launchd 무한 재기동을 끊는다.
   const crashLoop = createCrashLoopGuard({ base: defaultBase(), proj });
   const { halt } = await crashLoop.checkOnBoot();
-  if (halt) return 0;
+  if (halt) return EXIT.OK;
 
   const result = await supervisorUp(proj);
   // 리포트가 유일한 판정 신호이므로 쓰기 실패를 침묵 흡수하지 않고 데몬 stderr 로 로그한다
@@ -72,7 +72,7 @@ async function runDaemonForeground(proj: string): Promise<number> {
     }
     // 기동된 레인이 없으면 상주할 이유가 없다 — 결정적 부팅 실패("확정 종료, 재시도 무익").
     // exit 0 전환이 표면화를 삭제하지 않는다(runtime.json status:error + up 폴링).
-    return 0;
+    return EXIT.OK;
   }
 
   // 안정 판정 arm — minLifetimeMs(기본 60초) 생존 시 크래시루프 카운터 리셋.
@@ -108,7 +108,7 @@ async function runDaemonForeground(proj: string): Promise<number> {
   // 레인 기동 성공 → 소스 루프가 이벤트 루프를 유지하는 동안 포그라운드 상주.
   // 종료(SIGTERM/SIGINT) 까지 resolve 하지 않아 진입점의 process.exit 를 막는다.
   await new Promise<never>(() => {});
-  return 0; // 도달하지 않음
+  return EXIT.OK; // 도달하지 않음
 }
 
 /**
@@ -136,8 +136,10 @@ async function waitForBootReport(
  * 대기해 실패 레인·크래시(리포트 없음)·요약을 동일하게 표면화한다. 두 명령의 차이(등록 분기/unload
  * 등 선행 단계, `upDone`/`restartDone` 완료 메시지)는 호출측이 처리하고, 이 함수는 그 이후의
  * 리포트 대기·요약·종료코드만 담당한다(중복 blocks 제거).
+ * `json=true` 시 사람용 텍스트(요약·힌트)를 억제하고 BootReport(또는 리포트 부재 시 `null`)를
+ * 그대로 stdout 에 직렬화한다(신규 계산·필드 없음 — 기존 산출 재사용). 종료코드 판정은 텍스트 모드와 동일.
  */
-async function surfaceStartResult(proj: string, baseline: number): Promise<number> {
+async function surfaceStartResult(proj: string, baseline: number, json = false): Promise<number> {
   // 대기 상한(ms). 느린 머신에서 기동이 8s 이상 걸리면 ADDE_UP_WAIT_MS 로 늘릴 수 있다.
   // 양수만 유효 — 0·음수·비수치는 기본 8000(음수를 그대로 쓰면 대기를 건너뛰어 오탐을 유발).
   const waitEnv = Number(process.env.ADDE_UP_WAIT_MS);
@@ -150,10 +152,18 @@ async function surfaceStartResult(proj: string, baseline: number): Promise<numbe
   );
   // 대응 리포트 미기록(타임아웃) = 부팅 크래시로 간주 — 리포트 부재를 성공으로 오인하지 않는다.
   if (report === null) {
-    process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
-    return 1;
+    if (json) {
+      process.stdout.write(JSON.stringify(null) + "\n");
+    } else {
+      process.stderr.write(t("run.upInconclusive", { proj }) + "\n");
+    }
+    return EXIT.FAIL;
   }
   const failed = report.lanes.filter((l) => l.status === "error");
+  if (json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return failed.length > 0 ? EXIT.FAIL : EXIT.OK;
+  }
   if (failed.length > 0) {
     process.stderr.write(
       t("run.upFailed", {
@@ -166,7 +176,7 @@ async function surfaceStartResult(proj: string, baseline: number): Promise<numbe
     t("run.upSummary", { running: report.running, failed: failed.length }) + "\n",
   );
   process.stdout.write(t("run.statusHint", { proj }) + "\n");
-  return failed.length > 0 ? 1 : 0;
+  return failed.length > 0 ? EXIT.FAIL : EXIT.OK;
 }
 
 /**
@@ -177,7 +187,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   const first = argv[0];
   if (first === undefined) {
     process.stdout.write(`${buildUsage()}\n`);
-    return 0;
+    return EXIT.OK;
   }
   const spec = findCommand(first);
 
@@ -186,29 +196,29 @@ export async function run(argv: readonly string[]): Promise<number> {
     const g = parseCommand({ flags: [] }, argv);
     if (g.version) {
       process.stdout.write(`${COMMANDS.primary} ${readVersion()}\n`);
-      return 0;
+      return EXIT.OK;
     }
     if (g.help || first === "help") {
       process.stdout.write(`${buildUsage()}\n`);
-      return 0;
+      return EXIT.OK;
     }
     if (g.error) {
       process.stderr.write(`${flagErrorText(g.error)}\n\n${buildUsage()}\n`);
-      return 1;
+      return EXIT.USAGE;
     }
     // 비플래그 토큰 = 미지원 명령 → stderr 로 오류(+오타 추정 힌트) + 사용법(스크립트 오류 은폐 방지).
     const suggestions = suggestCommands(first);
     const hint =
       suggestions.length > 0 ? " " + t("cli.didYouMean", { cmds: suggestions.join(", ") }) : "";
     process.stderr.write(`${t("cli.unknownCmd", { cmd: first })}${hint}\n\n${buildUsage()}\n`);
-    return 1;
+    return EXIT.FAIL;
   }
 
   // 서브커맨드별 도움말 — `adde <cmd> --help`. lane 은 runLane 이 자체 처리(하위 명령 도움말).
   if (first !== "lane" && parseCommand({ flags: [] }, argv.slice(1)).help) {
     if (spec.usageKey && !spec.hidden) {
       process.stdout.write(t(spec.usageKey as never) + "\n");
-      return 0;
+      return EXIT.OK;
     }
   }
 
@@ -216,7 +226,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     const shell = argv[1];
     if (!shell) {
       process.stderr.write(USAGE.completion + "\n");
-      return 1;
+      return EXIT.USAGE;
     }
     const script = completionScript(shell);
     if (script === null) {
@@ -226,14 +236,14 @@ export async function run(argv: readonly string[]): Promise<number> {
           t("completion.unknownShell", { shell, supported: SUPPORTED_SHELLS.join("|") }),
         ) + "\n",
       );
-      return 1;
+      return EXIT.FAIL;
     }
     process.stdout.write(script);
     // stdout 이 터미널이면(리다이렉트 아님) 설치 힌트를 stderr 로 — 파이프/리다이렉트 시엔 stdout 은 순수 스크립트 유지.
     if (process.stdout.isTTY) {
       process.stderr.write("\n" + t("completion.installHint", { shell }) + "\n");
     }
-    return 0;
+    return EXIT.OK;
   }
 
   if (first === "init") {
@@ -262,7 +272,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     const proj = argv[1];
     if (!proj) {
       process.stderr.write(t("usage.daemon") + "\n");
-      return 1;
+      return EXIT.USAGE;
     }
     try {
       return await runDaemonForeground(proj);
@@ -271,7 +281,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       // 재현되는 결정적 실패("확정 종료, 재시도 무익")이므로 exit 0. 비결정적
       // 크래시(글로벌 uncaughtException)는 크래시 가드가 별도로 exit 1 처리한다.
       process.stderr.write(cmdError("__daemon", errMsg(err)) + "\n");
-      return 0;
+      return EXIT.OK;
     }
   }
 
@@ -280,12 +290,12 @@ export async function run(argv: readonly string[]): Promise<number> {
   const res = parseCommand(spec, argv.slice(1));
   if (res.version) {
     process.stdout.write(`${COMMANDS.primary} ${readVersion()}\n`);
-    return 0;
+    return EXIT.OK;
   }
   if (res.error) {
     const usage = spec.usageKey ? t(spec.usageKey as never) : buildUsage();
     process.stderr.write(`${cmdError(first, flagErrorText(res.error))}\n\n${usage}\n`);
-    return 1;
+    return EXIT.USAGE;
   }
 
   if (first === "status") {
@@ -312,8 +322,9 @@ export async function run(argv: readonly string[]): Promise<number> {
     const proj = res.positional[0];
     if (!proj) {
       process.stderr.write(USAGE.up + "\n");
-      return 1;
+      return EXIT.USAGE;
     }
+    const json = res.flags.json === true;
     try {
       const { loadDaemon, daemonRegState, unloadDaemon } = await import("../core/launchd.js");
       const { collectStatus, clearHalt } = await import("../core/diagnostics.js");
@@ -327,8 +338,9 @@ export async function run(argv: readonly string[]): Promise<number> {
         const running = rows.filter((r) => r.status === "running").length;
         if (running === 0) {
           // 등록 잔존 + 상주 레인 없음(부팅-실패-잔존 포함) — alreadyUp 조기반환
-          // 대신 재적재해 데드엔드를 해소한다. 아래 신규 기동과 동일한 load+poll 경로로 합류.
-          process.stdout.write(t("run.deadRegistered", { proj }) + "\n");
+          // 대신 재적재해 데드엔드를 해소한다. 아래 신규 기동과 동일한 load+poll 경로로 합류(--json 은
+          // surfaceStartResult 가 처리 — 여기 안내 텍스트만 억제).
+          if (!json) process.stdout.write(t("run.deadRegistered", { proj }) + "\n");
           await unloadDaemon(proj);
         } else {
           // 이미 기동 중이어도 건강하지 않은 레인(error/dead/stale)이 있으면 표면화하고 종료코드 1.
@@ -337,7 +349,7 @@ export async function run(argv: readonly string[]): Promise<number> {
           const unhealthy = rows.filter(
             (r) => r.status === "error" || r.status === "dead" || r.status === "stale",
           );
-          process.stdout.write(t("run.alreadyUp", { proj, running, total: rows.length }) + "\n");
+          // 비정상 레인 경고는 조언성 스트림 — --json 여부와 무관하게 stderr 유지.
           if (unhealthy.length > 0) {
             process.stderr.write(
               t("run.alreadyUpUnhealthy", {
@@ -348,20 +360,26 @@ export async function run(argv: readonly string[]): Promise<number> {
               }) + "\n",
             );
           }
-          process.stdout.write(t("run.alreadyUpHint", { proj }) + "\n");
-          return unhealthy.length > 0 ? 1 : 0;
+          // 부팅을 개시하지 않은 조기반환 — BootReport 가 없으므로 현재 상태 요약 객체로 대체.
+          if (json) {
+            process.stdout.write(JSON.stringify({ proj, alreadyUp: true, running }, null, 2) + "\n");
+          } else {
+            process.stdout.write(t("run.alreadyUp", { proj, running, total: rows.length }) + "\n");
+            process.stdout.write(t("run.alreadyUpHint", { proj }) + "\n");
+          }
+          return unhealthy.length > 0 ? EXIT.FAIL : EXIT.OK;
         }
       }
       // baseline — 이번 부팅이 개시되기 전 리포트의 boot id. 이후 이 값보다 큰 bootId 리포트만
       // 이번 기동 결과로 소비한다(잔존 리포트를 이번 결과로 오인하지 않도록).
       const baseline = (await readBootReport(defaultBase(), proj))?.bootId ?? 0;
       await loadDaemon(proj);
-      process.stdout.write(t("run.upDone", { proj }) + "\n");
+      if (!json) process.stdout.write(t("run.upDone", { proj }) + "\n");
       // 기동 결과를 바로 표면화 — restart 와 동일한 공유 경로(surfaceStartResult, N-1).
-      return await surfaceStartResult(proj, baseline);
+      return await surfaceStartResult(proj, baseline, json);
     } catch (err) {
       process.stderr.write(cmdError("up", errMsg(err)) + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
   }
 
@@ -369,16 +387,22 @@ export async function run(argv: readonly string[]): Promise<number> {
     const proj = res.positional[0];
     if (!proj) {
       process.stderr.write(USAGE.down + "\n");
-      return 1;
+      return EXIT.USAGE;
     }
+    const json = res.flags.json === true;
     try {
       const { unloadDaemon } = await import("../core/launchd.js");
       await unloadDaemon(proj);
-      process.stdout.write(t("run.downDone", { proj }) + "\n");
-      return 0;
+      if (json) {
+        process.stdout.write(JSON.stringify({ proj, stopped: true }, null, 2) + "\n");
+      } else {
+        process.stdout.write(t("run.downDone", { proj }) + "\n");
+      }
+      return EXIT.OK;
     } catch (err) {
+      // --json 이어도 오류는 stderr — 금지 대상은 stdout 본문 오염뿐이므로 stdout 은 비워둔다.
       process.stderr.write(cmdError("down", errMsg(err)) + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
   }
 
@@ -386,8 +410,9 @@ export async function run(argv: readonly string[]): Promise<number> {
     const proj = res.positional[0];
     if (!proj) {
       process.stderr.write(USAGE.restart + "\n");
-      return 1;
+      return EXIT.USAGE;
     }
+    const json = res.flags.json === true;
     try {
       const { unloadDaemon, loadDaemon } = await import("../core/launchd.js");
       const { clearHalt } = await import("../core/diagnostics.js");
@@ -399,16 +424,16 @@ export async function run(argv: readonly string[]): Promise<number> {
       // 큰 bootId 리포트만 이번 재기동 결과로 소비한다.
       const baseline = (await readBootReport(defaultBase(), proj))?.bootId ?? 0;
       await loadDaemon(proj);
-      process.stdout.write(t("run.restartDone", { proj }) + "\n");
+      if (!json) process.stdout.write(t("run.restartDone", { proj }) + "\n");
       // up 과 동일한 공유 경로(surfaceStartResult, N-1) — 재기동 성공/실패 레인을 동등하게 표면화한다.
-      return await surfaceStartResult(proj, baseline);
+      return await surfaceStartResult(proj, baseline, json);
     } catch (err) {
       process.stderr.write(cmdError("restart", errMsg(err)) + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
   }
 
   // 도달하지 않음(COMMAND_SPECS 의 명령 이름을 위에서 모두 처리) — 방어.
   process.stderr.write(`${buildUsage()}\n`);
-  return 1;
+  return EXIT.FAIL;
 }

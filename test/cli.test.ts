@@ -62,10 +62,10 @@ describe("run 최상위 디스패치", () => {
     expect(err.mock.calls.map((c) => String(c[0])).join("")).toContain("fish");
   });
 
-  it("completion 셸 인자 누락은 usage + 1", async () => {
+  it("completion 셸 인자 누락은 usage + 2 (SC-006, FR-004 — 위치인자 누락 계약)", async () => {
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    expect(await run(["completion"])).toBe(1);
+    expect(await run(["completion"])).toBe(2);
     expect(err.mock.calls.map((c) => String(c[0])).join("")).toContain("completion");
   });
 

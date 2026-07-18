@@ -133,8 +133,8 @@ export const LANE_SET_IDENTITY_FLAGS: readonly string[] = [
 const LANE_SUBS: readonly SubSpec[] = [
   { name: "add", flags: LANE_ADD_FLAGS, positional: ["proj", "lane"] },
   { name: "set", flags: LANE_SET_FLAGS, positional: ["proj", "lane"] },
-  { name: "ls", aliases: ["list"], flags: [], positional: ["proj"] },
-  { name: "show", flags: [], positional: ["proj", "lane"] },
+  { name: "ls", aliases: ["list"], flags: [{ name: "--json" }], positional: ["proj"] },
+  { name: "show", flags: [{ name: "--json" }], positional: ["proj", "lane"] },
   { name: "rm", aliases: ["remove"], flags: LANE_RM_FLAGS, positional: ["proj", "lane"] },
   { name: "help", flags: [] },
 ];
@@ -153,12 +153,12 @@ const PROJ_SUBS: readonly SubSpec[] = [
 /** 최상위 명령 SSOT. hidden 명령은 도움말·자동완성에서 제외. */
 export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: "init", args: "[<proj>]", flags: [], positional: ["proj"], desc: "guided setup", usageKey: "usage.init" }, // prettier-ignore
-  { name: "up", args: "<proj>", flags: [], positional: ["proj"], desc: "start lanes (daemon)", usageKey: "usage.up" }, // prettier-ignore
-  { name: "down", args: "<proj>", flags: [], positional: ["proj"], desc: "stop the daemon", usageKey: "usage.down" }, // prettier-ignore
-  { name: "restart", args: "<proj>", flags: [], positional: ["proj"], desc: "restart the daemon", usageKey: "usage.restart" }, // prettier-ignore
+  { name: "up", args: "<proj>", flags: [{ name: "--json" }], positional: ["proj"], desc: "start lanes (daemon)", usageKey: "usage.up" }, // prettier-ignore
+  { name: "down", args: "<proj>", flags: [{ name: "--json" }], positional: ["proj"], desc: "stop the daemon", usageKey: "usage.down" }, // prettier-ignore
+  { name: "restart", args: "<proj>", flags: [{ name: "--json" }], positional: ["proj"], desc: "restart the daemon", usageKey: "usage.restart" }, // prettier-ignore
   { name: "status", args: "[<proj>]", flags: [{ name: "--all" }, { name: "--json" }], positional: ["proj"], desc: "lane status", usageKey: "usage.status" }, // prettier-ignore
   { name: "doctor", args: "[<proj>]", flags: [{ name: "--json" }], positional: ["proj"], desc: "environment checks", usageKey: "usage.doctor" }, // prettier-ignore
-  { name: "logs", args: "<proj> <lane> [N]", flags: [{ name: "--engine" }, { name: "--daemon" }, { name: "--follow", short: "-f" }], positional: ["proj", "lane"], desc: "lane logs", usageKey: "usage.logs" }, // prettier-ignore
+  { name: "logs", args: "<proj> <lane> [N]", flags: [{ name: "--engine" }, { name: "--daemon" }, { name: "--follow", short: "-f" }, { name: "--json" }], positional: ["proj", "lane"], desc: "lane logs", usageKey: "usage.logs" }, // prettier-ignore
   { name: "sessions", args: "<proj> <lane>", flags: [{ name: "--json" }], positional: ["proj", "lane"], desc: "engine sessions", usageKey: "usage.sessions" }, // prettier-ignore
   { name: "lane", args: "<add|set|ls|show|rm>", flags: [], subs: LANE_SUBS, desc: "manage lane configs", usageKey: "usage.lane" }, // prettier-ignore
   { name: "proj", args: "<ls|rm>", flags: [], subs: PROJ_SUBS, desc: "list/delete projects", usageKey: "usage.proj" }, // prettier-ignore

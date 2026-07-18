@@ -61,6 +61,11 @@ function captureStdout(): () => string {
   return () => spy.mock.calls.map((c) => String(c[0])).join("");
 }
 
+function captureStderr(): () => string {
+  const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  return () => spy.mock.calls.map((c) => String(c[0])).join("");
+}
+
 describe("집계 status 기본 뷰 — 전 레인 stopped halt 프로젝트 감지 (SC-107 Edge)", () => {
   it("전 레인이 stopped 라 기본 뷰 필터에서 빠져도 halt 경고 + exit 1 을 반환한다", async () => {
     writeConf("haltproj", "l"); // runtime.json 없음 → stopped(기본 뷰 필터 제외 대상)
@@ -69,10 +74,12 @@ describe("집계 status 기본 뷰 — 전 레인 stopped halt 프로젝트 감�
       haltedAt: new Date().toISOString(),
       consecutiveShortLived: 5,
     });
-    const out = captureStdout();
+    captureStdout();
+    const err = captureStderr();
     const code = await runStatus([]);
     expect(code).toBe(1);
-    expect(out()).toContain("haltproj");
+    // halt 경고는 조언·경고성 출력이라 stderr 로 이동한다(FR-006 — 종전 stdout).
+    expect(err()).toContain("haltproj");
   });
 
   it("halt 대상 프로젝트에 running 레인이 섞여도(부분 stopped) halt 가 누락되지 않는다", async () => {
@@ -84,10 +91,11 @@ describe("집계 status 기본 뷰 — 전 레인 stopped halt 프로젝트 감�
       haltedAt: new Date().toISOString(),
       consecutiveShortLived: 5,
     });
-    const out = captureStdout();
+    captureStdout();
+    const err = captureStderr();
     const code = await runStatus([]);
     expect(code).toBe(1);
-    expect(out()).toContain("haltproj2");
+    expect(err()).toContain("haltproj2");
   });
 });
 

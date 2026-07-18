@@ -5,7 +5,7 @@
  */
 import { projRemove, LaneConfigError } from "../core/lane-config.js";
 import { listRegisteredProjects, collectStatus } from "../core/diagnostics.js";
-import { buildProjUsage, unknownProjSub, cmdError, flagErrorText } from "../core/messages.js";
+import { buildProjUsage, unknownProjSub, cmdError, flagErrorText, EXIT } from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
 import { t } from "../shared/i18n.js";
 import { defaultBase, assertSafeSegment } from "../shared/paths.js";
@@ -46,11 +46,11 @@ async function handleProjList(p: ParseResult): Promise<number> {
   }
   if (json) {
     process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
-    return 0;
+    return EXIT.OK;
   }
   if (rows.length === 0) {
     process.stdout.write(t("proj.none") + "\n");
-    return 0;
+    return EXIT.OK;
   }
   const header = ["PROJECT", "LANES", "RUNNING"];
   const body = rows.map((r) => [r.proj, String(r.lanes), String(r.running)]);
@@ -59,7 +59,7 @@ async function handleProjList(p: ParseResult): Promise<number> {
   );
   const fmt = (cols: string[]): string => cols.map((c, i) => c.padEnd(widths[i] ?? 0)).join("  ");
   process.stdout.write([fmt(header), ...body.map(fmt)].join("\n") + "\n");
-  return 0;
+  return EXIT.OK;
 }
 
 async function handleProjRemove(p: ParseResult): Promise<number> {
@@ -67,7 +67,7 @@ async function handleProjRemove(p: ParseResult): Promise<number> {
   const proj = p.positional[0];
   if (!proj) {
     process.stderr.write(buildProjUsage() + "\n");
-    return 1;
+    return EXIT.USAGE;
   }
 
   // 존재 확인을 프롬프트보다 먼저 — 없는 프로젝트에 이름 재입력을 요구하는 혼란 방지.
@@ -76,7 +76,7 @@ async function handleProjRemove(p: ParseResult): Promise<number> {
   const projDir = join(defaultBase(), proj);
   if (!(await pathExists(projDir))) {
     process.stderr.write(cmdError("proj", t("proj.notFound", { proj, path: projDir })) + "\n");
-    return 1;
+    return EXIT.FAIL;
   }
 
   // 실행 중(또는 크래시 잔존)인 레인이 있으면 삭제를 거부한다 — 먼저 데몬을 내리게 안내(--force 로 우회).
@@ -89,14 +89,14 @@ async function handleProjRemove(p: ParseResult): Promise<number> {
       cmdError("proj", t("proj.running", { proj, lanes: active.map((r) => r.lane).join(", ") })) +
         "\n",
     );
-    return 1;
+    return EXIT.FAIL;
   }
 
   // 파괴적 — 확인 선행. TTY 면 프로젝트 이름 재입력으로 확인, 비-TTY 면 --force 요구.
   if (!force) {
     if (!process.stdin.isTTY) {
       process.stderr.write(cmdError("proj", t("proj.needForce")) + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
     const prompter = createPrompter();
     let typed: string;
@@ -107,7 +107,7 @@ async function handleProjRemove(p: ParseResult): Promise<number> {
     }
     if (typed.trim() !== proj) {
       process.stdout.write(t("proj.aborted") + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
   }
 
@@ -122,7 +122,7 @@ async function handleProjRemove(p: ParseResult): Promise<number> {
 
   const result = await projRemove(proj);
   process.stdout.write(t("proj.removed", { proj: result.proj, path: result.path }) + "\n");
-  return 0;
+  return EXIT.OK;
 }
 
 /**
@@ -133,22 +133,23 @@ export async function runProj(argv: readonly string[]): Promise<number> {
   const [sub, ...rest] = argv;
   if (sub !== undefined && sub !== "help" && parseCommand({ flags: [] }, rest).help) {
     process.stdout.write(`${buildProjUsage()}\n`);
-    return 0;
+    return EXIT.OK;
   }
   if (sub === undefined || sub === "help" || sub === "--help" || sub === "-h") {
     process.stdout.write(`${buildProjUsage()}\n`);
-    return 0;
+    return EXIT.OK;
   }
   const subSpec = findSub("proj", sub);
   if (!subSpec) {
+    // 미지원 *서브커맨드* — "미지원 명령" 계열로 보아 exit 1 유지.
     process.stderr.write(unknownProjSub(sub) + "\n");
-    return 1;
+    return EXIT.FAIL;
   }
   try {
     const p = parseCommand(subSpec, rest);
     if (p.error) {
       process.stderr.write(`${cmdError("proj", flagErrorText(p.error))}\n\n${buildProjUsage()}\n`);
-      return 1;
+      return EXIT.USAGE;
     }
     switch (subSpec.name) {
       case "ls":
@@ -158,13 +159,13 @@ export async function runProj(argv: readonly string[]): Promise<number> {
       default:
         // 도달하지 않음(proj subs 는 ls/rm/help 로 한정) — 방어.
         process.stderr.write(unknownProjSub(sub) + "\n");
-        return 1;
+        return EXIT.FAIL;
     }
   } catch (err) {
     // LaneConfigError(검증 실패)든 예기치 못한 예외든 원시 스택 대신 명령 스코프 메시지로 표면화.
     process.stderr.write(
       cmdError("proj", err instanceof LaneConfigError ? err.message : errMsg(err)) + "\n",
     );
-    return 1;
+    return EXIT.FAIL;
   }
 }

@@ -20,6 +20,7 @@ import {
   laneError,
   unknownLaneSub,
   flagErrorText,
+  EXIT,
 } from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
 import { formatException } from "../shared/notify.js";
@@ -146,7 +147,7 @@ async function handleAdd(p: ParseResult): Promise<number> {
   const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneAdd + "\n");
-    return 1;
+    return EXIT.USAGE;
   }
 
   const wantInteractive = shouldRunInteractive(flags, process.stdin.isTTY === true);
@@ -160,7 +161,7 @@ async function handleAdd(p: ParseResult): Promise<number> {
           action: t("lane.ttyOnly.action"),
         }) + "\n",
       );
-      return 1;
+      return EXIT.FAIL;
     }
     const prompter = createPrompter();
     try {
@@ -222,7 +223,7 @@ async function handleAdd(p: ParseResult): Promise<number> {
     if (hint) process.stdout.write(hint + "\n");
   }
   process.stdout.write(t("lane.startHint", { proj }) + "\n");
-  return 0;
+  return EXIT.OK;
 }
 
 /** CSV → 트림·빈값 제거 배열. handleAdd 의 splitTools 와 동일 파싱(allowlist/denylist/hard_deny CLI 입력). */
@@ -253,7 +254,7 @@ async function handleSet(p: ParseResult): Promise<number> {
   const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneSet + "\n");
-    return 1;
+    return EXIT.USAGE;
   }
 
   const edits: LaneSetOptions = {};
@@ -289,8 +290,9 @@ async function handleSet(p: ParseResult): Promise<number> {
   // no-op 판정은 core laneSet 가 최종 권위(programmatic API 공유)지만, CLI 는 usage 를 함께
   // 병기해 안내한다 — laneSet 에 그대로 넘겨도 동일 거부이나 usage 는 CLI 계층 책임.
   if (Object.keys(edits).length === 0) {
+    // 파서 오류·위치인자 누락이 아니라 플래그 입력 완전성 검증 — exit 1 유지.
     process.stderr.write(laneError(t("laneConfig.err.noEdits")) + "\n\n" + USAGE.laneSet + "\n");
-    return 1;
+    return EXIT.FAIL;
   }
 
   const result = await laneSet(proj, lane, edits);
@@ -299,30 +301,41 @@ async function handleSet(p: ParseResult): Promise<number> {
     t("lane.set.updated", { lane: result.lane, confPath: result.confPath }) + "\n",
   );
   process.stdout.write(t("lane.set.restartHint", { proj }) + "\n");
-  return 0;
+  return EXIT.OK;
 }
 
 async function handleList(p: ParseResult): Promise<number> {
   const [proj] = p.positional;
   if (!proj) {
     process.stderr.write(USAGE.laneLs + "\n");
-    return 1;
+    return EXIT.USAGE;
   }
+  const json = p.flags.json === true;
   const { lanes } = await laneList(proj);
-  if (lanes.length === 0) process.stdout.write(t("lane.noLanes", { proj }) + "\n");
-  else process.stdout.write(lanes.join("\n") + "\n");
-  return 0;
+  if (json) {
+    process.stdout.write(JSON.stringify(lanes, null, 2) + "\n");
+  } else if (lanes.length === 0) {
+    process.stdout.write(t("lane.noLanes", { proj }) + "\n");
+  } else {
+    process.stdout.write(lanes.join("\n") + "\n");
+  }
+  return EXIT.OK;
 }
 
 async function handleShow(p: ParseResult): Promise<number> {
   const [proj, lane] = p.positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneShow + "\n");
-    return 1;
+    return EXIT.USAGE;
   }
-  const { confPath, text } = await laneShow(proj, lane);
-  process.stdout.write(`# ${confPath}\n${text}`);
-  return 0;
+  const json = p.flags.json === true;
+  const { confPath, conf, text } = await laneShow(proj, lane);
+  if (json) {
+    process.stdout.write(JSON.stringify({ lane, confPath, conf }, null, 2) + "\n");
+  } else {
+    process.stdout.write(`# ${confPath}\n${text}`);
+  }
+  return EXIT.OK;
 }
 
 async function handleRemove(p: ParseResult): Promise<number> {
@@ -330,7 +343,7 @@ async function handleRemove(p: ParseResult): Promise<number> {
   const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneRm + "\n");
-    return 1;
+    return EXIT.USAGE;
   }
   const purge = flags["purge"] === true;
   const force = flags["force"] === true;
@@ -351,12 +364,12 @@ async function handleRemove(p: ParseResult): Promise<number> {
         row.status === "error")
     ) {
       process.stderr.write(laneError(t("lane.purgeRunning", { proj, lane })) + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
     // 확인 — TTY 면 레인 이름 재입력, 비-TTY 면 --force 요구.
     if (!process.stdin.isTTY) {
       process.stderr.write(laneError(t("lane.purgeNeedForce")) + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
     const prompter = createPrompter();
     let typed: string;
@@ -367,7 +380,7 @@ async function handleRemove(p: ParseResult): Promise<number> {
     }
     if (typed.trim() !== lane) {
       process.stdout.write(t("lane.purgeAborted") + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
   }
 
@@ -376,7 +389,7 @@ async function handleRemove(p: ParseResult): Promise<number> {
     (purged ? t("lane.removedPurged", { lane, confPath }) : t("lane.removed", { lane, confPath })) +
       "\n",
   );
-  return 0;
+  return EXIT.OK;
 }
 
 /**
@@ -388,16 +401,17 @@ export async function runLane(argv: readonly string[]): Promise<number> {
   // `adde lane <sub> --help` — 전체 lane 옵션 도움말(하위 명령 인자 검증보다 우선).
   if (sub !== undefined && sub !== "help" && parseCommand({ flags: [] }, rest).help) {
     process.stdout.write(`${buildLaneUsage()}\n`);
-    return 0;
+    return EXIT.OK;
   }
   if (sub === undefined || sub === "help" || sub === "--help" || sub === "-h") {
     process.stdout.write(`${buildLaneUsage()}\n`);
-    return 0;
+    return EXIT.OK;
   }
   const subSpec = findSub("lane", sub);
   if (!subSpec) {
+    // 미지원 *서브커맨드* — "미지원 명령" 계열로 보아 exit 1 유지.
     process.stderr.write(unknownLaneSub(sub) + "\n");
-    return 1;
+    return EXIT.FAIL;
   }
   try {
     // 정체성 필드(source/backend/engine/acp_version) pre-scan — set 은 이 플래그들을 spec 에
@@ -408,13 +422,13 @@ export async function runLane(argv: readonly string[]): Promise<number> {
         process.stderr.write(
           laneError(t("laneConfig.err.identityFieldImmutable", { field: identityFlag })) + "\n",
         );
-        return 1;
+        return EXIT.FAIL;
       }
     }
     const p = parseCommand(subSpec, rest);
     if (p.error) {
       process.stderr.write(`${laneError(flagErrorText(p.error))}\n\n${buildLaneUsage()}\n`);
-      return 1;
+      return EXIT.USAGE;
     }
     switch (subSpec.name) {
       case "add":
@@ -430,7 +444,7 @@ export async function runLane(argv: readonly string[]): Promise<number> {
       default:
         // 도달하지 않음(lane subs 는 add/set/ls/show/rm/help 로 한정) — 방어.
         process.stderr.write(unknownLaneSub(sub) + "\n");
-        return 1;
+        return EXIT.FAIL;
     }
   } catch (err) {
     // LaneConfigError 는 검증 실패(친절 메시지) — 그 외 예기치 못한 예외도 원시 스택 대신
@@ -440,6 +454,6 @@ export async function runLane(argv: readonly string[]): Promise<number> {
     } else {
       process.stderr.write(cmdError("lane", errMsg(err)) + "\n");
     }
-    return 1;
+    return EXIT.FAIL;
   }
 }

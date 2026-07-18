@@ -108,7 +108,8 @@ describe("safe-defaults 미지원 (SC-003)", () => {
     const code = await runLane(["set", "proj", "lanesd", "--safe-defaults"]);
     cap.restore();
 
-    expect(code).toBe(1);
+    // 미지원 플래그(파서 오류)는 잘못된 호출 계약상 exit 2(종전 1 — usage 출력 지점 통일).
+    expect(code).toBe(2);
     expect(cap.err()).toContain(tAny("cli.unknownFlag", { flag: "--safe-defaults" }));
     expect(cap.err()).toContain(tAny("usage.lane"));
     expect(fs.readFileSync(confPath, "utf8")).toBe(before);

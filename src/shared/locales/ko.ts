@@ -33,21 +33,28 @@ export const ko = {
   -h, --help               도움말 출력
 
 명령별 도움말은 \`{{primary}} <command> --help\`, 레인 옵션은 \`adde lane help\` 참조.`,
-    up: "사용법: adde up <proj>",
-    down: "사용법: adde down <proj>",
-    restart: "사용법: adde restart <proj>",
+    up: `사용법: adde up <proj> [--json]
+
+  --json       기계가독 출력(부팅 리포트: 레인별 상태 + running 수; 미확정 시 null)`,
+    down: `사용법: adde down <proj> [--json]
+
+  --json       기계가독 출력({proj, stopped: true})`,
+    restart: `사용법: adde restart <proj> [--json]
+
+  --json       기계가독 출력(부팅 리포트: 레인별 상태 + running 수; 미확정 시 null)`,
     status: "사용법: adde status [<proj>] [--all] [--json]",
     doctor: `사용법: adde doctor [<proj>] [--json]
 
 환경·설정 정적 점검(상태 비의존).
   --json       기계가독 출력(checks 배열; 요약 줄·업데이트 알림 없음)`,
-    logs: `사용법: adde logs <proj> <lane> [N] [--engine] [--daemon] [-f|--follow]
+    logs: `사용법: adde logs <proj> <lane> [N] [--engine] [--daemon] [-f|--follow] [--json]
 
 레인 로그의 최근 N줄(기본 50)을 출력합니다.
   (기본)       레인 transcript(메시지·결정·알림)
   --engine     엔진 stderr 캡처(engine.log) — 엔진 크래시 진단
   --daemon     <proj> launchd 데몬 로그(기동 실패 원인이 여기 쌓임; <lane> 불필요)
-  -f, --follow 실시간 추적 — 종료 없이 계속 실행하며 신규 라인을 방출(Ctrl-C 로 정지)`,
+  -f, --follow 실시간 추적 — 종료 없이 계속 실행하며 신규 라인을 방출(Ctrl-C 로 정지)
+  --json       기계가독 출력({proj, lane, path, exists, lines}; --follow 보다 우선 — 스냅샷만 출력, 실시간 추적 없음)`,
     sessions: `사용법: adde sessions <proj> <lane> [--json]
 
 레인에 기록된 엔진 세션 목록(번호·첫 프롬프트 발췌·마지막 활동·id; 현재 세션 ◀ 표시).
@@ -63,10 +70,11 @@ export const ko = {
   zsh  → adde completion zsh  > "\${fpath[1]}/_adde"                     (그 뒤 compinit; ~/.zshrc 에 'autoload -Uz compinit && compinit' 필요)
 팁: 'adde init' 이 이 설정을 단계별로 안내합니다.`,
     proj: `사용법:
-  adde proj ls               등록된 프로젝트 목록(레인·실행 수 포함)
+  adde proj ls [--json]      등록된 프로젝트 목록(레인·실행 수 포함)
   adde proj rm <proj>        프로젝트 삭제 — 모든 레인과 state 를 제거
 
-  --force                    확인 프롬프트 건너뛰기(비대화형 셸에선 필수)`,
+  --json                     기계가독 출력(proj ls 전용)
+  --force                    확인 프롬프트 건너뛰기(비대화형 셸에선 필수; proj rm 전용)`,
     init: "사용법: adde init [<proj>]  (가이드 설정: doctor + 짧은 별칭 + 레인 생성; TTY 전용)",
     alias: `사용법: adde alias [names...]   (기본 이름: ad add)
 
@@ -74,16 +82,16 @@ adde 실행 파일 옆에 짧은 별칭(심링크)을 설치해 \`adde up <proj>
 전역 설치에서만 동작(PATH 의 adde 옆 쓰기 가능한 bin 디렉터리 필요)하며, 동명 명령이 이미 있으면 덮어쓰지 않고 건너뜁니다.`,
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
     laneSet: "사용법: adde lane set <proj> <lane> --<field> <value> ...",
-    laneLs: "사용법: adde lane ls <proj>",
-    laneShow: "사용법: adde lane show <proj> <lane>",
+    laneLs: "사용법: adde lane ls <proj> [--json]",
+    laneShow: "사용법: adde lane show <proj> <lane> [--json]",
     laneRm: "사용법: adde lane rm <proj> <lane>",
     daemon: "사용법: adde __daemon <proj> (내부 명령)",
     lane: `사용법:
   adde lane add <proj> <lane> [옵션]   레인 conf 생성
   adde lane set <proj> <lane> --<field> <value> ...  기존 레인 conf 를 제자리 편집
-  adde lane ls <proj>                  레인 목록
-  adde lane show <proj> <lane>         레인 conf 출력
-  adde lane rm <proj> <lane> [--purge] 레인 conf 삭제 (--purge 시 state/queue/out 데이터도 삭제)
+  adde lane ls <proj> [--json]         레인 목록
+  adde lane show <proj> <lane> [--json] 레인 conf 출력
+  adde lane rm <proj> <lane> [--purge] [--force] 레인 conf 삭제 (--purge 시 state/queue/out 데이터도 삭제; --force 는 --purge 의 실행중 가드/확인을 생략)
 
 lane add 옵션:
   --source <markdown|telegram>  (기본 markdown)

@@ -47,13 +47,15 @@ describe("tFor — 레인 로케일 고정", () => {
   it("전역이 ko 여도 tFor('en') 은 영어를 반환한다", () => {
     setLocale("ko");
     const tl = tFor("en");
-    expect(tl("usage.up")).toBe("Usage: adde up <proj>");
+    // usage.up 본문(플래그 표기 등)은 CLI 표면 변경에 따라 달라질 수 있으므로 로케일 판별에
+    // 필요한 접두(Usage:)·핵심 토큰(adde up <proj>)만으로 검증(전체 리터럴에 결합하지 않음).
+    expect(tl("usage.up")).toMatch(/^Usage: adde up <proj>/);
   });
 
   it("미지원·미지정 lang 은 전역 로케일을 따른다", () => {
     setLocale("ko");
-    expect(tFor("fr")("usage.up")).toBe("사용법: adde up <proj>");
-    expect(tFor(undefined)("usage.up")).toBe("사용법: adde up <proj>");
+    expect(tFor("fr")("usage.up")).toMatch(/^사용법: adde up <proj>/);
+    expect(tFor(undefined)("usage.up")).toMatch(/^사용법: adde up <proj>/);
   });
 
   it("notify 포매터가 tl 로 프리픽스까지 로케일을 전환한다", () => {

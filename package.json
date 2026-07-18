@@ -40,6 +40,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "i18n:check": "tsx scripts/check-i18n.ts",
+    "usage:check": "tsx scripts/check-usage-drift.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

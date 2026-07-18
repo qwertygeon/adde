@@ -57,6 +57,32 @@ describe("ADDE_UP_WAIT_MS 문서화 (SC-023, env 개명 반영)", () => {
   });
 });
 
+describe("usage/파싱 오류 종료 코드 1→2 변경 기재 (SC-016, NFR-003)", () => {
+  it("CHANGELOG 에 usage/파싱 오류·필수 인자 누락의 종료 코드가 1에서 2로 바뀌었다는 항목이 기재되어 있다", () => {
+    const hasCombinedLine = changelog
+      .split("\n")
+      .some(
+        (line) =>
+          /(usage|파싱\s*오류|미지원\s*플래그|unknown-flag|위치\s*인자)/i.test(line) &&
+          /(exit|종료\s*코드)/i.test(line) &&
+          /1.*2|2.*1/.test(line),
+      );
+    expect(hasCombinedLine, "usage/파싱 오류 exit 1→2 변경 기재 항목을 찾을 수 없음").toBe(true);
+  });
+});
+
+describe("status/doctor 진단·경고 stdout→stderr 이동 기재 (SC-016, NFR-003)", () => {
+  it("CHANGELOG 에 status/doctor 의 진단·경고 출력이 stdout 에서 stderr 로 이동했다는 항목이 기재되어 있다", () => {
+    const hasCombinedLine = changelog
+      .split("\n")
+      .some(
+        (line) =>
+          /(status|doctor)/i.test(line) && /stdout/i.test(line) && /stderr/i.test(line),
+      );
+    expect(hasCombinedLine, "status/doctor stdout→stderr 이동 기재 항목을 찾을 수 없음").toBe(true);
+  });
+});
+
 describe("env 개명·판정 대체 관측 변화 CHANGELOG 기재 (SC-014, NFR-005)", () => {
   it("CHANGELOG 에 ADDE_UP_POLL_MS → ADDE_UP_WAIT_MS 개명 항목이 기재되어 있다", () => {
     const hasCombinedLine = changelog

@@ -34,10 +34,11 @@ describe("t/setLocale — 카탈로그 전환", () => {
   it("ko 로케일에서 한국어, en 로케일에서 영어를 반환한다", () => {
     setLocale("ko");
     expect(getLocale()).toBe("ko");
-    expect(t("usage.up")).toBe("사용법: adde up <proj>");
+    // usage.up 본문(플래그 표기 등)은 CLI 표면 변경으로 달라질 수 있어 로케일 판별 접두만 검증.
+    expect(t("usage.up")).toMatch(/^사용법: adde up <proj>/);
     setLocale("en");
     expect(getLocale()).toBe("en");
-    expect(t("usage.up")).toBe("Usage: adde up <proj>");
+    expect(t("usage.up")).toMatch(/^Usage: adde up <proj>/);
   });
 
   it("보간 파라미터가 두 로케일에서 모두 치환된다", () => {

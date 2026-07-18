@@ -32,21 +32,28 @@ Options:
   -h, --help               print help
 
 Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help\` for lane options.`,
-    up: "Usage: adde up <proj>",
-    down: "Usage: adde down <proj>",
-    restart: "Usage: adde restart <proj>",
+    up: `Usage: adde up <proj> [--json]
+
+  --json       machine-readable output (boot report: lane statuses + running count; null if inconclusive)`,
+    down: `Usage: adde down <proj> [--json]
+
+  --json       machine-readable output ({proj, stopped: true})`,
+    restart: `Usage: adde restart <proj> [--json]
+
+  --json       machine-readable output (boot report: lane statuses + running count; null if inconclusive)`,
     status: "Usage: adde status [<proj>] [--all] [--json]",
     doctor: `Usage: adde doctor [<proj>] [--json]
 
 Static environment/config checks (state-independent).
   --json       machine-readable output (checks array; no summary line/update notice)`,
-    logs: `Usage: adde logs <proj> <lane> [N] [--engine] [--daemon] [-f|--follow]
+    logs: `Usage: adde logs <proj> <lane> [N] [--engine] [--daemon] [-f|--follow] [--json]
 
 Prints the last N lines (default 50) of a lane's log.
   (default)    the lane transcript (messages, decisions, notices)
   --engine     the engine's stderr capture (engine.log) — for engine crashes
   --daemon     the launchd daemon log for <proj> (startup failures land here; <lane> optional)
-  -f, --follow live tail — keeps running and prints new lines as they're appended (Ctrl-C to stop)`,
+  -f, --follow live tail — keeps running and prints new lines as they're appended (Ctrl-C to stop)
+  --json       machine-readable output ({proj, lane, path, exists, lines}; takes priority over --follow — snapshot only, no live tail)`,
     sessions: `Usage: adde sessions <proj> <lane> [--json]
 
 Lists the engine sessions recorded for a lane (number, first-prompt excerpt, last activity, id; current marked ◀).
@@ -62,10 +69,11 @@ Where/how to decide (check your shell with: echo $SHELL):
   zsh  → adde completion zsh  > "\${fpath[1]}/_adde"                     (then run compinit; ensure 'autoload -Uz compinit && compinit' is in ~/.zshrc)
 Tip: 'adde init' can walk you through this setup.`,
     proj: `Usage:
-  adde proj ls               list registered projects (with lane + running counts)
+  adde proj ls [--json]      list registered projects (with lane + running counts)
   adde proj rm <proj>        delete a project — removes ALL its lanes and state
 
-  --force                    skip the confirmation prompt (required in non-interactive shells)`,
+  --json                     machine-readable output (proj ls only)
+  --force                    skip the confirmation prompt (required in non-interactive shells; proj rm only)`,
     init: "Usage: adde init [<proj>]  (guided setup: doctor + short alias + create a lane; TTY only)",
     alias: `Usage: adde alias [names...]   (default names: ad add)
 
@@ -73,16 +81,16 @@ Installs short aliases (symlinks) next to the adde binary so you can type e.g. \
 Only works on a global install (needs a writable bin dir next to adde on PATH); if a command with that name already exists it is skipped, not overwritten.`,
     laneAdd: "Usage: adde lane add <proj> <lane> [options]",
     laneSet: "Usage: adde lane set <proj> <lane> --<field> <value> ...",
-    laneLs: "Usage: adde lane ls <proj>",
-    laneShow: "Usage: adde lane show <proj> <lane>",
+    laneLs: "Usage: adde lane ls <proj> [--json]",
+    laneShow: "Usage: adde lane show <proj> <lane> [--json]",
     laneRm: "Usage: adde lane rm <proj> <lane>",
     daemon: "Usage: adde __daemon <proj> (internal command)",
     lane: `Usage:
   adde lane add <proj> <lane> [options]   create a lane conf
   adde lane set <proj> <lane> --<field> <value> ...  edit an existing lane conf in place
-  adde lane ls <proj>                     list lanes
-  adde lane show <proj> <lane>            print a lane conf
-  adde lane rm <proj> <lane> [--purge]    delete a lane conf (--purge also removes its state/queue/out data)
+  adde lane ls <proj> [--json]            list lanes
+  adde lane show <proj> <lane> [--json]   print a lane conf
+  adde lane rm <proj> <lane> [--purge] [--force]    delete a lane conf (--purge also removes its state/queue/out data; --force skips the running-lane guard/confirmation for --purge)
 
 lane add options:
   --source <markdown|telegram>  (default markdown)

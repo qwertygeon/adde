@@ -251,13 +251,13 @@ type CommandHandler = (rest: readonly string[], parsed?: ParseResult) => Promise
 
 /**
  * `COMMAND_SPECS` 이름 → 핸들러 참조 테이블(SSOT 파생 디스패치). 키 집합은 `COMMAND_SPECS` 의
- * 이름 집합과 정확히 일치해야 한다(드리프트 가드 — 파리티 테스트). 기존 위임 핸들러
- * (init/alias/lane/proj/status/doctor/logs/sessions)는 lazy `import()` 래퍼로 참조해 현행
- * 동적 import 를 유지한다(startup 비용 불변).
+ * 이름 집합과 정확히 일치해야 한다(드리프트 가드 — 파리티 테스트가 런타임 집합 동등성으로 강제하므로
+ * export 한다). 기존 위임 핸들러(init/alias/lane/proj/status/doctor/logs/sessions)는 lazy `import()`
+ * 래퍼로 참조해 현행 동적 import 를 유지한다(startup 비용 불변).
  * `parse: false` = 핸들러가 잔여 argv 를 자체 파싱(pre-parse), `parse: true` = run() 이 공유
  * `parseCommand` 로 전역 버전·오류를 선처리한 뒤 파싱 결과를 핸들러에 전달(post-parse).
  */
-const DISPATCH: Record<string, { run: CommandHandler; parse: boolean }> = {
+export const DISPATCH: Record<string, { run: CommandHandler; parse: boolean }> = {
   completion: { run: handleCompletion, parse: false },
   init: { run: async (rest) => (await import("./init.js")).runInit(rest), parse: false },
   alias: { run: async (rest) => (await import("./init.js")).runAlias(rest), parse: false },

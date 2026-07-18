@@ -127,6 +127,41 @@ describe("run __daemon — SIGTERM graceful shutdown exit0 (SC-014 Happy)", () =
     errSpy.mockRestore();
     outSpy.mockRestore();
   });
+
+  it("await-후-exit 순서 — supervisorDown 이 resolve 되기 전에는 process.exit 가 호출되지 않는다", async () => {
+    supervisorUp.mockResolvedValue({
+      message: "boot ok",
+      lanes: [{ lane: "a", status: "running", error: null }],
+    });
+    // supervisorDown 을 수동 제어 deferred 로 — resolve 시점을 테스트가 쥔다.
+    let releaseDown: () => void = () => {};
+    supervisorDown.mockImplementation(
+      () =>
+        new Promise<{ message: string }>((resolve) => {
+          releaseDown = () => resolve({ message: "shutdown ok" });
+        }),
+    );
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const errSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const outSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    const before = process.listenerCount("SIGTERM");
+    void run(["__daemon", "demo"]);
+    await waitFor(() => process.listenerCount("SIGTERM") > before);
+
+    process.emit("SIGTERM");
+
+    // supervisorDown 이 호출됐지만 아직 resolve 되지 않은 상태 — exit 가 선행 호출되면 안 된다.
+    await waitFor(() => supervisorDown.mock.calls.length > 0);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // shutdown 완주 → 이제서야 exit(0).
+    releaseDown();
+    await waitFor(() => exitSpy.mock.calls.length > 0);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    errSpy.mockRestore();
+    outSpy.mockRestore();
+  });
 });
 
 describe("run __daemon — proj 위치인자 누락 (SC-010 Error)", () => {

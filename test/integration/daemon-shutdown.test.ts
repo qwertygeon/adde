@@ -154,23 +154,9 @@ describe("SIGTERM_source_stop_backend_close_순서_후_종료 (SC-011)", () => {
     expect(callOrder.indexOf("source.stop")).toBeLessThan(callOrder.indexOf("backend.close"));
   });
 
-  it("SIGTERM 핸들러 설계: process.exit(0) 은 await 완료 후 호출 (TypeScript 규칙)", async () => {
-    // shutdown 핸들러(SIGTERM/SIGINT → supervisorDown(proj) await → process.exit(0))는 데몬 워커
-    // 이관에 따라 core/daemon.ts 로 위치만 이동한다 — 단언 의도(await-후-exit 순서 보존)는 불변,
-    // 관측 동작도 불변이며 읽기 대상 파일만 이동에 맞춰 갱신한다.
-    const srcPath = process.cwd() + "/src/core/daemon.ts";
-    const fs_mod = await import("node:fs");
-    if (!fs_mod.existsSync(srcPath)) {
-      // 이관 전 — 정적 대상 부재, characterization 단계 RED 허용.
-      expect(true).toBe(true);
-      return;
-    }
-    const content = fs_mod.readFileSync(srcPath, "utf8");
-    // process.exit(0) 이 await 뒤에 있는지 확인
-    // "await ... process.exit" 패턴 — 순서 보장 정적 신호
-    const hasAwaitBeforeExit = content.includes("await") && content.includes("process.exit");
-    expect(hasAwaitBeforeExit).toBe(true);
-  });
+  // shutdown 핸들러의 await-후-exit 순서(supervisorDown 완주 전 process.exit 금지)는 정적 소스
+  // 검사가 아니라 run-boot.test.ts 의 SC-014 가 supervisorDown 을 deferred 로 제어해 행동으로
+  // 검증한다(supervisorDown resolve 전 exit 미호출 → resolve 후 exit(0)).
 });
 
 // ── orphan 0 — fake 검증 (SC-011 경계) ─────────────────────────────────

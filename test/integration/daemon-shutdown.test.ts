@@ -155,15 +155,13 @@ describe("SIGTERM_source_stop_backend_close_순서_후_종료 (SC-011)", () => {
   });
 
   it("SIGTERM 핸들러 설계: process.exit(0) 은 await 완료 후 호출 (TypeScript 규칙)", async () => {
-    // run.ts C-002 shutdown 핸들러의 설계 계약 검증
-    // TypeScript 규칙: await 완료 후 process.exit
-    // 여기서는 계약이 tasks.md C-002 에 명시되었음을 단언하는 정적 계약 테스트
-    //
-    // C-002 코드: SIGTERM/SIGINT → supervisorDown(proj) await → process.exit(0)
-    const srcPath = process.cwd() + "/src/cli/run.ts";
+    // shutdown 핸들러(SIGTERM/SIGINT → supervisorDown(proj) await → process.exit(0))는 데몬 워커
+    // 이관에 따라 core/daemon.ts 로 위치만 이동한다 — 단언 의도(await-후-exit 순서 보존)는 불변,
+    // 관측 동작도 불변이며 읽기 대상 파일만 이동에 맞춰 갱신한다.
+    const srcPath = process.cwd() + "/src/core/daemon.ts";
     const fs_mod = await import("node:fs");
     if (!fs_mod.existsSync(srcPath)) {
-      // TDD Red — 구현 전
+      // 이관 전 — 정적 대상 부재, characterization 단계 RED 허용.
       expect(true).toBe(true);
       return;
     }

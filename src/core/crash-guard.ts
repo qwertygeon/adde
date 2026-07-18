@@ -1,10 +1,10 @@
 /**
  * 데몬 워커 전용 크래시 안전망 — uncaughtException/unhandledRejection 전역 가드.
- * 단발 CLI 명령에는 설치하지 않는다(run.ts runDaemonForeground 에서만 호출).
+ * 단발 CLI 명령에는 설치하지 않는다(core/daemon.ts runDaemonForeground 에서만 호출).
  */
 import { maskSecrets } from "../shared/mask.js";
 
-/** 종료 진행 공유 플래그 — run.ts 의 signal shutdown()과 크래시 가드가 공유해 이중 종결을 막는다. */
+/** 종료 진행 공유 플래그 — core/daemon.ts 의 signal shutdown()과 크래시 가드가 공유해 이중 종결을 막는다. */
 export interface ShutdownState {
   active: boolean;
 }

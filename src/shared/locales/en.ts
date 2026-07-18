@@ -127,7 +127,8 @@ lane set options (edit-only subset of lane add — identity fields, tokens, and 
   --allow-from <ids>            telegram lanes only
   --root <abs-path>              markdown lanes only
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown lanes only
-Fields left unspecified keep their current value. Changes take effect after adde restart <proj>.`,
+Fields left unspecified keep their current value. Changes take effect after adde restart <proj>.
+Note: editing --file-mode only updates the conf value; existing directory permissions are NOT changed even after restart (relaxing private→shared needs a manual chmod). file_mode governs only the internal state/out/queue directories, not the markdown note tree.`,
   },
   cli: {
     cmdError: "[adde {{cmd}}] error: {{detail}}",
@@ -438,6 +439,8 @@ Fields left unspecified keep their current value. Changes take effect after adde
         "[warning] backup is enabled but archive is not configured — inbox content will keep accumulating.\n  ↳ action: set markdown.archive to relocate sent text as well.",
       hardDenyReplaced:
         "[warning] hard_deny was replaced — the previous list is gone (lane set replaces the whole list, it does not merge with the old one).",
+      fileModeRelaxNotice:
+        "[warning] file_mode changed to shared, but the existing directory permissions (0700) stay unchanged even after adde restart.\n  ↳ action: chmod the lane's state/out/queue directories manually to relax them (file_mode only governs those internal dirs, not the markdown note tree).",
     },
     err: {
       emptyIdent: "{{kind}} is empty",

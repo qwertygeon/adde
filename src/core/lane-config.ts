@@ -510,7 +510,13 @@ export async function laneSet(
   if (edits.cwd !== undefined) conf.cwd = edits.cwd;
   if (edits.engine_args !== undefined) conf.engine_args = edits.engine_args;
   if (edits.lang !== undefined) conf.lang = edits.lang;
+  // file_mode private→shared 완화 편집 인지 경고 대비 — overlay 전 이전 모드 캡처.
+  const prevFileMode = resolveFileMode(conf.file_mode);
   if (edits.file_mode !== undefined) conf.file_mode = edits.file_mode;
+  const fileModeRelaxed =
+    edits.file_mode !== undefined &&
+    prevFileMode === "private" &&
+    resolveFileMode(conf.file_mode) === "shared";
   if (edits.allowlist !== undefined) conf.allowlist = edits.allowlist;
   if (edits.denylist !== undefined) conf.denylist = edits.denylist;
 
@@ -566,6 +572,7 @@ export async function laneSet(
 
   const warnings = [...validated.warnings, ...(await collectAddWarnings(conf))];
   if (hardDenyReplaced) warnings.push(t("laneConfig.warn.hardDenyReplaced"));
+  if (fileModeRelaxed) warnings.push(t("laneConfig.warn.fileModeRelaxNotice"));
 
   return { lane, confPath: paths.confFile, conf, warnings };
 }

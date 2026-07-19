@@ -1,7 +1,7 @@
 {
   "name": "adde-acp",
-  "version": "0.1.4",
-  "description": "AI Driven Development Engine — an ACP-based gateway that drives AI CLI engines remotely from chat channels (Telegram/Markdown)",
+  "version": "0.2.0",
+  "description": "AI Driven Development Engine — an ACP-based gateway that drives AI CLI engines from your Markdown notes (or a chat channel like Telegram)",
   "type": "module",
   "repository": {
     "type": "git",
@@ -13,6 +13,8 @@
     "acp",
     "agent-client-protocol",
     "claude-code",
+    "markdown",
+    "notes",
     "telegram",
     "cli",
     "ai",
@@ -38,6 +40,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "i18n:check": "tsx scripts/check-i18n.ts",
+    "usage:check": "tsx scripts/check-usage-drift.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -46,13 +49,13 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.10.1",
-    "@vitest/coverage-v8": "^3.2.6",
+    "@vitest/coverage-v8": "^4.1.9",
     "eslint": "^10.6.0",
     "prettier": "^3.9.4",
     "tsx": "^4.20.6",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.62.1",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.9"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.55.0",

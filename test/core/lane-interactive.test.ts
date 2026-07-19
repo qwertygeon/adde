@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { collectInteractive, shouldRunInteractive } from "../../src/cli/lane.js";
 import type { Ask } from "../../src/cli/lane.js";
+import { SOURCE_REGISTRY } from "../../src/src-adapters/index.js";
+import type { LaneAddResult } from "../../src/core/lane-config.js";
 
 describe("shouldRunInteractive (대화형 default 디스패치)", () => {
   it("맨 인자 + TTY 면 대화형", () => {
@@ -56,7 +58,9 @@ describe("collectInteractive (007 SC1)", () => {
     const opts = await collectInteractive(ask);
 
     expect(opts.source).toBe("telegram");
-    expect(opts.engine).toBe("claude-agent-acp"); // 빈 입력 → 기본값
+    // engine 은 실배선되지 않는(지원 값이 하나뿐인) 노브라 프롬프트 자체가 제거됐다 — collectInteractive
+    // 는 더 이상 opts.engine 을 채우지 않고, 미지정 시 laneAdd 가 기본값을 기록한다.
+    expect(opts.engine).toBeUndefined();
     expect(opts.chat_id).toBe("12345");
     expect(opts.allowlist).toEqual(["Read", "Bash"]);
     expect(opts.root).toBeUndefined();
@@ -189,5 +193,97 @@ describe("collectInteractive (007 SC1)", () => {
     const { ask } = scriptedAsk({ source: "telegram" });
     const opts = await collectInteractive(ask);
     expect(opts.token).toBeUndefined();
+  });
+});
+
+// SC-008 (FR-006): 위저드 프롬프트·생성 후 힌트가 소스 정의(descriptor.wizard) 위임으로 제공된다.
+// collectInteractive 를 통한 소스별 필드 수집(블랙박스, 위 007 SC1 스위트와 동일 계약)은 회귀로
+// 이미 보존되므로, 여기서는 descriptor.wizard 자체의 존재·형태(FR-006 계약)를 직접 대조한다.
+describe("SC-008: 위저드/힌트가 descriptor.wizard 위임으로 제공된다", () => {
+  const makeConf = (
+    source: string,
+  ): LaneAddResult["conf"] => ({
+    source,
+    backend: "acp",
+    engine: "claude-agent-acp",
+    perm_tier: "acp",
+    acp_version: "v1",
+    allowlist: [],
+    denylist: [],
+    hard_deny: [],
+    auto_relaunch: true,
+  });
+
+  it("telegram descriptor 는 wizard.collect·wizard.postCreateHint 를 제공한다", () => {
+    expect(typeof SOURCE_REGISTRY["telegram"]?.wizard?.collect).toBe("function");
+    expect(typeof SOURCE_REGISTRY["telegram"]?.wizard?.postCreateHint).toBe("function");
+  });
+
+  it("markdown descriptor 는 wizard.collect 만 제공하고 postCreateHint 는 미제공이다(FR-007 훅 생략)", () => {
+    expect(typeof SOURCE_REGISTRY["markdown"]?.wizard?.collect).toBe("function");
+    expect(SOURCE_REGISTRY["markdown"]?.wizard?.postCreateHint).toBeUndefined();
+  });
+
+  it("telegram wizard.postCreateHint 는 토큰 다음 조치를 안내하는 힌트를 반환한다(기존 lane.tokenNext 위임)", () => {
+    const result: LaneAddResult = {
+      lane: "tg",
+      confPath: "/base/proj/lanes.d/tg.conf",
+      conf: makeConf("telegram"),
+      warnings: [],
+    };
+    const hint = SOURCE_REGISTRY["telegram"]?.wizard?.postCreateHint?.(result);
+    expect(hint).toBeDefined();
+    expect(hint).toContain(".env");
+  });
+
+  it("telegram wizard.collect 는 chat_id/allow_from 을 수집하고 markdown 필드는 다루지 않는다", async () => {
+    const { ask, questions } = scriptedAsk({ chat_id: "12345", allow_from: "1,2" });
+    const fields = await SOURCE_REGISTRY["telegram"]!.wizard!.collect({ ask });
+    expect(fields.chat_id).toBe("12345");
+    expect(fields.allow_from).toBe("1,2");
+    expect(questions.some((q) => q.includes("root"))).toBe(false);
+  });
+
+  it("markdown wizard.collect 는 root/inbox 를 수집하고 telegram 필드는 다루지 않는다", async () => {
+    const { ask } = scriptedAsk({ "root (markdown": "/vault" });
+    const fields = await SOURCE_REGISTRY["markdown"]!.wizard!.collect({ ask });
+    expect(fields.root).toBe("/vault");
+    expect(fields.inbox).toBe("inbox.md");
+    expect(fields.chat_id).toBeUndefined();
+  });
+});
+
+// ── 016-engine-wiring ────────────────────────────────────────────────────
+
+describe("SC-017: 지원 값이 단일한 노브(engine/backend/acp_version)는 위저드가 묻지 않는다", () => {
+  it("engine/backend/acp_version 질문이 전혀 발생하지 않는다(무배선 노브 프롬프트 0건)", async () => {
+    // 구 프롬프트는 리터럴 "engine"/"backend"/"acp_version" 문자열 질문이었다(마이그레이션 전
+    // collectInteractive 구현) — 정확 일치로 그 리터럴들의 완전 소거를 확인한다(engine_args 프롬프트
+    // 문구는 "engine_args (...)"로 시작해 부분일치로는 오탐하므로 정확 일치를 쓴다).
+    const { ask, questions } = scriptedAsk({ source: "telegram", chat_id: "12345" });
+    const opts = await collectInteractive(ask);
+
+    expect(questions).not.toContain("engine");
+    expect(questions).not.toContain("backend");
+    expect(questions).not.toContain("acp_version");
+    expect(opts.engine).toBeUndefined();
+    expect(opts.backend).toBeUndefined();
+    expect(opts.acp_version).toBeUndefined();
+  });
+
+  it("engine_args 는 옵트인 1줄 프롬프트로 남는다 — 빈 입력이면 opts 에 기록하지 않는다", async () => {
+    const { ask } = scriptedAsk({ source: "telegram", chat_id: "12345" });
+    const opts = await collectInteractive(ask);
+    expect(opts.engine_args).toBeUndefined();
+  });
+
+  it("engine_args 입력 시 opts.engine_args 로 그대로 반영된다", async () => {
+    const { ask } = scriptedAsk({
+      source: "telegram",
+      chat_id: "12345",
+      engine_args: "--model opus",
+    });
+    const opts = await collectInteractive(ask);
+    expect(opts.engine_args).toBe("--model opus");
   });
 });

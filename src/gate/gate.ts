@@ -10,7 +10,7 @@ export interface PermRequest {
   v: 1;
   id: string;
   lane: string;
-  channel: "telegram" | "markdown";
+  channel: string;
   tool: string;
   detail: string;
   cwd: string;
@@ -50,16 +50,25 @@ export async function gateRequestDecision(
 ): Promise<PermResponse> {
   const { sendPermPrompt, waitForDecision, timeoutMs = DEFAULT_GATE_TIMEOUT_MS } = opts;
 
-  const timeoutPromise = new Promise<"deny">((resolve) =>
-    setTimeout(() => resolve("deny"), timeoutMs),
-  );
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<"deny">((resolve) => {
+    timeoutHandle = setTimeout(() => resolve("deny"), timeoutMs);
+  });
 
   try {
     await sendPermPrompt(req);
   } catch {
+    // 전송 실패 즉시 deny — 대기 없이 반환하므로 타임아웃 타이머를 정리해 상주 누수를 막는다.
+    clearTimeout(timeoutHandle);
     return { id: req.id, decision: "deny", reason: "채널 전송 오류 — fail-closed deny" };
   }
 
-  const decision = await Promise.race([waitForDecision(), timeoutPromise]);
-  return { id: req.id, decision };
+  try {
+    const decision = await Promise.race([waitForDecision(), timeoutPromise]);
+    return { id: req.id, decision };
+  } finally {
+    // 결정 승리 경로에서도 타임아웃 타이머 clear — 미clear 시 결정 후 timeoutMs(기본 10분)만큼
+    // 타이머가 상주해 24h 기동 시 누적된다.
+    clearTimeout(timeoutHandle);
+  }
 }

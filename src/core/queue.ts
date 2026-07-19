@@ -1,10 +1,11 @@
 /**
- * atomic 저장·상태 전이·dedup.
- * tmp→rename 으로 부분 쓰기 미노출.
- * queue→processing→out 상태 전이는 원자적 rename.
+ * queue→processing 도메인 — atomic rename 기반 원자 전이. 소스 enqueue + injector claim 의
+ * 2 writer 라 lock-free rewrite 전제(단독 writer)가 성립하지 않아 rename 기반을 유지한다.
+ * tmp→rename 으로 부분 쓰기 미노출. out-상태(done/sending/sent/aborted/failed) 도메인은
+ * 레인당 단일 구조화 ledger(`src/core/out-ledger.ts`)로 이관됐다.
  */
 import { t } from "../shared/i18n.js";
-import { mkdir, rename, readdir, access, readFile } from "node:fs/promises";
+import { mkdir, rename, readdir, readFile, unlink } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { atomicWrite } from "../shared/fs-atomic.js";
 import { errMsg, errCode } from "../shared/errors.js";
@@ -12,6 +13,7 @@ import type { LanePaths } from "../shared/paths.js";
 import { serializeEnvelope, parseEnvelope } from "../shared/envelope.js";
 import type { Envelope } from "../shared/envelope.js";
 import { formatException } from "../shared/notify.js";
+import { setFailed } from "./out-ledger.js";
 
 /** queue 파일명 형식: <ts_ms>-<id>.msg */
 function queueFileName(envelope: Envelope): string {
@@ -105,7 +107,7 @@ export async function claimNext(
 /**
  * 손상된 processing 메시지를 격리한다(poison message 차단).
  * processing/<id>.msg → processing/<id>.msg.corrupt (scanProcessing 의 `.msg` 필터에서 제외돼
- * 재기동 시 재처리되지 않는다) + out/<id>.failed 가시성 기록.
+ * 재기동 시 재처리되지 않는다) + out-ledger state="failed" 가시성 기록.
  */
 export async function quarantineCorrupt(
   paths: LanePaths,
@@ -118,12 +120,12 @@ export async function quarantineCorrupt(
   try {
     await rename(src, corrupt);
   } catch (err) {
-    // 이미 격리됐거나(ENOENT) 다른 워커가 처리 — 격리 자체 실패는 로그만(가시성 .failed 는 계속 기록).
+    // 이미 격리됐거나(ENOENT) 다른 워커가 처리 — 격리 자체 실패는 로그만(가시성 state=failed 는 계속 기록).
     if (errCode(err) !== "ENOENT") {
       console.error(t("log.queue.quarantineFail", { id, code: errCode(err) ?? "unknown" }));
     }
   }
-  await writeFailed(
+  await setFailed(
     paths,
     id,
     t("queue.quarantined", { ts: new Date().toISOString(), detail }),
@@ -144,126 +146,19 @@ export async function scanProcessing(paths: LanePaths): Promise<string[]> {
   return files.filter((f) => f.endsWith(".msg")).map(idFromProcessingFile);
 }
 
-/**
- * out/<id>.out 존재 여부 검사 — dedup 판정.
- */
-export async function isDone(paths: LanePaths, id: string): Promise<boolean> {
-  const outPath = join(paths.outDir, `${id}.out`);
-  try {
-    await access(outPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * 해당 id 가 큐/처리/출력 어디든 이미 존재하는지 검사 — 크래시 재개 시 중복 enqueue 방지.
- * queue/<ts>-<id>.msg · processing/<id>.msg · out/<id>.out 중 하나라도 있으면 true.
- */
-export async function hasId(paths: LanePaths, id: string): Promise<boolean> {
-  if (await isDone(paths, id)) return true;
-  try {
-    await access(join(paths.processingDir, processingFileName(id)));
-    return true;
-  } catch {
-    // processing 에 없음 — 큐 검사로 진행
-  }
-  try {
-    const files = await readdir(paths.queueDir);
-    return files.some((f) => f.endsWith(`-${id}.msg`));
-  } catch {
-    return false;
-  }
-}
-
-export interface OutSidecar {
-  reply_ref?: { channel_msg_id: string; thread?: string };
-  /** turn 완료 시각(ISO). */
-  ts?: string;
-  /** 원본 메시지 전송(enqueue) 시각(envelope.ts) — 채널 렌더의 스탬프 SoT. */
-  origin_ts?: string;
-  /** 원본 질문 발췌(첫 줄, 마스킹) — 채널 렌더 헤더의 맥락 표시용. */
-  question?: string;
-}
-
-/**
- * 처리 결과를 out 디렉토리에 atomic rename 으로 기록.
- * <id>.out (텍스트) + <id>.out.json (sidecar).
- */
-export async function writeOut(
-  paths: LanePaths,
-  id: string,
-  text: string,
-  sidecar: OutSidecar,
-): Promise<void> {
-  // sidecar 를 먼저 확정한다 — `.out` 이 dedup/done 마커(isDone)이므로 본문을 마지막에 rename 하면
-  // "`.out` 존재 ⇒ sidecar 존재" 가 성립한다. 두 rename 사이 크래시에도 done 메시지가 reply_ref 를
-  // 잃지 않고, reader 가 `.out` 만 보고 sidecar 부재 창을 만나지 않는다.
-  await atomicWrite(join(paths.outDir, `${id}.out.json`), JSON.stringify(sidecar));
-  await atomicWrite(join(paths.outDir, `${id}.out`), text);
-}
-
-/**
- * 채널 전송 성공 마커 out/<id>.sent 기록(atomic). `.out`(응답 영속·dedup)과 분리해
- * "응답은 기록됐으나 채널 미전송" 상태를 표현 — render 실패 시 재전송 대상 판별에 쓰인다.
- */
-export async function markSent(paths: LanePaths, id: string): Promise<void> {
-  await atomicWrite(join(paths.outDir, `${id}.sent`), new Date().toISOString());
-}
-
-/** out/<id>.sent 존재 여부 — 채널 전송 완료 판정. */
-export async function isSent(paths: LanePaths, id: string): Promise<boolean> {
-  try {
-    await access(join(paths.outDir, `${id}.sent`));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * 응답은 기록됐으나(out/<id>.out) 채널 전송이 안 된(out/<id>.sent 부재) id 목록.
- * render 실패·크래시로 미전달된 응답의 재전송 대상.
- */
-export async function findUnsent(paths: LanePaths): Promise<string[]> {
-  let files: string[];
-  try {
-    files = await readdir(paths.outDir);
-  } catch {
-    return [];
-  }
-  const sent = new Set(
-    files.filter((f) => f.endsWith(".sent")).map((f) => f.replace(/\.sent$/, "")),
-  );
-  return files
-    .filter((f) => f.endsWith(".out"))
-    .map((f) => f.replace(/\.out$/, ""))
-    .filter((id) => !sent.has(id));
-}
-
-/**
- * inject 실패 등 처리 실패를 out/<id>.failed 로 기록(E1, 가시성).
- * dedup 마커(.out)가 아니므로 processing/<id>.msg 는 남아 재기동 시 재처리된다(at-least-once 유지).
- */
-export async function writeFailed(paths: LanePaths, id: string, reason: string): Promise<void> {
-  await atomicWrite(join(paths.outDir, `${id}.failed`), reason);
-}
-
 /** processing/<id>.msg 경로를 직접 반환 (재처리 복원 등에 사용). */
 export function processingFilePath(paths: LanePaths, id: string): string {
   return join(paths.processingDir, processingFileName(id));
 }
 
-/** out/<id>.out.json sidecar 읽기. */
-export async function readSidecar(paths: LanePaths, id: string): Promise<OutSidecar | null> {
-  const sidecarPath = join(paths.outDir, `${id}.out.json`);
-  try {
-    const json = await readFile(sidecarPath, "utf8");
-    return JSON.parse(json) as OutSidecar;
-  } catch {
-    return null;
-  }
+/**
+ * 처리 완료(out-ledger state=done 기록) 후 잉여가 된 processing/<id>.msg 를 제거(M5) — dedup 앵커는
+ * ledger 이므로(isDone/hasId 가 out-ledger 로 판정) 이 삭제는 재기동 dedup 을 깨지 않고 processing/
+ * 무한 증가만 막는다. done 이 기록되기 *전* 실패 경로에서는 호출하지 않는다(at-least-once 재처리
+ * 보존 — setFailed 주석). 부재(이미 없음)는 무시.
+ */
+export async function clearProcessing(paths: LanePaths, id: string): Promise<void> {
+  await unlink(processingFilePath(paths, id)).catch(() => {});
 }
 
 export { basename };

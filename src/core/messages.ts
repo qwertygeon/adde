@@ -6,6 +6,13 @@
  */
 import { t } from "../shared/i18n.js";
 
+/**
+ * CLI 종료 코드 3-계약(표면 계약 SSOT) — 전 디스패치(run/ops/lane/proj)가 이 상수를 참조한다.
+ * OK: 정상 완료·`-h/--help`·`-v/--version`. FAIL: 운영 실패(런타임 예외·기동 실패·값 검증 실패·
+ * 미지원 명령/서브커맨드). USAGE: 파서 오류(unknown-flag/value-required) + 필수 위치인자 누락.
+ */
+export const EXIT = { OK: 0, FAIL: 1, USAGE: 2 } as const;
+
 /** CLI 명령 표면. 최소 표면 원칙. */
 export const COMMANDS = {
   /** 주 진입점. */
@@ -41,6 +48,9 @@ export const USAGE = {
   },
   get laneAdd(): string {
     return t("usage.laneAdd");
+  },
+  get laneSet(): string {
+    return t("usage.laneSet");
   },
   get laneLs(): string {
     return t("usage.laneLs");
@@ -79,6 +89,19 @@ export function cmdError(cmd: string, detail: string): string {
 /** `adde lane` 하위 오류 — `[adde lane] <detail>`. */
 export function laneError(detail: string): string {
   return t("cli.laneError", { detail });
+}
+
+/**
+ * 파서 오류(kind+token)를 i18n 렌더링 텍스트로 변환 — 값 echo 없이 플래그/키 이름만 포함(A-P003).
+ * run/ops/lane/proj 디스패치가 공유하는 미지원 플래그·값 누락 오류 문구 SSOT.
+ */
+export function flagErrorText(error: {
+  kind: "unknown-flag" | "value-required";
+  token: string;
+}): string {
+  return error.kind === "value-required"
+    ? t("cli.valueRequired", { key: error.token })
+    : t("cli.unknownFlag", { flag: error.token });
 }
 
 /** 알 수 없는 lane 서브커맨드 안내(+ 사용법). */

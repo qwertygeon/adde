@@ -4,7 +4,7 @@ _English | [한국어](markdown.ko.md)_
 
 In button-less environments you drive an AI lane **just by editing markdown note files**. You send instructions with a checkbox in the inbox note, allow/deny permissions with checkboxes in the approval notes, and receive responses in output notes.
 
-This works in any markdown editor, but the **Obsidian + sync (Obsidian Sync / Syncthing)** combination fits best — notes sync to mobile without a server, and you can toggle checkboxes by tapping. This document uses Obsidian as the representative example.
+This works in any markdown editor and stays entirely in local files. To reach the notes from your phone, sync the folder with whatever tool you already use (Obsidian Sync, Syncthing, iCloud, …) — ADDE is sync-tool-agnostic and doesn't care which. The examples below use Obsidian, but nothing here is Obsidian-specific.
 
 ## Table of Contents
 
@@ -15,6 +15,7 @@ This works in any markdown editor, but the **Obsidian + sync (Obsidian Sync / Sy
 - [4. Receiving responses (output notes)](#4-receiving-responses-output-notes)
 - [5. Permission approval (approval notes)](#5-permission-approval-approval-notes)
 - [Mapping multiple notes/projects](#mapping-multiple-notesprojects)
+- [Keeping the vault light (retention & backup relocation)](#keeping-the-vault-light-retention--backup-relocation)
 - [Sync conflicts and caveats](#sync-conflicts-and-caveats)
 - [Syncing vaults and exposure of sensitive data](#syncing-vaults-and-exposure-of-sensitive-data)
 - [Troubleshooting](#troubleshooting)
@@ -45,15 +46,38 @@ acp_version=v1
 # the project folder the AI engine actually works in (absolute path)
 cwd=/Users/me/work/my-project
 
+# markdown adapter keys are namespaced as markdown.<field>
 # markdown root directory (absolute path, e.g. Obsidian vault)
-root=/Users/me/ObsidianVault
+markdown.root=/Users/me/ObsidianVault
 
 # path relative to root — input note (required)
-inbox=adde/my-lane/inbox.md
+markdown.inbox=adde/my-lane/inbox.md
 
 # optional (auto-placed as inbox siblings if omitted): approvals dir (one file per request) / output dir
-approvals=adde/my-lane/approvals/
-outbox=adde/my-lane/out/
+markdown.approvals=adde/my-lane/approvals/
+markdown.outbox=adde/my-lane/out/
+
+# optional (opt-in): archive directory. When set, a sent message's body is moved here at send time
+# as a dated file (YYYY-MM-DD.md), leaving only the compact `✅ sent [[...]]` marker in the inbox
+# (keeps a long-running inbox small). If omitted, bodies stay in the inbox (current behavior); you
+# can still archive on demand with a `🗄️ archive` checkbox.
+# Note: before v0.1.5, this was a single file. An existing single archive file from an older
+# version is auto-migrated (moved into the backup folder below, or kept alongside as `<name>.legacy`
+# if no backup folder is set) the first time the lane starts after upgrading.
+markdown.archive=adde/my-lane/sent-archive/
+
+# optional (opt-in, off by default): local backup folder. Output notes, decided approvals, and
+# archive files older than retention_days are moved here once a day — see "Keeping the vault light"
+# below for details.
+# markdown.backup=/Users/me/adde-backup
+# markdown.retention_days=2
+
+# optional (opt-in, off by default): also delete old internal bookkeeping files once this many
+# days past completion (not vault notes — see "Keeping the vault light" below).
+# markdown.out_retention_days=5
+
+# optional: sync provider for the vault (local | icloud). Only relevant with markdown.backup above.
+# markdown.sync_provider=icloud
 
 # optional: pre-allow frequently used tools to reduce approval frequency (gate stays on)
 allowlist=Read,Grep
@@ -68,7 +92,7 @@ allowlist=Read,Grep
 ```
 
 - `cwd` is this lane's AI working folder. Assigning a **different folder per lane** pairs a note with a project 1:1.
-- Only `root` is an absolute path; `inbox`, `approvals`, and `outbox` are relative to root. (If you use Obsidian, `root` is your vault path.)
+- Only `markdown.root` is an absolute path; `markdown.inbox`, `markdown.approvals`, and `markdown.outbox` are relative to root. (If you use Obsidian, `markdown.root` is your vault path.)
 - Create the input note (`inbox.md`) yourself in the editor (without it, no instructions can be received).
 - ⚠️ **Keep the control notes outside `cwd`**: if inbox/approvals/outbox live inside the AI working folder (`cwd`), the AI could forge an approval note during its own work, so **startup is refused** (fail-closed). Separate the vault and the project folder.
 - ⚠️ **allowlist is auto-run**: tools in the allowlist are auto-allowed without channel approval (prompt skipped, still recorded in the transcript). Don't add broad tools like `Bash` or file writes (self-approval risk).
@@ -119,6 +143,15 @@ You can use **session-control labels** with the same contract as send (exact lab
 ```
 
 When processed, the line terminates as `✅ sent [[...]]` and the result (completion notice / session list) is linked into a response note. Control labels act as message boundaries like send, so put them **alone on their own line**. Details: [command reference](commands.md#session-control-channel-commands).
+
+### Archiving sent messages (keeping the inbox small)
+
+Over a long-running lane the inbox accumulates the bodies of every message you've sent. Two ways to move them into an archive file, keeping only the compact `✅ sent [[...]]` marker in the inbox:
+
+- **Automatic (opt-in)**: set `markdown.archive=<path>` (see config above). At send time the message body is moved into that file and removed from the inbox — the `✅ sent` marker stays as the separator and clickable link. If unset, bodies stay in the inbox.
+- **On demand**: check a `- [x] 🗄️ archive` box. It moves the bodies of all existing `✅ sent` messages into the archive file (works with or without the config). The line terminates as `- [x] 🗄️ archived N <time>` (with `· auto` appended when the automatic mode is on). It only touches completed `✅ sent` segments — a message you're still drafting is never archived.
+
+The archive is a directory of plain append-only dated files (`<archive-dir>/YYYY-MM-DD.md`, each entry a `## [[send-time id]]` heading + the body). Your delivered messages and responses are unaffected — archiving only rewrites the inbox surface, never the queue or the response notes, so it can never lose or re-send a message.
 
 ## 4. Receiving responses (output notes)
 
@@ -172,9 +205,25 @@ Keep several conf files in `lanes.d/` and several lanes run at once. Each lane h
 
 One `adde up work` brings up all three lanes at once, each with its own note↔folder pair.
 
+## Keeping the vault light (retention & backup relocation)
+
+Every note ADDE writes into the vault stays there unless you set this up — over months a long-running lane accumulates a lot of output notes, decided approvals, and archived text, adding to sync traffic and your editor's indexing cost.
+
+**Date-partitioned folders (always on)**: output notes and decided approval files are organized into `YYYY-MM-DD/` subfolders by send/decision date (e.g. `out/2026-07-10/20260710-162045 a1b2.md`). This applies whether or not you configure anything below — wikilinks, delivery, and responses are unaffected; when browsing, just look one folder level deeper. Files without a send timestamp (from before this feature) stay at the top level.
+
+**Local backup relocation (opt-in, off by default)**: set `markdown.backup=<local folder path>` to move everything older than `markdown.retention_days` days (default 2) into that folder once a day. This moves files, it does not delete them — the backup folder mirrors the vault's layout, so anything can still be browsed or restored from there. A file is only removed from the vault after its copy in the backup folder is verified, so an interruption (crash, sleep) never loses data — relocation simply resumes next time. The backup path can be anywhere outside the vault (including a different disk), but it can't overlap the vault or ADDE's internal state folders (startup is refused if it does).
+
+⚠️ **Wikilinks break after relocation**: once a note moves to the backup folder, the inbox's `[[send-time id]]` wikilink to it no longer resolves in your editor (the file is no longer in the vault). This is an accepted trade-off of moving files out of the vault — keep notes you reference often within the retention window, or open them directly from the backup folder.
+
+**iCloud vaults**: if your vault syncs via iCloud, add `markdown.sync_provider=icloud`. Files iCloud hasn't downloaded to this device yet (a "placeholder") are downloaded before being moved; if a download is slow or fails, that one file is skipped for this run and retried the next day (the rest of the relocation still proceeds). Leave this unset (default `local`) for vaults synced by anything else (Obsidian Sync, Syncthing, Dropbox, a plain local folder, or no sync at all) — no download-wait applies there.
+
+**Internal cleanup (opt-in, off by default)**: `markdown.out_retention_days=<days>` additionally deletes old internal bookkeeping files (not vault notes — an invisible state folder ADDE uses to avoid re-sending messages) once they're this many days past completion. It must be at least `retention_days + 1`, or the lane refuses to start with an explanation. Leave it unset if you're unsure; nothing else behaves differently either way.
+
+**Not supported**: multiple lanes sharing the exact same `markdown.root` (relocation runs independently per lane and isn't coordinated across lanes pointed at the same vault) — use the [multiple notes/projects](#mapping-multiple-notesprojects) pattern (a separate `root`/`inbox` per lane) instead.
+
 ## Sync conflicts and caveats
 
-- **Conflict-file isolation**: `*.sync-conflict*` / `(conflicted copy)` files created by Obsidian Sync / Syncthing are isolated by ADDE into a `.conflicts/` folder and **never executed**.
+- **Conflict-file isolation**: `*.sync-conflict*` / `(conflicted copy)` files — created by whatever sync tool you use (Obsidian Sync, Syncthing, Dropbox, …) — are isolated by ADDE into a `.conflicts/` folder and **never executed**.
 - **Self-write safety**: even when ADDE updates the inbox/approval notes (status markers), no re-send loop occurs (idempotent via markers).
 - **Watch concurrent edits**: if you edit the same line at the exact moment ADDE updates a note, a sync conflict can occur. An active session viewed on one device is recommended.
 

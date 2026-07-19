@@ -10,11 +10,17 @@ import {
   listRegisteredProjects,
   runDoctor,
   readLogs,
+  readHalt,
+  clearHalt,
 } from "../../src/core/diagnostics.js";
 import { writeRuntime } from "../../src/core/runtime-state.js";
 import type { RuntimeInfo } from "../../src/core/runtime-state.js";
-import { lanePaths } from "../../src/shared/paths.js";
+import { lanePaths, daemonHaltPath, daemonBootsPath } from "../../src/shared/paths.js";
+import { createCrashLoopGuard } from "../../src/core/crash-loop.js";
 import type { LaunchctlExec as LaunchctlExecType } from "../../src/core/launchd.js";
+import type { HaltRecord } from "../../src/core/crash-loop.js";
+import { SOURCE_REGISTRY } from "../../src/src-adapters/index.js";
+import { parseLaneConf } from "../../src/shared/conf.js";
 
 // SC2: status running/dead/stopped 구분. SC3: doctor 점검+힌트. SC4: logs tail.
 // SC-008/009/014/015: daemon 등록 점검 케이스 (daemon-lifecycle spec)
@@ -202,17 +208,30 @@ describe("runDoctor (SC3)", () => {
   it("root(존재)+inbox 지정 markdown 레인은 마크다운 경로 PASS", async () => {
     const rootDir = path.join(tmpBase, "vault");
     fs.mkdirSync(rootDir, { recursive: true });
-    writeConf("p", "md-ok", mdConf(`root=${rootDir}\ninbox=inbox.md\n`));
+    writeConf("p", "md-ok", mdConf(`markdown.root=${rootDir}\nmarkdown.inbox=inbox.md\n`));
     const checks = await runDoctor("p", { base: tmpBase });
     const md = checks.find((c) => c.name.endsWith("마크다운 경로"));
     expect(md?.level).toBe("PASS");
   });
 
   it("존재하지 않는 root 의 markdown 레인은 마크다운 경로 FAIL", async () => {
-    writeConf("p", "md-noroot", mdConf(`root=${path.join(tmpBase, "no-vault")}\ninbox=inbox.md\n`));
+    writeConf(
+      "p",
+      "md-noroot",
+      mdConf(`markdown.root=${path.join(tmpBase, "no-vault")}\nmarkdown.inbox=inbox.md\n`),
+    );
     const checks = await runDoctor("p", { base: tmpBase });
     const md = checks.find((c) => c.name.endsWith("마크다운 경로"));
     expect(md?.level).toBe("FAIL");
+  });
+
+  it("구 평면 어댑터 키(root=)를 쓰면 conf format FAIL 로 마이그레이션을 안내한다", async () => {
+    // 클린 브레이크: 파서가 구 키를 무시하므로 doctor 가 감지해 포맷 변경을 알린다(조용한 실패 방지).
+    writeConf("p", "md-legacy", mdConf(`root=${tmpBase}\ninbox=inbox.md\n`));
+    const checks = await runDoctor("p", { base: tmpBase });
+    const fmt = checks.find((c) => c.name.endsWith("conf format"));
+    expect(fmt?.level).toBe("FAIL");
+    expect(fmt?.detail).toContain("root");
   });
 
   it("그룹/기타 읽기 가능한 .env 는 파일 권한 WARN (토큰 노출)", async () => {
@@ -259,6 +278,23 @@ describe("runDoctor (SC3)", () => {
     const checks = await runDoctor("p", { base: tmpBase });
     const perms = checks.find((c) => c.name.endsWith("파일 권한"));
     expect(perms?.level).toBe("PASS");
+  });
+
+  it("shared 선언인데 state 디렉터리가 0700(private→shared 편집 미완화)이면 INFO 로 불일치 표면화", async () => {
+    // v0.1.5/020: secureLaneDirs(shared) 는 no-op 이라 기존 private(0700) 이 유지 — 안전하나
+    // conf 선언(shared)과 실 권한(0700)이 불일치. FAIL/WARN 아닌 INFO 로 인지만 돕는다.
+    writeConf("p", "lane1", conf("file_mode=shared\n"));
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o700);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const permsAll = checks.filter((c) => c.name.endsWith("파일 권한"));
+    // 정확히 1건 — INFO 와 PASS 가 동시 push 되지 않음(PASS 분기의 !sharedTightState 가드).
+    expect(permsAll).toHaveLength(1);
+    const perms = permsAll[0];
+    expect(perms?.level).toBe("INFO");
+    expect(perms?.detail).toContain("700");
+    expect(perms?.hint).toBeTruthy();
   });
 });
 
@@ -307,6 +343,37 @@ describe("readLogs (SC4)", () => {
     const res = await readLogs("p", "lane1", 50, { base: tmpBase, engine: true });
     expect(res.exists).toBe(false);
     expect(res.path).toBe(lp.engineLog);
+  });
+});
+
+// readLogs — 스냅샷 종료 바이트 오프셋·inode 반환(코어 파트) — SC-104. ops.ts runLogs 의 follow
+// 진입이 이 값을 그대로 startOffset·startIno 로 이어받아 별도 stat 경합 창을 없앤다(ADR-004).
+describe("readLogs — endOffset·startIno 반환 (SC-104 코어)", () => {
+  it("endOffset 은 스냅샷이 읽은 바이트 종료 오프셋, startIno 는 파일 inode 다", async () => {
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.writeFileSync(lp.transcriptLog, "a\nb\nc\n");
+    const res = await readLogs("p", "lane1", 50, { base: tmpBase });
+    const st = fs.statSync(lp.transcriptLog);
+    expect(res.endOffset).toBe(st.size);
+    expect(res.startIno).toBe(st.ino);
+  });
+
+  it("파일 부재 시 endOffset·startIno 는 0", async () => {
+    const res = await readLogs("p", "ghost", 50, { base: tmpBase });
+    expect(res.endOffset).toBe(0);
+    expect(res.startIno).toBe(0);
+  });
+
+  it("--engine 옵션 시 engine.log 기준 endOffset·startIno 를 반환한다", async () => {
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.writeFileSync(lp.transcriptLog, "transcript-line\n");
+    fs.writeFileSync(lp.engineLog, ["err1", "err2"].join("\n") + "\n");
+    const res = await readLogs("p", "lane1", 50, { base: tmpBase, engine: true });
+    const st = fs.statSync(lp.engineLog);
+    expect(res.endOffset).toBe(st.size);
+    expect(res.startIno).toBe(st.ino);
   });
 });
 
@@ -461,5 +528,180 @@ describe("기존 conf·runtime.json 스키마 비침해 (SC-015)", () => {
     // conf 파일 내용 불변
     const afterContent = fs.readFileSync(confPath, "utf8");
     expect(afterContent).toBe(confContent);
+  });
+});
+
+// ── readHalt / clearHalt (SC-023·024·025 지원 프리미티브) ──────────────────
+
+describe("readHalt / clearHalt", () => {
+  it("daemon-halt.json 부재 시 readHalt 는 null", async () => {
+    expect(await readHalt(tmpBase, "haltproj")).toBeNull();
+  });
+
+  it("daemon-halt.json 존재 시 readHalt 가 원인·시점·카운트를 반환한다", async () => {
+    const haltPath = daemonHaltPath(tmpBase, "haltproj");
+    fs.mkdirSync(path.dirname(haltPath), { recursive: true });
+    const record: HaltRecord = {
+      reason: "crash-loop",
+      haltedAt: "2026-07-08T00:00:00.000Z",
+      consecutiveShortLived: 5,
+    };
+    fs.writeFileSync(haltPath, JSON.stringify(record));
+
+    const result = await readHalt(tmpBase, "haltproj");
+    expect(result).toEqual(record);
+  });
+
+  it("clearHalt 는 daemon-halt.json 을 제거한다(멱등 — 부재 시에도 throw 없음)", async () => {
+    const haltPath = daemonHaltPath(tmpBase, "haltproj");
+    fs.mkdirSync(path.dirname(haltPath), { recursive: true });
+    fs.writeFileSync(
+      haltPath,
+      JSON.stringify({ reason: "x", haltedAt: "2026-07-08T00:00:00.000Z", consecutiveShortLived: 5 }),
+    );
+
+    await clearHalt(tmpBase, "haltproj");
+    expect(fs.existsSync(haltPath)).toBe(false);
+
+    // 이미 제거된 상태에서 재호출해도 throw 없음(ENOENT 흡수 — 멱등).
+    await expect(clearHalt(tmpBase, "haltproj")).resolves.toBeUndefined();
+  });
+
+  it("clearHalt 는 짧은-수명 연속 카운터(daemon-boots.json)도 함께 제거한다 — 재시도 부팅이 즉시 재정지하지 않도록", async () => {
+    const haltPath = daemonHaltPath(tmpBase, "haltproj");
+    const bootsPath = daemonBootsPath(tmpBase, "haltproj");
+    fs.mkdirSync(path.dirname(haltPath), { recursive: true });
+    fs.writeFileSync(
+      haltPath,
+      JSON.stringify({ reason: "x", haltedAt: "2026-07-08T00:00:00.000Z", consecutiveShortLived: 6 }),
+    );
+    fs.writeFileSync(bootsPath, JSON.stringify({ consecutiveShortLived: 6 }));
+
+    await clearHalt(tmpBase, "haltproj");
+    expect(fs.existsSync(haltPath)).toBe(false);
+    expect(fs.existsSync(bootsPath)).toBe(false);
+  });
+
+  it("halt 후 clearHalt → 다음 부팅은 streak 을 승계하지 않는다 (회귀 — 실 launchd 검증에서 발견: restart 마다 즉시 재정지)", async () => {
+    const proj = "haltproj";
+    // halt 상태를 실제 guard 로 재현: 임계 2 로 두 번 연속 짧은-수명 부팅.
+    const mk = () => createCrashLoopGuard({ base: tmpBase, proj, maxShortLived: 2 });
+    await mk().checkOnBoot(); // count 1
+    const second = await mk().checkOnBoot(); // count 2 → halt
+    expect(second.halt).toBe(true);
+
+    // 사용자 명시 재시도(adde up/restart 경로) — halt + 카운터 모두 초기화돼야 한다.
+    await clearHalt(tmpBase, proj);
+
+    const retry = await mk().checkOnBoot();
+    expect(retry.halt).toBe(false);
+    expect(retry.count).toBe(1);
+  });
+});
+
+// ── runDoctor — halt 자가정지 표면화 (SC-024 Happy) ────────────────────────
+
+describe("runDoctor — halt 자가정지 표면화 (SC-024)", () => {
+  it("daemon-halt.json 존재 시 'FAIL' + 자가 정지 안내 + restart 조치 힌트를 표면화한다", async () => {
+    writeConf("haltp", "lane1", conf());
+    const haltPath = daemonHaltPath(tmpBase, "haltp");
+    fs.mkdirSync(path.dirname(haltPath), { recursive: true });
+    fs.writeFileSync(
+      haltPath,
+      JSON.stringify({
+        reason: "crash-loop",
+        haltedAt: "2026-07-08T00:00:00.000Z",
+        consecutiveShortLived: 5,
+      }),
+    );
+
+    const checks = await runDoctor("haltp", { base: tmpBase });
+    const haltCheck = checks.find((c) => c.detail.includes("자가 정지") || c.hint?.includes("restart"));
+    expect(haltCheck).toBeDefined();
+    expect(haltCheck?.level).toBe("FAIL");
+    expect(haltCheck?.hint).toBeTruthy();
+    expect(haltCheck?.hint).toMatch(/restart/);
+  });
+
+  it("daemon-halt.json 부재 시 halt 관련 FAIL 항목이 없다(정상 상태)", async () => {
+    writeConf("nohaltp", "lane1", conf());
+
+    const checks = await runDoctor("nohaltp", { base: tmpBase });
+    const haltCheck = checks.find((c) => c.detail.includes("자가 정지"));
+    expect(haltCheck).toBeUndefined();
+  });
+});
+
+// ── runDoctor — auto_restart=off 죽은-등록 표면화 (SC-026 Edge) ────────────
+//
+// 테스트 환경 한계(기존 daemon 등록 점검 describe 의 주석과 동일 제약): daemonRegState 의
+// plistExists 는 실 home 경로를 stat 하므로(runDoctor 는 home override 를 받지 않음) 테스트
+// 환경에서 항상 plistExists=false 다. 따라서 "plistExists && launchctlRegistered && running===0"
+// 조합(구현의 신규 deadReg 경고 분기)의 **완전한 재현은 실 macOS 검증 영역**이다(test-cases.md
+// 미커버 항목 카테고리(2)). 여기서는 도달 가능한 결합(plist 불일치 + running===0)에서 "거짓 UP"
+// 으로 보고되지 않음을 확인한다 — 기존 daemon 등록 점검 describe 의 검증 한계와 동일 관례.
+describe("runDoctor — auto_restart=off 죽은-등록 표면화 (SC-026)", () => {
+  const isDarwin = process.platform === "darwin";
+
+  it("등록 잔존(불일치 조합) + running===0 이어도 'PASS(정상)' 로 오인 보고하지 않는다(거짓 UP 없음)", async () => {
+    if (!isDarwin) {
+      expect(true).toBe(true);
+      return;
+    }
+    writeConf("deadregproj", "lane1", conf());
+    // lane1 은 runtime.json 없음 → collectStatus 상 stopped(running 아님) → running===0.
+    const label = "com.qwertygeon.adde.deadregproj";
+    const fakeExec: LaunchctlExecType = async (args) => {
+      if (args[0] === "list") {
+        return { stdout: `PID\tStatus\tLabel\n-\t0\t${label}\n`, code: 0 };
+      }
+      return { stdout: "", code: 0 };
+    };
+
+    const checks = await runDoctor("deadregproj", { base: tmpBase, launchctlExec: fakeExec });
+    const rows = await collectStatus("deadregproj", { base: tmpBase });
+    expect(rows.every((r) => r.status !== "running")).toBe(true);
+
+    const daemonCheck = checks.find((c) => c.name.startsWith("daemon 등록"));
+    expect(daemonCheck).toBeDefined();
+    expect(daemonCheck?.level).not.toBe("PASS");
+  });
+});
+
+// ── 005-source-extensibility ─────────────────────────────────────────────
+
+describe("SC-006: telegram doctor 진단이 소스 정의(descriptor.doctorChecks) 위임으로 수행된다", () => {
+  it("토큰 미존재(.env 부재)는 기존과 동일하게 토큰 누락 FAIL 로 보고된다", async () => {
+    writeConf("sc006", "tg", conf());
+    const checks = await runDoctor("sc006", { base: tmpBase });
+    const tokenCheck = checks.find((c) => c.name.includes("토큰"));
+    expect(tokenCheck?.level).toBe("FAIL");
+  });
+
+  it("SOURCE_REGISTRY.telegram.doctorChecks 를 직접 호출해도 토큰 부재를 FAIL 로 반환한다(descriptor 직접 대조)", async () => {
+    const lp = lanePaths(tmpBase, "sc006b", "tg");
+    fs.mkdirSync(lp.stateDir, { recursive: true }); // .env 없음
+    const doctorChecks = SOURCE_REGISTRY["telegram"]?.doctorChecks;
+    expect(typeof doctorChecks).toBe("function");
+    const result = await doctorChecks!({ lane: "tg", conf: parseLaneConf(conf()), paths: lp });
+    expect(result.some((c) => c.level === "FAIL")).toBe(true);
+  });
+});
+
+describe("SC-007: markdown doctor 진단이 소스 정의(descriptor.doctorChecks) 위임으로 수행된다", () => {
+  it("root 경로 부재는 기존과 동일하게 마크다운 경로 FAIL 로 보고된다", async () => {
+    writeConf("sc007", "md", mdConf(`markdown.root=${path.join(tmpBase, "NoSuchRoot")}\n`));
+    const checks = await runDoctor("sc007", { base: tmpBase });
+    const mdCheck = checks.find((c) => c.name.includes("마크다운"));
+    expect(mdCheck?.level).toBe("FAIL");
+  });
+
+  it("SOURCE_REGISTRY.markdown.doctorChecks 를 직접 호출해도 root 부재를 FAIL 로 반환한다(descriptor 직접 대조)", async () => {
+    const lp = lanePaths(tmpBase, "sc007b", "md");
+    const doctorChecks = SOURCE_REGISTRY["markdown"]?.doctorChecks;
+    expect(typeof doctorChecks).toBe("function");
+    const badConf = parseLaneConf(mdConf(`markdown.root=${path.join(tmpBase, "NoSuchRoot2")}\n`));
+    const result = await doctorChecks!({ lane: "md", conf: badConf, paths: lp });
+    expect(result.every((c) => c.level === "FAIL")).toBe(true);
   });
 });

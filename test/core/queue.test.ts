@@ -3,13 +3,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { enqueue, claimNext, scanProcessing, isDone, writeOut } from "../../src/core/queue.js";
+import { enqueue, claimNext, scanProcessing } from "../../src/core/queue.js";
 import { lanePaths } from "../../src/shared/paths.js";
 
 // fake fs quirk 재현: atomic rename 중간상태·.sync-conflict 출현
 // SC-002: atomic rename — tmp 파일이 queue/ 에 노출되지 않음
 // SC-003: processing 잔존 파일 재처리
-// SC-005: out 존재 시 dedup (isDone)
+//
+// out-상태(isDone/writeOut/markSent/markSending/findUnsent 등)는 out-ledger.ts 로 이동했다
+// (013-out-state-ledger DEC-003·research §F) — 해당 describe 는 test/core/out-ledger.test.ts 로
+// 이전했다. 본 파일은 queue→processing 도메인만 다룬다(013 tasks.md D-02).
 
 let tmpBase: string;
 let paths: ReturnType<typeof lanePaths>;
@@ -101,34 +104,5 @@ describe("scanProcessing (SC-003 크래시 재처리)", () => {
   });
 });
 
-describe("isDone (SC-005 dedup)", () => {
-  it("out/<id>.out 가 존재하면 true 를 반환한다", async () => {
-    const id = "done-001";
-    fs.writeFileSync(path.join(paths.outDir, `${id}.out`), "응답 텍스트");
-    expect(await isDone(paths, id)).toBe(true);
-  });
-
-  it("out/<id>.out 가 없으면 false 를 반환한다", async () => {
-    expect(await isDone(paths, "not-done")).toBe(false);
-  });
-});
-
-describe("writeOut (SC-005 dedup + atomic)", () => {
-  it("writeOut 후 out/<id>.out 파일이 존재한다", async () => {
-    await writeOut(paths, "out-001", "응답 텍스트", { reply_ref: { channel_msg_id: "42" } });
-    const outFile = path.join(paths.outDir, "out-001.out");
-    expect(fs.existsSync(outFile)).toBe(true);
-    expect(fs.readFileSync(outFile, "utf8")).toBe("응답 텍스트");
-  });
-
-  it("writeOut 후 sidecar .out.json 파일이 존재한다", async () => {
-    await writeOut(paths, "out-002", "텍스트", { reply_ref: { channel_msg_id: "99" } });
-    const sidecar = path.join(paths.outDir, "out-002.out.json");
-    expect(fs.existsSync(sidecar)).toBe(true);
-  });
-
-  it("writeOut 후 isDone 이 true 를 반환한다 (dedup 게이트)", async () => {
-    await writeOut(paths, "out-003", "내용", { reply_ref: { channel_msg_id: "1" } });
-    expect(await isDone(paths, "out-003")).toBe(true);
-  });
-});
+// out-상태 dedup(isDone)·전송 저널(sending/sent/aborted)·findUnsent 종단 제외는
+// test/core/out-ledger.test.ts(SC-001·002·003)로 이전됨(ledger entry/state 단언).

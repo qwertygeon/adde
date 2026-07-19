@@ -26,7 +26,7 @@ export interface Envelope {
   v: 1;
   id: string;
   lane: string;
-  source: "telegram" | "markdown";
+  source: string;
   backend: "acp";
   engine: string;
   project: string;

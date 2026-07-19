@@ -17,6 +17,8 @@ export interface LanePaths {
   queueDir: string;
   processingDir: string;
   outDir: string;
+  /** out-상태 구조화 레코드(013-out-state-ledger) — id → {state, sidecar} 단일 파일. */
+  outLedgerFile: string;
   stateDir: string;
   envFile: string;
   sessionIdFile: string;
@@ -84,6 +86,30 @@ export function pathsOverlap(a: string, b: string): boolean {
   return isPathInside(na, nb) || isPathInside(nb, na);
 }
 
+/** `<base>/<proj>/proj.conf` — 프로젝트 수준 설정(auto_restart 등). 데몬은 proj 당 1개라 레인 하위가 아닌 proj 루트. */
+export function projConfPath(base: string, proj: string): string {
+  assertSafeSegment("proj", proj);
+  return join(base, proj, "proj.conf");
+}
+
+/** `<base>/<proj>/daemon-boots.json` — 크래시루프 짧은-수명 연속 카운터(데몬 단일 writer). */
+export function daemonBootsPath(base: string, proj: string): string {
+  assertSafeSegment("proj", proj);
+  return join(base, proj, "daemon-boots.json");
+}
+
+/** `<base>/<proj>/daemon-halt.json` — 크래시루프 자가 정지 기록(원인·시점). */
+export function daemonHaltPath(base: string, proj: string): string {
+  assertSafeSegment("proj", proj);
+  return join(base, proj, "daemon-halt.json");
+}
+
+/** `<base>/<proj>/daemon-boot-report.json` — 최신 부팅 리포트(데몬 단일 writer, CLI reader). */
+export function daemonBootReportPath(base: string, proj: string): string {
+  assertSafeSegment("proj", proj);
+  return join(base, proj, "daemon-boot-report.json");
+}
+
 export function lanePaths(base: string, proj: string, lane: string): LanePaths {
   assertSafeSegment("proj", proj);
   assertSafeSegment("lane", lane);
@@ -94,6 +120,7 @@ export function lanePaths(base: string, proj: string, lane: string): LanePaths {
     queueDir: join(root, "queue", lane),
     processingDir: join(root, "processing", lane),
     outDir: join(root, "out", lane),
+    outLedgerFile: join(root, "out", lane, "ledger.json"),
     stateDir,
     envFile: join(stateDir, ".env"),
     sessionIdFile: join(stateDir, "session.id"),

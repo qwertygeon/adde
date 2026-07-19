@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runCheck, flattenCatalog, checkParity, placeholders } from "../../scripts/check-i18n.js";
 import { en } from "../../src/shared/locales/en.js";
+import { ko } from "../../src/shared/locales/ko.js";
 
 describe("i18n 패리티 — 실제 카탈로그", () => {
   it("en/ko 키·플레이스홀더·빈 문자열 이슈 0건", () => {
@@ -9,6 +10,87 @@ describe("i18n 패리티 — 실제 카탈로그", () => {
 
   it("카탈로그에 키가 존재한다", () => {
     expect(flattenCatalog(en).size).toBeGreaterThan(0);
+  });
+});
+
+// SC-009 (FR-007 관련 — i18n 패리티): 자가 재기동 시도·포기(ON)·비활성(OFF) 메시지 키가
+// ko/en 카탈로그에 존재하고 플레이스홀더가 일치한다. 002-lane-engine-recovery.
+describe("i18n 패리티 — selfRecovery 키 (SC-009)", () => {
+  it("supervisor.selfRecovery.{attempt,abandoned,disabled} 키가 en/ko 양쪽에 존재한다", () => {
+    const enFlat = flattenCatalog(en);
+    const koFlat = flattenCatalog(ko);
+    for (const key of [
+      "supervisor.selfRecovery.attempt",
+      "supervisor.selfRecovery.abandoned",
+      "supervisor.selfRecovery.disabled",
+    ]) {
+      expect(enFlat.has(key), `en 카탈로그에 ${key} 키가 있어야 한다`).toBe(true);
+      expect(koFlat.has(key), `ko 카탈로그에 ${key} 키가 있어야 한다`).toBe(true);
+    }
+  });
+
+  it("attempt 는 {{lane}}, abandoned 는 {{lane}}·{{attempts}}·{{proj}}, disabled 는 {{lane}}·{{proj}} 플레이스홀더를 갖는다", () => {
+    const enFlat = flattenCatalog(en);
+    expect([...placeholders(enFlat.get("supervisor.selfRecovery.attempt") ?? "")].sort()).toEqual([
+      "lane",
+    ]);
+    expect([...placeholders(enFlat.get("supervisor.selfRecovery.abandoned") ?? "")].sort()).toEqual(
+      ["attempts", "lane", "proj"],
+    );
+    expect([...placeholders(enFlat.get("supervisor.selfRecovery.disabled") ?? "")].sort()).toEqual([
+      "lane",
+      "proj",
+    ]);
+  });
+
+  it("selfRecovery 신규 키도 전체 i18n:check 통과에 포함된다(패리티 회귀 없음)", () => {
+    expect(runCheck()).toEqual([]);
+  });
+});
+
+// 017-lane-set D4 (5a AUTHORING, SC-020): lane set 신규 키 7종(usage.laneSet·lane.set.updated·
+// lane.set.restartHint·laneConfig.err.identityFieldImmutable·laneConfig.err.sourceFieldMismatch·
+// laneConfig.err.noEdits·laneConfig.warn.hardDenyReplaced) en/ko 패리티. C1(i18n) 착지 전에는
+// 키 부재로 RED 가 예상 상태(PPG-1 병렬 — PROC-R15).
+describe("i18n 패리티 — lane set 키 (SC-020)", () => {
+  it("lane set 신규 키 7종이 en/ko 양쪽에 존재한다", () => {
+    const enFlat = flattenCatalog(en);
+    const koFlat = flattenCatalog(ko);
+    for (const key of [
+      "usage.laneSet",
+      "lane.set.updated",
+      "lane.set.restartHint",
+      "laneConfig.err.identityFieldImmutable",
+      "laneConfig.err.sourceFieldMismatch",
+      "laneConfig.err.noEdits",
+      "laneConfig.warn.hardDenyReplaced",
+    ]) {
+      expect(enFlat.has(key), `en 카탈로그에 ${key} 키가 있어야 한다`).toBe(true);
+      expect(koFlat.has(key), `ko 카탈로그에 ${key} 키가 있어야 한다`).toBe(true);
+    }
+  });
+
+  it("lane.set.updated 는 {{lane}}·{{confPath}}, lane.set.restartHint 는 {{proj}} 플레이스홀더를 갖는다", () => {
+    const enFlat = flattenCatalog(en);
+    expect([...placeholders(enFlat.get("lane.set.updated") ?? "")].sort()).toEqual([
+      "confPath",
+      "lane",
+    ]);
+    expect([...placeholders(enFlat.get("lane.set.restartHint") ?? "")].sort()).toEqual(["proj"]);
+  });
+
+  it("identityFieldImmutable 은 {{field}}, sourceFieldMismatch 는 {{field}}·{{source}} 플레이스홀더를 갖는다", () => {
+    const enFlat = flattenCatalog(en);
+    expect(
+      [...placeholders(enFlat.get("laneConfig.err.identityFieldImmutable") ?? "")].sort(),
+    ).toEqual(["field"]);
+    expect([...placeholders(enFlat.get("laneConfig.err.sourceFieldMismatch") ?? "")].sort()).toEqual(
+      ["field", "source"],
+    );
+  });
+
+  it("lane set 신규 키 포함 전체 i18n:check 통과(패리티 회귀 없음)", () => {
+    expect(runCheck()).toEqual([]);
   });
 });
 

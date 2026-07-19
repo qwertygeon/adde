@@ -14,8 +14,11 @@ Diagnosis and remedies by symptom. Two commands narrow down most issues first:
 - [Won't start](#wont-start)
 - [Lane shows as dead](#lane-shows-as-dead)
 - [Lane shows as stale (hung)](#lane-shows-as-stale-hung)
+- [Engine crash & self-recovery](#engine-crash--self-recovery)
+- [Crash safety & log rotation](#crash-safety--log-rotation)
 - [Recovery after reboot / orphan cleanup](#recovery-after-reboot--orphan-cleanup)
 - [No response after sending a message](#no-response-after-sending-a-message)
+- ["Delivery uncertain" notice after an interrupted send](#delivery-uncertain-notice-after-an-interrupted-send)
 - [Failure notice after session control (clear/resume)](#failure-notice-after-session-control-clearresume)
 - [Permissions](#permissions)
 - [Telegram-only](#telegram-only)
@@ -73,9 +76,40 @@ adde restart <proj>                # recover by restarting the daemon
 
 A common cause of a hang is the engine being tied up in a long task / external wait, or its response stopping. If a restart doesn't clear it, check the environment with the `--engine` log and `adde doctor <proj>`.
 
+## Engine crash & self-recovery
+
+If a lane's **engine** process (not the daemon itself) crashes after the handshake, ADDE detects it and, by default, relaunches it automatically — carrying over the same session, subscribers, and permission handler, so a single crash doesn't require a manual restart. While it's retrying (bounded exponential backoff, capped attempts), `adde status` may briefly show `stale` (the heartbeat is intentionally held back so a crashed-and-retrying lane isn't misreported as `running`). If every attempt fails, ADDE gives up, marks the lane `error`, and sends a one-time channel notice:
+
+```
+🛑 lane <lane> auto-recovery gave up after <N> attempts — status set to error. Recover with adde restart <proj>.
+```
+
+Any permission approval still pending at crash time is denied (fail-closed) rather than left to time out — the channel does not hang waiting for the full approval timeout.
+
+- **Recovering after a give-up**: `adde restart <proj>` (or `/clear`/`/resume` from the channel).
+- **Turning self-recovery off**: add `auto_relaunch=false` to the lane's `.conf` (not a `lane add` flag — edit the file, then `adde restart <proj>`). With it off, ADDE still detects the crash, denies pending approvals, and sends a one-time notice, but marks the lane `error` **immediately** instead of retrying:
+  ```
+  🛑 engine crashed on lane <lane> — auto-relaunch is off (auto_relaunch=false); status set to error, no restart attempted. Recover with adde restart <proj>.
+  ```
+- Intentional restarts (`adde restart`, `/clear`, `/resume`) are unaffected — self-recovery only reacts to _unexpected_ engine exits, and disarms itself during a deliberate restart so the engine isn't double-started.
+
+## Crash safety & log rotation
+
+The section above covers a lane's **engine** process. The **daemon** process itself (the launchd-managed worker that hosts all of a project's lanes) has a separate, lower-level safety net.
+
+- **Unhandled daemon errors**: an uncaught exception in the daemon worker is logged with secrets masked and the daemon exits (after a bounded, 5-second cleanup attempt) so launchd can restart it — see the crash-only auto-restart semantics below. An unhandled promise rejection, by contrast, is logged and absorbed instead of exiting, so a single stray rejection doesn't take the whole daemon down (repeats of the same cause are rate-limited to about once a minute in the log so they don't flood it).
+- **Log growth**: `transcript.log` and `engine.log` rotate once they reach 5MB (2 generations kept, oldest dropped), so a 24-hour resident daemon's logs stay bounded instead of eventually filling the disk (which would otherwise start failing every write — queue, output, runtime state, session ledger). `adde logs <proj> <lane>` keeps working across rotations. The launchd daemon log (`.out`/`.err.log`, `adde logs <proj> --daemon`) isn't rotated while running (launchd holds it open) but is trimmed to its last ~5MB when the daemon is next (re)loaded.
+
+| Symptom | Cause | Remedy |
+|---|---|---|
+| Daemon used to restart itself even right after a clean `adde down` or a manual stop | Previously `KeepAlive` was unconditional, so **any** exit (including a clean one) was relaunched; this is now fixed — a graceful stop exits cleanly and is not restarted | No action needed. If an older registration still shows this, `adde restart <proj>` to apply the current plist |
+| `adde up`/the daemon used to loop restarting every ~10s right after a config problem (e.g. zero lanes) | Previously a deterministic boot failure exited non-zero and got relaunched forever; this is now fixed — that kind of boot failure exits cleanly instead of looping (the failure is still reported by `adde up`, it's just not auto-retried) | Fix the underlying config (see the failure reason `adde up` printed), then `adde up <proj>` again |
+| `adde status`/`adde doctor <proj>` reports the daemon has **self-halted** | Repeated short-lived crashes right after boot (5 or more in a row, each surviving under a minute) tripped the crash-loop safety net, which stops retrying and records the halt cause/time instead of retrying forever | Check the reported cause, fix it, then `adde restart <proj>` — this clears the halt record and lets the daemon go through a normal boot again |
+| Daemon crashed and stayed down instead of auto-restarting | `proj.conf` has `auto_restart=false` for this project — see [command reference](commands.md#projconf--daemon-crash-auto-restart) | Expected with this setting; `adde restart <proj>` (or `adde up <proj>`) to bring it back up, or remove/flip the setting if you want launchd to auto-restart crashes again |
+
 ## Recovery after reboot / orphan cleanup
 
-- **Lane isn't up after a reboot/logout**: a daemon registered with `adde up` auto-recovers via `KeepAlive`/`RunAtLoad`, but confirm the actual status yourself — if `adde status <proj>` isn't `running`, check `adde doctor <proj>` (including registration status) then restart with `adde up <proj>`. The plist holds the PATH from the time of `adde up`, so if you later moved node/claude's install location, refresh the PATH with `adde restart <proj>`.
+- **Lane isn't up after a reboot/logout**: a daemon registered with `adde up` always auto-recovers via `RunAtLoad` regardless of `proj.conf`'s `auto_restart` (that setting only affects crash restarts, not reboot recovery), but confirm the actual status yourself — if `adde status <proj>` isn't `running`, check `adde doctor <proj>` (including registration status) then restart with `adde up <proj>`. The plist holds the PATH from the time of `adde up`, so if you later moved node/claude's install location, refresh the PATH with `adde restart <proj>`.
 - **Orphan engine process**: a `claude-agent-acp` engine process can linger after an abnormal exit. After `adde down <proj>`, check for leftovers with `ps aux | grep claude-agent-acp`, and if any remain, terminate that pid.
 
 ## No response after sending a message
@@ -84,6 +118,20 @@ A common cause of a hang is the engine being tied up in a long task / external w
 2. See whether the message is received/processed with `adde logs <proj> <lane>`.
 3. If the AI turn is long, the response comes **all at once at turn end** (no streaming during progress). Wait a moment.
 4. If message-queue enqueuing fails repeatedly due to a full disk or a permission problem, ADDE sends an "enqueue failed N times in a row" alert to the operator channel — check disk capacity and the `state` directory's permissions.
+
+## "Delivery uncertain" notice after an interrupted send
+
+In a **Telegram (chat)** lane, you may occasionally see a one-time notice like this:
+
+> ⚠️ The process was interrupted mid-send — delivery of this reply (id …) is uncertain. It will not be resent, to avoid duplicates. If it didn't arrive, please ask again.
+
+In plain terms:
+
+- ADDE had finished preparing an answer and was in the middle of sending it to your chat when the process was interrupted (for example, the daemon restarted at exactly that moment).
+- Because ADDE can't be sure whether that message actually reached you, it deliberately **does not send it again**. This prevents the earlier problem where you could receive the same answer twice.
+- The answer may or may not have arrived. **If it didn't show up, just send your request again** — that's the only action needed.
+- Nothing is broken and there is nothing to configure; this is normal crash-safety behavior.
+- This applies to **Telegram (chat) lanes only**. Markdown (note) lanes are unaffected — re-writing the same note is harmless, so they simply finish delivering with no duplicates.
 
 ## Failure notice after session control (clear/resume)
 
@@ -120,5 +168,10 @@ Detailed setup: [Telegram guide](telegram.md).
 | Lane doesn't come up                    | Whether the `root` absolute path actually exists (fail-closed if not) · whether the inbox/approvals/outbox paths don't overlap (startup refused if equal or in a containment relationship) |
 | Startup refused (control-note location) | Whether inbox/approvals/outbox are **outside** `cwd` (refused with self-approval risk if inside)                                                                                           |
 | Response note not visible               | Check the `outbox` path, and whether the AI turn has ended (idle)                                                                                                                          |
+| Output note / decided approval not where expected | Look for a `YYYY-MM-DD/` subfolder underneath (date-partitioned by send/decision time, applied even without `markdown.backup`) — or, if `markdown.backup` is configured, in the backup folder for anything older than `retention_days` |
+| Startup refused ("backup path overlaps ...") | `markdown.backup` overlaps the vault or ADDE's internal state folder — point it somewhere else (outside the vault, no shared ancestor) |
+| Startup refused ("unsupported sync_provider") | `markdown.sync_provider` must be `local` or `icloud` (leave it unset for `local`) |
+| Startup refused ("out_retention_days ... must be >= retention_days ...") | `markdown.out_retention_days` must be at least `retention_days + 1` — raise it or unset it |
+| "backup relocation is on but archive is not configured" warning | `markdown.backup` is set but `markdown.archive` isn't — set an archive directory too if you also want sent text relocated (otherwise inbox text keeps accumulating) |
 
-Detailed setup: [Markdown guide](markdown.md).
+Detailed setup: [Markdown guide](markdown.md#keeping-the-vault-light-retention--backup-relocation).

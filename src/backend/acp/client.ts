@@ -20,12 +20,14 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type { ChildProcess } from "node:child_process";
 import { spawnEngine } from "./spawn.js";
+import { DEFAULT_LOG_MAX_BYTES, DEFAULT_LOG_KEEP } from "../../shared/log-rotate.js";
 import type { LanePaths } from "../../shared/paths.js";
 import { appendTranscript } from "../../core/transcript.js";
 import type { SessionEvent } from "../../core/transcript.js";
 import type { PermRequest, PermResponse } from "../../gate/gate.js";
 import type { AddePolicy, EngineEffective } from "./perm-diff.js";
 import { maskSecrets } from "../../shared/mask.js";
+import { ACP_VERSION } from "../../shared/conf.js";
 import { comparePerm, formatWarn } from "./perm-diff.js";
 import { formatException, formatWarnNote } from "../../shared/notify.js";
 import { matchesDenylist } from "../../shared/deny-match.js";
@@ -191,7 +193,7 @@ export interface AcpBackend {
     plane: "acp";
     perm_tier: string;
     supports_attachments: boolean;
-    acp_version: "v1";
+    acp_version: string;
   };
   /** resumed: resumeSessionId 요청이 실제로 복귀에 성공했는지(실패 시 새 세션 폴백 + false). */
   launch(lane: string, opts?: LaunchOpts): Promise<{ sessionId: string; resumed?: boolean }>;
@@ -207,6 +209,17 @@ export interface AcpBackend {
   reset?(lane: string): Promise<{ sessionId: string }>;
   /** 지정 세션으로 복귀(/resume 등가) — 재기동 + session/load. 실패 시 새 세션 폴백(resumed=false). */
   resumeSession?(lane: string, sessionId: string): Promise<{ sessionId: string; resumed: boolean }>;
+  /**
+   * 엔진 child 의 정상·비정상 종료(크래시) 신호 등록 — 라이브니스 감독(watcher) 배선용.
+   * 핸드셰이크 완료 후에만 유효(그 전 크래시는 launch() 의 spawnFailed 경로가 처리).
+   * 의도적 close/relaunch 로 교체·삭제된 child 의 종료는 신호에서 자연 제외된다.
+   */
+  onExit?(
+    lane: string,
+    cb: (lane: string, info: { code: number | null; signal: NodeJS.Signals | null }) => void,
+  ): void;
+  /** 현재 레인 엔진 child 생존 여부 — watcher 의 백오프 fire 재확인(double-spawn 가드)용. */
+  isAlive?(lane: string): boolean;
 }
 
 interface LaneConfig {
@@ -215,10 +228,12 @@ interface LaneConfig {
   channelWarn?: (msg: string) => void;
   /** 레인별 엔진 작업 폴더(프로젝트 폴더 매핑). 미지정 시 process.cwd(). */
   cwd?: string | undefined;
-  /** 권한 정규화 시 채널 표기. 미지정 시 telegram. */
-  channel?: "telegram" | "markdown" | undefined;
+  /** 권한 정규화 시 채널 표기(= 소스 id). 미지정 시 telegram 폴백(직접 백엔드 사용·테스트용). */
+  channel?: string | undefined;
   /** 채널 메시지 로케일(LaneConf.lang). 미지정 시 전역 로케일. */
   lang?: string | undefined;
+  /** 엔진 spawn argv 로 전달할 CLI 인자(parseEngineArgs 결과). 미설정 시 spawn 은 빈 인자. */
+  engineArgs?: string[];
 }
 
 interface LaneState {
@@ -231,52 +246,86 @@ interface LaneState {
   paths: LanePaths;
   addePolicy: AddePolicy;
   onIdle: (() => void) | null;
+  /** 크래시(종료) 신호 콜백 — onExit() 이 설정, 핸드셰이크 후 exit 리스너가 호출. */
+  onExitHandler:
+    ((lane: string, info: { code: number | null; signal: NodeJS.Signals | null }) => void) | null;
+}
+
+/**
+ * 승인 상관키 포맷(F11) — `<세션프리픽스>-<seq>`. 프리픽스는 sessionId 를 [A-Za-z0-9_-] 로
+ * 새니타이즈 후 앞 12자 — 재기동 시 엔진이 새 sessionId 를 발급한다는 전제 하에(ACP 계약) 디스크
+ * 잔존 승인파일과의 크로스-프로세스 충돌을 막는다(새 프로세스는 seq 를 0 부터 재시작하므로).
+ * seq 는 인스턴스 단조 카운터(프로세스 내 유일). 결과 charset 은 telegram callback_data(≤64B)·
+ * markdown 파일명·envelope msg-id 정규식(`^[A-Za-z0-9_:-]+$`)에 모두 안전하다. seq 주입으로 순수·결정론.
+ */
+export function formatPermId(sessionId: string, seq: number): string {
+  const prefix = (sessionId || "s").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 12);
+  return `${prefix}-${seq}`;
 }
 
 export class AcpBackendImpl implements AcpBackend {
   private readonly adapterBin: string;
-  private readonly lanes = new Map<string, LaneState>();
-  private readonly laneConfigs = new Map<string, LaneConfig>();
+  private laneState: LaneState | null = null;
+  private laneConfig: LaneConfig | null = null;
   /**
    * relaunch → launch 로 전달되는 승계분(구독자·권한 핸들러) — launch 가 상태 생성 시 1회 소비.
-   * 인스턴스당 단일 슬롯이라 **한 impl = 한 레인** 불변식에 의존한다(supervisor 가 레인마다
-   * 별도 AcpBackendImpl 생성). 한 인스턴스가 다중 레인을 동시 relaunch 하면 승계가 레인 간
-   * 오염될 수 있으므로, 그 경우 Map<lane> 으로 키잉해야 한다.
+   * 인스턴스당 단일 슬롯 — **한 impl = 한 레인** 불변식이 `laneState`/`laneConfig` 자체가 단일
+   * nullable 필드(Map 아님)로 타입 수준에서 강제된다. 한 인스턴스가 다중 레인을 동시 relaunch 하는
+   * 경로는 이 필드 형태상 존재하지 않는다.
    */
   private pendingInherit: {
     subscribers: Array<(e: SessionEvent) => void>;
     permHandler: ((req: PermRequest) => Promise<PermResponse>) | null;
     onIdle: (() => void) | null;
+    onExitHandler:
+      ((lane: string, info: { code: number | null; signal: NodeJS.Signals | null }) => void) | null;
   } | null = null;
+
+  /**
+   * 요청당 승인 상관키 카운터(F11) — 인스턴스 레벨이라 relaunch/reset 이 같은 impl 을
+   * 재사용해도 단조 증가가 유지된다(프로세스 내 유일성 보장). launch 클로저 지역이면
+   * 재기동마다 0 으로 리셋돼 프리픽스 충돌 시 같은 키를 재발급할 수 있어 인스턴스에 둔다.
+   */
+  private permSeq = 0;
 
   constructor(adapterBin: string) {
     this.adapterBin = adapterBin;
   }
 
   /**
+   * 요청당 고유 승인 상관키 발급(F11) — 인스턴스 카운터를 소비해 formatPermId 로 조립.
+   * 세션 내 전 권한요청이 sessionId 를 공유하면 스테일 버튼·병렬 호출이 서로의 대기자
+   * (supervisor pendingDecisions)·승인파일(markdown atomicWrite)을 오귀속·덮어쓴다 → per-call
+   * 고유키로 격리한다. 카운터는 인스턴스 레벨이라 프로세스 내 단조 증가(유일성)를 보장한다.
+   */
+  private mintPermId(sessionId: string): string {
+    return formatPermId(sessionId, this.permSeq++);
+  }
+
+  /**
    * launch 전 레인별 경로·정책 설정.
    * AcpBackend 인터페이스 계약 외부 — 구체 타입(AcpBackendImpl) 사용자만 호출.
    */
-  configureLane(lane: string, config: LaneConfig): void {
-    this.laneConfigs.set(lane, config);
+  configureLane(_lane: string, config: LaneConfig): void {
+    this.laneConfig = config;
   }
 
   caps(): {
     plane: "acp";
     perm_tier: string;
     supports_attachments: boolean;
-    acp_version: "v1";
+    acp_version: string;
   } {
     return {
       plane: "acp",
       perm_tier: "acp",
       supports_attachments: false,
-      acp_version: "v1",
+      acp_version: ACP_VERSION,
     };
   }
 
   async launch(lane: string, opts?: LaunchOpts): Promise<{ sessionId: string; resumed?: boolean }> {
-    const config = this.laneConfigs.get(lane);
+    const config = this.laneConfig;
     const paths = config?.paths;
     const addePolicy = config?.addePolicy;
     const channelWarn = config?.channelWarn;
@@ -285,7 +334,16 @@ export class AcpBackendImpl implements AcpBackend {
     const channel = config?.channel ?? "telegram";
 
     // paths 가 있으면 엔진 stderr 를 레인 engine.log 로 캡처(없으면 inherit — 테스트/레거시).
-    const child = spawnEngine(this.adapterBin, [], paths ? { stderrPath: paths.engineLog } : {});
+    const child = spawnEngine(
+      this.adapterBin,
+      config?.engineArgs ?? [],
+      paths
+        ? {
+            stderrPath: paths.engineLog,
+            stderrRotate: { maxBytes: DEFAULT_LOG_MAX_BYTES, keep: DEFAULT_LOG_KEEP },
+          }
+        : {},
+    );
 
     // child 'error'(예: 바이너리 ENOENT) 는 미처리 시 프로세스를 크래시시킨다.
     // 핸드셰이크 완료 전에는 launch 실패로 전환하고, 이후에는 로깅한다(상시 리스너 유지).
@@ -317,6 +375,8 @@ export class AcpBackendImpl implements AcpBackend {
     const laneRef: { state: LaneState | null } = { state: null };
     // toolCallId→원시 도구명 — tool_call 업데이트에서 채집, 권한 매칭에 사용.
     const toolNames = new Map<string, string>();
+    // clientImpl 객체 메서드 안의 this 는 clientImpl 이므로, 인스턴스 카운터 소비용으로 바인딩 캡처.
+    const mintPermId = this.mintPermId.bind(this);
 
     const conn = new acp.ClientSideConnection((_agent) => {
       const clientImpl: acp.Client = {
@@ -445,7 +505,8 @@ export class AcpBackendImpl implements AcpBackend {
 
           const req: PermRequest = {
             v: 1,
-            id: params.sessionId,
+            // per-call 고유키(F11) — sessionId 공유 시 스테일 버튼·병렬 호출 오귀속을 막는다.
+            id: mintPermId(params.sessionId),
             lane,
             channel,
             // 채널 표시: "도구명 · 제목" — 제목(인자 포함)은 사용자 판단 근거, 도구명은 식별자.
@@ -565,6 +626,15 @@ export class AcpBackendImpl implements AcpBackend {
     onSpawnError = (err) =>
       console.error(t("log.acp.engineProcessError", { lane, error: err.message }));
 
+    // 크래시 감지 — 'exit' 은 정상/비정상 종료 모두에서 발생(Node child_process 공식 동작).
+    // "종료된 child === 현재 레인의 child" 가드로 의도적 close/relaunch(delete-before-kill) 는 자연
+    // 억제한다(double-spawn 방지) — 별도 intentional-close 플래그 불요.
+    const thisChild = child;
+    thisChild.on("exit", (code, signal) => {
+      if (this.laneState?.child !== thisChild) return;
+      this.laneState?.onExitHandler?.(lane, { code, signal });
+    });
+
     const sessionId = sessionResp.sessionId;
 
     if (paths) {
@@ -585,9 +655,10 @@ export class AcpBackendImpl implements AcpBackend {
       paths: paths ?? ({} as LanePaths),
       addePolicy: addePolicy ?? { perm_tier: "acp", allowlist: [] },
       onIdle: inherit?.onIdle ?? null,
+      onExitHandler: inherit?.onExitHandler ?? null,
     };
     laneRef.state = state;
-    this.lanes.set(lane, state);
+    this.laneState = state;
 
     if (paths && addePolicy) {
       const engineEffective = await this.fetchEngineEffective(lane);
@@ -649,11 +720,12 @@ export class AcpBackendImpl implements AcpBackend {
     lane: string,
     resumeSessionId?: string,
   ): Promise<{ sessionId: string; resumed: boolean }> {
-    const old = this.lanes.get(lane);
+    const old = this.laneState;
     this.pendingInherit = {
       subscribers: old ? [...old.subscribers] : [],
       permHandler: old?.permHandler ?? null,
       onIdle: old?.onIdle ?? null,
+      onExitHandler: old?.onExitHandler ?? null,
     };
     try {
       await this.close(lane);
@@ -664,8 +736,8 @@ export class AcpBackendImpl implements AcpBackend {
     }
   }
 
-  private async fetchEngineEffective(lane: string): Promise<EngineEffective | null> {
-    const state = this.lanes.get(lane);
+  private async fetchEngineEffective(_lane: string): Promise<EngineEffective | null> {
+    const state = this.laneState;
     if (!state) return null;
     try {
       const result = await state.conn.extMethod("session/getMode", {
@@ -689,7 +761,7 @@ export class AcpBackendImpl implements AcpBackend {
   }
 
   async inject(lane: string, text: string): Promise<void> {
-    const state = this.lanes.get(lane);
+    const state = this.laneState;
     if (!state) throw new Error(`[acp] lane "${lane}" not launched`);
 
     // prompt 는 turn 종료에 resolve 한다 — injector 는 inject() resolve 로 turn 종료를 감지해 다음 큐를
@@ -701,7 +773,7 @@ export class AcpBackendImpl implements AcpBackend {
   }
 
   subscribe(lane: string, on: (e: SessionEvent) => void): void {
-    const state = this.lanes.get(lane);
+    const state = this.laneState;
     if (!state) {
       throw new Error(`[acp] lane "${lane}" not launched`);
     }
@@ -709,15 +781,32 @@ export class AcpBackendImpl implements AcpBackend {
   }
 
   onPermissionRequest(lane: string, handler: (req: PermRequest) => Promise<PermResponse>): void {
-    const state = this.lanes.get(lane);
+    const state = this.laneState;
     if (!state) throw new Error(`[acp] lane "${lane}" not launched`);
     state.permHandler = handler;
   }
 
+  /**
+   * 크래시 신호 콜백 등록 — subscribe/onPermissionRequest 와 달리 launch 전 호출도 무해하게
+   * no-op 한다(콜백을 걸 대상 상태가 아직 없을 뿐, 등록 자체는 크래시를 유발하지 않음). watcher 는
+   * 항상 launch 성공 후에 등록하므로 정상 경로에서는 이 분기를 타지 않는다.
+   */
+  onExit(
+    _lane: string,
+    cb: (lane: string, info: { code: number | null; signal: NodeJS.Signals | null }) => void,
+  ): void {
+    const state = this.laneState;
+    if (state) state.onExitHandler = cb;
+  }
+
+  isAlive(_lane: string): boolean {
+    return this.laneState?.child.exitCode === null;
+  }
+
   /** 레인 종료 — 엔진 child 정리(SIGTERM→유예→SIGKILL) + 상태 제거. */
-  async close(lane: string): Promise<void> {
-    const state = this.lanes.get(lane);
-    this.lanes.delete(lane);
+  async close(_lane: string): Promise<void> {
+    const state = this.laneState;
+    this.laneState = null;
     if (!state) return;
     await closeChild(state.child, CHILD_GRACE_MS);
   }

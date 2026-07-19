@@ -120,6 +120,177 @@ describe("matchesDenylist — 글롭 의미론 (DEC-001/003)", () => {
   });
 });
 
+describe("재귀 rm 견고 매칭 — 플래그 형태 불문(-r·-R·-fr·-rfv·--recursive), 대상 스코프 유지", () => {
+  const rm = ["Bash(rm -rf /*)", "Bash(rm -rf ~*)", "Bash(rm -rf .*)"];
+
+  it("-f 없는 -r 도 잡는다 (이번 개선의 핵심)", () => {
+    expect(matchesDenylist(rm, "Bash", { command: "rm -r /etc" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -r ~/Documents" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -r .git" })).toBe(true);
+  });
+
+  it("플래그 순서·번들·대문자·--recursive 변형을 잡는다", () => {
+    expect(matchesDenylist(rm, "Bash", { command: "rm -fr /" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -R /var" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -rfv /" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm --recursive /etc" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -rf  /" })).toBe(true); // 이중 공백
+    expect(matchesDenylist(rm, "Bash", { command: 'rm -r "/"' })).toBe(true); // 인용 대상
+  });
+
+  it("체이닝·서브셸의 재귀 rm 도 세그먼트로 잡는다", () => {
+    expect(matchesDenylist(rm, "Bash", { command: "cd /tmp && rm -r /etc" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "(rm -R ~/x)" })).toBe(true);
+    expect(matchesDenylist(rm, "Bash", { command: "FOO=1 rm -r /var" })).toBe(true);
+  });
+
+  it("스코프 유지 — 비대상(상대경로) 재귀 rm 은 통과, 비재귀 rm 도 통과", () => {
+    // 대상이 / ~ . 이 아니면(상대 하위경로) autopass 허용 유지(자율성).
+    expect(matchesDenylist(rm, "Bash", { command: "rm -rf build" })).toBe(false);
+    expect(matchesDenylist(rm, "Bash", { command: "rm -r node_modules" })).toBe(false);
+    // 재귀 아님(-f 만·단일 파일)은 대상 무관 미매칭.
+    expect(matchesDenylist(rm, "Bash", { command: "rm -f /etc/x" })).toBe(false);
+    expect(matchesDenylist(rm, "Bash", { command: "rm /etc/x" })).toBe(false);
+    // rm 이 실행 토큰이 아니면 미매칭.
+    expect(matchesDenylist(rm, "Bash", { command: "echo rm -r /" })).toBe(false);
+  });
+});
+
+describe("정규화 인식기 — 절대경로·래퍼·이중공백 우회 차단", () => {
+  const D = [...DEFAULT_AUTOPASS_DENYLIST];
+  const bash = (c: string) => matchesDenylist(D, "Bash", { command: c });
+
+  it("절대경로·따옴표·백슬래시 명령도 잡는다 (rm)", () => {
+    expect(bash("/bin/rm -rf /")).toBe(true);
+    expect(bash("/usr/bin/rm -r ~/x")).toBe(true);
+    expect(bash('"rm" -rf /')).toBe(true);
+    expect(bash("\\rm -rf /")).toBe(true);
+  });
+
+  it("래퍼(env·nice·time·command)를 벗겨 실제 명령을 본다", () => {
+    expect(bash("env rm -rf /")).toBe(true);
+    expect(bash("env FOO=1 rm -rf /")).toBe(true);
+    expect(bash("nice -n 10 rm -rf /")).toBe(true);
+    expect(bash("time rm -rf /")).toBe(true);
+    expect(bash("command rm -rf /")).toBe(true);
+    expect(bash("/usr/bin/git push --force")).toBe(true);
+  });
+});
+
+describe("정규화 인식기 — git 강제 변경 형태 불문", () => {
+  const D = [...DEFAULT_AUTOPASS_DENYLIST];
+  const bash = (c: string) => matchesDenylist(D, "Bash", { command: c });
+
+  it("refspec + 강제푸시를 잡는다 (--force 미포함)", () => {
+    expect(bash("git push origin +main")).toBe(true);
+    expect(bash("git push origin +HEAD:main")).toBe(true);
+  });
+
+  it("전역옵션 -C/-c 접두를 무시하고 서브커맨드로 판정", () => {
+    expect(bash("git -C /repo push --force")).toBe(true);
+    expect(bash("git -C /repo reset --hard")).toBe(true);
+    expect(bash("git -C /repo clean -fd")).toBe(true);
+    expect(bash("git -c foo=bar push --force")).toBe(true);
+  });
+
+  it("이중공백·플래그순서·번들·--force-with-lease 변형", () => {
+    expect(bash("git  push --force")).toBe(true);
+    expect(bash("git clean -df")).toBe(true);
+    expect(bash("git clean --force -d")).toBe(true);
+    expect(bash("git push -uf origin")).toBe(true);
+    expect(bash("git push --force-with-lease origin")).toBe(true);
+    expect(bash("git clean -f")).toBe(true); // -d 없이 -f 만으로도 위험
+  });
+
+  it("비강제 git 은 통과 (자율성 유지)", () => {
+    expect(bash("git push origin feature/x")).toBe(false);
+    expect(bash("git status")).toBe(false);
+    expect(bash("git reset HEAD~1")).toBe(false); // --hard 아님
+    expect(bash("git clean -n")).toBe(false); // dry-run(-n)만
+  });
+});
+
+describe("정규화 인식기 — 권한상승 doas", () => {
+  const D = [...DEFAULT_AUTOPASS_DENYLIST];
+  it("doas·경로 doas 를 잡는다", () => {
+    expect(matchesDenylist(D, "Bash", { command: "doas rm -rf /" })).toBe(true);
+    expect(matchesDenylist(D, "Bash", { command: "/usr/bin/doas reboot" })).toBe(true);
+    expect(matchesDenylist(D, "Bash", { command: "env sudo make" })).toBe(true);
+  });
+});
+
+describe("정규화 인식기 — 셸 중첩·추가 래퍼·$HOME (PR#33 리뷰 후속)", () => {
+  const D = [...DEFAULT_AUTOPASS_DENYLIST];
+  const bash = (c: string) => matchesDenylist(D, "Bash", { command: c });
+
+  it("sh -c / bash -c 페이로드 안 위험명령을 재귀 분해해 잡는다", () => {
+    expect(bash('bash -c "rm -rf ~"')).toBe(true);
+    expect(bash("sh -c 'rm -rf /'")).toBe(true);
+    expect(bash('bash -c "git push origin +main"')).toBe(true);
+    expect(bash('sh -c "cat ~/.ssh/id_rsa"')).toBe(true);
+    expect(bash("bash -c 'pnpm test'")).toBe(false); // 무해 페이로드는 통과
+  });
+
+  it("timeout·nohup·xargs 래퍼도 벗겨 실제 명령을 본다", () => {
+    expect(bash("timeout 5 rm -rf /")).toBe(true);
+    expect(bash("timeout -k 5 10 rm -rf /")).toBe(true);
+    expect(bash("nohup rm -rf /")).toBe(true);
+    expect(bash("xargs rm -rf /")).toBe(true);
+    expect(bash("xargs -n 1 rm -rf /")).toBe(true);
+    expect(bash("timeout 5 pnpm test")).toBe(false); // 무해 명령은 통과
+  });
+
+  it("$HOME/${HOME} 홈 삭제를 홈 스코프로 잡는다", () => {
+    expect(bash("rm -rf $HOME")).toBe(true);
+    expect(bash('rm -rf "$HOME"')).toBe(true);
+    expect(bash("rm -rf ${HOME}")).toBe(true);
+    expect(bash("rm -rf $HOME/")).toBe(true);
+    expect(bash("echo $HOME")).toBe(false); // rm 아님
+  });
+});
+
+describe("자격증명 경로 교차 보호 — 파일도구 전반 + Bash args", () => {
+  const D = [...DEFAULT_AUTOPASS_DENYLIST];
+
+  it("Bash 리더(cat/cp/less)가 자격증명 경로를 건드리면 잡는다", () => {
+    expect(matchesDenylist(D, "Bash", { command: "cat ~/.ssh/id_rsa" })).toBe(true);
+    expect(matchesDenylist(D, "Bash", { command: "cp ~/.aws/credentials /tmp/x" })).toBe(true);
+    expect(matchesDenylist(D, "Bash", { command: "less ~/.config/gh/hosts.yml" })).toBe(true);
+  });
+
+  it("디렉터리 통째 exfil(tar/cp -r/zip) 도 잡는다 (/** 글롭 자식요구 보완)", () => {
+    expect(matchesDenylist(D, "Bash", { command: "tar czf - ~/.ssh" })).toBe(true);
+    expect(matchesDenylist(D, "Bash", { command: "cp -r ~/.ssh /tmp/x" })).toBe(true);
+    expect(matchesDenylist(D, "Bash", { command: "zip -r out.zip ~/.aws" })).toBe(true);
+  });
+
+  it("opt=path 로 붙은 자격증명 경로도 잡는다", () => {
+    expect(matchesDenylist(D, "Bash", { command: "dd if=~/.aws/credentials of=/tmp/x" })).toBe(
+      true,
+    );
+    expect(matchesDenylist(D, "Bash", { command: "scp --identity=~/.ssh/id_rsa host:" })).toBe(
+      true,
+    );
+  });
+
+  it("Write/Edit/NotebookEdit 로 자격증명 경로 쓰기도 잡는다 (Read 전용 아님)", () => {
+    expect(matchesDenylist(D, "Write", { file_path: `${homedir()}/.ssh/authorized_keys` })).toBe(
+      true,
+    );
+    expect(matchesDenylist(D, "Edit", { file_path: "~/.aws/credentials" })).toBe(true);
+  });
+
+  it("경로 트래버설(..)을 접어서 잡는다", () => {
+    expect(matchesDenylist(D, "Read", { file_path: "~/x/../.ssh/id_rsa" })).toBe(true);
+    expect(matchesDenylist(D, "Bash", { command: "cat ~/x/../.ssh/id_rsa" })).toBe(true);
+  });
+
+  it("비자격증명 경로는 통과", () => {
+    expect(matchesDenylist(D, "Write", { file_path: "/tmp/out.txt" })).toBe(false);
+    expect(matchesDenylist(D, "Bash", { command: "cat README.md" })).toBe(false);
+  });
+});
+
 describe("DEFAULT_AUTOPASS_DENYLIST — 내장 기본 denylist", () => {
   it("전 항목이 유효한 형식이다", () => {
     for (const entry of DEFAULT_AUTOPASS_DENYLIST) {

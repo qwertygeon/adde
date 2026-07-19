@@ -12,6 +12,8 @@ import {
 } from "../../src/core/lane-config.js";
 import { lanePaths } from "../../src/shared/paths.js";
 import { parseLaneConf } from "../../src/shared/conf.js";
+import type { LaneConf } from "../../src/shared/conf.js";
+import { SOURCE_REGISTRY, SOURCE_IDS } from "../../src/src-adapters/index.js";
 
 // adde lane <add|ls|show|rm> 코어 — conf 생성/조회/삭제, 검증, 원자적 쓰기
 
@@ -82,7 +84,7 @@ describe("laneAdd", () => {
     const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
     expect(conf.cwd).toBe("/abs/project");
     expect(conf.allowlist).toEqual(["Read", "Grep"]);
-    expect(conf.chat_id).toBe("12345");
+    expect(conf.telegram?.chat_id).toBe("12345");
   });
 
   it("--safe-defaults 는 hard_deny 에 내장 위험 목록을 채운다", async () => {
@@ -124,8 +126,8 @@ describe("laneAdd", () => {
     });
     const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
     expect(conf.source).toBe("markdown");
-    expect(conf.root).toBe("/abs/Notes");
-    expect(conf.inbox).toBe("in.md");
+    expect(conf.markdown?.root).toBe("/abs/Notes");
+    expect(conf.markdown?.inbox).toBe("in.md");
   });
 
   it("미지원 source 는 거부한다", async () => {
@@ -146,7 +148,7 @@ describe("laneAdd", () => {
   it("음수 chat_id(그룹)는 허용한다", async () => {
     const res = await laneAdd("proj", "tg", { base, chat_id: "-100123" });
     const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
-    expect(conf.chat_id).toBe("-100123");
+    expect(conf.telegram?.chat_id).toBe("-100123");
   });
 
   it("기존 conf 는 force 없이는 덮어쓰지 않는다", async () => {
@@ -407,9 +409,9 @@ describe("인바운드 인증(allow_from) + 파일 권한(file_mode)", () => {
       chat_id: "111",
       allow_from: "222,333",
     });
-    expect(res.conf.allow_from).toBe("222,333");
+    expect(res.conf.telegram?.allow_from).toBe("222,333");
     const reparsed = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
-    expect(reparsed.allow_from).toBe("222,333");
+    expect(reparsed.telegram?.allow_from).toBe("222,333");
   });
 
   it("allow_from 항목이 숫자가 아니면 거부한다", async () => {
@@ -496,5 +498,146 @@ describe("인바운드 인증(allow_from) + 파일 권한(file_mode)", () => {
     const stateDir = path.dirname(res.envPath as string);
     // shared 는 no-op — 0700 이 아니어야 한다(기본 umask 권한 유지).
     expect(fs.statSync(stateDir).mode & 0o777).not.toBe(0o700);
+  });
+});
+
+// ── 005-source-extensibility ─────────────────────────────────────────────
+
+describe("SC-002: 미지원 소스 거부가 레지스트리 기준으로 판정된다", () => {
+  it("레지스트리에 없는 소스(foobar)는 거부되고 지원 목록을 안내한다", async () => {
+    let caught: unknown;
+    try {
+      await laneAdd("proj", "x", { base, source: "foobar" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(LaneConfigError);
+    const msg = (caught as Error).message;
+    expect(msg).toContain("foobar");
+    for (const id of SOURCE_IDS) expect(msg).toContain(id);
+  });
+
+  it("레지스트리에 등록된 소스(markdown)는 소스 판정을 통과한다", async () => {
+    const res = await laneAdd("proj", "md-ok", { base, source: "markdown" });
+    expect(res.conf.source).toBe("markdown");
+  });
+});
+
+describe("SC-004: telegram conf 검증이 소스 정의(descriptor.validate) 위임으로 수행된다", () => {
+  it("잘못된 chat_id 형식은 기존과 동일하게 생성을 거부한다", async () => {
+    await expect(
+      laneAdd("proj", "tg-bad", { base, source: "telegram", chat_id: "abc" }),
+    ).rejects.toThrow(LaneConfigError);
+  });
+
+  it("개인 chat 도 allow_from 도 없으면 기존과 동일한 무인증 경고를 반환한다(생성은 됨)", async () => {
+    const res = await laneAdd("proj", "tg-noauth", { base, source: "telegram" });
+    expect(fs.existsSync(res.confPath)).toBe(true);
+    expect(res.warnings.some((w) => w.includes("인증"))).toBe(true);
+  });
+
+  it("SOURCE_REGISTRY.telegram.validate 가 chat_id 형식 오류를 errors 로 반환한다(descriptor 직접 대조)", () => {
+    const validate = SOURCE_REGISTRY["telegram"]?.validate;
+    expect(typeof validate).toBe("function");
+    const conf: LaneConf = {
+      source: "telegram",
+      backend: "acp",
+      engine: "e",
+      perm_tier: "acp",
+      acp_version: "v1",
+      allowlist: [],
+      denylist: [],
+      hard_deny: [],
+      auto_relaunch: true,
+    };
+    const result = validate!({ conf, opts: { chat_id: "abc" } });
+    expect(result.errors.some((e) => e.includes("abc"))).toBe(true);
+  });
+});
+
+describe("SC-005: markdown conf 검증이 소스 정의(descriptor.validate) 위임으로 수행된다", () => {
+  it("root 미지정 markdown 레인은 기존과 동일한 root 부재 경고를 반환한다", async () => {
+    const res = await laneAdd("proj", "md-noroot", { base, source: "markdown" });
+    expect(res.warnings.some((w) => w.includes("root"))).toBe(true);
+  });
+
+  it("inbox/approvals/outbox 경로 중첩 조합은 기존과 동일한 경로 중첩 경고를 반환한다", async () => {
+    const rootDir = path.join(base, "vault");
+    fs.mkdirSync(rootDir, { recursive: true });
+    const res = await laneAdd("proj", "md-overlap", {
+      base,
+      source: "markdown",
+      root: rootDir,
+      inbox: "inbox.md",
+      approvals: "shared",
+      outbox: "shared",
+    });
+    expect(res.warnings.some((w) => w.includes("겹") || w.includes("분리"))).toBe(true);
+  });
+});
+
+describe("SC-017: 하드 오류/경고 구분이 유지된다", () => {
+  it("이미 존재하는 레인 이름은 force 없이 거부된다(하드 오류)", async () => {
+    await laneAdd("proj", "dup-sc17", { base });
+    await expect(laneAdd("proj", "dup-sc17", { base })).rejects.toThrow(LaneConfigError);
+  });
+
+  it("cwd 경로 부재는 레인 생성을 막지 않고 경고만 반환한다(비차단)", async () => {
+    const res = await laneAdd("proj", "cwd-warn-sc17", { base, cwd: path.join(base, "nope-cwd") });
+    expect(fs.existsSync(res.confPath)).toBe(true);
+    expect(res.warnings.some((w) => w.includes("cwd"))).toBe(true);
+  });
+});
+
+describe("SC-021: 토큰 값이 메시지에 노출되지 않는다 (lane-config 경고)", () => {
+  it("형식이 이상한 토큰으로 telegram 레인을 생성해도 경고 메시지에 토큰 원문이 포함되지 않는다", async () => {
+    const secretToken = "not-a-real-token-xyz789";
+    const res = await laneAdd("proj", "tg-secret", { base, source: "telegram", token: secretToken });
+    for (const w of res.warnings) {
+      expect(w).not.toContain(secretToken);
+    }
+  });
+});
+
+// ── 016-engine-wiring ────────────────────────────────────────────────────
+
+describe("SC-005: engine 기본값이 resolveEngine 과 laneAdd 기록값 사이에 단일화된다", () => {
+  it("engine 미지정 laneAdd 는 conf.engine 에 DEFAULT_ENGINE 을 기록하고, resolveEngine(undefined) 와 동일하다", async () => {
+    // DEFAULT_ENGINE 은 shared/conf.ts 신규 export — 동적 import 로 개별 격리(PPG-1 병렬 미착지 대비).
+    const { DEFAULT_ENGINE, resolveEngine } = await import("../../src/shared/conf.js");
+    expect(resolveEngine(undefined)).toBe(DEFAULT_ENGINE);
+
+    const res = await laneAdd("proj", "sc005-engine", { base });
+    const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(conf.engine).toBe(DEFAULT_ENGINE);
+  });
+});
+
+describe("SC-009: laneAdd 는 engine_args 옵션을 conf 에 기록한다", () => {
+  it("engine_args 옵션이 conf.engine_args 로 기록되고 라운드트립 파싱된다", async () => {
+    const res = await laneAdd("proj", "sc009-args", {
+      base,
+      engine_args: "--model opus",
+    } as Parameters<typeof laneAdd>[2]);
+    const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(conf.engine_args).toBe("--model opus");
+  });
+
+  it("engine_args 미지정이면 conf 에 기록하지 않는다(기본 동작 불변)", async () => {
+    const res = await laneAdd("proj", "sc009-noargs", { base });
+    const conf = parseLaneConf(fs.readFileSync(res.confPath, "utf8"));
+    expect(conf.engine_args).toBeUndefined();
+  });
+
+  it("engine_args 에 개행이 든 conf-키 주입 시도는 생성 시점에 거부되고 conf 를 쓰지 않는다 (fail-closed)", async () => {
+    // 개행 뒤에 hard_deny 를 주입해 권한 게이트를 약화시키려는 시도.
+    await expect(
+      laneAdd("proj", "sc009-inject", {
+        base,
+        engine_args: "--model opus\nhard_deny=",
+      } as Parameters<typeof laneAdd>[2]),
+    ).rejects.toThrow(LaneConfigError);
+    // conf 파일 자체가 생성되지 않아야 한다(validate-then-commit).
+    expect(fs.existsSync(lanePaths(base, "proj", "sc009-inject").confFile)).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -36,7 +36,8 @@ afterEach(() => {
 });
 
 // fake sendPermPrompt — inline_keyboard 를 포함한 sendMessage 를 기록
-function makeFakeSendPermPrompt(fakeSendMessage: ReturnType<typeof vi.fn>) {
+// vitest 4: 타입인자 없는 Mock 은 Procedure|Constructable 유니온이라 직접 호출 불가로 판정됨 → 호출 시그니처 명시.
+function makeFakeSendPermPrompt(fakeSendMessage: Mock<(msg: unknown) => Promise<unknown>>) {
   return async (
     _chatId: number,
     _reqId: string,

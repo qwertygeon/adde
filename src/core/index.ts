@@ -11,8 +11,9 @@ export type {
   SupervisorUpOptions,
   SupervisorDownOptions,
 } from "./supervisor.js";
-export { enqueue, claimNext, scanProcessing, isDone, writeOut } from "./queue.js";
-export type { OutSidecar } from "./queue.js";
+export { enqueue, claimNext, scanProcessing } from "./queue.js";
+export { isDone, writeOutBody } from "./out-ledger.js";
+export type { OutSidecar } from "./out-ledger.js";
 export { createInjector } from "./injector.js";
 export { appendTranscript, renderEvent } from "./transcript.js";
 export type { SessionEvent } from "./transcript.js";

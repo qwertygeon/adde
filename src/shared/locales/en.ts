@@ -14,10 +14,10 @@ Commands:
   up <proj>                start all lanes of the project as a background daemon
   down <proj>              stop the daemon (works from any terminal)
   restart <proj>           restart the daemon (down + up)
-  status [<proj>] [--all]  lane status (all running projects if <proj> omitted, --all includes stopped)
-  doctor [<proj>]          static environment/config checks (state-independent)
-  logs <proj> <lane> [N]   last N lines of the lane transcript (default 50, engine stderr with --engine)
-  sessions <proj> <lane>   list recorded engine sessions (resume via channel: /resume or resume checkbox)
+  status [<proj>] [--all] [--json]  lane status (all running projects if <proj> omitted, --all includes stopped)
+  doctor [<proj>] [--json]  static environment/config checks (state-independent)
+  logs <proj> <lane> [N] [-f|--follow]  last N lines of the lane transcript (default 50, engine stderr with --engine; -f/--follow to tail live)
+  sessions <proj> <lane> [--json]  list recorded engine sessions (resume via channel: /resume or resume checkbox)
   lane add <proj> <lane>   create a lane conf
   lane ls <proj>           list lanes
   lane show <proj> <lane>  print a lane conf
@@ -32,21 +32,33 @@ Options:
   -h, --help               print help
 
 Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help\` for lane options.`,
-    up: "Usage: adde up <proj>",
-    down: "Usage: adde down <proj>",
-    restart: "Usage: adde restart <proj>",
+    up: `Usage: adde up <proj> [--json]
+
+  --json       machine-readable output (boot report: lane statuses + running count; null if inconclusive)`,
+    down: `Usage: adde down <proj> [--json]
+
+  --json       machine-readable output ({proj, stopped: true})`,
+    restart: `Usage: adde restart <proj> [--json]
+
+  --json       machine-readable output (boot report: lane statuses + running count; null if inconclusive)`,
     status: "Usage: adde status [<proj>] [--all] [--json]",
-    doctor: "Usage: adde doctor [<proj>]",
-    logs: `Usage: adde logs <proj> <lane> [N] [--engine] [--daemon]
+    doctor: `Usage: adde doctor [<proj>] [--json]
+
+Static environment/config checks (state-independent).
+  --json       machine-readable output (checks array; no summary line/update notice)`,
+    logs: `Usage: adde logs <proj> <lane> [N] [--engine] [--daemon] [-f|--follow] [--json]
 
 Prints the last N lines (default 50) of a lane's log.
   (default)    the lane transcript (messages, decisions, notices)
   --engine     the engine's stderr capture (engine.log) — for engine crashes
-  --daemon     the launchd daemon log for <proj> (startup failures land here; <lane> optional)`,
-    sessions: `Usage: adde sessions <proj> <lane>
+  --daemon     the launchd daemon log for <proj> (startup failures land here; <lane> optional)
+  -f, --follow live tail — keeps running and prints new lines as they're appended (Ctrl-C to stop)
+  --json       machine-readable output ({proj, lane, path, exists, lines}; takes priority over --follow — snapshot only, no live tail)`,
+    sessions: `Usage: adde sessions <proj> <lane> [--json]
 
 Lists the engine sessions recorded for a lane (number, first-prompt excerpt, last activity, id; current marked ◀).
-Read-only — resuming/resetting a session is done from the channel (/resume <n> or the resume checkbox), not the CLI.`,
+Read-only — resuming/resetting a session is done from the channel (/resume <n> or the resume checkbox), not the CLI.
+  --json       machine-readable output (array of sessions)`,
     completion: `Usage: adde completion <bash|zsh>
 
 Prints a shell completion script to stdout — it does NOT install anything.
@@ -57,33 +69,35 @@ Where/how to decide (check your shell with: echo $SHELL):
   zsh  → adde completion zsh  > "\${fpath[1]}/_adde"                     (then run compinit; ensure 'autoload -Uz compinit && compinit' is in ~/.zshrc)
 Tip: 'adde init' can walk you through this setup.`,
     proj: `Usage:
-  adde proj ls               list registered projects (with lane + running counts)
+  adde proj ls [--json]      list registered projects (with lane + running counts)
   adde proj rm <proj>        delete a project — removes ALL its lanes and state
 
-  --force                    skip the confirmation prompt (required in non-interactive shells)`,
+  --json                     machine-readable output (proj ls only)
+  --force                    skip the confirmation prompt (required in non-interactive shells; proj rm only)`,
     init: "Usage: adde init [<proj>]  (guided setup: doctor + short alias + create a lane; TTY only)",
     alias: `Usage: adde alias [names...]   (default names: ad add)
 
 Installs short aliases (symlinks) next to the adde binary so you can type e.g. \`ad up <proj>\` instead of \`adde up <proj>\`.
 Only works on a global install (needs a writable bin dir next to adde on PATH); if a command with that name already exists it is skipped, not overwritten.`,
     laneAdd: "Usage: adde lane add <proj> <lane> [options]",
-    laneLs: "Usage: adde lane ls <proj>",
-    laneShow: "Usage: adde lane show <proj> <lane>",
+    laneSet: "Usage: adde lane set <proj> <lane> --<field> <value> ...",
+    laneLs: "Usage: adde lane ls <proj> [--json]",
+    laneShow: "Usage: adde lane show <proj> <lane> [--json]",
     laneRm: "Usage: adde lane rm <proj> <lane>",
     daemon: "Usage: adde __daemon <proj> (internal command)",
     lane: `Usage:
   adde lane add <proj> <lane> [options]   create a lane conf
-  adde lane ls <proj>                     list lanes
-  adde lane show <proj> <lane>            print a lane conf
-  adde lane rm <proj> <lane> [--purge]    delete a lane conf (--purge also removes its state/queue/out data)
+  adde lane set <proj> <lane> --<field> <value> ...  edit an existing lane conf in place
+  adde lane ls <proj> [--json]            list lanes
+  adde lane show <proj> <lane> [--json]   print a lane conf
+  adde lane rm <proj> <lane> [--purge] [--force]    delete a lane conf (--purge also removes its state/queue/out data; --force skips the running-lane guard/confirmation for --purge)
 
 lane add options:
   --source <markdown|telegram>  (default markdown)
-  --engine <name>               (default claude-agent-acp)
-  --backend <name>              (default acp)
   --perm-tier <acp|autopass>    (default acp — channel approval for every tool / autopass — auto-allow except denylist)
-  --acp-version <v>             (default v1)
   --cwd <abs-path>              lane working directory (project mapping)
+  --engine-args <args>          extra CLI args for the engine process, space-separated (e.g. "--model opus")
+                                (not for secrets/tokens — visible in the OS process list; quoted values unsupported)
   --allowlist <a,b,c>           auto-allowed tools (gate kept, for perm_tier=acp)
   --denylist <entries,...>      tools/patterns that fall back to channel approval under autopass
                                 (e.g. "Bash,Write(/etc/*)" · built-in default list if omitted: blocks sudo, rm -rf, forced git changes, credential reads)
@@ -98,7 +112,23 @@ lane add options:
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown note paths
   --force                       overwrite an existing conf
   --interactive                 force the interactive wizard (default on a TTY; the bot token is entered hidden)
-  --no-interactive              disable the interactive default and use flags/defaults (for scripts)`,
+  --no-interactive              disable the interactive default and use flags/defaults (for scripts)
+
+lane set options (edit-only subset of lane add — identity fields, tokens, and safe-defaults are not editable; recreate the lane instead):
+  --perm-tier <acp|autopass>
+  --allowlist <a,b,c>           replaces the whole list (not merged)
+  --denylist <entries,...>      replaces the whole list (not merged)
+  --hard-deny <entries,...>     replaces the whole list (not merged; warns if it had entries before)
+  --cwd <abs-path>
+  --engine-args <args>
+  --lang <en|ko>
+  --file-mode <private|shared>
+  --chat-id <id>                telegram lanes only
+  --allow-from <ids>            telegram lanes only
+  --root <abs-path>              markdown lanes only
+  --inbox <rel> --approvals <rel> --outbox <rel>   markdown lanes only
+Fields left unspecified keep their current value. Changes take effect after adde restart <proj>.
+Note: editing --file-mode only updates the conf value; existing directory permissions are NOT changed even after restart (relaxing private→shared needs a manual chmod). file_mode governs only the internal state/out/queue directories, not the markdown note tree.`,
   },
   cli: {
     cmdError: "[adde {{cmd}}] error: {{detail}}",
@@ -106,6 +136,8 @@ lane add options:
     unknownSub: "Unknown lane subcommand: {{sub}}",
     unknownCmd: "Unknown command: {{cmd}}",
     didYouMean: "Did you mean: {{cmds}}?",
+    unknownFlag: "unknown option: {{flag}}",
+    valueRequired: "{{key}} requires a value",
   },
   completion: {
     unknownShell: 'unsupported shell "{{shell}}" — one of {{supported}}',
@@ -136,11 +168,15 @@ lane add options:
       "  View: adde status {{proj}} · apply conf changes: adde restart {{proj}} · stop: adde down {{proj}}",
     alreadyUpUnhealthy:
       "[adde] {{proj}} has unhealthy lane(s): {{lanes}}\n  ↳ action: inspect with adde status {{proj}} / adde logs {{proj}} --daemon, then adde restart {{proj}}.",
+    deadRegistered:
+      "[adde] {{proj}} is registered but no lane is running (the daemon died) — reloading it...",
     upFailed:
       "[adde] lane(s) failed to start: {{lanes}}\n  ↳ action: inspect with adde logs {{proj}} <lane> --engine, or the daemon log with adde logs {{proj}} --daemon; then adde restart {{proj}}.",
-    upSummary: "  {{running}} running · {{failed}} failed · {{pending}} still starting",
+    upSummary: "  {{running}} running · {{failed}} failed",
     upInconclusive:
       "[adde] no lane came up within the wait window — the daemon may have failed to boot.\n  ↳ action: check the daemon log with adde logs {{proj}} --daemon, then adde restart {{proj}}.",
+    pollMsDeprecated:
+      "[adde] ADDE_UP_POLL_MS is no longer read — set ADDE_UP_WAIT_MS instead (default 8000ms unchanged if unset).",
     statusHint: "  Check status: adde status {{proj}}",
     downDone: "[adde] {{proj}} daemon stopped.",
     restartDone: "[adde] {{proj}} restarted. Lanes are starting in the background.",
@@ -163,14 +199,19 @@ lane add options:
         "error: lane(s) failed to start: {{lanes}}.\n  ↳ action: inspect the daemon log (adde logs <proj> --daemon) or engine log (adde logs <proj> <lane> --engine), then adde restart <proj>.",
       errorWarnSingle:
         "error: lane(s) failed to start: {{lanes}}.\n  ↳ action: inspect the daemon log (adde logs {{proj}} --daemon) or engine log (adde logs {{proj}} <lane> --engine), then adde restart {{proj}}.",
+      haltWarn:
+        "[adde] {{proj}} self-halted after repeated crash-loop restarts.\n  ↳ action: fix the underlying cause, then adde restart {{proj}}.",
     },
     doctor: {
       hint: "    ↳ action: {{hint}}",
-      summary: "Summary: {{pass}} PASS / {{warn}} WARN / {{fail}} FAIL",
+      summary: "Summary: {{pass}} PASS / {{warn}} WARN / {{fail}} FAIL / {{info}} INFO",
     },
     logs: {
       whatEngine: "engine log",
       whatTranscript: "transcript",
+      badCount: 'invalid line count "{{raw}}" (must be a positive integer) — falling back to 50.',
+      watchError:
+        "warning: log change watch failed ({{msg}}) — continuing to track via 1s polling.",
       notFound:
         "{{what}} not found: {{path}}\n  ↳ action: the lane has not been active or started yet. Check with adde status {{proj}}.",
       daemonNotFound:
@@ -179,7 +220,6 @@ lane add options:
     },
   },
   lane: {
-    valueRequired: "--{{key}} requires a value",
     retry: {
       chatId: "  chat_id — enter a numeric id (or leave empty)",
       allowFrom: "  allow_from — enter comma-separated numeric ids (or leave empty)",
@@ -195,6 +235,8 @@ lane add options:
       lang: "lang (channel message locale, empty for global)",
       token: "telegram bot token (hidden input, empty to set later)",
       cwd: "cwd (absolute lane working directory, empty to skip)",
+      engineArgs:
+        "engine_args (extra CLI args for the engine process, space-separated, empty to skip — not a place for secrets: engine args become visible in the OS process list)",
       chatId: "chat_id (reply target + authorizes that chat for inbound, empty to skip)",
       allowFrom: "allow_from (extra authorized sender ids, comma-separated, empty to skip)",
       fileMode:
@@ -210,6 +252,10 @@ lane add options:
         "Specify flags instead (e.g. adde lane add <proj> <lane> --source markdown). See adde lane help for the option list.",
     },
     created: 'lane "{{lane}}" created: {{confPath}}',
+    set: {
+      updated: 'lane "{{lane}}" updated: {{confPath}}',
+      restartHint: "Changes take effect after: adde restart {{proj}}",
+    },
     noLanes: "{{proj}}: no lanes",
     removed: 'lane "{{lane}}" removed: {{confPath}}',
     removedPurged: 'lane "{{lane}}" removed with state/queue/out purged: {{confPath}}',
@@ -280,6 +326,10 @@ lane add options:
       unsupported: 'unsupported source: "{{source}}"',
       hint: "Set source in the conf to markdown or telegram.",
     },
+    legacyKeys: {
+      detail: "legacy flat adapter keys detected: {{keys}} (ignored)",
+      hint: "The conf format changed to namespaced keys — use markdown.root/markdown.inbox, telegram.chat_id/telegram.allow_from. Recreate the lane (adde lane add) or rename the keys.",
+    },
     cwd: {
       hint: "Fix cwd in the conf to an existing working directory.",
     },
@@ -308,6 +358,21 @@ lane add options:
         "state dir is group/other-accessible (mode {{mode}}) but file_mode=private is expected to be 0700",
       stateHint:
         "Restrict it: chmod 700 {{path}} — or restart the lane (adde restart {{proj}}) to re-secure it.",
+      sharedTight:
+        "state dir is not group/other-accessible (mode {{mode}}) but file_mode=shared is declared — perms were not relaxed (fail-closed)",
+      sharedTightHint:
+        "Safe (tighter than declared). file_mode edits do not loosen existing dirs; to actually relax, chmod the state/out/queue dirs manually: {{path}}",
+    },
+    halt: {
+      name: "self-halt ({{proj}})",
+      detail: "self-halted after {{count}} consecutive short-lived crashes — {{reason}}",
+      hint: "Fix the underlying cause, then retry with adde restart {{proj}}.",
+    },
+    deadReg: {
+      name: "daemon liveness ({{proj}})",
+      detail:
+        "registered in launchctl but no lane is running — expected if auto_restart=off after a crash (no auto-restart); otherwise the daemon may have failed to boot",
+      hint: "Check adde logs {{proj}} --daemon for the cause, then adde restart {{proj}}.",
     },
   },
   update: {
@@ -374,11 +439,20 @@ lane add options:
         '[warning] lang "{{lang}}" is not a supported locale ({{supported}}) — the global locale applies.\n  ↳ action: fix lang in the conf if it is a typo.',
       telegramNoAuth:
         "[warning] telegram lane has no authorized inbound sender — all inbound will be rejected (fail-closed). A private chat_id self-authorizes, but a group chat_id (negative) is only a reply target and does NOT authorize its members.\n  ↳ action: set --chat-id <your private chat id>, and/or list member ids with --allow-from <ids>.",
+      mdBackupNoArchive:
+        "[warning] backup is enabled but archive is not configured — inbox content will keep accumulating.\n  ↳ action: set markdown.archive to relocate sent text as well.",
+      hardDenyReplaced:
+        "[warning] hard_deny was replaced — the previous list is gone (lane set replaces the whole list, it does not merge with the old one).",
+      fileModeRelaxNotice:
+        "[warning] file_mode changed to shared, but the existing directory permissions (0700) stay unchanged even after adde restart.\n  ↳ action: chmod the lane's state/out/queue directories manually to relax them (file_mode only governs those internal dirs, not the markdown note tree).",
     },
     err: {
       emptyIdent: "{{kind}} is empty",
       badIdent: '{{kind}} "{{value}}" is invalid — only letters/digits/_/- allowed',
       badSource: 'source "{{source}}" unsupported — one of {{supported}}',
+      unknownEngine: 'engine "{{value}}" unsupported — one of {{known}}',
+      unknownBackend: 'backend "{{value}}" unsupported — one of {{known}}',
+      invalidEngineArgs: "engine_args is invalid: {{reason}}",
       badChatId: 'chat_id "{{chatId}}" is not a number',
       tokenOnlyTelegram: "token is only used for source=telegram lanes",
       allowFromOnlyTelegram: "allow_from is only used for source=telegram lanes",
@@ -391,6 +465,10 @@ lane add options:
       tokenEmpty: "token is empty",
       envHasToken: "{{envFile}} already contains a token — use --force to overwrite",
       laneNotFound: 'lane "{{lane}}" not found ({{confFile}})',
+      identityFieldImmutable:
+        "{{field}} cannot be changed with lane set — recreate the lane to change it (adde lane rm, then adde lane add).",
+      sourceFieldMismatch: "{{field}} does not apply to source={{source}} lanes",
+      noEdits: "no edit flags given — nothing to update",
     },
   },
   telegram: {
@@ -422,6 +500,14 @@ lane add options:
       'invalid approval request id "{{reqId}}" — path escape blocked (fail-closed deny).',
     outMeta: "🕒 sent {{sent}} · done {{done}}",
     approvalMeta: "🕒 requested {{requested}} · auto-deny at {{deadline}} if no response",
+    backupPathOverlap:
+      "[markdown] backup path overlaps {{name}}({{path}}): {{backup}} — refusing startup to avoid corrupting vault/state.",
+    syncProviderUnsupported:
+      '[markdown] unsupported sync_provider "{{value}}" — supported: {{supported}}',
+    outRetentionTooLow:
+      "[markdown] out_retention_days({{outRetentionDays}}) must be >= retention_days({{retentionDays}}) + {{margin}} — refusing startup.",
+    backupNoArchiveWarn:
+      "⚠️ backup relocation is on but archive is not configured — inbox content keeps accumulating (archived text is not relocated). Set markdown.archive to enable archiving.",
   },
   supervisor: {
     noLanesMsg: "{{proj}}: 0 lanes — no conf in lanes.d",
@@ -439,6 +525,27 @@ lane add options:
     upStarted: "{{proj}}: {{count}} lane(s) started",
     upSkipped: "{{count}} already running (skipped)",
     downStopped: "{{proj}}: {{count}} lane(s) stopped",
+    source: {
+      unknown:
+        'unknown source "{{source}}" — not a registered source. Fix source= in lanes.d/<lane>.conf (see adde doctor for supported sources).',
+    },
+    engineWiring: {
+      unknownEngine:
+        'unsupported engine "{{value}}" (known: {{known}}) — fix engine= in lanes.d/<lane>.conf.',
+      unknownBackend:
+        'unsupported backend "{{value}}" (known: {{known}}) — fix backend= in lanes.d/<lane>.conf.',
+    },
+    engineArgs: {
+      parseFail:
+        "engine_args parsing failed: {{detail}} — quoted values are not supported (space-separated only); fix engine_args= in lanes.d/<lane>.conf.",
+    },
+    selfRecovery: {
+      attempt: "⚠️ engine crashed on lane {{lane}} — attempting auto-recovery (backoff)…",
+      abandoned:
+        "🛑 lane {{lane}} auto-recovery gave up after {{attempts}} attempts — status set to error. Recover with adde restart {{proj}}.",
+      disabled:
+        "🛑 engine crashed on lane {{lane}} — auto-relaunch is off (auto_relaunch=false); status set to error, no restart attempted. Recover with adde restart {{proj}}.",
+    },
   },
   launchd: {
     macOnly: {
@@ -464,6 +571,23 @@ lane add options:
     },
     quarantined: "corrupt message quarantined @ {{ts}}: {{detail}}",
   },
+  outLedger: {
+    readFail: {
+      situation: "out-state ledger read failed ({{path}}): {{error}}",
+      action:
+        "Check disk/permission issues. Treated as an empty ledger for this operation (conservative — non-idempotent lanes will not resend in-flight messages until the file is restored).",
+    },
+    corrupt: {
+      situation: "out-state ledger parse failed ({{path}}): {{error}}",
+      action:
+        "The file may be externally corrupted (disk error, manual edit, sync conflict). Treated as an empty ledger for this operation (in-flight non-idempotent lane responses may not be resent — duplicate-avoidance direction). Restore from a backup if available.",
+    },
+    unknownVersion: {
+      situation: "out-state ledger schema version unrecognized ({{path}}, v={{v}})",
+      action:
+        "This may be a file from a newer ADDE version. Known fields are read on a best-effort basis; verify behavior after a downgrade.",
+    },
+  },
   injector: {
     injectFailed: "inject failed @ {{ts}}: {{detail}}",
     control: {
@@ -486,6 +610,8 @@ lane add options:
       action:
         "The message is preserved and will be reprocessed on restart. If it recurs, check the transcript and logs.",
     },
+    deliverUncertain:
+      "⚠️ The process was interrupted mid-send — delivery of this reply (id {{id}}) is uncertain. It will not be resent, to avoid duplicates. If it didn't arrive, please ask again.",
   },
   transcript: {
     commandsUpdated: "[{{ts}}] commands_update: (updated)",
@@ -516,6 +642,8 @@ lane add options:
   log: {
     supervisor: {
       noConf: "[supervisor] {{proj}}: no conf in lanes.d",
+      legacyKeys:
+        "[supervisor] lane={{lane}} legacy flat adapter keys ignored: {{keys}} — conf format changed to namespaced keys (markdown.*/telegram.*). Recreate the lane or rename the keys.",
       heartbeatFail: "[supervisor] lane={{lane}} heartbeat touch failed (auxiliary): {{error}}",
       ledgerFail: "[supervisor] lane={{lane}} session ledger update failed (auxiliary): {{error}}",
       deadCleanupFail:
@@ -530,6 +658,8 @@ lane add options:
       securePermsFail:
         "[supervisor] lane={{lane}} state directory permission lock failed (auxiliary — files may be world-readable): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} start failed: {{reason}}",
+      laneCleanupFail:
+        "[supervisor] lane={{lane}} failed-start cleanup (engine close) failed (auxiliary): {{error}}",
     },
     queue: {
       quarantineFail: "[queue] corrupt message quarantine failed id={{id}}: {{code}}",
@@ -543,6 +673,8 @@ lane add options:
       advanceError: "[injector] advance error lane={{lane}}: {{error}}",
       failNotifyError:
         "[injector] failure notice delivery error lane={{lane}} id={{id}}: {{error}}",
+      uncertainNotifyError:
+        "[injector] uncertain-delivery notice error lane={{lane}} id={{id}}: {{error}}",
       relaunchError:
         "[injector] session-control engine relaunch failed lane={{lane}} — the lane may be down until restart: {{error}}",
     },
@@ -569,6 +701,24 @@ lane add options:
       inboxError: "[markdown] inbox processing error: {{error}}",
       approvalsError: "[markdown] approvals processing error: {{error}}",
       pollError: "[markdown] polling error: {{error}}",
+      decidedMoveError: "[markdown] failed to archive decided approval {{file}}: {{error}}",
+      backupWarnNotifyFail: "[markdown] failed to write backup/archive warning notice: {{error}}",
+      legacyArchiveMoveError:
+        "[markdown] failed to relocate legacy archive file {{path}}: {{error}}",
+    },
+    markdownRetention: {
+      relocateFail:
+        "[markdown-retention] relocate failed {{src}} -> {{dst}}: {{error}} (fail-open, continuing)",
+      migrateOutboxFail:
+        "[markdown-retention] outbox migration failed {{name}}: {{error}} (fail-open)",
+      migrateDecidedMtimeFail:
+        "[markdown-retention] decided mtime lookup failed {{name}}: {{error}} (fail-open)",
+      migrateDecidedFail:
+        "[markdown-retention] decided migration failed {{name}}: {{error}} (fail-open)",
+      maintenanceFail:
+        "[markdown-retention] lane={{lane}} maintenance run failed: {{error}} (fail-open)",
+      lastRunWriteFail:
+        "[markdown-retention] lane={{lane}} failed to persist retention-last-run: {{error}}",
     },
     transcript: {
       auditAppendFail:
@@ -582,6 +732,9 @@ lane add options:
       subscriberError: "[acp] lane={{lane}} subscriber error: {{error}}",
       transcriptWriteFail: "[acp] lane={{lane}} transcript write failed: {{error}}",
       permDiff: "[acp] launch perm-diff: {{note}}",
+    },
+    rotate: {
+      fail: "[log-rotate] rotation failed for {{path}} (absorbed — logging continues): {{detail}}",
     },
   },
   notify: {

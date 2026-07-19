@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   shouldAutoAllow,
   shouldAutopass,
@@ -9,7 +13,10 @@ import {
   extractPermDecision,
   recordToolName,
   resolveToolName,
+  formatPermId,
+  AcpBackendImpl,
 } from "../../src/backend/acp/client.js";
+import { lanePaths } from "../../src/shared/paths.js";
 
 // A2/DEC-002: allowlist auto-allow 판정
 describe("shouldAutoAllow (A2 allowlist)", () => {
@@ -340,5 +347,102 @@ describe("extractPermDecision — requestPermission 배선 통합 (F4)", () => {
     const r = extractPermDecision(params, toolNames, { perm_tier: "acp", allowlist: ["Read"] });
     expect(r.toolTitle).toBe("unknown");
     expect(r.decision).toEqual({ kind: "auto", via: "allowlist" });
+  });
+});
+
+// F11: 승인 상관키는 per-call 고유여야 한다. sessionId 를 그대로 쓰면 세션 내 전 요청이
+// 같은 키를 공유 → 스테일 버튼·병렬 호출이 서로의 대기자·승인파일을 오귀속/덮어쓴다.
+describe("formatPermId (F11 per-call 고유 승인키)", () => {
+  const SAFE = /^[A-Za-z0-9_-]+$/;
+
+  it("같은 세션의 연속 seq 는 서로 다른 키를 만든다 (오귀속 방지 핵심)", () => {
+    const s = "sess-abc";
+    expect(formatPermId(s, 0)).not.toBe(formatPermId(s, 1));
+    expect(formatPermId(s, 0)).toBe("sess-abc-0");
+    expect(formatPermId(s, 1)).toBe("sess-abc-1");
+  });
+
+  it("결과 charset 은 [A-Za-z0-9_-] 이고 allow: 접두 포함 64바이트 예산 내다", () => {
+    // 긴/적대적 sessionId 여도 프리픽스 12자 절단 → 예산 보장. telegram 최장 접두 allow:(6B) 기준.
+    const id = formatPermId("x".repeat(200), 999999);
+    expect(id).toMatch(SAFE);
+    expect(Buffer.byteLength(`allow:${id}`, "utf8")).toBeLessThanOrEqual(64);
+  });
+
+  it("sessionId 의 비안전 문자는 _ 로 새니타이즈하고 앞 12자로 절단한다", () => {
+    // "a/b:c d.e#f/gh/ij/kl" → 새니타이즈 "a_b_c_d_e_f_gh_ij_kl" → 앞 12자 "a_b_c_d_e_f_"
+    const id = formatPermId("a/b:c d.e#f/gh/ij/kl", 3);
+    expect(id).toMatch(SAFE);
+    expect(id).toBe("a_b_c_d_e_f_-3");
+  });
+
+  it("빈 sessionId 는 기본 프리픽스 s 로 대체한다", () => {
+    expect(formatPermId("", 0)).toBe("s-0");
+  });
+
+  it("동일 (sessionId, seq) 는 결정론적으로 같은 키다 (테스트 재현성)", () => {
+    expect(formatPermId("sess", 7)).toBe(formatPermId("sess", 7));
+  });
+
+  // 카운터가 인스턴스 필드라 같은 impl 의 연속 발급이 단조 증가한다. relaunch/reset 은 같은
+  // AcpBackendImpl 을 재사용하므로(client.ts), 이 단조성이 곧 재기동을 넘는 키 유일성 보장이다.
+  it("mintPermId 는 인스턴스에서 단조 증가하는 고유키를 발급한다 (재기동 넘어 유지)", () => {
+    const backend = new AcpBackendImpl("/nonexistent-bin");
+    const mint = (backend as unknown as { mintPermId(s: string): string }).mintPermId.bind(backend);
+    const first = mint("sess-x");
+    const second = mint("sess-x");
+    expect(first).toBe("sess-x-0");
+    expect(second).toBe("sess-x-1");
+    expect(first).not.toBe(second);
+  });
+});
+
+// launch() 이 engineArgs 를 실 spawn argv 로 전달하는지 실 child(fake-acp-agent.mjs)로 검증한다.
+// no-op 더블(가짜 EventEmitter)로는 spawnEngine 호출부의 실제 인자 배선을 못 잡는다 — fixture 가
+// 자신의 argv 를 파일로 덤프하게 해(FAKE_ACP_ARGV_DUMP) 실 프로세스 인자를 관찰한다(실제 spawn
+// argv 형태로 검증, 더블 흉내가 아님).
+describe("AcpBackendImpl.launch — engineArgs spawn 배선", () => {
+  const FIXTURE = fileURLToPath(new URL("../fixtures/fake-acp-agent.mjs", import.meta.url));
+  const origDump = process.env["FAKE_ACP_ARGV_DUMP"];
+
+  let tmpBase: string;
+  let dumpPath: string;
+  let backend: AcpBackendImpl;
+
+  beforeEach(() => {
+    fs.chmodSync(FIXTURE, 0o755);
+    tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-engineargs-"));
+    dumpPath = path.join(tmpBase, "argv.json");
+    process.env["FAKE_ACP_ARGV_DUMP"] = dumpPath;
+    const paths = lanePaths(tmpBase, "p", "lane");
+    fs.mkdirSync(paths.stateDir, { recursive: true });
+    backend = new AcpBackendImpl(FIXTURE);
+  });
+
+  afterEach(async () => {
+    await backend.close("lane").catch(() => {});
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+    if (origDump === undefined) delete process.env["FAKE_ACP_ARGV_DUMP"];
+    else process.env["FAKE_ACP_ARGV_DUMP"] = origDump;
+  });
+
+  it("engineArgs 가 지정되면 spawn argv 에 그대로 포함된다 (SC-008 Happy)", async () => {
+    const paths = lanePaths(tmpBase, "p", "lane");
+    // LaneConfig.engineArgs 는 아직 미착지 필드일 수 있음(PPG-1 병렬) — as 로 넘겨 타입 오류로
+    // 파일 전체가 깨지지 않게 격리한다. 필드가 무시되면 아래 argv 단언이 RED 로 표면화한다.
+    backend.configureLane("lane", { paths, engineArgs: ["--model", "opus"] } as Parameters<
+      AcpBackendImpl["configureLane"]
+    >[1]);
+    await backend.launch("lane");
+    const argv = JSON.parse(fs.readFileSync(dumpPath, "utf8")) as string[];
+    expect(argv).toEqual(["--model", "opus"]);
+  });
+
+  it("engineArgs 미설정 시 spawn argv 는 종전대로 빈 배열이다 (SC-010 Edge·SC-013 관측 불변)", async () => {
+    const paths = lanePaths(tmpBase, "p", "lane");
+    backend.configureLane("lane", { paths });
+    await backend.launch("lane");
+    const argv = JSON.parse(fs.readFileSync(dumpPath, "utf8")) as string[];
+    expect(argv).toEqual([]);
   });
 });

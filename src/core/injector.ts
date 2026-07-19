@@ -2,8 +2,12 @@
  * 직렬 idle 게이트·dedup·turn 라이프사이클 루프.
  * state=idle|active. active 동안 다음 envelope 미주입.
  * 크래시 재개: 기동 시 scanProcessing → 각 id 에 isDone? 스킵 : 재처리.
- * 응답 캡처: backend.inject() resolve(=turn 종료) 시 누적 응답을 writeOut + 렌더 트리거 → 다음 큐 진행.
- *   turn 종료 신호는 inject() resolve 로 감지한다(conn.prompt 가 turn 종료에 resolve) — 별도 idleCallback 배선 불요.
+ * 응답 캡처: backend.inject() resolve(=turn 종료) 시 누적 응답을 writeOutBody+setDone + 렌더 트리거 →
+ *   다음 큐 진행. turn 종료 신호는 inject() resolve 로 감지한다(conn.prompt 가 turn 종료에 resolve) —
+ *   별도 idleCallback 배선 불요.
+ * out-상태(done/sending/sent/aborted/failed)는 out-ledger.ts 가 SSOT.
+ * 진행 직렬화는 단일 runLoop promise chain 이 담당(single-flight) — 과거
+ * advancing bool·delivering Set·setImmediate 자기예약 3중 가드를 대체한다.
  */
 import { t } from "../shared/i18n.js";
 import type { NotifyT } from "../shared/notify.js";
@@ -11,19 +15,22 @@ import { readFile } from "node:fs/promises";
 import { appendTranscript } from "./transcript.js";
 import { recordSession, touchSession, readLedger, formatWhen } from "./session-ledger.js";
 import { errMsg } from "../shared/errors.js";
+import { claimNext, scanProcessing, processingFilePath, clearProcessing, quarantineCorrupt } from "./queue.js";
 import {
-  claimNext,
-  scanProcessing,
   isDone,
-  writeOut,
-  writeFailed,
-  processingFilePath,
-  markSent,
-  isSent,
+  writeOutBody,
+  setDone,
+  setFailed,
+  setSent,
+  setSending,
+  setAborted,
   findUnsent,
-  quarantineCorrupt,
-} from "./queue.js";
-import type { OutSidecar } from "./queue.js";
+  getEntry,
+  migrateLegacyOut,
+  TERMINAL_STATES,
+  projectSidecar,
+} from "./out-ledger.js";
+import type { OutSidecar, RenderHint } from "./out-ledger.js";
 import type { LanePaths } from "../shared/paths.js";
 import type { AcpBackend } from "../backend/acp/client.js";
 import type { SessionEvent } from "./transcript.js";
@@ -33,14 +40,27 @@ import type { Envelope } from "../shared/envelope.js";
 
 export type InjectorState = "idle" | "active";
 
-/** 처리 결과를 채널로 렌더하는 in-process 콜백(소스 renderOut 주입). 실패는 흡수(durable out/ 유지). */
-export type RenderCallback = (id: string) => Promise<void>;
+/** 처리 결과를 채널로 렌더하는 in-process 콜백(소스 renderOut 주입). 실패는 흡수(durable out/ 유지).
+ * hint 는 방금 메모리에서 쓴 텍스트·sidecar(디스크 재read 생략, M7) — flush 재전송 경로엔 없다. */
+export type RenderCallback = (id: string, hint?: RenderHint) => Promise<void>;
 
 /**
  * 주입 실패를 채널로 표면화하는 콜백(supervisor 가 Source.notify 로 배선).
- * 보조 신호 — 알림 실패는 로그 후 흡수하고 .failed 사이드카·재처리 경로는 그대로 유지.
+ * 보조 신호 — 알림 실패는 로그 후 흡수하고 ledger state=failed·재처리 경로는 그대로 유지.
  */
 export type FailNotifyCallback = (id: string, detail: string) => Promise<void>;
+
+/** 전송 dedup 옵션(소스별). SourceDescriptor.deliveryIdempotent 에서 supervisor 가 파생해 주입. */
+export interface DeliveryOptions {
+  /**
+   * renderOut 이 멱등(재호출 안전)이면 true — state=sending 저널을 쓰지 않고 재시작 재전송을 허용한다
+   * (at-least-once, markdown). 기본 false(비멱등, telegram 등): render 직전 state=sending 을 남겨
+   * render 진행 중 크래시를 재시작 시 "전달 불확실"로 판정하고 재전송 대신 통지 후 종단한다(at-most-once).
+   */
+  idempotent?: boolean;
+  /** 전달 불확실(render 진행 중 크래시) 종단 시 채널 통지(보조 — 실패는 로그 후 흡수). */
+  onUncertain?: (id: string) => Promise<void>;
+}
 
 export interface Injector {
   start(): Promise<void>;
@@ -88,17 +108,21 @@ export function createInjector(
   onFail?: FailNotifyCallback,
   /** 제어 결과 등 채널 대면 문구의 로케일(레인 lang). 미지정 시 전역 t. */
   laneT: NotifyT = t,
+  /** 소스별 전송 dedup 옵션(멱등성·불확실 통지). 미지정 = 비멱등(중복 회피 방향 fail-safe). */
+  delivery: DeliveryOptions = {},
 ): Injector {
+  const idempotentDelivery = delivery.idempotent ?? false;
+  const onDeliveryUncertain = delivery.onUncertain;
   let state: InjectorState = "idle";
   let responseText = "";
-  // claim→처리 진입을 직렬화(E4): idle 체크와 processOne(state=active) 사이의 두 await(claimNext·isDone)
-  // 창에서 두 injectNext 가 각각 다른 메시지를 claim 해 동시 turn 이 뜨는 경합 방지(rename 은 동일
-  // 메시지 중복만 막음). advancing 은 injectNext 전 구간을 감싸 한 번에 하나만 진행하게 한다.
-  let advancing = false;
-  // 전송 중인 id — start() 의 flushUnsent 는 advancing 가드 밖이라, 기동 중 notify 발 injectNext 의
-  // flushUnsent 와 동시 진입할 수 있다. deliver 진입 가드(in-flight Set + isSent 재확인)로 같은 응답의
-  // 이중 전송(중복 render)을 차단한다.
-  const delivering = new Set<string>();
+  // 진행 직렬화(single-flight) — notify()·turn 종료 후속 진행·start() 의 초기 진행을 모두 이 체인에
+  // 편입해 단일 진행을 보장한다. 각 스텝은 자체 catch 로 흡수해 체인이 죽지 않는다(re-arm 불요 —
+  // runLoop 자체가 항상 resolve 하므로 다음 enqueueStep 이 정상 이어진다).
+  let runLoop: Promise<void> = Promise.resolve();
+  // 미전송(state=done|sending) id 의 in-memory 추적(M5) — flushUnsent 가 매 턴 ledger 를 O(n) 재조회
+  // 하지 않도록. start() 에서 findUnsent 로 1회 시드(크래시 복구), 이후 setDone→add / setSent(등
+  // 종단)→delete 로 injector 가 단독 갱신한다. 재전송 대상은 이 집합만 순회한다.
+  const unsent = new Set<string>();
 
   function onSessionEvent(event: SessionEvent): void {
     if (state !== "active") return;
@@ -175,6 +199,69 @@ export function createInjector(
     }
   }
 
+  /**
+   * 응답을 채널로 전송하고 성공 시 state=sent 전이. entry.state∈TERMINAL 재확인은 stale(직전
+   * flush 가 이미 종단 처리)에 대비한 방어 — 진행이 단일 체인으로 완전 직렬화된 상태에서도 유지한다.
+   * 멱등 소스(markdown): state=sending 미경유 → render 실패해도 state=done 유지 → 다음 flush 재전송
+   * (at-least-once). 비멱등 소스(telegram): render 직전 state=sending 저널 — 재시작 잔존 또는
+   * 같은 프로세스의 markSent-throw edge(설정 직후 커밋 실패) 시 다음 진입에서 전달 불확실로 판정해
+   * 재전송 대신 통지 후 state=aborted 종단(at-most-once across restart). 프로세스 내 render 실패는
+   * state=done 으로 되돌려 다음 flush 가 정상 재시도한다(at-least-once within one process life).
+   */
+  async function deliver(id: string, hint?: RenderHint): Promise<void> {
+    try {
+      const entry = await getEntry(paths, id);
+      if (!entry || TERMINAL_STATES.has(entry.state)) {
+        unsent.delete(id); // 직전 flush 가 이미 종단 처리했거나 entry 부재(stale) — 추적 해제
+        return;
+      }
+      if (!idempotentDelivery && entry.state === "sending") {
+        if (onDeliveryUncertain) {
+          await onDeliveryUncertain(id).catch((e: unknown) =>
+            console.error(t("log.injector.uncertainNotifyError", { lane, id, error: errMsg(e) })),
+          );
+        }
+        await setAborted(paths, id); // 종단(findUnsent 제외) → 재시작마다 반복 통지 없음
+        unsent.delete(id);
+        return;
+      }
+      if (!render) {
+        // 렌더 대상 없음(예: chat_id 미설정) — 전송 개념 부재로 즉시 종결 처리.
+        await setSent(paths, id);
+        unsent.delete(id);
+        return;
+      }
+      if (!idempotentDelivery) await setSending(paths, id); // render 직전 저널(크래시 감지 앵커)
+      try {
+        await render(id, hint);
+      } catch (err) {
+        // 프로세스 내 render 실패 — 저널을 done 으로 되돌린 후 재던짐. 재시작이 아니므로 다음 턴
+        // flush 가 정상 재시도(at-least-once within process). sidecar 는 현재 entry 에서 투영해
+        // reply_ref/origin_ts/question 을 잃지 않는다.
+        if (!idempotentDelivery) {
+          await setDone(paths, id, projectSidecar(entry));
+        }
+        throw err;
+      }
+      await setSent(paths, id);
+      unsent.delete(id); // 전송 확정 → 미전송 추적 해제(render 실패 시엔 남겨 재전송)
+    } catch (err) {
+      console.error(
+        t("log.injector.renderError", {
+          lane,
+          id,
+          error: errMsg(err),
+        }),
+      );
+    }
+  }
+
+  /** 미전송 in-memory 집합만 순회 재전송(M5) — ledger O(n) 재조회 없음. deliver 성공 시 집합에서
+   * 제거된다. hint 없이 호출 → 어댑터가 디스크에서 읽는다(재전송 시점엔 메모리 텍스트가 없으므로 정상). */
+  async function flushUnsent(): Promise<void> {
+    for (const id of [...unsent]) await deliver(id);
+  }
+
   /** 한 메시지의 turn 을 처리: inject → (turn 종료) 응답 기록 + 렌더. 제어 envelope 는 세션 제어로 분기. */
   async function processOne(id: string, envelope: Envelope): Promise<void> {
     state = "active";
@@ -190,28 +277,38 @@ export function createInjector(
         if (envelope.reply_ref?.channel_msg_id) {
           sidecar.reply_ref = { channel_msg_id: envelope.reply_ref.channel_msg_id };
         }
-        await writeOut(paths, id, message, sidecar);
-        await deliver(id);
+        // body-first → ledger done 전이(commit point): 두 쓰기 사이 크래시해도 리더는
+        // "전이 전"(entry 부재) 상태만 관측한다.
+        await writeOutBody(paths, id, message);
+        await setDone(paths, id, sidecar);
+        unsent.add(id); // done 기록됨 → 전송 확인 전까지 미전송 추적(M5)
+        await clearProcessing(paths, id); // out durable → processing/<id>.msg 잉여(dedup 앵커=ledger)
+        await deliver(id, { text: message, sidecar });
         return;
       }
       await backend.inject(lane, envelope.text);
-      // inject resolve = turn 종료 — 누적 응답을 마스킹 후 out 기록 + 렌더.
+      // inject resolve = turn 종료 — 누적 응답을 마스킹 후 body+ledger 기록 + 렌더.
       const sidecar: OutSidecar = { ts: new Date().toISOString(), origin_ts: envelope.ts };
       if (envelope.reply_ref?.channel_msg_id) {
         sidecar.reply_ref = { channel_msg_id: envelope.reply_ref.channel_msg_id };
       }
       const question = questionExcerpt(envelope.text);
       if (question.length > 0) sidecar.question = question;
-      await writeOut(paths, id, maskSecrets(responseText), sidecar);
-      await deliver(id);
+      const outText = maskSecrets(responseText);
+      await writeOutBody(paths, id, outText);
+      await setDone(paths, id, sidecar);
+      unsent.add(id); // done 기록됨 → 전송 확인 전까지 미전송 추적(M5)
+      await clearProcessing(paths, id); // out durable → processing/<id>.msg 잉여(dedup 앵커=ledger)
+      await deliver(id, { text: outText, sidecar });
       // 세션 장부 갱신(보조): 마지막 대화 시각 + 미기재 시 첫 프롬프트 발췌를 라벨로.
       const sid = await currentSessionId();
       if (sid) await touchSession(paths, sid, question || undefined).catch(() => {});
     } catch (err) {
       const detail = errMsg(err);
       console.error(t("log.injector.injectError", { lane, id, detail }));
-      // 실패를 .failed 사이드카로 보존(E1) — processing/<id>.msg 는 남아 재기동 시 재처리(at-least-once).
-      await writeFailed(
+      // 실패를 ledger state=failed 로 보존(가시성) — processing/<id>.msg 는 남아 재기동 시
+      // 재처리(at-least-once). done 이 아니므로 dedup 대상이 아니다.
+      await setFailed(
         paths,
         id,
         t("injector.injectFailed", { ts: new Date().toISOString(), detail }),
@@ -242,106 +339,74 @@ export function createInjector(
     }
   }
 
-  /**
-   * 응답을 채널로 전송하고 성공 시 .sent 마커 기록.
-   * render 실패(부분 청크 실패 포함)는 .sent 미기록 → out/ 에 durable 하게 남아 재전송 대상(flushUnsent).
-   */
-  async function deliver(id: string): Promise<void> {
-    // 이중 전송 가드: in-flight 클레임은 await 이전에 동기적으로 잡아야 두 동시 호출이 모두 통과하는
-    // 창이 없다. add 후 .sent 재확인으로 직전(완료된) flush 가 이미 보낸 경우(stale 목록)도 건너뛴다.
-    if (delivering.has(id)) return;
-    delivering.add(id);
-    try {
-      if (await isSent(paths, id)) return;
-      if (!render) {
-        // 렌더 대상 없음(예: chat_id 미설정) — 전송 개념 부재로 즉시 종결 처리.
-        await markSent(paths, id);
-        return;
-      }
-      await render(id);
-      await markSent(paths, id);
-    } catch (err) {
-      console.error(
-        t("log.injector.renderError", {
-          lane,
-          id,
-          error: errMsg(err),
-        }),
-      );
-    } finally {
-      delivering.delete(id);
+  /** 체인에 다음 스텝을 편입 — 이전 스텝의 성공/실패와 무관하게 이어 실행되어 체인이 끊기지 않는다. */
+  function enqueueStep<T>(fn: () => Promise<T>): Promise<T> {
+    const result = runLoop.then(fn, fn);
+    runLoop = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  /** 체인 1 스텝: flushUnsent → claimNext → (dedup? clearProcessing : processOne). 처리 후 다음
+   * 메시지가 남아있을 수 있으므로 스스로 다음 스텝을 예약한다(자기 연쇄 — 큐가 빌 때까지 진행). */
+  async function drainOnce(): Promise<void> {
+    await flushUnsent();
+    const claimed = await claimNext(paths);
+    if (!claimed) return;
+    const { id, envelope } = claimed;
+    if (await isDone(paths, id)) {
+      // dedup: ledger 상태가 이미 done 계열 → prompt 미호출. 방금 claim 한 processing/<id>.msg 는
+      // 잉여라 정리(M5).
+      await clearProcessing(paths, id);
+    } else {
+      await processOne(id, envelope);
     }
+    scheduleStep();
   }
 
-  /** out/ 에 응답은 있으나(.out) 미전송(.sent 부재)인 항목 재전송 — render 실패·크래시 복구. */
-  async function flushUnsent(): Promise<void> {
-    const ids = await findUnsent(paths);
-    for (const id of ids) await deliver(id);
-  }
-
-  /** 다음 injectNext 를 비동기 예약 — rejection(예: 일시적 fs 오류)은 로깅(unhandled 방지). */
-  function scheduleNext(): void {
-    setImmediate(() => {
-      void injectNext().catch((err: unknown) => {
-        console.error(
-          t("log.injector.advanceError", {
-            lane,
-            error: errMsg(err),
-          }),
-        );
-      });
+  function scheduleStep(): void {
+    enqueueStep(drainOnce).catch((err: unknown) => {
+      console.error(t("log.injector.advanceError", { lane, error: errMsg(err) }));
     });
   }
 
-  async function injectNext(): Promise<void> {
-    if (state !== "idle" || advancing) return;
-    advancing = true;
-    try {
-      // 미전송(.out 있고 .sent 부재) 응답을 먼저 재전송 — render 실패·크래시 복구.
-      await flushUnsent();
-
-      const claimed = await claimNext(paths);
-      if (!claimed) return;
-
-      const { id, envelope } = claimed;
-
-      if (await isDone(paths, id)) {
-        // dedup: out 이미 존재 → prompt 미호출, 다음으로 진행.
-        scheduleNext();
-        return;
-      }
-
-      await processOne(id, envelope);
-      // turn 종료 후 다음 큐 메시지로 진행.
-      scheduleNext();
-    } finally {
-      advancing = false;
-    }
-  }
-
   async function start(): Promise<void> {
-    // 크래시 재개: 응답은 기록됐으나 미전송된 항목 먼저 재전송.
-    await flushUnsent();
-    // processing 잔존 파일을 순차 재처리.
-    const pendingIds = await scanProcessing(paths);
-    for (const id of pendingIds) {
-      if (await isDone(paths, id)) continue; // dedup — 이미 out 있음
-      let envelope: Envelope;
-      try {
-        const { readFile } = await import("node:fs/promises");
-        envelope = parseEnvelope(await readFile(processingFilePath(paths, id), "utf8"));
-      } catch (err) {
-        // 손상 메시지 — 격리 후 다음으로(매 기동 동일 파싱오류 반복 차단).
-        await quarantineCorrupt(paths, id, err);
-        continue;
+    await migrateLegacyOut(paths); // 1회성 — findUnsent 시드·scanProcessing 이전에 수행
+    // 크래시 재개: 응답은 기록됐으나 미전송된 항목을 ledger 에서 1회 시드(이후엔 in-memory 로만 추적, M5).
+    for (const id of await findUnsent(paths)) unsent.add(id);
+
+    await enqueueStep(async () => {
+      await flushUnsent();
+      // processing 잔존 파일을 순차 재처리.
+      const pendingIds = await scanProcessing(paths);
+      for (const id of pendingIds) {
+        if (await isDone(paths, id)) {
+          await clearProcessing(paths, id); // 이미 done 있음 → 잉여 processing 정리(M5)
+          continue;
+        }
+        let envelope: Envelope;
+        try {
+          envelope = parseEnvelope(await readFile(processingFilePath(paths, id), "utf8"));
+        } catch (err) {
+          // 손상 메시지 — 격리 후 다음으로(매 기동 동일 파싱오류 반복 차단).
+          await quarantineCorrupt(paths, id, err);
+          continue;
+        }
+        await processOne(id, envelope); // processOne 은 자체 try/catch(state=failed)로 throw 하지 않음
       }
-      await processOne(id, envelope); // processOne 은 자체 try/catch(.failed)로 throw 하지 않음
-    }
-    await injectNext();
+    }).catch((err: unknown) => {
+      console.error(t("log.injector.advanceError", { lane, error: errMsg(err) }));
+    });
+
+    await enqueueStep(drainOnce).catch((err: unknown) => {
+      console.error(t("log.injector.advanceError", { lane, error: errMsg(err) }));
+    });
   }
 
   function notify(): void {
-    scheduleNext();
+    scheduleStep();
   }
 
   function getState(): InjectorState {
@@ -350,5 +415,3 @@ export function createInjector(
 
   return { start, notify, onSessionEvent, getState };
 }
-
-export { writeOut };

@@ -3,16 +3,25 @@
  * CLI 계층(cli/ops.ts)이 결과를 표/JSON/텍스트로 표면화한다.
  */
 import { t } from "../shared/i18n.js";
-import { readFile, stat, readdir } from "node:fs/promises";
+import { readFile, stat, readdir, unlink, open } from "node:fs/promises";
 import { join } from "node:path";
 import { laneList, resolveFileMode } from "./lane-config.js";
 import { resolveAdapterBin } from "./supervisor.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
-import { lanePaths, defaultBase, expandTilde, isSafeSegment } from "../shared/paths.js";
-import { parseLaneConf } from "../shared/conf.js";
+import {
+  lanePaths,
+  defaultBase,
+  expandTilde,
+  isSafeSegment,
+  daemonHaltPath,
+  daemonBootsPath,
+} from "../shared/paths.js";
+import { parseLaneConf, detectLegacyAdapterKeys } from "../shared/conf.js";
 import { daemonRegState, daemonEntryPath } from "./launchd.js";
 import type { LaunchctlExec } from "./launchd.js";
+import { SOURCE_IDS, SOURCE_REGISTRY } from "../src-adapters/index.js";
+import type { HaltRecord } from "./crash-loop.js";
 
 export interface DiagBaseOptions {
   /** 설정 base 경로(테스트 override). 미지정 시 $ADDE_HOME 또는 ~/.config/adde. */
@@ -130,9 +139,37 @@ export async function collectAllStatus(
   return rows;
 }
 
+// ── 크래시루프 halt 상태 ─────────────────────────────────
+
+/** `daemon-halt.json` 읽기 — 크래시루프 자가 정지 기록. 부재/파싱 실패 시 null(halt 아님). */
+export async function readHalt(base: string, proj: string): Promise<HaltRecord | null> {
+  try {
+    const text = await readFile(daemonHaltPath(base, proj), "utf8");
+    return JSON.parse(text) as HaltRecord;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * halt 기록 + 짧은-수명 연속 카운터 제거(ENOENT 흡수 — 멱등) — `adde up`/`restart` 가 사용자
+ * 명시 재시도 시 호출. 카운터(daemon-boots.json)를 함께 지워야 한다: halt 마커만 지우면
+ * 재시도 부팅이 기존 streak 에 +1 하며 임계를 즉시 재초과 → 매 restart 가 곧바로 재정지해
+ * 사용자 명시 재시도가 영구히 무효화된다.
+ */
+export async function clearHalt(base: string, proj: string): Promise<void> {
+  for (const p of [daemonHaltPath(base, proj), daemonBootsPath(base, proj)]) {
+    try {
+      await unlink(p);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  }
+}
+
 // ── doctor ──────────────────────────────────────────────────────────────
 
-export type CheckLevel = "PASS" | "WARN" | "FAIL";
+export type CheckLevel = "PASS" | "WARN" | "FAIL" | "INFO";
 
 export interface DoctorCheck {
   name: string;
@@ -229,6 +266,17 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
 
   if (proj === undefined) return checks;
 
+  // 크래시루프 자가 정지 상태 — plist/launchctl 등록 여부와 무관하게 halt 기록 파일로 판정.
+  const halt = await readHalt(base, proj);
+  if (halt) {
+    checks.push({
+      name: t("doctor.halt.name", { proj }),
+      level: "FAIL",
+      detail: t("doctor.halt.detail", { count: halt.consecutiveShortLived, reason: halt.reason }),
+      hint: t("doctor.halt.hint", { proj }),
+    });
+  }
+
   // daemon 등록 상태 점검 (macOS 전용 — 비-darwin 은 항목 스킵).
   if (process.platform === "darwin") {
     try {
@@ -243,6 +291,21 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
           level: "PASS",
           detail: t("doctor.daemon.registered"),
         });
+        // 등록은 잔존하나 실제 상주 레인이 0 — auto_restart=off 크래시 후 미재기동 또는
+        // 부팅-실패-잔존(rekick 대상)의 관찰 시점 스냅샷. 거짓 UP 표기 방지.
+        const { lanes: regLanes } = await laneList(proj, { base });
+        if (regLanes.length > 0) {
+          const statusRows = await collectStatus(proj, opts);
+          const runningCount = statusRows.filter((r) => r.status === "running").length;
+          if (runningCount === 0) {
+            checks.push({
+              name: t("doctor.deadReg.name", { proj }),
+              level: "WARN",
+              detail: t("doctor.deadReg.detail"),
+              hint: t("doctor.deadReg.hint", { proj }),
+            });
+          }
+        }
       } else if (!plistExists && !launchctlRegistered) {
         // 둘 다 false — 데몬 미기동 상태(정상 — 기동 전 또는 down 후).
         checks.push({
@@ -301,8 +364,8 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
     }
     const conf = parseLaneConf(confText);
 
-    // source 유효성
-    if (conf.source === "telegram" || conf.source === "markdown") {
+    // source 유효성 — 등록된 소스(SOURCE_REGISTRY)만 PASS. 미등록은 FAIL(supervisor fail-closed 와 동일 기준).
+    if (SOURCE_IDS.includes(conf.source)) {
       checks.push({ name: `${lane}: source`, level: "PASS", detail: conf.source });
     } else {
       checks.push({
@@ -310,6 +373,18 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
         level: "FAIL",
         detail: t("doctor.source.unsupported", { source: conf.source }),
         hint: t("doctor.source.hint"),
+      });
+    }
+
+    // 구 평면 어댑터 키(root=·chat_id= 등) 감지 — 포맷이 `<source>.<key>` 네임스페이스로 변경됨.
+    // 파서가 구 키를 무시하므로(값 미반영) 여기서 감지해 마이그레이션을 안내한다(조용한 실패 방지).
+    const legacyKeys = detectLegacyAdapterKeys(confText);
+    if (legacyKeys.length > 0) {
+      checks.push({
+        name: `${lane}: conf format`,
+        level: "FAIL",
+        detail: t("doctor.legacyKeys.detail", { keys: legacyKeys.join(", ") }),
+        hint: t("doctor.legacyKeys.hint"),
       });
     }
 
@@ -328,58 +403,10 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
       );
     }
 
-    // 토큰(telegram 한정)
-    if (conf.source === "telegram") {
-      let hasToken = false;
-      try {
-        hasToken = (await readFile(paths.envFile, "utf8")).includes("TELEGRAM_BOT_TOKEN=");
-      } catch {
-        // env 파일 부재/읽기 실패 = 토큰 없음(초기값 유지)
-      }
-      checks.push(
-        hasToken
-          ? {
-              name: t("doctor.token.name", { lane }),
-              level: "PASS",
-              detail: t("doctor.token.present"),
-            }
-          : {
-              name: t("doctor.token.name", { lane }),
-              level: "FAIL",
-              detail: t("doctor.token.missing", { path: paths.envFile }),
-              hint: t("doctor.token.hint", { path: paths.envFile }),
-            },
-      );
-    }
-
-    // 마크다운 경로(markdown 한정) — root/inbox 누락은 기동 실패로 이어진다(laneAdd 는 경고만 하고
-    // 레인을 생성하므로, up 전에 doctor 가 검출해 조치를 안내한다). resolvePaths 필수 키와 동일 기준.
-    if (conf.source === "markdown") {
-      const mdName = t("doctor.markdown.name", { lane });
-      if (!conf.root) {
-        checks.push({
-          name: mdName,
-          level: "FAIL",
-          detail: t("doctor.markdown.rootMissing"),
-          hint: t("doctor.markdown.rootMissingHint"),
-        });
-      } else if (!(await pathExists(expandTilde(conf.root)))) {
-        checks.push({
-          name: mdName,
-          level: "FAIL",
-          detail: t("doctor.markdown.rootNotFound", { path: expandTilde(conf.root) }),
-          hint: t("doctor.markdown.rootNotFoundHint"),
-        });
-      } else if (!conf.inbox) {
-        checks.push({
-          name: mdName,
-          level: "FAIL",
-          detail: t("doctor.markdown.inboxMissing"),
-          hint: t("doctor.markdown.inboxMissingHint"),
-        });
-      } else {
-        checks.push({ name: mdName, level: "PASS", detail: t("doctor.markdown.ok") });
-      }
+    // 소스별 doctor 진단 위임 — 훅 미제공 소스는 오류 없이 생략.
+    const doctorChecks = SOURCE_REGISTRY[conf.source]?.doctorChecks;
+    if (doctorChecks) {
+      checks.push(...(await doctorChecks({ lane, conf, paths })));
     }
 
     // 파일 권한 감사 — 시크릿(.env)·private 모드 상태 디렉터리가 그룹/기타에 노출됐는지.
@@ -392,6 +419,14 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
       stateMode !== null &&
       resolveFileMode(conf.file_mode) === "private" &&
       (stateMode & 0o077) !== 0;
+    // file_mode=shared 로 선언됐으나 실 디렉터리가 0700(그룹/기타 비트 없음)인 불일치 — private→shared
+    // 편집 시 secureLaneDirs(shared)가 no-op 이라 기존 0700 이 완화되지 않은 상태(v0.1.5/020). 안전
+    // 방향(더 조임)이라 FAIL/WARN 이 아니라 INFO 로 인지만 돕는다. 갓 만든 shared 레인은 mkdir 기본
+    // 권한(umask, 통상 0755)이라 이 분기에 걸리지 않는다 — 편집 불일치 케이스만 표면화.
+    const sharedTightState =
+      stateMode !== null &&
+      resolveFileMode(conf.file_mode) === "shared" &&
+      (stateMode & 0o077) === 0;
     // env·state 는 독립 관심사 — 둘 다 느슨하면 둘 다 경고한다(하나가 다른 하나를 가리지 않도록).
     if (looseEnv) {
       checks.push({
@@ -409,7 +444,15 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
         hint: t("doctor.perms.stateHint", { path: paths.stateDir, proj }),
       });
     }
-    if (!looseEnv && !looseState && (envMode !== null || stateMode !== null)) {
+    if (sharedTightState) {
+      checks.push({
+        name: t("doctor.perms.name", { lane }),
+        level: "INFO",
+        detail: t("doctor.perms.sharedTight", { mode: octal(stateMode) }),
+        hint: t("doctor.perms.sharedTightHint", { path: paths.stateDir }),
+      });
+    }
+    if (!looseEnv && !looseState && !sharedTightState && (envMode !== null || stateMode !== null)) {
       checks.push({
         name: t("doctor.perms.name", { lane }),
         level: "PASS",
@@ -430,6 +473,10 @@ export interface LogsResult {
   exists: boolean;
   /** 최근 N줄(파일 끝 기준). */
   lines: string[];
+  /** 스냅샷이 실제로 읽은 바이트 종료 오프셋(follow 이어읽기 시작점). !exists 시 0. */
+  endOffset: number;
+  /** 스냅샷 파일 inode(회전 감지 기준점). !exists 시 0. */
+  startIno: number;
 }
 
 export interface ReadLogsOptions extends DiagBaseOptions {
@@ -437,7 +484,11 @@ export interface ReadLogsOptions extends DiagBaseOptions {
   engine?: boolean;
 }
 
-/** 레인 로그(transcript.log 기본, engine 옵션 시 engine.log)의 최근 n줄을 반환한다. 파일 없으면 exists=false. */
+/**
+ * 레인 로그(transcript.log 기본, engine 옵션 시 engine.log)의 최근 n줄을 반환한다. 파일 없으면
+ * exists=false. open→fstat(ino+size)→read 로 원자 취득해 endOffset(실제 읽은 바이트)·startIno(inode)를
+ * 함께 반환한다 — follow 가 이 오프셋에서 정확히 이어받아 스냅샷↔follow 사이 append 유실 창을 닫는다.
+ */
 export async function readLogs(
   proj: string,
   lane: string,
@@ -447,12 +498,29 @@ export async function readLogs(
   const base = opts.base ?? defaultBase();
   const paths = lanePaths(base, proj, lane);
   const target = opts.engine ? paths.engineLog : paths.transcriptLog;
-  let text: string;
+  let fh;
   try {
-    text = await readFile(target, "utf8");
+    fh = await open(target, "r");
   } catch {
-    return { path: target, exists: false, lines: [] };
+    return { path: target, exists: false, lines: [], endOffset: 0, startIno: 0 };
   }
-  const all = text.split("\n").filter((l) => l.length > 0);
-  return { path: target, exists: true, lines: all.slice(-Math.max(1, n)) };
+  let buf: Buffer;
+  let ino: number;
+  try {
+    const fstat = await fh.stat();
+    ino = fstat.ino;
+    buf = Buffer.alloc(fstat.size);
+    const { bytesRead } = await fh.read(buf, 0, fstat.size, 0);
+    buf = buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
+  const all = buf.toString("utf8").split("\n").filter((l) => l.length > 0);
+  return {
+    path: target,
+    exists: true,
+    lines: all.slice(-Math.max(1, n)),
+    endOffset: buf.length,
+    startIno: ino,
+  };
 }

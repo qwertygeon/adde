@@ -11,13 +11,27 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LanePaths } from "../shared/paths.js";
-import { enqueue, readSidecar } from "../core/queue.js";
+import { enqueue } from "../core/queue.js";
+import { readSidecar } from "../core/out-ledger.js";
+import type { RenderHint } from "../core/out-ledger.js";
 import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
 import { formatException } from "../shared/notify.js";
-import type { Source, DecisionCallback } from "./source.js";
+import type {
+  Source,
+  DecisionCallback,
+  SourceContext,
+  SourceDescriptor,
+  SourceValidateInput,
+  SourceValidateResult,
+  SourceDoctorInput,
+  WizardCtx,
+} from "./source.js";
 import { ENQUEUE_FAIL_THRESHOLD } from "./source.js";
+import type { LaneConf } from "../shared/conf.js";
+import type { LaneAddOptions, LaneAddResult } from "../core/lane-config.js";
+import type { DoctorCheck } from "../core/diagnostics.js";
 
 const TELEGRAM_API = "https://api.telegram.org";
 const POLL_TIMEOUT_SECS = 30;
@@ -52,6 +66,11 @@ const RETRY_AFTER_CAP_MS = 60_000;
 /** 폴 오류 지수 백오프 base·상한. */
 const POLL_BACKOFF_BASE_MS = 1_000;
 const POLL_BACKOFF_MAX_MS = 30_000;
+/**
+ * 기동 시 getMe 연결 확인 probe 의 상한(ms) — 무한 대기 회피. 고정 상수(CLI/conf 미노출).
+ * 10초 초과 시 abort 하여 기동 실패로 간주한다.
+ */
+const TELEGRAM_STARTUP_PROBE_TIMEOUT_MS = 10_000;
 
 /** 폴 오류 지수 백오프 간격: min(base·2^(n-1), max). n=연속 실패 횟수(1부터). */
 export function pollBackoffMs(failures: number): number {
@@ -193,6 +212,171 @@ export function isAuthorizedSender(
 export function selfAuthorizedChatId(chatId: number | undefined): number | undefined {
   return chatId !== undefined && chatId > 0 ? chatId : undefined;
 }
+
+/**
+ * conf 에서 telegram 회신 대상·인증셋을 조립(순수) — supervisor 인라인에서 어댑터로 이관.
+ * chatId = 파싱 가능한 chat_id. authorizedIds = allow_from ∪ (개인 chat 인 chatId).
+ * 비면 fail-closed(어댑터가 전 인바운드/콜백 거부). allow_from 파싱 = 트림·빈값 제거·NaN 제외.
+ */
+export function resolveTelegramAuth(conf: LaneConf): {
+  chatId: number | undefined;
+  authorizedIds: number[];
+} {
+  const chatIdRaw = conf.telegram?.chat_id;
+  const chatId = chatIdRaw && !Number.isNaN(Number(chatIdRaw)) ? Number(chatIdRaw) : undefined;
+  const authorizedIds: number[] = [];
+  const selfAuth = selfAuthorizedChatId(chatId);
+  if (selfAuth !== undefined) authorizedIds.push(selfAuth);
+  const allowFrom = conf.telegram?.allow_from;
+  const rawList = allowFrom
+    ? allowFrom
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+    : [];
+  for (const raw of rawList) {
+    const n = Number(raw);
+    if (!Number.isNaN(n)) authorizedIds.push(n);
+  }
+  return { chatId, authorizedIds };
+}
+
+/** 레지스트리용 어댑터 — SourceContext 에서 telegram 설정·인증셋을 self-resolve 해 생성. */
+export function createTelegramSourceFromContext(ctx: SourceContext): Source {
+  const { chatId, authorizedIds } = resolveTelegramAuth(ctx.conf);
+  return createTelegramSource({
+    lane: ctx.lane,
+    proj: ctx.proj,
+    engine: ctx.engine,
+    paths: ctx.paths,
+    chatId,
+    authorizedIds,
+    onInbound: ctx.onInbound,
+    lang: ctx.conf.lang,
+  });
+}
+
+// --- 소스 정의(descriptor) 훅 — validate/doctorChecks/wizard -----------------
+
+/** telegram chat_id — 그룹은 음수일 수 있음. */
+const CHAT_ID_RE = /^-?\d+$/;
+/** allow_from 항목 — telegram user/chat id(그룹은 음수). */
+const ALLOW_FROM_RE = /^-?\d+$/;
+/** 봇 토큰 대략 형식: <숫자id>:<영숫자/_-> (형식 오타 조기 발견용 휴리스틱). */
+const TELEGRAM_TOKEN_RE = /^\d+:[A-Za-z0-9_-]+$/;
+
+/**
+ * telegram conf 검증 — chat_id/allow_from 형식(하드)·토큰 형식·무인증 앵커(경고).
+ * 교차-소스 옵션 가드(token/allow_from 는 telegram 전용)는 소스 무관 공통 지식이라 lane-config.ts
+ * 본문에 유지한다(descriptor 로 분산하면 "옵션은 이 소스 전용" 지식이 흩어져 중앙화 취지가 역행).
+ */
+function validateTelegramConf(input: SourceValidateInput): SourceValidateResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  const chatId = input.opts.chat_id;
+  if (chatId !== undefined && chatId !== "" && !CHAT_ID_RE.test(chatId)) {
+    errors.push(t("laneConfig.err.badChatId", { chatId }));
+  }
+  const allowFrom = input.opts.allow_from;
+  if (allowFrom !== undefined && allowFrom !== "") {
+    for (const id of allowFrom
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)) {
+      if (!ALLOW_FROM_RE.test(id)) {
+        errors.push(t("laneConfig.err.badAllowFrom", { id }));
+        break; // 원 동작: 첫 위반에서 즉시 실패
+      }
+    }
+  }
+
+  if (input.token !== undefined && !TELEGRAM_TOKEN_RE.test(input.token)) {
+    warnings.push(t("laneConfig.warn.tokenFormat"));
+  }
+  // 인바운드 인증 앵커 부재 → 기동 시 전 인바운드 fail-closed 무시. 생성 시점에 미리 안내.
+  const tg = input.conf.telegram;
+  const chatIdNum = tg?.chat_id ? Number(tg.chat_id) : NaN;
+  const hasSelfAuth = Number.isFinite(chatIdNum) && chatIdNum > 0;
+  if (!hasSelfAuth && !tg?.allow_from) {
+    warnings.push(t("laneConfig.warn.telegramNoAuth"));
+  }
+
+  return { errors, warnings };
+}
+
+/** telegram doctor 진단 — 토큰 존재 여부(.env). */
+async function telegramDoctorChecks(input: SourceDoctorInput): Promise<DoctorCheck[]> {
+  let hasToken = false;
+  try {
+    hasToken = (await readFile(input.paths.envFile, "utf8")).includes("TELEGRAM_BOT_TOKEN=");
+  } catch {
+    // env 파일 부재/읽기 실패 = 토큰 없음(초기값 유지)
+  }
+  return [
+    hasToken
+      ? {
+          name: t("doctor.token.name", { lane: input.lane }),
+          level: "PASS",
+          detail: t("doctor.token.present"),
+        }
+      : {
+          name: t("doctor.token.name", { lane: input.lane }),
+          level: "FAIL",
+          detail: t("doctor.token.missing", { path: input.paths.envFile }),
+          hint: t("doctor.token.hint", { path: input.paths.envFile }),
+        },
+  ];
+}
+
+/** telegram 위저드 필드 수집 — chat_id/allow_from(재질의) + 봇 토큰(가려진 입력). */
+async function collectTelegramWizardFields(ctx: WizardCtx): Promise<Partial<LaneAddOptions>> {
+  const fields: Partial<LaneAddOptions> = {};
+  const isNumericId = (v: string): boolean => /^-?\d+$/.test(v);
+  const isIdCsv = (v: string): boolean => {
+    const ids = v
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return ids.length > 0 && ids.every(isNumericId);
+  };
+
+  let chatId = await ctx.ask(t("lane.prompt.chatId"), "");
+  while (chatId !== "" && !isNumericId(chatId)) chatId = await ctx.ask(t("lane.retry.chatId"), "");
+  if (chatId) fields.chat_id = chatId;
+
+  let allowFrom = await ctx.ask(t("lane.prompt.allowFrom"), "");
+  while (allowFrom !== "" && !isIdCsv(allowFrom)) {
+    allowFrom = await ctx.ask(t("lane.retry.allowFrom"), "");
+  }
+  if (allowFrom) fields.allow_from = allowFrom;
+
+  // 봇 토큰 — 가려진 입력. 빈 입력이면 생성 후 안내로 위임(시크릿 비노출).
+  if (ctx.askSecret) {
+    const token = await ctx.askSecret(t("lane.prompt.token"));
+    if (token) fields.token = token;
+  }
+
+  return fields;
+}
+
+/** 생성 후 힌트 — token 을 .env 에 즉시 쓰지 않은 경우 다음 조치 안내. */
+function telegramPostCreateHint(result: LaneAddResult): string | undefined {
+  return t("lane.tokenNext", {
+    envPath: result.confPath.replace(/lanes\.d\/.*$/, `state/${result.lane}/.env`),
+  });
+}
+
+/** telegram 소스 정의 — SOURCE_REGISTRY 가 등록한다(index.ts). */
+export const telegramDescriptor: SourceDescriptor = {
+  factory: createTelegramSourceFromContext,
+  validate: validateTelegramConf,
+  doctorChecks: telegramDoctorChecks,
+  wizard: {
+    collect: collectTelegramWizardFields,
+    postCreateHint: telegramPostCreateHint,
+  },
+};
 
 export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   const tl = tFor(cfg.lang);
@@ -449,30 +633,50 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     );
   }
 
-  /** out/<id>.out (+ sidecar) → quote-reply 전송. injector 가 writeOut 직후 in-process 호출. */
-  async function renderOut(id: string): Promise<void> {
+  /** out/<id>.out (+ sidecar) → quote-reply 전송. injector 가 writeOutBody+setDone 직후 in-process 호출. */
+  async function renderOut(id: string, hint?: RenderHint): Promise<void> {
     const defaultChatId = cfg.chatId ?? 0;
     if (!defaultChatId) return; // 회신 대상 미지정 시 렌더 생략
 
-    const outPath = join(cfg.paths.outDir, `${id}.out`);
-
+    // hint(injector 메모리) 있으면 디스크 재read 생략(M7). 없으면(크래시 flush) 디스크에서 읽는다.
     // sidecar 읽기는 queue.readSidecar 로 일원화(부재·파손 → null = reply_to 없이 전송).
     let replyTo: number | undefined;
-    const sidecar = await readSidecar(cfg.paths, id);
+    const sidecar = hint ? hint.sidecar : await readSidecar(cfg.paths, id);
     if (sidecar?.reply_ref?.channel_msg_id) {
       // 비숫자 channel_msg_id 가드 — NaN 이면 reply_to_message_id 생략(전송 파라미터 오염 방지).
       const parsed = parseInt(sidecar.reply_ref.channel_msg_id, 10);
       if (!Number.isNaN(parsed)) replyTo = parsed;
     }
 
-    const text = await readFile(outPath, "utf8");
+    const text = hint ? hint.text : await readFile(join(cfg.paths.outDir, `${id}.out`), "utf8");
     await sendReply(defaultChatId, text, replyTo);
   }
 
-  function start(): void {
+  async function start(): Promise<void> {
+    // 기동 연결 확인 — running=true·폴 기동 전에 getMe 를 1회 확인한다. 토큰 불량/네트워크
+    // 불가달/API 오류(원인 불문) 시 throw → supervisor 가 기동 실패로 반영(status:error).
+    // AbortController·상한 타이머는 첫 await(getToken) 전에 동기적으로 등록한다 — 등록을 토큰
+    // 읽기(fs I/O) 뒤로 미루면 상한 시작점이 지연돼 실질 상한이 늘어난다(무한 대기 회피 취지 약화).
+    const probeController = new AbortController();
+    const probeTimer = setTimeout(
+      () => probeController.abort(),
+      TELEGRAM_STARTUP_PROBE_TIMEOUT_MS,
+    );
+    try {
+      const tok = await getToken();
+      // 토큰 읽기(로컬 fs, 네트워크 아님) 중 상한이 이미 지났으면 네트워크 호출 없이 즉시 실패
+      // 처리한다 — signal 이 이미 abort 된 뒤에 fetch 를 호출하는 경로를 피한다.
+      if (probeController.signal.aborted) {
+        throw new Error("[telegram] getMe probe aborted (startup timeout)");
+      }
+      await callBotApi(tok, "getMe", {}, probeController.signal);
+    } finally {
+      clearTimeout(probeTimer);
+    }
+
     running = true;
     pollAbort = new AbortController();
-    // fire-and-forget 루프 — rejection 이 unhandled 가 되지 않도록 로깅(토큰 읽기 실패 등).
+    // fire-and-forget 루프 — rejection 이 unhandled 가 되지 않도록 로깅(기동 후 일시 오류는 기존대로 유지).
     // pollPromise 를 보관해 stop() 이 종료를 대기.
     pollPromise = pollLoop().catch((err: unknown) => {
       console.error(t("log.telegram.pollLoopEnd", { error: errMsg(err) }));

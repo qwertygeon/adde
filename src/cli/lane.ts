@@ -1,78 +1,42 @@
 /**
- * `adde lane <add|ls|show|rm>` 서브커맨드 그룹 — 레인 .conf 설정 CLI.
+ * `adde lane <add|set|ls|show|rm>` 서브커맨드 그룹 — 레인 .conf 설정 CLI.
  * argv 파싱 후 core/lane-config 의 코어 함수에 위임하고, 결과/오류를 stdout/stderr 로 표면화.
  */
 import {
   laneAdd,
+  laneSet,
   laneList,
   laneShow,
   laneRemove,
   LaneConfigError,
   parseCsv,
 } from "../core/lane-config.js";
-import type { LaneAddOptions } from "../core/lane-config.js";
+import type { LaneAddOptions, LaneSetOptions } from "../core/lane-config.js";
 import { collectStatus } from "../core/diagnostics.js";
-import { USAGE, buildLaneUsage, cmdError, laneError, unknownLaneSub } from "../core/messages.js";
+import {
+  USAGE,
+  buildLaneUsage,
+  cmdError,
+  laneError,
+  unknownLaneSub,
+  flagErrorText,
+  EXIT,
+} from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
 import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
+import { SOURCE_IDS, SOURCE_REGISTRY } from "../src-adapters/index.js";
 import { createPrompter } from "./prompt.js";
 import type { Ask } from "./prompt.js";
+import { findSub, valueKeys, LANE_SET_IDENTITY_FLAGS } from "./spec.js";
+import { parseCommand } from "./parse.js";
+import type { ParseResult } from "./parse.js";
 
 export type { Ask } from "./prompt.js";
 
-/** `--key value` / `--flag` 혼합 파싱. 값이 필요한 키는 valueKeys 로 지정. */
-interface ParsedArgs {
-  positional: string[];
-  flags: Record<string, string | true>;
-}
-
-function parseArgs(argv: readonly string[], valueKeys: ReadonlySet<string>): ParsedArgs {
-  const positional: string[] = [];
-  const flags: Record<string, string | true> = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === undefined) continue;
-    if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const eq = key.indexOf("=");
-      if (eq !== -1) {
-        flags[key.slice(0, eq)] = key.slice(eq + 1);
-      } else if (valueKeys.has(key)) {
-        const next = argv[i + 1];
-        if (next === undefined) throw new LaneConfigError(t("lane.valueRequired", { key }));
-        flags[key] = next;
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else {
-      positional.push(arg);
-    }
-  }
-  return { positional, flags };
-}
-
-const ADD_VALUE_KEYS = new Set([
-  "source",
-  "engine",
-  "backend",
-  "perm-tier",
-  "acp-version",
-  "cwd",
-  "allowlist",
-  "denylist",
-  "hard-deny",
-  "chat-id",
-  "allow-from",
-  "file-mode",
-  "lang",
-  "root",
-  "inbox",
-  "approvals",
-  "outbox",
-]);
+/** `lane add` 값 플래그 키(`--` 제거) — spec.ts 의 SubSpec 선언에서 파생(SSOT). */
+const laneAddValueKeys = valueKeys(findSub("lane", "add")!.flags);
 
 /**
  * 대화형 여부 결정 — 명시 `--interactive`, 또는 (`--no-interactive` 아님 && 필드 플래그 없음 && TTY).
@@ -83,7 +47,7 @@ export function shouldRunInteractive(
   isTTY: boolean,
 ): boolean {
   const fieldFlagsGiven =
-    [...ADD_VALUE_KEYS].some((k) => flags[k] !== undefined) ||
+    [...laneAddValueKeys].some((k) => flags[k] !== undefined) ||
     flags["safe-defaults"] === true ||
     flags["token-stdin"] === true;
   return (
@@ -103,19 +67,6 @@ async function readStdin(): Promise<string> {
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
-}
-
-/** 유효한 응답이 나올 때까지 재질의한다(숫자·CSV 필드 입력 시점 검증). */
-async function askUntil(
-  ask: Ask,
-  question: string,
-  def: string,
-  valid: (v: string) => boolean,
-  retry: string,
-): Promise<string> {
-  let v = await ask(question, def);
-  while (!valid(v)) v = await ask(retry, def);
-  return v;
 }
 
 /**
@@ -153,18 +104,10 @@ export async function collectInteractive(
   askPath: Ask = ask,
 ): Promise<LaneAddOptions> {
   const opts: LaneAddOptions = {};
-  const isNumericId = (v: string): boolean => /^-?\d+$/.test(v);
-  const isIdCsv = (v: string): boolean => {
-    const ids = parseCsv(v);
-    return ids.length > 0 && ids.every(isNumericId);
-  };
 
-  const source = await askEnum(ask, t("lane.prompt.source"), ["markdown", "telegram"], "markdown");
+  const source = await askEnum(ask, t("lane.prompt.source"), [...SOURCE_IDS], "markdown");
   opts.source = source;
-  opts.engine = await ask("engine", "claude-agent-acp");
-  opts.backend = await ask("backend", "acp");
   opts.perm_tier = await askEnum(ask, t("lane.prompt.permTier"), ["acp", "autopass"], "acp");
-  opts.acp_version = await ask("acp_version", "v1");
 
   const allow = await ask(t("lane.prompt.allowlist"), "");
   if (allow) opts.allowlist = parseCsv(allow);
@@ -182,52 +125,29 @@ export async function collectInteractive(
   const cwd = await askPath(t("lane.prompt.cwd"), "");
   if (cwd) opts.cwd = cwd;
 
-  if (source === "telegram") {
-    const chatId = await askUntil(
-      ask,
-      t("lane.prompt.chatId"),
-      "",
-      (v) => v === "" || isNumericId(v),
-      t("lane.retry.chatId"),
-    );
-    if (chatId) opts.chat_id = chatId;
-    const allowFrom = await askUntil(
-      ask,
-      t("lane.prompt.allowFrom"),
-      "",
-      (v) => v === "" || isIdCsv(v),
-      t("lane.retry.allowFrom"),
-    );
-    if (allowFrom) opts.allow_from = allowFrom;
-  } else {
-    const root = await askPath(t("lane.prompt.root"), "");
-    if (root) opts.root = root;
-    const inbox = await askPath(t("lane.prompt.inbox"), "inbox.md");
-    if (inbox) opts.inbox = inbox;
-    const approvals = await askPath(t("lane.prompt.approvals"), "");
-    if (approvals) opts.approvals = approvals;
-    const outbox = await askPath(t("lane.prompt.outbox"), "");
-    if (outbox) opts.outbox = outbox;
-  }
+  const engineArgs = await ask(t("lane.prompt.engineArgs"), "");
+  if (engineArgs) opts.engine_args = engineArgs;
 
+  // 공통 파일모드 프롬프트를 소스별 위저드보다 먼저 — 리팩터 전 프롬프트 순서(파일모드 → 소스별
+  // 토큰 등) 보존. 소스별 위저드가 시크릿(토큰) 프롬프트를 포함하므로 순서 역전 방지.
   const fileMode = await askEnum(ask, t("lane.prompt.fileMode"), ["private", "shared"], "private");
   if (fileMode && fileMode !== "private") opts.file_mode = fileMode;
 
-  // 봇 토큰(telegram) — 가려진 입력. 빈 입력이면 생성 후 안내로 위임(시크릿 비노출).
-  if (source === "telegram" && askSecret) {
-    const token = await askSecret(t("lane.prompt.token"));
-    if (token) opts.token = token;
+  // 소스별 필드 프롬프트 위임 — 훅 미제공 소스는 공통 프롬프트만(생략).
+  const wizard = SOURCE_REGISTRY[source]?.wizard;
+  if (wizard) {
+    Object.assign(opts, await wizard.collect({ ask, askSecret, askPath }));
   }
 
   return opts;
 }
 
-async function handleAdd(rest: readonly string[]): Promise<number> {
-  const { positional, flags } = parseArgs(rest, ADD_VALUE_KEYS);
+async function handleAdd(p: ParseResult): Promise<number> {
+  const { positional, flags } = p;
   const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneAdd + "\n");
-    return 1;
+    return EXIT.USAGE;
   }
 
   const wantInteractive = shouldRunInteractive(flags, process.stdin.isTTY === true);
@@ -241,7 +161,7 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
           action: t("lane.ttyOnly.action"),
         }) + "\n",
       );
-      return 1;
+      return EXIT.FAIL;
     }
     const prompter = createPrompter();
     try {
@@ -254,14 +174,10 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
     opts = {};
     const source = flagStr(flags, "source");
     if (source !== undefined) opts.source = source;
-    const engine = flagStr(flags, "engine");
-    if (engine !== undefined) opts.engine = engine;
-    const backend = flagStr(flags, "backend");
-    if (backend !== undefined) opts.backend = backend;
     const permTier = flagStr(flags, "perm-tier");
     if (permTier !== undefined) opts.perm_tier = permTier;
-    const acpVersion = flagStr(flags, "acp-version");
-    if (acpVersion !== undefined) opts.acp_version = acpVersion;
+    const engineArgs = flagStr(flags, "engine-args");
+    if (engineArgs !== undefined) opts.engine_args = engineArgs;
     const cwd = flagStr(flags, "cwd");
     if (cwd !== undefined) opts.cwd = cwd;
     const lang = flagStr(flags, "lang");
@@ -299,50 +215,136 @@ async function handleAdd(rest: readonly string[]): Promise<number> {
   const result = await laneAdd(proj, lane, opts);
   for (const w of result.warnings) process.stdout.write(w + "\n");
   process.stdout.write(t("lane.created", { lane: result.lane, confPath: result.confPath }) + "\n");
-  if (result.envPath)
+  if (result.envPath) {
     process.stdout.write(t("lane.tokenWritten", { envPath: result.envPath }) + "\n");
-  else if (result.conf.source === "telegram") {
-    process.stdout.write(
-      t("lane.tokenNext", {
-        envPath: result.confPath.replace(/lanes\.d\/.*$/, `state/${result.lane}/.env`),
-      }) + "\n",
-    );
+  } else {
+    // 생성 후 힌트 위임 — 훅 미제공 소스는 힌트 없음(생략).
+    const hint = SOURCE_REGISTRY[result.conf.source]?.wizard?.postCreateHint?.(result);
+    if (hint) process.stdout.write(hint + "\n");
   }
   process.stdout.write(t("lane.startHint", { proj }) + "\n");
-  return 0;
+  return EXIT.OK;
 }
 
-async function handleList(rest: readonly string[]): Promise<number> {
-  const { positional } = parseArgs(rest, new Set());
-  const [proj] = positional;
-  if (!proj) {
-    process.stderr.write(USAGE.laneLs + "\n");
-    return 1;
+/** CSV → 트림·빈값 제거 배열. handleAdd 의 splitTools 와 동일 파싱(allowlist/denylist/hard_deny CLI 입력). */
+function splitTools(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * argv 토큰(`--flag`/`--flag=v` 양형)에서 레인 정체성 플래그(LANE_SET_IDENTITY_FLAGS)를 찾는다.
+ * `parseCommand` 는 이 플래그들을 모르므로(LANE_SET_FLAGS 미등록) 일반 unknown-flag 로
+ * 흘려보내기 전에 먼저 검사해 친절 오류로 안내한다.
+ */
+function scanIdentityFlags(argv: readonly string[]): string | undefined {
+  for (const tok of argv) {
+    if (!tok.startsWith("--")) continue;
+    const eq = tok.indexOf("=");
+    const name = eq === -1 ? tok : tok.slice(0, eq);
+    if (LANE_SET_IDENTITY_FLAGS.includes(name)) return name;
   }
-  const { lanes } = await laneList(proj);
-  if (lanes.length === 0) process.stdout.write(t("lane.noLanes", { proj }) + "\n");
-  else process.stdout.write(lanes.join("\n") + "\n");
-  return 0;
+  return undefined;
 }
 
-async function handleShow(rest: readonly string[]): Promise<number> {
-  const { positional } = parseArgs(rest, new Set());
+async function handleSet(p: ParseResult): Promise<number> {
+  const { positional, flags } = p;
   const [proj, lane] = positional;
   if (!proj || !lane) {
-    process.stderr.write(USAGE.laneShow + "\n");
-    return 1;
+    process.stderr.write(USAGE.laneSet + "\n");
+    return EXIT.USAGE;
   }
-  const { confPath, text } = await laneShow(proj, lane);
-  process.stdout.write(`# ${confPath}\n${text}`);
-  return 0;
+
+  const edits: LaneSetOptions = {};
+  const permTier = flagStr(flags, "perm-tier");
+  if (permTier !== undefined) edits.perm_tier = permTier;
+  const cwd = flagStr(flags, "cwd");
+  if (cwd !== undefined) edits.cwd = cwd;
+  const engineArgs = flagStr(flags, "engine-args");
+  if (engineArgs !== undefined) edits.engine_args = engineArgs;
+  const lang = flagStr(flags, "lang");
+  if (lang !== undefined) edits.lang = lang;
+  const fileMode = flagStr(flags, "file-mode");
+  if (fileMode !== undefined) edits.file_mode = fileMode;
+  const chatId = flagStr(flags, "chat-id");
+  if (chatId !== undefined) edits.chat_id = chatId;
+  const allowFrom = flagStr(flags, "allow-from");
+  if (allowFrom !== undefined) edits.allow_from = allowFrom;
+  const root = flagStr(flags, "root");
+  if (root !== undefined) edits.root = root;
+  const inbox = flagStr(flags, "inbox");
+  if (inbox !== undefined) edits.inbox = inbox;
+  const approvals = flagStr(flags, "approvals");
+  if (approvals !== undefined) edits.approvals = approvals;
+  const outbox = flagStr(flags, "outbox");
+  if (outbox !== undefined) edits.outbox = outbox;
+  const allowlist = flagStr(flags, "allowlist");
+  if (allowlist !== undefined) edits.allowlist = splitTools(allowlist);
+  const denylist = flagStr(flags, "denylist");
+  if (denylist !== undefined) edits.denylist = splitTools(denylist);
+  const hardDeny = flagStr(flags, "hard-deny");
+  if (hardDeny !== undefined) edits.hard_deny = splitTools(hardDeny);
+
+  // no-op 판정은 core laneSet 가 최종 권위(programmatic API 공유)지만, CLI 는 usage 를 함께
+  // 병기해 안내한다 — laneSet 에 그대로 넘겨도 동일 거부이나 usage 는 CLI 계층 책임.
+  if (Object.keys(edits).length === 0) {
+    // 파서 오류·위치인자 누락이 아니라 플래그 입력 완전성 검증 — exit 1 유지.
+    process.stderr.write(laneError(t("laneConfig.err.noEdits")) + "\n\n" + USAGE.laneSet + "\n");
+    return EXIT.FAIL;
+  }
+
+  const result = await laneSet(proj, lane, edits);
+  for (const w of result.warnings) process.stdout.write(w + "\n");
+  process.stdout.write(
+    t("lane.set.updated", { lane: result.lane, confPath: result.confPath }) + "\n",
+  );
+  process.stdout.write(t("lane.set.restartHint", { proj }) + "\n");
+  return EXIT.OK;
 }
 
-async function handleRemove(rest: readonly string[]): Promise<number> {
-  const { positional, flags } = parseArgs(rest, new Set());
+async function handleList(p: ParseResult): Promise<number> {
+  const [proj] = p.positional;
+  if (!proj) {
+    process.stderr.write(USAGE.laneLs + "\n");
+    return EXIT.USAGE;
+  }
+  const json = p.flags.json === true;
+  const { lanes } = await laneList(proj);
+  if (json) {
+    // 최상위 배열 대신 {v, lanes} 객체(BREAKING — 기존 배열 소비자). `v` = 스키마 버전.
+    process.stdout.write(JSON.stringify({ v: 1, lanes }, null, 2) + "\n");
+  } else if (lanes.length === 0) {
+    process.stdout.write(t("lane.noLanes", { proj }) + "\n");
+  } else {
+    process.stdout.write(lanes.join("\n") + "\n");
+  }
+  return EXIT.OK;
+}
+
+async function handleShow(p: ParseResult): Promise<number> {
+  const [proj, lane] = p.positional;
+  if (!proj || !lane) {
+    process.stderr.write(USAGE.laneShow + "\n");
+    return EXIT.USAGE;
+  }
+  const json = p.flags.json === true;
+  const { confPath, conf, text } = await laneShow(proj, lane);
+  if (json) {
+    process.stdout.write(JSON.stringify({ v: 1, lane, confPath, conf }, null, 2) + "\n");
+  } else {
+    process.stdout.write(`# ${confPath}\n${text}`);
+  }
+  return EXIT.OK;
+}
+
+async function handleRemove(p: ParseResult): Promise<number> {
+  const { positional, flags } = p;
   const [proj, lane] = positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneRm + "\n");
-    return 1;
+    return EXIT.USAGE;
   }
   const purge = flags["purge"] === true;
   const force = flags["force"] === true;
@@ -363,12 +365,12 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
         row.status === "error")
     ) {
       process.stderr.write(laneError(t("lane.purgeRunning", { proj, lane })) + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
     // 확인 — TTY 면 레인 이름 재입력, 비-TTY 면 --force 요구.
     if (!process.stdin.isTTY) {
       process.stderr.write(laneError(t("lane.purgeNeedForce")) + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
     const prompter = createPrompter();
     let typed: string;
@@ -379,7 +381,7 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
     }
     if (typed.trim() !== lane) {
       process.stdout.write(t("lane.purgeAborted") + "\n");
-      return 1;
+      return EXIT.FAIL;
     }
   }
 
@@ -388,7 +390,7 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
     (purged ? t("lane.removedPurged", { lane, confPath }) : t("lane.removed", { lane, confPath })) +
       "\n",
   );
-  return 0;
+  return EXIT.OK;
 }
 
 /**
@@ -398,31 +400,52 @@ async function handleRemove(rest: readonly string[]): Promise<number> {
 export async function runLane(argv: readonly string[]): Promise<number> {
   const [sub, ...rest] = argv;
   // `adde lane <sub> --help` — 전체 lane 옵션 도움말(하위 명령 인자 검증보다 우선).
-  if (sub !== undefined && sub !== "help" && (rest.includes("--help") || rest.includes("-h"))) {
+  if (sub !== undefined && sub !== "help" && parseCommand({ flags: [] }, rest).help) {
     process.stdout.write(`${buildLaneUsage()}\n`);
-    return 0;
+    return EXIT.OK;
+  }
+  if (sub === undefined || sub === "help" || sub === "--help" || sub === "-h") {
+    process.stdout.write(`${buildLaneUsage()}\n`);
+    return EXIT.OK;
+  }
+  const subSpec = findSub("lane", sub);
+  if (!subSpec) {
+    // 미지원 *서브커맨드* — "미지원 명령" 계열로 보아 exit 1 유지.
+    process.stderr.write(unknownLaneSub(sub) + "\n");
+    return EXIT.FAIL;
   }
   try {
-    switch (sub) {
+    // 정체성 필드(source/backend/engine/acp_version) pre-scan — set 은 이 플래그들을 spec 에
+    // 등록하지 않으므로 parseCommand 의 일반 unknown-flag 보다 먼저 친절 오류로 안내한다.
+    if (subSpec.name === "set") {
+      const identityFlag = scanIdentityFlags(rest);
+      if (identityFlag !== undefined) {
+        process.stderr.write(
+          laneError(t("laneConfig.err.identityFieldImmutable", { field: identityFlag })) + "\n",
+        );
+        return EXIT.FAIL;
+      }
+    }
+    const p = parseCommand(subSpec, rest);
+    if (p.error) {
+      process.stderr.write(`${laneError(flagErrorText(p.error))}\n\n${buildLaneUsage()}\n`);
+      return EXIT.USAGE;
+    }
+    switch (subSpec.name) {
       case "add":
-        return await handleAdd(rest);
+        return await handleAdd(p);
+      case "set":
+        return await handleSet(p);
       case "ls":
-      case "list":
-        return await handleList(rest);
+        return await handleList(p);
       case "show":
-        return await handleShow(rest);
+        return await handleShow(p);
       case "rm":
-      case "remove":
-        return await handleRemove(rest);
-      case undefined:
-      case "help":
-      case "--help":
-      case "-h":
-        process.stdout.write(`${buildLaneUsage()}\n`);
-        return 0;
+        return await handleRemove(p);
       default:
+        // 도달하지 않음(lane subs 는 add/set/ls/show/rm/help 로 한정) — 방어.
         process.stderr.write(unknownLaneSub(sub) + "\n");
-        return 1;
+        return EXIT.FAIL;
     }
   } catch (err) {
     // LaneConfigError 는 검증 실패(친절 메시지) — 그 외 예기치 못한 예외도 원시 스택 대신
@@ -432,6 +455,6 @@ export async function runLane(argv: readonly string[]): Promise<number> {
     } else {
       process.stderr.write(cmdError("lane", errMsg(err)) + "\n");
     }
-    return 1;
+    return EXIT.FAIL;
   }
 }

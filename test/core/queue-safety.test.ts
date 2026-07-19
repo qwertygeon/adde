@@ -4,12 +4,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-// SC1: writeOut sidecar-first 순서(`.out` 존재 ⇒ sidecar 존재).
-// SC2: claimNext ENOENT(정상)=null vs 비-ENOENT=전파.
+// SC-005: 전이 두 쓰기(body→ledger) 사이 크래시 → 재시작 시 전/후 상태만 관측(부분조합 없음).
+// SC-012: claimNext ENOENT(정상)=null vs 비-ENOENT=전파. 손상 격리 시 setFailed(state="failed").
+// SC-003/SC-015: 전송 마커(setSent)·findUnsent 종단 제외.
 
 // fs/promises 의 writeFile/rename 을 선택적으로 가로채는 훅(hoisted — vi.mock 팩토리에서 참조 가능).
 const h = vi.hoisted(() => ({
-  failOutBodyWrite: false,
+  failLedgerWrite: false,
   renameError: null as NodeJS.ErrnoException | null,
 }));
 
@@ -18,9 +19,10 @@ vi.mock("node:fs/promises", async (orig) => {
   return {
     ...actual,
     writeFile: async (p: unknown, data: unknown, opts?: unknown) => {
-      // 본문 tmp(`.<id>.out.<pid>.tmp`)만 가로챔 — sidecar tmp 는 `.out.json.<pid>.tmp` 라 매칭 안 됨.
-      if (h.failOutBodyWrite && typeof p === "string" && /\.out\.\d+\.tmp$/.test(p)) {
-        throw new Error("주입된 본문 쓰기 실패");
+      // ledger.json 의 tmp(`.ledger.json.<pid>.tmp`)만 가로챔 — body tmp(`.<id>.out.<pid>.tmp`)는
+      // 별도 파일명 패턴이라 매칭 안 됨(body-first 순서: 본문은 항상 성공, ledger 커밋만 실패 재현).
+      if (h.failLedgerWrite && typeof p === "string" && /\.ledger\.json\.\d+\.tmp$/.test(p)) {
+        throw new Error("주입된 ledger 커밋 실패");
       }
       return (actual.writeFile as (...a: unknown[]) => Promise<void>)(p, data, opts);
     },
@@ -31,8 +33,10 @@ vi.mock("node:fs/promises", async (orig) => {
   };
 });
 
-const { writeOut, isDone, readSidecar, claimNext, enqueue, markSent, isSent, findUnsent } =
-  await import("../../src/core/queue.js");
+const { writeOutBody, readOutBody, getEntry, setDone, setSent, findUnsent } = await import(
+  "../../src/core/out-ledger.js"
+);
+const { claimNext, enqueue } = await import("../../src/core/queue.js");
 import { lanePaths } from "../../src/shared/paths.js";
 
 let tmpBase: string;
@@ -44,7 +48,7 @@ beforeEach(() => {
   fs.mkdirSync(paths.queueDir, { recursive: true });
   fs.mkdirSync(paths.processingDir, { recursive: true });
   fs.mkdirSync(paths.outDir, { recursive: true });
-  h.failOutBodyWrite = false;
+  h.failLedgerWrite = false;
   h.renameError = null;
 });
 
@@ -52,27 +56,33 @@ afterEach(() => {
   fs.rmSync(tmpBase, { recursive: true, force: true });
 });
 
-describe("writeOut sidecar-first 순서 (SC1)", () => {
-  it("정상 경로: 본문·sidecar 둘 다 기록되고 done·reply_ref 보존", async () => {
-    await writeOut(paths, "m1", "응답", { reply_ref: { channel_msg_id: "42" } });
-    expect(await isDone(paths, "m1")).toBe(true);
+describe("body-first 전이 순서 (SC-005)", () => {
+  it("정상 경로: 본문·ledger 둘 다 기록되고 done·reply_ref 보존", async () => {
+    await writeOutBody(paths, "m1", "응답");
+    await setDone(paths, "m1", { reply_ref: { channel_msg_id: "42" } });
+
     expect(fs.readFileSync(path.join(paths.outDir, "m1.out"), "utf8")).toBe("응답");
-    const sc = await readSidecar(paths, "m1");
-    expect(sc?.reply_ref?.channel_msg_id).toBe("42");
+    const entry = await getEntry(paths, "m1");
+    expect(entry?.state).toBe("done");
+    expect(entry?.reply_ref?.channel_msg_id).toBe("42");
+    expect(await readOutBody(paths, "m1")).toBe("응답");
   });
 
-  it("본문 쓰기 실패 시 sidecar 는 이미 디스크에 있고 `.out`(done 마커)은 없다", async () => {
-    h.failOutBodyWrite = true;
+  it("본문 쓰기는 성공했으나 ledger 커밋(setDone)이 실패하면 body 는 있고 done entry 는 없다(크래시해도 done 오인 없음)", async () => {
+    await writeOutBody(paths, "m2", "응답");
+    h.failLedgerWrite = true;
     await expect(
-      writeOut(paths, "m2", "응답", { reply_ref: { channel_msg_id: "7" } }),
+      setDone(paths, "m2", { reply_ref: { channel_msg_id: "7" } }),
     ).rejects.toThrow();
-    // sidecar 먼저 확정 → 존재. 본문(done 마커)은 미생성 → 크래시해도 done 으로 오인되지 않음.
-    expect(fs.existsSync(path.join(paths.outDir, "m2.out.json"))).toBe(true);
-    expect(fs.existsSync(path.join(paths.outDir, "m2.out"))).toBe(false);
+
+    // 본문(body-first)은 이미 확정 → 존재. ledger done entry(commit)는 실패 → 부재.
+    // 재시작 시 리더는 "전이 전"(entry 없음) 상태만 관측하고 부분조합을 만나지 않는다.
+    expect(fs.existsSync(path.join(paths.outDir, "m2.out"))).toBe(true);
+    expect(await getEntry(paths, "m2")).toBeUndefined();
   });
 });
 
-describe("claimNext 오류 구분 (SC2)", () => {
+describe("claimNext 오류 구분 (SC2, queue 도메인 불변)", () => {
   function putQueueFile(id: string): void {
     fs.writeFileSync(path.join(paths.queueDir, `1700000000000-${id}.msg`), "{}");
   }
@@ -96,7 +106,7 @@ describe("claimNext 오류 구분 (SC2)", () => {
     expect(await claimNext(paths)).toBeNull();
   });
 
-  it("손상 메시지는 격리(.corrupt + .failed)하고 다음 유효 메시지를 claim 한다 (FR-2)", async () => {
+  it("손상 메시지는 격리(.corrupt + ledger failed 상태)하고 다음 유효 메시지를 claim 한다 (FR-2·SC-012)", async () => {
     // 더 이른 ts → 먼저 시도됨. 손상.
     fs.writeFileSync(path.join(paths.queueDir, `1700000000000-bad.msg`), "{ not json");
     await enqueue(paths, makeEnvelope("good", "정상")); // 큰 ts → 뒤에 정렬
@@ -104,21 +114,23 @@ describe("claimNext 오류 구분 (SC2)", () => {
     const claimed = await claimNext(paths);
     expect(claimed?.id).toBe("good");
     expect(claimed?.envelope.text).toBe("정상");
-    // 손상 메시지는 격리되어 재시도 대상에서 제외.
+    // 손상 메시지는 격리되어 재시도 대상에서 제외되고, 가시성은 ledger state="failed" 로 기록된다.
     expect(fs.existsSync(path.join(paths.processingDir, "bad.msg.corrupt"))).toBe(true);
-    expect(fs.existsSync(path.join(paths.outDir, "bad.failed"))).toBe(true);
+    const badEntry = await getEntry(paths, "bad");
+    expect(badEntry?.state).toBe("failed");
     expect(fs.existsSync(path.join(paths.processingDir, "bad.msg"))).toBe(false);
   });
 });
 
-describe("전송 마커 markSent/isSent/findUnsent (FR-1)", () => {
-  it("out 있고 .sent 없으면 findUnsent 대상, markSent 후 제외", async () => {
-    await writeOut(paths, "u1", "응답", {});
-    expect(await isSent(paths, "u1")).toBe(false);
+describe("전송 마커 setSent/findUnsent (FR-1, SC-003·SC-015)", () => {
+  it("out 있고 sent 상태 아니면 findUnsent 대상, setSent 후 제외", async () => {
+    await writeOutBody(paths, "u1", "응답");
+    await setDone(paths, "u1", {});
+    expect((await getEntry(paths, "u1"))?.state).not.toBe("sent");
     expect(await findUnsent(paths)).toContain("u1");
 
-    await markSent(paths, "u1");
-    expect(await isSent(paths, "u1")).toBe(true);
+    await setSent(paths, "u1");
+    expect((await getEntry(paths, "u1"))?.state).toBe("sent");
     expect(await findUnsent(paths)).not.toContain("u1");
   });
 });

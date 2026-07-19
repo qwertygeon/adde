@@ -38,6 +38,8 @@ The full command and option set of the ADDE CLI. The single main entry point is 
 
 Running `adde` with no arguments, or `-h`/`--help`/`help`, prints the overall usage. For a specific command's help, `adde <command> --help` (e.g. `adde status --help`, `adde lane add --help`) — if a known command precedes `--help`, that command's usage is shown; otherwise the overall usage is shown.
 
+**Machine-readable output (`--json`)**: commands that support `--json` print a single machine-readable JSON document on stdout. Every `--json` output carries a top-level integer **schema-version field `v`** (currently `1`) so consumers can detect future structure changes (schemas evolve via a version field rather than breaking silently). The one exception is the `up`/`restart` boot-timeout, which emits a bare `null` (consumers check for null). Per-command shapes are documented under each command below.
+
 ## init — onboarding wizard
 
 ```bash
@@ -126,7 +128,7 @@ Starts every `*.conf` lane in `~/.config/adde/<proj>/lanes.d/` as a **macOS laun
 - **Already-up notice**: if the daemon is already registered _and_ has at least one running lane, `adde up` does not re-register (which would fail as "already loaded"). Instead it prints an "already up" line with the running/total lane count and hints (`adde status` to view, `adde restart` to apply conf changes, `adde down` to stop). If any lane is currently unhealthy (`error`/`dead`/`stale`), it is listed and `adde up` exits non-zero here too. If the registration is present but **no lane is actually running** (e.g. after a deterministic boot failure that exited cleanly), `adde up` does not just report "already up" — it re-registers the daemon (unload+load) to recover it, then polls as a fresh start.
 - **Double-start guard**: within the daemon, an already-running lane is skipped with a warning (recorded in the daemon log). Double starts do not happen.
 - **macOS only**: the launchd feature works only on macOS. See [macOS-only features](#macos-only-features) for details.
-- **`--json`**: prints the startup outcome as JSON instead of the human-readable summary — the same `BootReport` shape recorded internally (`{v, bootId, bootedAt, lanes: [{lane, status, error?}], running}`), with no new fields, and suppresses the plain-text summary/hints. If no matching boot report appears within the wait window, the JSON output is the literal `null` (still a non-zero exit). The already-up/dead-registered early-return paths print a minimal `{ proj, alreadyUp: true, running }` object instead of the suppressed text.
+- **`--json`**: prints the startup outcome as JSON instead of the human-readable summary — the same `BootReport` shape recorded internally (`{v, bootId, bootedAt, lanes: [{lane, status, error?}], running}`), with no new fields, and suppresses the plain-text summary/hints. If no matching boot report appears within the wait window, the JSON output is the literal `null` (still a non-zero exit). The already-up/dead-registered early-return paths print a minimal `{ v: 1, proj, alreadyUp: true, running }` object instead of the suppressed text.
 
 At startup a plist file (`~/Library/LaunchAgents/com.qwertygeon.adde.<proj>.plist`) is created and registered with launchd. Each lane's status is recorded in `state/<lane>/runtime.json`.
 
@@ -142,7 +144,7 @@ adde down <proj> [--json]
 
 Stops that project's launchd daemon and removes the plist file. It can run **from any terminal** (cross-process termination).
 
-- **`--json`**: prints `{ "proj": "<proj>", "stopped": true }` instead of the plain-text confirmation. On an error the message still goes to stderr and stdout stays empty (exit 1).
+- **`--json`**: prints `{ "v": 1, "proj": "<proj>", "stopped": true }` instead of the plain-text confirmation. On an error the message still goes to stderr and stdout stays empty (exit 1).
 
 ```bash
 adde down myproj --json   # machine-readable confirmation (scripts)
@@ -198,14 +200,14 @@ Scans each lane in `lanes.d` and determines its status.
 - If there are `dead`/`stale`/`error` lanes, remedy guidance is appended **to stderr** (`[behavior-change]` — previously stdout; `SEEN` = time since the last heartbeat; for `error`, the start-failure reason and a pointer to `adde logs <proj> --daemon`/`--engine`).
 - Heartbeat: `adde up` periodically refreshes the state-file mtime. Even if the pid is alive, if the refresh stops past a threshold it is judged `stale` (hung).
 - **Crash-loop self-halt (`halt`)**: if the daemon self-halted after repeated short-lived crashes (see [crash safety & log rotation](troubleshooting.md#crash-safety--log-rotation)), `status` prints a warning **to stderr** for the affected project (`[behavior-change]` — previously stdout) and **also returns exit code 1** for it (the same `dead`/`stale`/`error` → exit 1 rule already applied and still applies). The aggregate (no-`<proj>`) view detects `halt` against the full set of projects, not just the lanes shown in the table — a project whose lanes are all `stopped` (and therefore filtered out of the default aggregate table) still surfaces its `halt` warning and exit code 1.
-- **[BREAKING] `--json`**: the top-level JSON output is an **object** `{ "lanes": [...], "halt": ... }`, not a bare array (previously `adde status --json` printed a top-level array of lane objects). `lanes` holds the same per-lane objects as before (including `lastSeenAt`; annotated with `proj` when aggregating). `halt` carries the crash-loop self-halt state: `HaltRecord | null` for a single `<proj>` view, or `{ "<proj>": HaltRecord | null, ... }` for the aggregated (no-`<proj>`) view. **Migration**: change a top-level array reference to `.lanes` — e.g. `adde status --json | jq '.[]'` → `jq '.lanes[]'`. The non-JSON (text) output is unchanged. Both the text table and the `--json` body stay on stdout — only the advisory warnings/notice above moved to stderr.
+- **[BREAKING] `--json`**: the top-level JSON output is an **object** `{ "v": 1, "lanes": [...], "halt": ... }`, not a bare array (previously `adde status --json` printed a top-level array of lane objects). `v` is the schema version (see Global options). `lanes` holds the same per-lane objects as before (including `lastSeenAt`; annotated with `proj` when aggregating). `halt` carries the crash-loop self-halt state: `HaltRecord | null` for a single `<proj>` view, or `{ "<proj>": HaltRecord | null, ... }` for the aggregated (no-`<proj>`) view. **Migration**: change a top-level array reference to `.lanes` — e.g. `adde status --json | jq '.[]'` → `jq '.lanes[]'`. The non-JSON (text) output is unchanged. Both the text table and the `--json` body stay on stdout — only the advisory warnings/notice above moved to stderr.
 - **Update notice**: if a newer version is available on npm, a one-line notice is appended **to stderr** (`[behavior-change]` — previously stdout; `npm i -g adde-acp@latest` … then `adde restart`). It uses a 24-hour cache (under the config base), only hits the network in an interactive terminal (TTY), and can be disabled with the `ADDE_NO_UPDATE_CHECK` env var.
 - Read-only (no side effects).
 
 ```bash
 adde status myproj          # per-lane table for one project (includes stopped)
 adde status --all           # every project, including stopped lanes
-adde status myproj --json   # machine-readable {lanes, halt} object (monitoring/scripts)
+adde status myproj --json   # machine-readable {v, lanes, halt} object (monitoring/scripts)
 ```
 
 ## doctor — environment check
@@ -220,7 +222,7 @@ Performs a static check independent of status and reports each item as `PASS` / 
 - With `<proj>`, per lane: source validity · `cwd` existence · (telegram) `.env` token presence.
 - **File-permission audit** (with `<proj>`, per lane): `WARN` if `state/<lane>/.env` is group/other-accessible (expects 0600 — bot-token exposure risk), and `WARN` if `file_mode=private` but the `state/<lane>` directory is group/other-accessible (expects 0700), with a `chmod`/`adde restart` hint. `file_mode=shared` is treated as an intentional choice and not warned.
 - With `<proj>`, on macOS it also checks the launchd daemon registration state — it cross-checks plist existence against launchctl registration and surfaces a mismatch (plist present but not registered with launchd, or vice versa) as `WARN`.
-- **`--json`**: prints the check list as a JSON array (each item's `name`/`level`/`detail`, plus `hint` when `WARN`/`FAIL`) instead of the human-readable symbol list, and suppresses the summary line and the update notice (machine-readable output only). The exit code meaning is unchanged (`FAIL` present → 1, otherwise 0 — same as the text mode). Without `--json`, output and exit code are exactly as before (additive change). The check list itself — text symbols or the `--json` array, plus the summary line and hints — stays on stdout in both modes, so `adde doctor > report.txt` still captures it.
+- **[BREAKING] `--json`**: the top-level JSON output is an **object** `{ "v": 1, "checks": [...] }`, not a bare array (previously `adde doctor --json` printed a top-level `DoctorCheck[]` array). `v` is the schema version (see Global options); `checks` holds the same check items as before (each item's `name`/`level`/`detail`, plus `hint` when `WARN`/`FAIL`). **Migration**: change a top-level array reference to `.checks` — e.g. `adde doctor --json | jq '.[]'` → `jq '.checks[]'`. `--json` suppresses the summary line and the update notice (machine-readable output only). The exit code meaning is unchanged (`FAIL` present → 1, otherwise 0 — same as the text mode). Without `--json`, output and exit code are exactly as before (additive change). The check list itself — text symbols or the `--json` object, plus the summary line and hints — stays on stdout in both modes, so `adde doctor > report.txt` still captures it.
 - **Update notice**: like `status`, if a newer version is available on npm it prints a one-line notice **to stderr** (`[behavior-change]` — previously stdout; 24-hour cache · network only in TTY · disable with `ADDE_NO_UPDATE_CHECK`) — suppressed in `--json` mode (see above).
 - Read-only. It's for self-diagnosing "why won't it start" before startup.
 
@@ -241,7 +243,7 @@ Prints the last `N` lines of that lane's `transcript.log` (ACP session event rec
 - `--engine`: prints `engine.log` (the engine subprocess's captured stderr) instead of the transcript. Use it to see the engine's own diagnostic output (tracing `stale`/startup-failure causes, etc.).
 - `--daemon`: prints the **launchd daemon log** for the project (`~/Library/Logs/adde/<proj>.err.log`) — `<lane>` is not needed. This is where the background daemon's own output (including **startup-failure causes**) lands, which the per-lane transcript/engine logs don't capture.
 - **`--follow`/`-f`**: after printing the initial snapshot, stays running and prints new lines as they're appended (like `tail -f`) — transcript by default, or the engine log with `--engine`, resuming exactly where the snapshot left off (no gap, no duplicate lines). It's driven by an OS file-change notification (`fs.watch` on the containing directory) as the primary trigger, with a low-frequency (1s) stat poll running alongside as a safety net in case notifications are unsupported or an event is missed — so tailing doesn't silently stall. It follows transparently across log rotation (the 5MB size-based rotation) and across a same-inode truncate immediately followed by regrowth (e.g. `copytruncate`-style rotation), with no lost, duplicated, or misaligned lines; multi-byte characters (e.g. Korean) split across a read boundary are decoded intact (no mangled output). Press `Ctrl-C` (`SIGINT`) to stop immediately (no hang, no busy-polling). If the target log doesn't exist yet when you start, it prints the usual "not found" message and exits rather than waiting around for it to be created. `--daemon` logs are **not** followable — `-f` is ignored for `--daemon` and it just prints the snapshot.
-- **`--json`** (snapshot only): prints `{ "proj", "lane", "path", "exists", "lines" }` (`--daemon` omits `lane`) instead of the human-readable snapshot or "not found" text — a missing file is `{ exists: false, lines: [] }` rather than an error. If both `--follow`/`-f` and `--json` are given, `--json` takes precedence: a JSON snapshot is printed and it does not enter the live-tail loop.
+- **`--json`** (snapshot only): prints `{ "v": 1, "proj", "lane", "path", "exists", "lines" }` (`--daemon` omits `lane`) instead of the human-readable snapshot or "not found" text — a missing file is `{ exists: false, lines: [] }` rather than an error. If both `--follow`/`-f` and `--json` are given, `--json` takes precedence: a JSON snapshot is printed and it does not enter the live-tail loop.
 
 ```bash
 adde logs myproj tg-claude 100 --engine   # last 100 lines of the engine stderr log
@@ -260,7 +262,7 @@ adde sessions <proj> <lane> [--json]
 Prints the lane's engine session ledger — number, first-prompt excerpt, **last conversation time**, and session id (the current session marked with `◀`). Resuming/resetting sessions is done from the channel (see "Session control (channel commands)" below).
 
 - Positional arguments (`<proj>`/`<lane>`) and `--json` can appear in any order — `--json` is never mistaken for a `<proj>`/`<lane>` value.
-- **`--json`**: prints the ledger as a JSON array, each entry with `id`/`label`/`createdAt`/`lastActivityAt`/`current` (`true` for the active session). An empty ledger prints a valid empty array `[]` (exit 0). Without `--json`, output and exit code are unchanged.
+- **[BREAKING] `--json`**: the top-level JSON output is an **object** `{ "v": 1, "sessions": [...] }`, not a bare array (previously `adde sessions --json` printed a top-level array of session entries). `v` is the schema version (see Global options); `sessions` holds the same entries as before, each with `id`/`label`/`createdAt`/`lastActivityAt`/`current` (`true` for the active session). An empty ledger prints `{ "v": 1, "sessions": [] }` (previously `[]`; exit 0). **Migration**: change a top-level array reference to `.sessions` — e.g. `adde sessions --json | jq '.[]'` → `jq '.sessions[]'`. Without `--json`, output and exit code are unchanged.
 
 ```bash
 adde sessions myproj tg-claude --json   # machine-readable ledger (monitoring/scripts)
@@ -298,10 +300,12 @@ By default `lane rm` deletes only the conf and preserves side data (state/queue/
 
 `ls`/`rm` can also be written as `list`/`remove` (same behavior).
 
-**`--json`**: `lane ls --json` prints a JSON array of lane names instead of the plain list; `lane show --json` prints `{ "lane", "confPath", "conf" }` (`conf` is the parsed lane conf object — no token field) instead of the human-readable dump.
+**`--json`**: `lane show --json` prints `{ "v": 1, "lane", "confPath", "conf" }` (`conf` is the parsed lane conf object — no token field) instead of the human-readable dump; `v` is the schema version (see Global options).
+
+- **[BREAKING] `lane ls --json`**: the top-level JSON output is an **object** `{ "v": 1, "lanes": [...] }`, not a bare array (previously `adde lane ls --json` printed a top-level array of lane-name strings). `lanes` holds the same array of lane-name strings. **Migration**: change a top-level array reference to `.lanes` — e.g. `adde lane ls --json | jq '.[]'` → `jq '.lanes[]'`.
 
 ```bash
-adde lane ls myproj --json              # machine-readable lane name array
+adde lane ls myproj --json              # machine-readable { v, lanes } object
 adde lane show myproj tg-claude --json  # machine-readable conf (scripts/monitoring)
 ```
 
@@ -447,7 +451,7 @@ adde proj rm <proj> [--force]   # delete a project: all its lanes + state
 
 `ls`/`rm` can also be written as `list`/`remove`.
 
-- **`proj ls`** — one row per registered project (a directory under the config base that has a `lanes.d/`) with its lane count and running count. `--json` prints an array for scripts.
+- **`proj ls`** — one row per registered project (a directory under the config base that has a `lanes.d/`) with its lane count and running count. **[BREAKING] `--json`**: the top-level JSON output is an **object** `{ "v": 1, "projects": [...] }`, not a bare array (previously `adde proj ls --json` printed a top-level array of rows). `v` is the schema version (see Global options); `projects` holds the same row objects as before (`proj`/`lanes`/`running`). **Migration**: change a top-level array reference to `.projects` — e.g. `adde proj ls --json | jq '.[]'` → `jq '.projects[]'`.
 - **`proj rm <proj>`** — deletes the entire project directory (`lanes.d` + `state` + `queue` + `processing` + `out`). Because it is destructive:
   - it **refuses** if the project has running/dead/stale lanes — stop the daemon first (`adde down <proj>`), or pass `--force` to delete anyway;
   - on a TTY it asks you to **re-type the project name** to confirm; in a non-interactive shell it requires `--force`;

@@ -15,6 +15,7 @@ vi.mock("../../src/core/launchd.js", () => ({ loadDaemon, unloadDaemon, daemonRe
 
 import { run } from "../../src/cli/run.js";
 import { runLane } from "../../src/cli/lane.js";
+import { runProj } from "../../src/cli/proj.js";
 import { runLogs } from "../../src/cli/ops.js";
 import { appendTranscript } from "../../src/core/transcript.js";
 import { lanePaths } from "../../src/shared/paths.js";
@@ -52,41 +53,44 @@ function captureStdout(): { out: () => string; restore: () => void } {
   return { out: () => chunks.join(""), restore: () => spy.mockRestore() };
 }
 
-describe("adde lane ls --json — 레인 이름 배열 (SC-001 Happy)", () => {
-  it("레인 conf 가 있으면 stdout 이 JSON.parse 가능한 배열이고 exit 0", async () => {
+describe("adde lane ls --json — {v,lanes} 객체 (SC-001 Happy)", () => {
+  it("레인 conf 가 있으면 stdout 이 {v,lanes} 객체이고 exit 0", async () => {
     writeConf("p", "a");
     writeConf("p", "b");
     const cap = captureStdout();
     const code = await runLane(["ls", "p", "--json"]);
     cap.restore();
-    const parsed = JSON.parse(cap.out()) as string[];
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.sort()).toEqual(["a", "b"]);
+    const parsed = JSON.parse(cap.out()) as { v: number; lanes: string[] };
+    expect(parsed.v).toBe(1);
+    expect(Array.isArray(parsed.lanes)).toBe(true);
+    expect(parsed.lanes.sort()).toEqual(["a", "b"]);
     expect(code).toBe(0);
   });
 });
 
 describe("adde lane ls --json — 레인 0개 (SC-001 Edge)", () => {
-  it("레인 conf 가 없으면 stdout 은 빈 배열이고 exit 0", async () => {
+  it("레인 conf 가 없으면 lanes 는 빈 배열이고 exit 0", async () => {
     const cap = captureStdout();
     const code = await runLane(["ls", "p", "--json"]);
     cap.restore();
-    expect(JSON.parse(cap.out())).toEqual([]);
+    expect(JSON.parse(cap.out())).toEqual({ v: 1, lanes: [] });
     expect(code).toBe(0);
   });
 });
 
-describe("adde lane show --json — {lane,confPath,conf} (SC-001 Happy)", () => {
-  it("stdout 이 lane/confPath/conf 를 담은 JSON 객체이고 exit 0", async () => {
+describe("adde lane show --json — {v,lane,confPath,conf} (SC-001 Happy)", () => {
+  it("stdout 이 v/lane/confPath/conf 를 담은 JSON 객체이고 exit 0", async () => {
     writeConf("p", "a");
     const cap = captureStdout();
     const code = await runLane(["show", "p", "a", "--json"]);
     cap.restore();
     const parsed = JSON.parse(cap.out()) as {
+      v: number;
       lane: string;
       confPath: string;
       conf: { source: string };
     };
+    expect(parsed.v).toBe(1);
     expect(parsed.lane).toBe("a");
     expect(parsed.confPath).toContain("a.conf");
     expect(parsed.conf.source).toBe("telegram");
@@ -102,11 +106,13 @@ describe("adde logs --json — 스냅샷 {proj,lane,path,exists,lines} (SC-001 H
     const code = await runLogs(["p", "a", "--json"]);
     cap.restore();
     const parsed = JSON.parse(cap.out()) as {
+      v: number;
       proj: string;
       lane: string;
       exists: boolean;
       lines: string[];
     };
+    expect(parsed.v).toBe(1);
     expect(parsed.proj).toBe("p");
     expect(parsed.lane).toBe("a");
     expect(parsed.exists).toBe(true);
@@ -120,21 +126,47 @@ describe("adde logs --json — 파일 부재 (SC-001 Error)", () => {
     const cap = captureStdout();
     const code = await runLogs(["p", "nolane", "--json"]);
     cap.restore();
-    const parsed = JSON.parse(cap.out()) as { exists: boolean; lines: string[] };
+    const parsed = JSON.parse(cap.out()) as { v: number; exists: boolean; lines: string[] };
+    expect(parsed.v).toBe(1);
     expect(parsed.exists).toBe(false);
     expect(parsed.lines).toEqual([]);
     expect(code).toBe(0);
   });
 });
 
-describe("adde down --json — {proj,stopped:true} (SC-001 Happy)", () => {
-  it("unloadDaemon 성공 시 stdout 이 {proj,stopped:true} JSON, exit 0", async () => {
+describe("adde proj ls --json — {v,projects} 객체 (SC-001 Happy)", () => {
+  it("등록 프로젝트가 있으면 stdout 이 {v,projects} 객체이고 exit 0", async () => {
+    writeConf("p", "a");
+    const cap = captureStdout();
+    const code = await runProj(["ls", "--json"]);
+    cap.restore();
+    const parsed = JSON.parse(cap.out()) as {
+      v: number;
+      projects: Array<{ proj: string; lanes: number; running: number }>;
+    };
+    expect(parsed.v).toBe(1);
+    expect(Array.isArray(parsed.projects)).toBe(true);
+    expect(parsed.projects.find((r) => r.proj === "p")?.lanes).toBe(1);
+    expect(code).toBe(0);
+  });
+
+  it("등록 프로젝트가 없으면 projects 는 빈 배열이고 exit 0", async () => {
+    const cap = captureStdout();
+    const code = await runProj(["ls", "--json"]);
+    cap.restore();
+    expect(JSON.parse(cap.out())).toEqual({ v: 1, projects: [] });
+    expect(code).toBe(0);
+  });
+});
+
+describe("adde down --json — {v,proj,stopped:true} (SC-001 Happy)", () => {
+  it("unloadDaemon 성공 시 stdout 이 {v,proj,stopped:true} JSON, exit 0", async () => {
     unloadDaemon.mockResolvedValue(undefined);
     const cap = captureStdout();
     const code = await run(["down", "p", "--json"]);
     cap.restore();
-    const parsed = JSON.parse(cap.out()) as { proj: string; stopped: boolean };
-    expect(parsed).toEqual({ proj: "p", stopped: true });
+    const parsed = JSON.parse(cap.out()) as { v: number; proj: string; stopped: boolean };
+    expect(parsed).toEqual({ v: 1, proj: "p", stopped: true });
     expect(code).toBe(0);
   });
 });

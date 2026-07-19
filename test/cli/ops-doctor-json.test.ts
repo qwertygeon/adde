@@ -33,8 +33,9 @@ describe("doctor --json 구조·부가출력 억제 (SC-001 Happy)", () => {
     const cap = captureStdout();
     await runDoctorCli(["demo", "--json"]);
     cap.restore();
-    const parsed = JSON.parse(cap.out()) as DoctorCheck[];
-    expect(parsed).toEqual(WITH_FAIL);
+    const parsed = JSON.parse(cap.out()) as { v: number; checks: DoctorCheck[] };
+    expect(parsed.v).toBe(1);
+    expect(parsed.checks).toEqual(WITH_FAIL);
     // 사람용 심볼(✔▲✘)·요약 문구가 JSON 출력에 섞이지 않는다.
     expect(cap.out()).not.toMatch(/[✔▲✘]/);
   });
@@ -44,9 +45,9 @@ describe("doctor --json 구조·부가출력 억제 (SC-001 Happy)", () => {
     const cap = captureStdout();
     await runDoctorCli(["demo", "--json"]);
     cap.restore();
-    const parsed = JSON.parse(cap.out()) as DoctorCheck[];
-    const pass = parsed.find((c) => c.level === "PASS");
-    const fail = parsed.find((c) => c.level === "FAIL");
+    const parsed = JSON.parse(cap.out()) as { v: number; checks: DoctorCheck[] };
+    const pass = parsed.checks.find((c) => c.level === "PASS");
+    const fail = parsed.checks.find((c) => c.level === "FAIL");
     expect(pass?.hint).toBeUndefined();
     expect(fail?.hint).toBeTruthy();
   });

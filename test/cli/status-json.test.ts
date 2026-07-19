@@ -65,8 +65,9 @@ describe("status --json 객체 재구성 — halt 없음 (SC-018 Happy)", () => 
     await writeRuntime(lanePaths(tmpBase, "p", "l"), rt(process.pid, "l"));
     const out = captureStdout();
     const code = await runStatus(["p", "--json"]);
-    const parsed = JSON.parse(out()) as { lanes: unknown[]; halt: unknown };
+    const parsed = JSON.parse(out()) as { v: number; lanes: unknown[]; halt: unknown };
     expect(Array.isArray(parsed)).toBe(false);
+    expect(parsed.v).toBe(1);
     expect(Array.isArray(parsed.lanes)).toBe(true);
     expect(parsed.halt).toBeNull();
     expect(code).toBe(0);
@@ -116,14 +117,15 @@ describe("status --json halt 포함 (SC-019 Edge)", () => {
   });
 });
 
-describe("status --json 최상위 스키마 불변 (SC-014 Happy, NFR-001)", () => {
-  it("최상위 키가 정확히 lanes/halt 뿐이고 성공 경로는 exit 0(신규 필드 없음)", async () => {
+describe("status --json 최상위 스키마 (SC-014 Happy, NFR-001)", () => {
+  it("최상위 키가 정확히 v/lanes/halt 이고 v=1, 성공 경로는 exit 0", async () => {
     writeConf("p", "l");
     await writeRuntime(lanePaths(tmpBase, "p", "l"), rt(process.pid, "l"));
     const out = captureStdout();
     const code = await runStatus(["p", "--json"]);
     const parsed = JSON.parse(out()) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(["halt", "lanes"]);
+    expect(Object.keys(parsed).sort()).toEqual(["halt", "lanes", "v"]);
+    expect(parsed.v).toBe(1);
     expect(code).toBe(0);
   });
 });
@@ -143,9 +145,11 @@ describe("집계 status --json 구조 (SC-020 Edge)", () => {
     const out = captureStdout();
     const code = await runStatus(["--json"]);
     const parsed = JSON.parse(out()) as {
+      v: number;
       lanes: Array<{ proj?: string }>;
       halt: Record<string, HaltRecord | null>;
     };
+    expect(parsed.v).toBe(1);
     expect(Array.isArray(parsed.lanes)).toBe(true);
     expect(parsed.lanes.every((r) => typeof r.proj === "string")).toBe(true);
     expect(parsed.halt.p1).toBeNull();

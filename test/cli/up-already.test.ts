@@ -49,6 +49,22 @@ describe("adde up — 이미 기동 중 표면화 (SC-007)", () => {
     expect(cap.out()).toContain("1/2"); // running/total
   });
 
+  it("이미 기동 중 + --json 이면 stdout 이 {v,proj,alreadyUp,running} 객체이고 exit 0", async () => {
+    daemonRegState.mockResolvedValue({ plistExists: true, launchctlRegistered: true });
+    collectStatus.mockResolvedValue([{ lane: "a", status: "running", error: null }]);
+    const cap = captureStdout();
+    const code = await run(["up", "demo", "--json"]);
+    cap.restore();
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.out()) as {
+      v: number;
+      proj: string;
+      alreadyUp: boolean;
+      running: number;
+    };
+    expect(parsed).toEqual({ v: 1, proj: "demo", alreadyUp: true, running: 1 });
+  });
+
   it("이미 기동 중이어도 실패(error/dead) 레인이 있으면 표면화하고 1 을 반환한다", async () => {
     daemonRegState.mockResolvedValue({ plistExists: true, launchctlRegistered: true });
     collectStatus.mockResolvedValue([

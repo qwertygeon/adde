@@ -121,8 +121,9 @@ export async function runStatus(rest: readonly string[], parsed?: ParseResult): 
       haltMap[p] = await readHalt(base, p);
     }
     if (json) {
-      // BREAKING — 최상위 배열 대신 {lanes, halt} 객체(halt 는 프로젝트별 상태를 담는 자리).
-      process.stdout.write(JSON.stringify({ lanes: rows, halt: haltMap }, null, 2) + "\n");
+      // 최상위 배열 대신 {v, lanes, halt} 객체(halt 는 프로젝트별 상태를 담는 자리). `v` = 스키마
+      // 버전(구조 변경 시 증가 — 소비자가 해석 계약을 분기).
+      process.stdout.write(JSON.stringify({ v: 1, lanes: rows, halt: haltMap }, null, 2) + "\n");
     } else {
       process.stdout.write(statusTableAggregate(rows, all) + "\n");
       // 경고 블록은 조언성 진단 — 표(1차 데이터)와 분리해 stderr 로 출력.
@@ -182,8 +183,8 @@ export async function runStatus(rest: readonly string[], parsed?: ParseResult): 
   // halt 조회를 json/text 분기 밖으로 리프트(중복 조회 없음) — 두 모드·종료 코드 모두 반영.
   const halt = await readHalt(defaultBase(), proj);
   if (json) {
-    // BREAKING — 최상위 배열 대신 {lanes, halt} 객체.
-    process.stdout.write(JSON.stringify({ lanes: rows, halt }, null, 2) + "\n");
+    // 최상위 배열 대신 {v, lanes, halt} 객체. `v` = 스키마 버전.
+    process.stdout.write(JSON.stringify({ v: 1, lanes: rows, halt }, null, 2) + "\n");
   } else {
     process.stdout.write(statusTable(rows) + "\n");
     // 경고 블록은 조언성 진단 — 표(1차 데이터)와 분리해 stderr 로 출력.
@@ -253,7 +254,8 @@ export async function runDoctorCli(
   const fails = checks.filter((c) => c.level === "FAIL").length;
   if (json) {
     // 기계가독 모드 — 사람용 심볼 루프·요약·업데이트 알림은 억제(텍스트 미혼입).
-    process.stdout.write(JSON.stringify(checks, null, 2) + "\n");
+    // 최상위 배열 대신 {v, checks} 객체로 감싸 스키마 버전을 부여(BREAKING — 기존 배열 소비자).
+    process.stdout.write(JSON.stringify({ v: 1, checks }, null, 2) + "\n");
     return fails > 0 ? EXIT.FAIL : EXIT.OK;
   }
   // 체크 리스트(줄+hint)는 "조회한 진단 결과" payload — stdout 유지.
@@ -300,7 +302,8 @@ export async function runSessions(
   const entries = await readLedger(paths);
   if (entries.length === 0) {
     if (json) {
-      process.stdout.write(JSON.stringify([], null, 2) + "\n");
+      // 빈 세션도 {v, sessions:[]} 로 감싼다(비어있음 분기도 동일 스키마 유지 — 배열→객체 BREAKING).
+      process.stdout.write(JSON.stringify({ v: 1, sessions: [] }, null, 2) + "\n");
     } else {
       process.stdout.write(t("injector.control.sessionsEmpty") + "\n");
     }
@@ -320,7 +323,8 @@ export async function runSessions(
       lastActivityAt: e.lastActivityAt,
       current: e.id === current,
     }));
-    process.stdout.write(JSON.stringify(items, null, 2) + "\n");
+    // 최상위 배열 대신 {v, sessions} 객체(BREAKING — 기존 배열 소비자).
+    process.stdout.write(JSON.stringify({ v: 1, sessions: items }, null, 2) + "\n");
     return EXIT.OK;
   }
   const lines = entries.map((e, i) => {
@@ -371,8 +375,11 @@ async function runDaemonLogs(proj: string, n: number, json = false): Promise<num
   const lines = await readTail(logs.err, n);
   if (json) {
     process.stdout.write(
-      JSON.stringify({ proj, path: logs.err, exists: lines !== null, lines: lines ?? [] }, null, 2) +
-        "\n",
+      JSON.stringify(
+        { v: 1, proj, path: logs.err, exists: lines !== null, lines: lines ?? [] },
+        null,
+        2,
+      ) + "\n",
     );
     return EXIT.OK;
   }
@@ -462,7 +469,7 @@ export async function runLogs(rest: readonly string[], parsed?: ParseResult): Pr
     if (json) {
       process.stdout.write(
         JSON.stringify(
-          { proj, lane, path: result.path, exists: result.exists, lines: result.lines },
+          { v: 1, proj, lane, path: result.path, exists: result.exists, lines: result.lines },
           null,
           2,
         ) + "\n",

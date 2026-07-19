@@ -279,6 +279,23 @@ describe("runDoctor (SC3)", () => {
     const perms = checks.find((c) => c.name.endsWith("파일 권한"));
     expect(perms?.level).toBe("PASS");
   });
+
+  it("shared 선언인데 state 디렉터리가 0700(private→shared 편집 미완화)이면 INFO 로 불일치 표면화", async () => {
+    // v0.1.5/020: secureLaneDirs(shared) 는 no-op 이라 기존 private(0700) 이 유지 — 안전하나
+    // conf 선언(shared)과 실 권한(0700)이 불일치. FAIL/WARN 아닌 INFO 로 인지만 돕는다.
+    writeConf("p", "lane1", conf("file_mode=shared\n"));
+    const lp = lanePaths(tmpBase, "p", "lane1");
+    fs.mkdirSync(lp.stateDir, { recursive: true });
+    fs.chmodSync(lp.stateDir, 0o700);
+    const checks = await runDoctor("p", { base: tmpBase });
+    const permsAll = checks.filter((c) => c.name.endsWith("파일 권한"));
+    // 정확히 1건 — INFO 와 PASS 가 동시 push 되지 않음(PASS 분기의 !sharedTightState 가드).
+    expect(permsAll).toHaveLength(1);
+    const perms = permsAll[0];
+    expect(perms?.level).toBe("INFO");
+    expect(perms?.detail).toContain("700");
+    expect(perms?.hint).toBeTruthy();
+  });
 });
 
 describe("readLogs (SC4)", () => {

@@ -228,8 +228,9 @@ export async function runStatus(rest: readonly string[], parsed?: ParseResult): 
   return laneBad || halt !== null ? EXIT.FAIL : EXIT.OK;
 }
 
-function checkSymbol(level: DoctorCheck["level"]): string {
-  return level === "PASS" ? "✔" : level === "WARN" ? "▲" : "✘";
+/** 진단 레벨 → 표시 심볼. init(전역 doctor 요약)과 공유해 레벨 추가 시 드리프트를 막는다. */
+export function checkSymbol(level: DoctorCheck["level"]): string {
+  return level === "PASS" ? "✔" : level === "WARN" ? "▲" : level === "INFO" ? "ℹ" : "✘";
 }
 
 export async function runDoctorCli(
@@ -264,9 +265,15 @@ export async function runDoctorCli(
     if (c.hint) process.stdout.write(t("ops.doctor.hint", { hint: c.hint }) + "\n");
   }
   const warns = checks.filter((c) => c.level === "WARN").length;
+  const infos = checks.filter((c) => c.level === "INFO").length;
   process.stdout.write(
     "\n" +
-      t("ops.doctor.summary", { pass: checks.length - fails - warns, warn: warns, fail: fails }) +
+      t("ops.doctor.summary", {
+        pass: checks.length - fails - warns - infos,
+        warn: warns,
+        fail: fails,
+        info: infos,
+      }) +
       "\n",
   );
   // 업데이트 알림만 조언성 — stderr. 체크리스트+요약은 위에서 이미 stdout 으로 나갔다.

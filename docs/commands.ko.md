@@ -216,13 +216,13 @@ adde status myproj --json   # 기계 판독 {v, lanes, halt} 객체(모니터링
 adde doctor [<proj>] [--json]
 ```
 
-상태와 무관한 정적 점검을 수행하고 각 항목을 `PASS` / `WARN` / `FAIL` 로 보고합니다. 실패·경고에는 조치 힌트(`↳ 조치:`)가 붙습니다.
+상태와 무관한 정적 점검을 수행하고 각 항목을 `PASS` / `WARN` / `FAIL` / `INFO` 로 보고합니다. 실패·경고·정보에는 조치 힌트(`↳ 조치:`)가 붙습니다. `INFO` 는 조언성(비-`FAIL`, 종료 코드에 영향 없음)입니다.
 
 - 전역: Node 버전(≥22) · ACP 어댑터 바이너리 해석 · 설정 base 디렉터리 · (macOS) 데몬 진입 파일 해석.
 - `<proj>` 지정 시 레인별: source 유효성 · `cwd` 존재 · (telegram) `.env` 토큰 존재.
-- **파일 권한 점검**(`<proj>` 지정 시 레인별): `state/<lane>/.env` 가 그룹/기타 사용자에게 열려 있으면(기대 0600 — 봇 토큰 노출 위험) `WARN`, `file_mode=private` 인데 `state/<lane>` 디렉터리가 그룹/기타 사용자에게 열려 있으면(기대 0700) `WARN` 하고 `chmod`/`adde restart` 힌트를 붙입니다. `file_mode=shared` 는 의도된 선택으로 보고 경고하지 않습니다.
+- **파일 권한 점검**(`<proj>` 지정 시 레인별): `state/<lane>/.env` 가 그룹/기타 사용자에게 열려 있으면(기대 0600 — 봇 토큰 노출 위험) `WARN`, `file_mode=private` 인데 `state/<lane>` 디렉터리가 그룹/기타 사용자에게 열려 있으면(기대 0700) `WARN` 하고 `chmod`/`adde restart` 힌트를 붙입니다. `file_mode=shared` 에서 그룹/기타 열린 디렉터리는 의도된 선택으로 보고 경고하지 않습니다. 다만 `file_mode=shared` 로 선언됐는데 `state/<lane>` 디렉터리가 여전히 `0700` 이면(예: `private→shared` 편집 후 — 기존 디렉터리를 완화하지 않음) `INFO` 로 불일치를 표면화합니다(안전 — 선언보다 조여짐; 실제 완화하려면 state/out/queue 디렉터리를 수동 chmod).
 - `<proj>` 지정 시 macOS에서는 launchd 데몬 등록 상태도 점검합니다 — plist 존재 여부와 launchctl 등록 여부를 교차 확인하고, 불일치(plist는 있으나 launchd 미등록, 또는 그 역)를 `WARN`으로 표면화합니다.
-- **[BREAKING] `--json`**: 최상위 JSON 출력이 배열이 아니라 **`{ "v": 1, "checks": [...] }` 객체**입니다(기존에는 `adde doctor --json` 이 최상위 `DoctorCheck[]` 배열을 출력했습니다). `v` 는 스키마 버전이며(전역 옵션 참조), `checks` 는 기존과 동일한 점검 항목을 담습니다(각 항목의 `name`/`level`/`detail`, `WARN`/`FAIL` 시 `hint` 포함). **마이그레이션**: 기존 최상위 배열 참조를 `.checks` 로 바꾸세요 — 예: `adde doctor --json | jq '.[]'` → `jq '.checks[]'`. `--json` 은 요약 줄·업데이트 안내를 억제합니다(기계가독 출력만). 종료 코드 의미는 불변(`FAIL` 존재 → 1, 아니면 0 — 텍스트 모드와 동일). `--json` 없이 호출하면 기존과 완전히 동일합니다(additive). 점검 목록 자체(텍스트 심볼 또는 `--json` 객체, 요약 줄·힌트 포함)는 두 모드 모두 stdout 을 유지하므로 `adde doctor > report.txt` 캡처가 그대로 보존됩니다.
+- **[BREAKING] `--json`**: 최상위 JSON 출력이 배열이 아니라 **`{ "v": 1, "checks": [...] }` 객체**입니다(기존에는 `adde doctor --json` 이 최상위 `DoctorCheck[]` 배열을 출력했습니다). `v` 는 스키마 버전이며(전역 옵션 참조), `checks` 는 기존과 동일한 점검 항목을 담습니다(각 항목의 `name`/`level`/`detail`, `WARN`/`FAIL`/`INFO` 시 `hint` 포함). `level` 에 `INFO`(조언성·비-`FAIL` 값, additive 추가)가 나올 수 있습니다 — `level` 로 분기하는 소비자는 미인식 값을 조언성으로 취급하세요. **마이그레이션**: 기존 최상위 배열 참조를 `.checks` 로 바꾸세요 — 예: `adde doctor --json | jq '.[]'` → `jq '.checks[]'`. `--json` 은 요약 줄·업데이트 안내를 억제합니다(기계가독 출력만). 종료 코드 의미는 불변(`FAIL` 존재 → 1, 아니면 0 — 텍스트 모드와 동일). `--json` 없이 호출하면 기존과 완전히 동일합니다(additive). 점검 목록 자체(텍스트 심볼 또는 `--json` 객체, 요약 줄·힌트 포함)는 두 모드 모두 stdout 을 유지하므로 `adde doctor > report.txt` 캡처가 그대로 보존됩니다.
 - **업데이트 안내**: `status` 와 동일하게, npm 에 새 버전이 있으면 안내 한 줄을 **stderr 로** 표시합니다(`[behavior-change]` — 기존에는 stdout; 24시간 캐시·TTY 에서만 조회·`ADDE_NO_UPDATE_CHECK` 로 비활성) — `--json` 모드에서는 억제됩니다(위 참조).
 - 읽기 전용. 기동 전 "왜 안 뜨나"를 자가 진단하는 용도입니다.
 

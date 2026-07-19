@@ -204,7 +204,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
     },
     doctor: {
       hint: "    ↳ action: {{hint}}",
-      summary: "Summary: {{pass}} PASS / {{warn}} WARN / {{fail}} FAIL",
+      summary: "Summary: {{pass}} PASS / {{warn}} WARN / {{fail}} FAIL / {{info}} INFO",
     },
     logs: {
       whatEngine: "engine log",
@@ -358,6 +358,10 @@ Note: editing --file-mode only updates the conf value; existing directory permis
         "state dir is group/other-accessible (mode {{mode}}) but file_mode=private is expected to be 0700",
       stateHint:
         "Restrict it: chmod 700 {{path}} — or restart the lane (adde restart {{proj}}) to re-secure it.",
+      sharedTight:
+        "state dir is not group/other-accessible (mode {{mode}}) but file_mode=shared is declared — perms were not relaxed (fail-closed)",
+      sharedTightHint:
+        "Safe (tighter than declared). file_mode edits do not loosen existing dirs; to actually relax, chmod the state/out/queue dirs manually: {{path}}",
     },
     halt: {
       name: "self-halt ({{proj}})",

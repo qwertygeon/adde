@@ -169,7 +169,7 @@ export async function clearHalt(base: string, proj: string): Promise<void> {
 
 // ── doctor ──────────────────────────────────────────────────────────────
 
-export type CheckLevel = "PASS" | "WARN" | "FAIL";
+export type CheckLevel = "PASS" | "WARN" | "FAIL" | "INFO";
 
 export interface DoctorCheck {
   name: string;
@@ -419,6 +419,14 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
       stateMode !== null &&
       resolveFileMode(conf.file_mode) === "private" &&
       (stateMode & 0o077) !== 0;
+    // file_mode=shared 로 선언됐으나 실 디렉터리가 0700(그룹/기타 비트 없음)인 불일치 — private→shared
+    // 편집 시 secureLaneDirs(shared)가 no-op 이라 기존 0700 이 완화되지 않은 상태(v0.1.5/020). 안전
+    // 방향(더 조임)이라 FAIL/WARN 이 아니라 INFO 로 인지만 돕는다. 갓 만든 shared 레인은 mkdir 기본
+    // 권한(umask, 통상 0755)이라 이 분기에 걸리지 않는다 — 편집 불일치 케이스만 표면화.
+    const sharedTightState =
+      stateMode !== null &&
+      resolveFileMode(conf.file_mode) === "shared" &&
+      (stateMode & 0o077) === 0;
     // env·state 는 독립 관심사 — 둘 다 느슨하면 둘 다 경고한다(하나가 다른 하나를 가리지 않도록).
     if (looseEnv) {
       checks.push({
@@ -436,7 +444,15 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
         hint: t("doctor.perms.stateHint", { path: paths.stateDir, proj }),
       });
     }
-    if (!looseEnv && !looseState && (envMode !== null || stateMode !== null)) {
+    if (sharedTightState) {
+      checks.push({
+        name: t("doctor.perms.name", { lane }),
+        level: "INFO",
+        detail: t("doctor.perms.sharedTight", { mode: octal(stateMode) }),
+        hint: t("doctor.perms.sharedTightHint", { path: paths.stateDir }),
+      });
+    }
+    if (!looseEnv && !looseState && !sharedTightState && (envMode !== null || stateMode !== null)) {
       checks.push({
         name: t("doctor.perms.name", { lane }),
         level: "PASS",

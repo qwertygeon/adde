@@ -24,6 +24,10 @@ const WITH_FAIL: DoctorCheck[] = [
   ...PASS_ONLY,
   { name: "어댑터 바이너리", level: "FAIL", detail: "부재", hint: "설치 필요" },
 ];
+const WITH_INFO: DoctorCheck[] = [
+  ...PASS_ONLY,
+  { name: "l: file permissions", level: "INFO", detail: "state dir is 0700 (mode 700)", hint: "chmod" },
+];
 
 afterEach(() => vi.clearAllMocks());
 
@@ -67,6 +71,31 @@ describe("doctor --json exit code (SC-002)", () => {
     const cap = captureStdout();
     const code = await runDoctorCli(["demo", "--json"]);
     cap.restore();
+    expect(code).toBe(0);
+  });
+});
+
+describe("doctor INFO 레벨 처리 (I17)", () => {
+  it("텍스트 모드: INFO 항목은 ℹ 심볼·[INFO] 태그로 출력되고 요약에 INFO 카운트가 잡히며 exit 0", async () => {
+    runDoctor.mockResolvedValue(WITH_INFO);
+    const cap = captureStdout();
+    const code = await runDoctorCli(["demo"]);
+    cap.restore();
+    const out = cap.out();
+    expect(out).toMatch(/ℹ \[INFO\]/);
+    expect(out).toMatch(/1 INFO/); // 요약에 INFO 카운트
+    expect(out).not.toMatch(/[✘]/); // FAIL 심볼 없음
+    expect(code).toBe(0); // INFO 는 비-FAIL → exit 0
+  });
+
+  it("--json 모드: INFO 레벨이 checks 항목에 그대로 직렬화되고 exit 0", async () => {
+    runDoctor.mockResolvedValue(WITH_INFO);
+    const cap = captureStdout();
+    const code = await runDoctorCli(["demo", "--json"]);
+    cap.restore();
+    const parsed = JSON.parse(cap.out()) as { v: number; checks: DoctorCheck[] };
+    expect(parsed.v).toBe(1);
+    expect(parsed.checks.some((c) => c.level === "INFO")).toBe(true);
     expect(code).toBe(0);
   });
 });

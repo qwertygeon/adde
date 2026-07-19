@@ -10,6 +10,7 @@ import { formatException } from "../shared/notify.js";
 import { runDoctor } from "../core/diagnostics.js";
 import { laneAdd, LaneConfigError } from "../core/lane-config.js";
 import { collectInteractive } from "./lane.js";
+import { checkSymbol } from "./ops.js";
 import { createPrompter } from "./prompt.js";
 import { cmdError, laneError } from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
@@ -61,8 +62,7 @@ export async function runInit(argv: readonly string[]): Promise<number> {
     // 1) 환경 점검(전역 doctor) — 결과 요약 후 FAIL 이 있으면 주의 안내(계속 진행).
     const checks = await runDoctor();
     for (const c of checks) {
-      const sym = c.level === "PASS" ? "✔" : c.level === "WARN" ? "▲" : "✘";
-      process.stdout.write(`  ${sym} ${c.name}: ${c.detail}\n`);
+      process.stdout.write(`  ${checkSymbol(c.level)} ${c.name}: ${c.detail}\n`);
     }
     if (checks.some((c) => c.level === "FAIL")) {
       process.stdout.write("\n" + t("init.doctorWarn") + "\n");

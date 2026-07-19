@@ -288,7 +288,10 @@ describe("runDoctor (SC3)", () => {
     fs.mkdirSync(lp.stateDir, { recursive: true });
     fs.chmodSync(lp.stateDir, 0o700);
     const checks = await runDoctor("p", { base: tmpBase });
-    const perms = checks.find((c) => c.name.endsWith("파일 권한"));
+    const permsAll = checks.filter((c) => c.name.endsWith("파일 권한"));
+    // 정확히 1건 — INFO 와 PASS 가 동시 push 되지 않음(PASS 분기의 !sharedTightState 가드).
+    expect(permsAll).toHaveLength(1);
+    const perms = permsAll[0];
     expect(perms?.level).toBe("INFO");
     expect(perms?.detail).toContain("700");
     expect(perms?.hint).toBeTruthy();

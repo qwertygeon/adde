@@ -359,7 +359,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       stateHint:
         "Restrict it: chmod 700 {{path}} — or restart the lane (adde restart {{proj}}) to re-secure it.",
       sharedTight:
-        "state dir is 0700 (mode {{mode}}) but file_mode=shared is declared — perms were not relaxed (fail-closed)",
+        "state dir is not group/other-accessible (mode {{mode}}) but file_mode=shared is declared — perms were not relaxed (fail-closed)",
       sharedTightHint:
         "Safe (tighter than declared). file_mode edits do not loosen existing dirs; to actually relax, chmod the state/out/queue dirs manually: {{path}}",
     },

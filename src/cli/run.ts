@@ -171,7 +171,9 @@ async function handleUp(rest: readonly string[], parsed?: ParseResult): Promise<
         }
         // 부팅을 개시하지 않은 조기반환 — BootReport 가 없으므로 현재 상태 요약 객체로 대체.
         if (json) {
-          process.stdout.write(JSON.stringify({ proj, alreadyUp: true, running }, null, 2) + "\n");
+          process.stdout.write(
+            JSON.stringify({ v: 1, proj, alreadyUp: true, running }, null, 2) + "\n",
+          );
         } else {
           process.stdout.write(t("run.alreadyUp", { proj, running, total: rows.length }) + "\n");
           process.stdout.write(t("run.alreadyUpHint", { proj }) + "\n");
@@ -205,7 +207,7 @@ async function handleDown(rest: readonly string[], parsed?: ParseResult): Promis
     const { unloadDaemon } = await import("../core/launchd.js");
     await unloadDaemon(proj);
     if (json) {
-      process.stdout.write(JSON.stringify({ proj, stopped: true }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ v: 1, proj, stopped: true }, null, 2) + "\n");
     } else {
       process.stdout.write(t("run.downDone", { proj }) + "\n");
     }

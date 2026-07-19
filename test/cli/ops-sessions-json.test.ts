@@ -64,10 +64,11 @@ describe("sessions 플래그 위치 무관 파싱 (SC-003)", () => {
 
     expect(code1).toBe(0);
     expect(code2).toBe(0);
-    const parsed1 = JSON.parse(out1) as unknown[];
-    const parsed2 = JSON.parse(out2) as unknown[];
+    const parsed1 = JSON.parse(out1) as { v: number; sessions: unknown[] };
+    const parsed2 = JSON.parse(out2) as { v: number; sessions: unknown[] };
     expect(parsed1).toEqual(parsed2);
-    expect(parsed1).toHaveLength(1);
+    expect(parsed1.v).toBe(1);
+    expect(parsed1.sessions).toHaveLength(1);
   });
 
   it("`--json` 이 proj/lane 값으로 오인되지 않는다(선두 위치에서도)", async () => {
@@ -78,8 +79,9 @@ describe("sessions 플래그 위치 무관 파싱 (SC-003)", () => {
     const code = await runSessions(["--json", "p", "l"]);
     cap.restore();
     expect(code).toBe(0);
-    const parsed = JSON.parse(cap.out()) as unknown[];
-    expect(parsed).toHaveLength(1); // proj="--json" 오인 시 장부를 못 찾아 빈 결과가 됨
+    const parsed = JSON.parse(cap.out()) as { v: number; sessions: unknown[] };
+    expect(parsed.v).toBe(1);
+    expect(parsed.sessions).toHaveLength(1); // proj="--json" 오인 시 장부를 못 찾아 빈 결과가 됨
   });
 });
 
@@ -103,29 +105,34 @@ describe("sessions --json 항목 직렬화 (SC-004)", () => {
     const code = await runSessions(["p", "l", "--json"]);
     cap.restore();
     expect(code).toBe(0);
-    const parsed = JSON.parse(cap.out()) as Array<{
-      id: string;
-      label: string | null;
-      lastActivityAt: string;
-      current: boolean;
-    }>;
-    expect(parsed).toHaveLength(2);
-    expect(parsed.filter((e) => e.current)).toHaveLength(1);
-    expect(parsed.find((e) => e.current)?.id).toBe("s2");
-    expect(parsed.find((e) => e.id === "s1")?.label).toBe("hello");
+    const parsed = JSON.parse(cap.out()) as {
+      v: number;
+      sessions: Array<{
+        id: string;
+        label: string | null;
+        lastActivityAt: string;
+        current: boolean;
+      }>;
+    };
+    expect(parsed.v).toBe(1);
+    const items = parsed.sessions;
+    expect(items).toHaveLength(2);
+    expect(items.filter((e) => e.current)).toHaveLength(1);
+    expect(items.find((e) => e.current)?.id).toBe("s2");
+    expect(items.find((e) => e.id === "s1")?.label).toBe("hello");
     // label 미기재 항목은 텍스트 fallback 문자열이 아니라 null 로 안정 파싱된다.
-    expect(parsed.find((e) => e.id === "s2")?.label).toBeNull();
+    expect(items.find((e) => e.id === "s2")?.label).toBeNull();
   });
 });
 
 describe("sessions --json 빈 장부 (SC-005)", () => {
-  it("빈 배열을 나타내는 유효 JSON + exit 0", async () => {
+  it("빈 세션을 {v,sessions:[]} 로 나타내는 유효 JSON + exit 0", async () => {
     writeLedgerFixture("p", "l", []);
     const cap = captureStdout();
     const code = await runSessions(["p", "l", "--json"]);
     cap.restore();
     expect(code).toBe(0);
-    expect(JSON.parse(cap.out())).toEqual([]);
+    expect(JSON.parse(cap.out())).toEqual({ v: 1, sessions: [] });
   });
 });
 

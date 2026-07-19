@@ -313,7 +313,8 @@ async function handleList(p: ParseResult): Promise<number> {
   const json = p.flags.json === true;
   const { lanes } = await laneList(proj);
   if (json) {
-    process.stdout.write(JSON.stringify(lanes, null, 2) + "\n");
+    // 최상위 배열 대신 {v, lanes} 객체(BREAKING — 기존 배열 소비자). `v` = 스키마 버전.
+    process.stdout.write(JSON.stringify({ v: 1, lanes }, null, 2) + "\n");
   } else if (lanes.length === 0) {
     process.stdout.write(t("lane.noLanes", { proj }) + "\n");
   } else {
@@ -331,7 +332,7 @@ async function handleShow(p: ParseResult): Promise<number> {
   const json = p.flags.json === true;
   const { confPath, conf, text } = await laneShow(proj, lane);
   if (json) {
-    process.stdout.write(JSON.stringify({ lane, confPath, conf }, null, 2) + "\n");
+    process.stdout.write(JSON.stringify({ v: 1, lane, confPath, conf }, null, 2) + "\n");
   } else {
     process.stdout.write(`# ${confPath}\n${text}`);
   }

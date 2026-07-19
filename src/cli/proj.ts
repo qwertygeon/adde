@@ -45,7 +45,8 @@ async function handleProjList(p: ParseResult): Promise<number> {
     });
   }
   if (json) {
-    process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+    // 최상위 배열 대신 {v, projects} 객체(BREAKING — 기존 배열 소비자). `v` = 스키마 버전.
+    process.stdout.write(JSON.stringify({ v: 1, projects: rows }, null, 2) + "\n");
     return EXIT.OK;
   }
   if (rows.length === 0) {

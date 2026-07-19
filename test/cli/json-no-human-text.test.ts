@@ -79,6 +79,7 @@ describe("doctor --json — 요약 줄 부재 (SC-004 Edge)", () => {
     // (배열 JSON 앞뒤에 추가 텍스트 줄이 없다는 뜻 — 요약 문구가 섞이면 배열 뒤에 개행+문장이
     // 남아 trailing 파싱 실패 또는 별도 라인이 생긴다).
     const parsed = JSON.parse(out) as { v: number; checks: unknown[] };
+    expect(parsed.v).toBe(1);
     expect(Array.isArray(parsed.checks)).toBe(true);
     expect(out.split("\n").filter((l) => /pass|warn|fail/i.test(l) && !l.trim().startsWith('"')).length).toBe(0);
   });

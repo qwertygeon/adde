@@ -79,7 +79,8 @@ describe("sessions 플래그 위치 무관 파싱 (SC-003)", () => {
     const code = await runSessions(["--json", "p", "l"]);
     cap.restore();
     expect(code).toBe(0);
-    const parsed = JSON.parse(cap.out()) as { sessions: unknown[] };
+    const parsed = JSON.parse(cap.out()) as { v: number; sessions: unknown[] };
+    expect(parsed.v).toBe(1);
     expect(parsed.sessions).toHaveLength(1); // proj="--json" 오인 시 장부를 못 찾아 빈 결과가 됨
   });
 });

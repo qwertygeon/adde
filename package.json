@@ -1,6 +1,6 @@
 {
   "name": "adde-acp",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "AI Driven Development Engine — an ACP-based gateway that drives AI CLI engines from your Markdown notes (or a chat channel like Telegram)",
   "type": "module",
   "repository": {

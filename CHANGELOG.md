@@ -2,7 +2,7 @@
 
 이 프로젝트의 주목할 변경을 기록합니다. [Keep a Changelog](https://keepachangelog.com/) 형식, [SemVer](https://semver.org/) 준수.
 
-## [Unreleased]
+## [0.2.0] - 2026-07-19
 
 ### Added
 

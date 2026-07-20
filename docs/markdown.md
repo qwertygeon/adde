@@ -109,27 +109,27 @@ Once started, ADDE begins watching the inbox/approvals notes and the output dire
 
 ## 3. Sending instructions (inbox)
 
-In the input note (`inbox.md`):
+In the input note (`inbox.md`), ADDE always keeps an empty `- [ ] 📤 send` checkbox at the **top** of the note, with a blank line above it as your writing area:
 
-1. Freely write the message (prompt) to send.
-2. On **the line below it**, create a send checkbox:
-   ```markdown
-   Write the instruction to send to the AI here.
-   Multiple lines are fine.
+```markdown
 
-   - [ ] 📤 send
-   ```
-3. When ready to send, tap/check the checkbox: `- [x] 📤 send`.
-4. ADDE detects it and delivers the message to the AI. That line changes in two stages:
+- [ ] 📤 send
+```
+
+1. Write the message (prompt) on the blank line(s) **above** the send checkbox — i.e. at the very top of the note. Multiple lines are fine.
+2. When ready to send, tap/check the checkbox: `- [x] 📤 send`.
+3. ADDE detects it and delivers the message to the AI. That line changes in two stages:
    ```markdown
    - [x] ⏳ sending a1b2c3d4 20260703-162045 ← send started (durable record)
    - [x] ✅ sent [[20260703-162045 a1b2c3d4]] ← send completed
    ```
    Once you see `✅ sent`, it's done. `[[send-time id]]` is a wikilink identical to the response note's filename, so once the response is created you can click the link to jump straight to it (in Obsidian or other wikilink-supporting editors). Even if ADDE dies mid-way and stalls at `⏳ sending`, on restart it re-sends only the missing part exactly once and finishes with `✅ sent` (no duplicates/losses).
 
-For the next message, write it below and create a new send box. The `✅ sent` line acts as a message separator, so a previous message won't bleed into the next one.
+After a send, ADDE puts a fresh empty `- [ ] 📤 send` back at the top and the `✅ sent` line settles just below it — so your history reads newest-first going down, and the active send box stays at the top (no scrolling to the bottom of a long note). The `✅ sent` line acts as a message separator, so a previous message won't bleed into the next one. For the next message, just write above the top send box again.
 
-> **The trigger is only a checkbox whose label is exactly `send`** (a leading emoji is allowed — `- [x] 📤 send`). A checkbox with other words mixed in, like `- [x] please send the mail`, is not a trigger but treated as ordinary message body, so you can freely use to-do checkboxes inside a message. Checking an empty message doesn't send and shows `⚠️ empty`.
+> **The prompt is the text *above* the send box, never below it.** ADDE keeps no blank line under the box, so write in the area above it. (If you check the box with nothing above it, it sends nothing and shows `⚠️ empty`.)
+
+> **The trigger is only a checkbox whose label is exactly `send`** (a leading emoji is allowed — `- [x] 📤 send`). A checkbox with other words mixed in, like `- [x] please send the mail`, is not a trigger but treated as ordinary message body, so you can freely use to-do checkboxes inside a message.
 
 ### Session-control checkboxes
 

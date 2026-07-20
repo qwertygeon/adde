@@ -242,8 +242,17 @@ export function blankSendLine(): string {
  * inbox 에 미체크 빈 `- [ ] 📤 send` 트리거가 하나도 없으면 하나 추가(M8, 상시 빈 send).
  * 이미 있으면 무변경(중복 방지). 추가는 미체크라 parseInbox 가 액션으로 삼지 않는다(오전송 없음).
  * 추가했으면 true(호출부가 write 여부 판단). lines 를 in-place 변경.
- * 삽입 위치는 **끝의 빈 줄들 앞** — split 의 트레일링 빈 요소와 blank send 사이에 공백줄이 끼어
- * 누적되는 것을 막는다(joinLines 와 함께 개행 위생 유지).
+ *
+ * 삽입 위치는 **문서 최상단**이며 그 위에 compose 빈 줄 하나를 얹는다(결과: `["", send, ...기록]`).
+ * parseInbox 는 프롬프트를 send 마커 '위' 세그먼트로 읽으므로(위-읽기), 맨 윗줄 compose 가 입력 자리가
+ * 되고 기록(✅ sent)은 send 아래로 최신순 누적된다 — 활성 send 접근에 하단 스크롤이 불필요하다.
+ * send '아래'에는 빈 줄을 두지 않는다: 아래 여백은 위-읽기에서 프롬프트로 읽히지 않아, 그곳 입력이
+ * ⚠️ empty 전송을 유발한다(유일한 입력 여백을 compose 로 유도). 선행 빈 줄은 걷어내 정확히
+ * `[compose, send]` 만 얹어 재-heal 시 leading blank 누적을 막는다(joinLines 와 함께 개행 위생 유지).
+ *
+ * 호출부 인덱스 안전성: handleInbox 의 모든 ensureBlankSend 호출은 인덱스 기반 라인 변형(empty/
+ * sending/sent 마킹·splice) '이후'에 위치한다 — 최상단 삽입이 라인 인덱스를 +2 밀어도 그 시점 이후
+ * 인덱스 재사용이 없어 안전하다. 이 함수를 인덱스 사용 '이전'에 호출하도록 순서를 바꾸지 말 것.
  */
 export function ensureBlankSend(lines: string[]): boolean {
   const hasUnchecked = lines.some((line) => {
@@ -251,9 +260,8 @@ export function ensureBlankSend(lines: string[]): boolean {
     return cb !== null && cb[1] === " " && isSendLabel(cb[2]!.trim());
   });
   if (hasUnchecked) return false;
-  let insertAt = lines.length;
-  while (insertAt > 0 && lines[insertAt - 1] === "") insertAt--;
-  lines.splice(insertAt, 0, blankSendLine());
+  while (lines.length > 0 && lines[0] === "") lines.shift();
+  lines.splice(0, 0, "", blankSendLine());
   return true;
 }
 

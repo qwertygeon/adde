@@ -288,19 +288,19 @@ Resetting, compacting, and resuming a conversation session is instructed **from 
 Creates, lists, and deletes a lane conf (`lanes.d/<lane>.conf`). One file = one lane.
 
 ```bash
-adde lane add <proj> <lane> [options]           # create
-adde lane set <proj> <lane> --<field> <value>…  # edit an existing conf in place
-adde lane ls <proj> [--json]                     # list
-adde lane show <proj> <lane> [--json]            # print conf
-adde lane rm <proj> <lane> [--purge]             # delete conf (--purge also removes state/queue/out)
-adde lane help                                   # all options
+adde lane add <proj> <lane> [options]                            # create
+adde lane set <proj> <lane> [<key> <value> …] [--unset <key> …]  # edit an existing conf in place (no args on a TTY: interactive wizard)
+adde lane ls <proj> [--json]                                     # list
+adde lane show <proj> <lane> [key] [--json] [--defaults]         # print conf (or a single key's metadata)
+adde lane rm <proj> <lane> [--purge]                             # delete conf (--purge also removes state/queue/out)
+adde lane help                                                   # all options
 ```
 
 By default `lane rm` deletes only the conf and preserves side data (state/queue/out). `--purge` also removes the lane's `state`/`queue`/`processing`/`out` directories (orphan cleanup). Because `--purge` destroys state (including the bot-token `.env`), it is guarded like `proj rm`: it **refuses if the lane is active** (stop the daemon first, or `--force`), and on a TTY it asks you to re-type the lane name to confirm (non-interactive requires `--force`). Plain `lane rm` (no `--purge`) has no such guard.
 
 `ls`/`rm` can also be written as `list`/`remove` (same behavior).
 
-**`--json`**: `lane show --json` prints `{ "v": 1, "lane", "confPath", "conf" }` (`conf` is the parsed lane conf object — no token field) instead of the human-readable dump; `v` is the schema version (see Global options).
+**`--json`**: `lane show --json` prints `{ "v": 1, "lane", "confPath", "conf" }` (`conf` is the parsed lane conf object — no token field) instead of the human-readable dump; `v` is the schema version (see Global options). Adding a `key` argument (`lane show <proj> <lane> <key> --json`) instead prints that single key's metadata `{ "key", "value", "default", "explicit", "editable", "identity" }` (`explicit` = the key is set in the conf rather than inheriting a default). `lane show <proj> <lane> --defaults --json` prints `{ "v": 1, "defaults": [{ "key", "default" }, …] }`.
 
 - **[BREAKING] `lane ls --json`**: the top-level JSON output is an **object** `{ "v": 1, "lanes": [...] }`, not a bare array (previously `adde lane ls --json` printed a top-level array of lane-name strings). `lanes` holds the same array of lane-name strings. **Migration**: change a top-level array reference to `.lanes` — e.g. `adde lane ls --json | jq '.[]'` → `jq '.lanes[]'`.
 
@@ -411,10 +411,13 @@ Passing `--token-stdin` (or any field flag) already makes the command non-intera
 ### lane set — edit an existing lane conf in place
 
 ```bash
-adde lane set <proj> <lane> --<field> <value> …
+adde lane set <proj> <lane> <key> <value> …       # positional dot-notation edits
+adde lane set <proj> <lane> --<field> <value> …   # named flags (same surface)
+adde lane set <proj> <lane> --unset <key> …       # remove keys (restore their default)
+adde lane set <proj> <lane>                        # no args on a TTY: interactive wizard
 ```
 
-Edits an existing lane's conf without deleting and recreating it (no state/queue/token loss). Fields left unspecified keep their current value.
+Edits an existing lane's conf without deleting and recreating it (no state/queue/token loss). Fields left unspecified keep their current value. There are three ways to specify the edits — positional dot-notation keys, the named flags below, and (on a TTY, with no args) an interactive wizard — and they can be combined in one command.
 
 | Option                                               | Notes                                                                                     |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
@@ -428,6 +431,13 @@ Edits an existing lane's conf without deleting and recreating it (no state/queue
 | `--file-mode <private\|shared>`                       | conf value only — the on-disk directory permissions are re-applied on the next `adde restart` (not immediately) |
 | `--chat-id <id>` `--allow-from <ids>`                 | telegram lanes only — rejected on a markdown lane                                          |
 | `--root <abs-path>` `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | markdown lanes only — rejected on a telegram lane                          |
+| `--unset <key> …`                                     | remove keys (dot-notation) so they fall back to their default — see below                 |
+
+**Positional dot-notation keys**: `adde lane set <proj> <lane> <key> <value> …` edits by canonical dot-notation key (e.g. `perm_tier autopass`, `markdown.retention_days 5`), taking one or more `<key> <value>` pairs in a single command. This is the same surface as the named flags above, **plus these markdown-only keys that have no flag**: `markdown.archive`, `markdown.backup`, `markdown.retention_days`, `markdown.out_retention_days`, `markdown.sync_provider` (see the [markdown guide](markdown.md#1-lane-configuration) for what each does). A batch is **all-or-nothing**: an unknown key (with a "did you mean…" suggestion for near-misses), a wrong type/enum/format value, or an odd number of tokens rejects the whole command and writes nothing.
+
+**`--unset <key> …`**: removes one or more keys (dot-notation) so the lane falls back to their consumer default. Identity keys (`source`/`backend`/`engine`/`acp_version`) and required keys (`markdown.root`/`markdown.inbox`, telegram `chat_id`) are refused — they have no default to fall back to.
+
+**No-arg interactive wizard (on a TTY)**: `adde lane set <proj> <lane>` with no edit arguments launches an interactive editor. Each editable field for the lane's source is shown prefilled with its current value (in parentheses); **leaving the input blank keeps the current value**, enum fields are chosen by number, and path fields support Tab completion. At the end it prints a summary of the pending changes (a `key: old → new` diff) and asks to confirm before writing — declining, or making no changes, writes nothing. (On a non-TTY, `lane set` with no edits is an error, not a wizard.)
 
 **Not editable**: `--source`/`--backend`/`--engine`/`--acp-version` (lane identity), the bot token, and `--safe-defaults` are not `lane set` flags. Passing an identity flag is rejected with a dedicated "recreate the lane instead" error (not a generic unsupported-flag error); recreate the lane (`adde lane rm`, then `adde lane add`) to change these. To change the hard-deny danger list, edit `--hard-deny` directly instead of `--safe-defaults`.
 
@@ -437,7 +447,24 @@ Edits an existing lane's conf without deleting and recreating it (no state/queue
 
 ```bash
 adde lane set myproj tg-claude --perm-tier autopass --hard-deny "Bash(sudo *)"
+adde lane set myproj md-claude markdown.retention_days 5 markdown.sync_provider icloud   # dot-notation batch
+adde lane set myproj md-claude --unset markdown.backup                                   # restore its default
 adde restart myproj
+```
+
+### lane show — print a lane conf (or a single key's metadata)
+
+```bash
+adde lane show <proj> <lane>                  # the whole conf (human-readable dump)
+adde lane show <proj> <lane> <key>            # one key: value, default, and metadata
+adde lane show <proj> <lane> --defaults       # the editable keys and their built-in defaults
+```
+
+With no `key`, `lane show` prints the parsed conf (or the `{ v, lane, confPath, conf }` object with `--json`, see **`--json`** above). Adding a `key` argument prints just that key's current value, its built-in default, whether it is `explicit` (set in the conf rather than inheriting the default), and whether it is `editable`/`identity`. An unknown key is rejected with a "did you mean…" suggestion for near-misses. `--defaults` (no key) lists every editable key alongside its default. Both accept `--json` for machine-readable output.
+
+```bash
+adde lane show myproj md-claude markdown.retention_days   # e.g. value=5 default=2 explicit=true editable=true identity=false
+adde lane show myproj md-claude perm_tier --json          # single-key metadata as JSON
 ```
 
 ## proj — project listing and deletion

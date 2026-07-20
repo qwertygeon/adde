@@ -26,7 +26,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24 # OIDC Trusted Publishing 하한(npm ≥ 11.5.1 · Node ≥ 22.14) 충족
           # 발행 워크플로에서는 의존성 캐시 비활성(캐시 포이즈닝으로 OIDC 토큰 노출 방지 — setup-node OIDC 권장).

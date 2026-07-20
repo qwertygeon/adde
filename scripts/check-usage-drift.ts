@@ -9,10 +9,11 @@ import { pathToFileURL } from "node:url";
 import { en } from "../src/shared/locales/en.js";
 import { ko } from "../src/shared/locales/ko.js";
 import { GLOBAL_FLAGS, findCommand, subFlagNames, flagNames } from "../src/cli/spec.js";
+import { dotOnlyEditableKeys } from "../src/core/lane-schema.js";
 
 export interface DriftIssue {
   usageKey: string;
-  kind: "missing-in-usage" | "undeclared";
+  kind: "missing-in-usage" | "undeclared" | "missing-key";
   flag: string;
   locale: "en" | "ko";
 }
@@ -103,6 +104,23 @@ export function usageDriftIssues(
   return issues;
 }
 
+/**
+ * 위치 점표기 편집 키(플래그 없는 노출 편집 키 — markdown 그룹) 문서화 정합 체크(003).
+ * 이 키들은 위치인자라 플래그 정규식(usageDriftIssues)이 닿지 않으므로, 그룹 help(usage.lane)에
+ * canonical 이름이 문서화됐는지 별도로 대조한다 — 신규 노출 키가 add 되고도 문서에 안 뜨는 드리프트 차단.
+ */
+export function keyDocIssues(
+  catalog: UsageCatalog,
+  usageKey: string,
+  keys: readonly string[],
+): DriftIssue[] {
+  const text = catalog.texts[usageKey];
+  if (text === undefined) return [];
+  return keys
+    .filter((key) => !text.includes(key))
+    .map((key) => ({ usageKey, kind: "missing-key" as const, flag: key, locale: catalog.locale }));
+}
+
 /** 중첩 카탈로그를 `a.b.c` 평탄 키 → 문자열 맵으로 변환(check-i18n.ts 와 동일 패턴). */
 function flattenCatalog(obj: Record<string, unknown>, prefix = ""): Record<string, string> {
   const out: Record<string, string> = {};
@@ -164,7 +182,14 @@ export function runCheck(): DriftIssue[] {
   const checks = buildChecks();
   const enCatalog: UsageCatalog = { locale: "en", texts: flattenCatalog(en) };
   const koCatalog: UsageCatalog = { locale: "ko", texts: flattenCatalog(ko) };
-  return [...usageDriftIssues(enCatalog, checks), ...usageDriftIssues(koCatalog, checks)];
+  // 점표기 전용 편집 키(플래그 없음)는 그룹 help(usage.lane)에 canonical 이름 문서화를 강제한다.
+  const dotKeys = dotOnlyEditableKeys();
+  return [
+    ...usageDriftIssues(enCatalog, checks),
+    ...usageDriftIssues(koCatalog, checks),
+    ...keyDocIssues(enCatalog, "usage.lane", dotKeys),
+    ...keyDocIssues(koCatalog, "usage.lane", dotKeys),
+  ];
 }
 
 const isMain =

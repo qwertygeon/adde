@@ -164,7 +164,7 @@ export function parseEngineArgs(raw: string | undefined): string[] {
  * 어댑터 네임스페이스별 필드 목록(`<ns>.<field>`). 파서·직렬화 공용 SoT.
  * 새 어댑터 추가 = 여기에 한 줄 + LaneConf 서브타입 1개.
  */
-const NAMESPACE_FIELDS = {
+export const NAMESPACE_FIELDS = {
   markdown: [
     "root",
     "inbox",

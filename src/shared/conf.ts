@@ -7,7 +7,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { projConfPath } from "./paths.js";
+import { projConfPath, normalizeUserPath } from "./paths.js";
 
 /** markdown 어댑터 전용 설정(`markdown.*` 키). */
 export interface MarkdownLaneConf {
@@ -187,6 +187,12 @@ const NAMESPACE_FIELDS = {
 const NAMESPACE_INT_FIELDS = new Set(["retention_days", "out_retention_days"]);
 
 /**
+ * 파일시스템 경로로 해석되는 네임스페이스 필드 — 셸 이스케이프를 normalizeUserPath 로 제거한다.
+ * 비경로 값(telegram.chat_id·allow_from, markdown.sync_provider 등)은 대상 아님.
+ */
+const PATH_NAMESPACE_FIELDS = new Set(["root", "inbox", "approvals", "outbox", "archive", "backup"]);
+
+/**
  * 구 평면 어댑터 키(네임스페이스 이전 포맷). 클린 브레이크로 값은 읽지 않으며(무시),
  * detectLegacyAdapterKeys 가 감지해 마이그레이션 경고에만 쓴다.
  */
@@ -240,7 +246,7 @@ export function parseLaneConf(text: string): LaneConf {
   for (const key of COMMON_OPTIONAL_KEYS) {
     const value = conf[key];
     if (value !== undefined && value.length > 0) {
-      result[key] = value;
+      result[key] = key === "cwd" ? normalizeUserPath(value) : value;
     }
   }
 
@@ -262,7 +268,7 @@ export function parseLaneConf(text: string): LaneConf {
         const n = Number.parseInt(value, 10);
         if (Number.isFinite(n) && n > 0) sub[field] = n;
       } else {
-        sub[field] = value;
+        sub[field] = PATH_NAMESPACE_FIELDS.has(field) ? normalizeUserPath(value) : value;
       }
     }
     if (Object.keys(sub).length > 0) {

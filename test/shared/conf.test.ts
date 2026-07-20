@@ -88,6 +88,20 @@ channel=telegram
     expect(result.markdown?.outbox).toBe("adde/L/out/");
   });
 
+  it("경로 타입 키의 셸 이스케이프 백슬래시를 제거한다 (비경로 값은 무변경)", () => {
+    const conf =
+      "source=markdown\n" +
+      "cwd=/proj/My\\ App\n" +
+      "markdown.root=/a/Mobile\\ Documents/iCloud\\~md\\~obsidian/ADDE\n" +
+      "markdown.inbox=adde/L\\ 1/inbox.md\n" +
+      "telegram.chat_id=123\\ 45\n"; // 비경로 값 — 정규화 대상 아님
+    const result = parseLaneConf(conf);
+    expect(result.cwd).toBe("/proj/My App");
+    expect(result.markdown?.root).toBe("/a/Mobile Documents/iCloud~md~obsidian/ADDE");
+    expect(result.markdown?.inbox).toBe("adde/L 1/inbox.md");
+    expect(result.telegram?.chat_id).toBe("123\\ 45"); // 백슬래시 보존(비경로)
+  });
+
   it("관련 네임스페이스 키가 없으면 서브객체는 undefined 다", () => {
     const result = parseLaneConf(minimalConf);
     expect(result.markdown).toBeUndefined();

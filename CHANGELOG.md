@@ -2,6 +2,12 @@
 
 이 프로젝트의 주목할 변경을 기록합니다. [Keep a Changelog](https://keepachangelog.com/) 형식, [SemVer](https://semver.org/) 준수.
 
+## [Unreleased]
+
+### Fixed
+
+- **레인 conf 경로 값의 셸 이스케이프 백슬래시 자동 정규화** — 터미널에서 드래그드롭·탭완성·복붙으로 얻은 셸 이스케이프 경로(예: `markdown.root=/Users/me/Library/Mobile\ Documents/iCloud\~md\~obsidian/...`)를 conf 나 `adde lane add`/`lane set` 위저드에 넣으면, 백슬래시가 리터럴로 경로에 섞여 ADDE 가 실제 vault 가 아닌 "백슬래시가 이름에 박힌 엉뚱한 디렉터리"를 감시·생성하던 문제를 해소한다(레인은 `running` 으로 표시되나 inbox 를 전혀 처리하지 못했다). 이제 경로 타입 conf 값(`cwd`·`markdown.root`/`inbox`/`approvals`/`outbox`/`archive`/`backup`)을 읽을 때 셸 메타문자(공백·`~`·괄호 등) 앞의 백슬래시를 자동 제거하며, 위저드 입력도 유입 시점에 동일 정규화해 저장된다. 이미 이스케이프가 섞여 저장된 기존 conf 도 재파싱만으로 교정된다(`adde restart` 후 적용). POSIX 에서 합법 파일명 문자인 백슬래시(일반문자·경로구분자 앞)는 보존한다.
+
 ## [0.2.0] - 2026-07-19
 
 ### Added

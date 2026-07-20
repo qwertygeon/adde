@@ -42,6 +42,19 @@ export function expandTilde(p: string): string {
   return p;
 }
 
+/** 셸이 이스케이프하는 메타문자(공백·틸드·글롭·인용부호 등) 앞의 백슬래시. */
+const SHELL_ESCAPED = /\\([ \t~!"#$&'()*;<>?[\]`{|}\\])/g;
+
+/**
+ * 사용자·conf 에서 받은 경로의 셸식 백슬래시 이스케이프를 제거한다(예: `Mobile\ Documents` → `Mobile Documents`).
+ * 드래그드롭·탭완성·터미널 복붙으로 유입된 이스케이프가 리터럴 백슬래시로 파일시스템 경로에 섞이는 것을 막는다.
+ * 메타문자 앞 백슬래시만 제거한다 — POSIX 에서 백슬래시는 합법 파일명 문자라 일반문자·경로구분자(`/`) 앞의
+ * 백슬래시는 보존한다(전체 언이스케이프는 실재 백슬래시 경로를 손상시킨다).
+ */
+export function normalizeUserPath(p: string): string {
+  return p.replace(SHELL_ESCAPED, "$1");
+}
+
 /** proj/lane 식별자 허용 문자셋 — 경로 세그먼트로 안전(`..`·`/`·구분자 차단). lane-config 의 NAME_RE 와 동일 규약. */
 const SAFE_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 

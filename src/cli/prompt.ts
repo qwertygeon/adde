@@ -7,7 +7,7 @@ import * as readline from "node:readline/promises";
 import { Writable } from "node:stream";
 import * as fs from "node:fs";
 import { dirname, basename, join } from "node:path";
-import { expandTilde } from "../shared/paths.js";
+import { expandTilde, normalizeUserPath } from "../shared/paths.js";
 
 /**
  * 경로 입력용 Tab 완성기 — cwd/root/inbox 등 경로 프롬프트에서 디렉터리·파일명을 완성한다.
@@ -80,7 +80,7 @@ export function createPrompter(deps: PrompterDeps = {}): Prompter {
   const askPath: Ask = async (q, def) => {
     pathMode = true;
     try {
-      return await question(q, def);
+      return normalizeUserPath(await question(q, def));
     } finally {
       pathMode = false;
     }

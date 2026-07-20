@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
-import { lanePaths, expandTilde } from "../../src/shared/paths.js";
+import { lanePaths, expandTilde, normalizeUserPath } from "../../src/shared/paths.js";
 
 describe("expandTilde", () => {
   it("'~' 를 홈 디렉터리로 확장한다", () => {
@@ -15,6 +15,29 @@ describe("expandTilde", () => {
   });
   it("'~user' 형태는 확장하지 않는다(미지원)", () => {
     expect(expandTilde("~other/x")).toBe("~other/x");
+  });
+});
+
+describe("normalizeUserPath", () => {
+  it("이스케이프된 공백을 제거한다", () => {
+    expect(normalizeUserPath("/a/Mobile\\ Documents/x")).toBe("/a/Mobile Documents/x");
+  });
+  it("이스케이프된 틸드·괄호 등 셸 메타문자를 제거한다", () => {
+    expect(normalizeUserPath("/a/iCloud\\~md\\~obsidian")).toBe("/a/iCloud~md~obsidian");
+    expect(normalizeUserPath("/a/f\\(1\\)")).toBe("/a/f(1)");
+  });
+  it("한 경로의 다중 이스케이프를 모두 제거한다", () => {
+    expect(
+      normalizeUserPath("/Users/x/Library/Mobile\\ Documents/iCloud\\~md\\~obsidian/Documents"),
+    ).toBe("/Users/x/Library/Mobile Documents/iCloud~md~obsidian/Documents");
+  });
+  it("일반문자·경로구분자 앞의 백슬래시(합법 파일명)는 보존한다", () => {
+    expect(normalizeUserPath("/a/we\\ird")).toBe("/a/we\\ird"); // \i 는 메타문자 아님 → 보존
+    expect(normalizeUserPath("/a/b\\/c")).toBe("/a/b\\/c"); // \/ 보존
+  });
+  it("이스케이프 없는 경로는 그대로 둔다", () => {
+    expect(normalizeUserPath("/abs/plain/path")).toBe("/abs/plain/path");
+    expect(normalizeUserPath("rel/inbox.md")).toBe("rel/inbox.md");
   });
 });
 

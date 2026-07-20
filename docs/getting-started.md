@@ -71,7 +71,7 @@ The fastest way to create your first lane is the onboarding wizard:
 adde init [<proj>]
 ```
 
-It first runs the global `doctor` and shows the results → asks whether to install the short aliases → prompts interactively for project/lane names and lane fields → creates the lane → prints the token-write and `adde up` start hints (TTY only). For a telegram lane the bot token is prompted last with **hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to set it later. Details: [command reference](commands.md#init--onboarding-wizard).
+It first runs the global `doctor` and shows the results → asks whether to install the short aliases → offers to set up shell tab-completion (prints the `adde completion <shell>` command for your shell) → prompts interactively for project/lane names and lane fields → creates the lane → prints the token-write and `adde up` start hints (TTY only). For a telegram lane the bot token is prompted last with **hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to set it later. Details: [command reference](commands.md#init--onboarding-wizard).
 
 ### Configure via subcommands
 

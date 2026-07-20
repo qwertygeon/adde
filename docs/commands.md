@@ -50,10 +50,11 @@ An onboarding wizard that creates your first lane interactively (**TTY only** �
 
 1. Runs the global `doctor` and prints the results (continues even if there are `FAIL`s, with a warning).
 2. Offers to install the short aliases (default yes — see `alias` below).
-3. Prompts for project and lane names (validated: letters, digits, `_`, `-` only).
-4. Collects lane fields interactively (the same fields as an interactive `lane add`). For a telegram lane the bot token is prompted **last, with hidden input** (keystrokes are not echoed) and written to `.env` (0600). Leaving it empty defers it (set it later via `--token-stdin` or by editing `.env`).
-5. Creates the lane.
-6. Prints the token-written (or token-next) hint and the `adde up` start hint.
+3. Offers to set up shell tab-completion (opt-in): detects your shell (bash/zsh) and prints the exact `adde completion <shell> > …` command to enable it (see `completion` below). It prints the command rather than editing your shell config for you.
+4. Prompts for project and lane names (validated: letters, digits, `_`, `-` only).
+5. Collects lane fields interactively (the same fields as an interactive `lane add`). For a telegram lane the bot token is prompted **last, with hidden input** (keystrokes are not echoed) and written to `.env` (0600). Leaving it empty defers it (set it later via `--token-stdin` or by editing `.env`).
+6. Creates the lane.
+7. Prints the token-written (or token-next) hint and the `adde up` start hint.
 
 **Example session** (telegram lane; hidden token entered — the input is not shown on screen):
 

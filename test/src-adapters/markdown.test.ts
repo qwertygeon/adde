@@ -337,11 +337,15 @@ describe("아카이브 헬퍼 (M8 2b-2 sent 세그먼트 이관)", () => {
 });
 
 describe("ensureBlankSend (M8 상시 빈 send)", () => {
-  it("미체크 빈 send 가 없으면 끝에 하나 추가하고 true 를 반환한다 (문서 관습 이모지 표기)", () => {
+  it("미체크 빈 send 가 없으면 최상단에 compose 빈 줄 + send 를 추가하고 true 를 반환한다 (방안2)", () => {
     const lines = ["보낸 메시지", sentLine("id-1", STAMP)];
     expect(ensureBlankSend(lines)).toBe(true);
-    expect(lines[lines.length - 1]).toBe(blankSendLine());
+    expect(lines[0]).toBe(""); // compose 빈 줄(입력 자리 — 위-읽기 프롬프트 세그먼트)
+    expect(lines[1]).toBe(blankSendLine()); // send 는 그 바로 아래(최상단 활성 트리거)
     expect(blankSendLine()).toBe("- [ ] 📤 send");
+    // 기록은 send 아래로(reverse-chrono), send 바로 아래엔 빈 줄 없음(오입력 방지).
+    expect(lines[2]).toBe("보낸 메시지");
+    expect(lines[3]).toBe(sentLine("id-1", STAMP));
   });
 
   it("이미 미체크 빈 send 가 있으면 무변경·false (중복 방지)", () => {
@@ -359,7 +363,8 @@ describe("ensureBlankSend (M8 상시 빈 send)", () => {
   it("send 가 아닌 미체크 체크박스는 트리거로 세지 않는다 (초안 to-do 오인 금지)", () => {
     const lines = ["- [ ] buy milk", "- [ ] send now"]; // 정확 일치 아님
     expect(ensureBlankSend(lines)).toBe(true);
-    expect(lines[lines.length - 1]).toBe(blankSendLine());
+    expect(lines[0]).toBe("");
+    expect(lines[1]).toBe(blankSendLine());
   });
 
   it("체크된 send(대소문자 [x]/[X] = 소모)만 있으면 새 빈 send 를 추가한다", () => {
@@ -373,6 +378,15 @@ describe("ensureBlankSend (M8 상시 빈 send)", () => {
 
   it("CRLF(\\r) 미체크 send 도 기존 트리거로 인식한다 (중복 추가 없음)", () => {
     expect(ensureBlankSend(["- [ ] send\r"])).toBe(false);
+  });
+
+  it("선행 빈 줄이 여러 개여도 정규화해 compose 한 줄만 남긴다 (방안2 — leading blank 누적 방지)", () => {
+    const lines = ["", "", "지난 기록", sentLine("id-1", STAMP)];
+    expect(ensureBlankSend(lines)).toBe(true);
+    expect(lines[0]).toBe(""); // compose 하나
+    expect(lines[1]).toBe(blankSendLine());
+    expect(lines[2]).toBe("지난 기록"); // 선행 빈 줄들은 제거됨
+    expect(lines.filter((l) => l === "")).toHaveLength(1);
   });
 
   it("추가된 빈 send 는 미체크라 parseInbox 액션이 되지 않는다 (오전송 없음)", () => {
@@ -697,14 +711,19 @@ describe("createMarkdownSource (통합)", () => {
     // 인박스가 sent 종단으로 재작성됨
     await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("sent"));
 
-    // M8: 소모된 send 를 대체할 빈 send 가 정확히 하나 준비된다(단일 write 통합).
+    // M8+방안2: 소모된 send 를 대체할 빈 send 가 정확히 하나, 문서 최상단(compose 빈 줄 아래)에 준비된다.
     await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes(blankSendLine()));
     const finalInbox = fs.readFileSync(inboxPath, "utf8");
-    const blanks = finalInbox.split("\n").filter((l) => l === blankSendLine());
+    const finalLines = finalInbox.split("\n");
+    const blanks = finalLines.filter((l) => l === blankSendLine());
     expect(blanks).toHaveLength(1);
-    // finding2 회귀: 트레일링 개행 누적 없음 + sent 와 blank send 사이 공백줄 없음(개행 위생).
+    // 방안2: 최상단 = compose 빈 줄 + send, 기록(sent)은 그 아래로(reverse-chrono).
+    expect(finalLines[0]).toBe(""); // compose 빈 줄(입력 자리)
+    expect(finalLines[1]).toBe(blankSendLine()); // 활성 send 는 최상단
+    expect(finalLines[2]).not.toBe(""); // send 바로 아래엔 빈 줄 없음(아래는 기록)
+    expect(finalInbox).toContain("✅ sent"); // 소비된 메시지는 send 아래에 sent 로 종단
+    // 개행 위생: 트레일링 개행 누적 없음.
     expect(finalInbox.endsWith("\n\n")).toBe(false);
-    expect(finalInbox).not.toContain("\n\n" + blankSendLine());
 
     // 자기쓰기 가드: 종단 후 추가 enqueue 없음(빈 send 추가는 미체크라 재트리거 안 됨)
     await new Promise((r) => setTimeout(r, 200));

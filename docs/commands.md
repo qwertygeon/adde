@@ -67,28 +67,32 @@ adde setup — environment check, short aliases, and your first lane.
   ✔ config base directory: ~/.config/adde
   ✔ daemon entry: /opt/homebrew/lib/node_modules/adde/dist/cli/adde.js
 
-install short aliases (ad, add) next to the adde command? (Y/n) [y]: y
+install short aliases (ad, add) next to the adde command? (Y/n): y
   ✔ alias created: ad → /usr/local/bin
   ✔ alias created: add → /usr/local/bin
 
 project name [default]: myproj
 lane name [main]: tg-claude
-source (enter a number or the value)
+source
   1) markdown
-  2) telegram [markdown]: 2
+  2) telegram
+enter a number or the value [markdown]: 2
 perm_tier (acp = approve each tool in the channel / autopass = auto-allow except denylist)
   1) acp
-  2) autopass [acp]:
+  2) autopass
+enter a number or the value [acp]:
 allowlist (comma-separated, empty for none): Read,Grep
-enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (y/N) [y]: y
+enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (Y/n): y
 lang (channel message locale, empty for global)
   1) en
-  2) ko:
+  2) ko
+enter a number or the value:
 cwd (absolute lane working directory, empty to skip): /Users/me/work/my-project
 engine_args (extra CLI args for the engine process, space-separated, empty to skip — not a place for secrets: engine args become visible in the OS process list):
 file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable)
   1) private
-  2) shared [private]:
+  2) shared
+enter a number or the value [private]:
 chat_id (reply target + authorizes that chat for inbound, empty to skip): 12345678
 allow_from (extra authorized sender ids, comma-separated, empty to skip):
 telegram bot token (hidden input, empty to set later): ⟨input hidden⟩
@@ -343,24 +347,27 @@ In the wizard, the telegram bot token is prompted **last, with hidden input** (k
 
 ```text
 $ adde lane add myproj tg-claude
-source (enter a number or the value)
+source
   1) markdown
-  2) telegram [markdown]: 2
-channel [telegram]:
+  2) telegram
+enter a number or the value [markdown]: 2
 perm_tier (acp = approve each tool in the channel / autopass = auto-allow except denylist)
   1) acp
-  2) autopass [acp]: 2
+  2) autopass
+enter a number or the value [acp]: 2
 allowlist (comma-separated, empty for none): Read,Grep
-denylist (tools/patterns that fall back to channel approval, comma-separated) [Bash(sudo *),…]:
-enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (y/N) [y]: y
+denylist (tools/patterns that fall back to channel approval, comma-separated; empty for the recommended default list):
+enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (Y/n): y
 lang (channel message locale, empty for global)
   1) en
-  2) ko: 2
+  2) ko
+enter a number or the value: 2
 cwd (absolute lane working directory, empty to skip): /Users/me/work/my-project    # Tab completes paths
 engine_args (extra CLI args for the engine process, space-separated, empty to skip — not a place for secrets: engine args become visible in the OS process list):
 file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable)
   1) private
-  2) shared [private]:
+  2) shared
+enter a number or the value [private]:
 chat_id (reply target + authorizes that chat for inbound, empty to skip): 12345678
 allow_from (extra authorized sender ids, comma-separated, empty to skip):
 telegram bot token (hidden input, empty to set later): ⟨input hidden⟩
@@ -420,19 +427,19 @@ adde lane set <proj> <lane>                        # no args on a TTY: interacti
 
 Edits an existing lane's conf without deleting and recreating it (no state/queue/token loss). Fields left unspecified keep their current value. There are three ways to specify the edits — positional dot-notation keys, the named flags below, and (on a TTY, with no args) an interactive wizard — and they can be combined in one command.
 
-| Option                                               | Notes                                                                                     |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `--perm-tier <acp\|autopass>`                        | same as `lane add`                                                                          |
-| `--cwd <abs-path>`                                   | same as `lane add`                                                                          |
-| `--engine-args <args>`                                | same as `lane add` (space-separated, re-validated on edit)                                 |
-| `--allowlist <a,b,c>`                                 | **replaces the whole list** (not merged) — omit to leave unchanged                          |
-| `--denylist <entries,...>`                            | **replaces the whole list** (not merged)                                                    |
-| `--hard-deny <entries,...>`                           | **replaces the whole list** (not merged) — a warning is printed if the previous list was non-empty |
-| `--lang <en\|ko>`                                    | same as `lane add`                                                                          |
-| `--file-mode <private\|shared>`                       | conf value only — the on-disk directory permissions are re-applied on the next `adde restart` (not immediately) |
-| `--chat-id <id>` `--allow-from <ids>`                 | telegram lanes only — rejected on a markdown lane                                          |
-| `--root <abs-path>` `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | markdown lanes only — rejected on a telegram lane                          |
-| `--unset <key> …`                                     | remove keys (dot-notation) so they fall back to their default — see below                 |
+| Option                                                                   | Notes                                                                                                           |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `--perm-tier <acp\|autopass>`                                            | same as `lane add`                                                                                              |
+| `--cwd <abs-path>`                                                       | same as `lane add`                                                                                              |
+| `--engine-args <args>`                                                   | same as `lane add` (space-separated, re-validated on edit)                                                      |
+| `--allowlist <a,b,c>`                                                    | **replaces the whole list** (not merged) — omit to leave unchanged                                              |
+| `--denylist <entries,...>`                                               | **replaces the whole list** (not merged)                                                                        |
+| `--hard-deny <entries,...>`                                              | **replaces the whole list** (not merged) — a warning is printed if the previous list was non-empty              |
+| `--lang <en\|ko>`                                                        | same as `lane add`                                                                                              |
+| `--file-mode <private\|shared>`                                          | conf value only — the on-disk directory permissions are re-applied on the next `adde restart` (not immediately) |
+| `--chat-id <id>` `--allow-from <ids>`                                    | telegram lanes only — rejected on a markdown lane                                                               |
+| `--root <abs-path>` `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | markdown lanes only — rejected on a telegram lane                                                               |
+| `--unset <key> …`                                                        | remove keys (dot-notation) so they fall back to their default — see below                                       |
 
 **Positional dot-notation keys**: `adde lane set <proj> <lane> <key> <value> …` edits by canonical dot-notation key (e.g. `perm_tier autopass`, `markdown.retention_days 5`), taking one or more `<key> <value>` pairs in a single command. This is the same surface as the named flags above, **plus these markdown-only keys that have no flag**: `markdown.archive`, `markdown.backup`, `markdown.retention_days`, `markdown.out_retention_days`, `markdown.sync_provider` (see the [markdown guide](markdown.md#1-lane-configuration) for what each does). A batch is **all-or-nothing**: an unknown key (with a "did you mean…" suggestion for near-misses), a wrong type/enum/format value, or an odd number of tokens rejects the whole command and writes nothing.
 
@@ -529,20 +536,20 @@ An unsupported shell gives an error + exit code 1.
 
 Three exit codes: **0** success (including `--help`/`--version`); **2** the call itself was malformed — an unsupported flag, a bad/missing flag value, or a missing required argument (usage is printed to stderr); **1** everything else that isn't success — an operational failure, an unsupported command/subcommand, or a value that failed validation (`[behavior-change]` — usage/parse errors used to return 1 along with everything else; see [Help and typo hints](#help-and-typo-hints)).
 
-| Command      | 0                                                        | 1                                                                                                                      | 2                                                                  |
-| ------------ | ----------------------------------------------------------| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------|
-| `up`         | Daemon registration succeeded                              | launchd registration failure · an already-running project has an unhealthy lane                                       | Missing `<proj>` · unsupported flag / bad flag value                 |
-| `down`       | Daemon stop succeeded (0 even if already gone)             | Error occurred                                                                                                         | Missing `<proj>` · unsupported flag / bad flag value                 |
-| `restart`    | down+up succeeded and every lane started                   | down/up failed, or one or more lanes failed to start                                                                   | Missing `<proj>` · unsupported flag / bad flag value                 |
-| `status`     | All healthy                                                 | A `dead` (crash) / `stale` (hung) / `error` lane exists, **or the project has a crash-loop self-halt (`halt`)**        | Unsupported flag / bad flag value                                    |
-| `doctor`     | No FAIL (same with `--json`)                                | A FAIL item exists (same with `--json`)                                                                                | Unsupported flag / bad flag value                                    |
-| `logs`       | Read succeeded (0 with an info message even if no file)     | Path-validation error                                                                                                  | Missing project/lane argument · unsupported flag / bad flag value    |
-| `sessions`   | Read succeeded (empty ledger prints `[]`)                   | Path-validation error                                                                                                  | Missing project/lane argument · unsupported flag / bad flag value    |
-| `lane *`     | Success                                                     | Value-validation failure (e.g. an unsupported field value, or a rejected identity-field edit) · unsupported subcommand | Missing required argument · unsupported flag / bad flag value        |
-| `proj *`     | Success                                                     | Deletion guard triggered without `--force` · unsupported subcommand · error                                            | Missing required argument · unsupported flag / bad flag value        |
-| `completion` | Script output                                               | Unsupported shell                                                                                                      | Missing shell argument                                               |
-| `init`       | Wizard completed                                            | Non-TTY · missing argument · validation/creation error                                                                 | — (not part of this exit-code contract — see below)                  |
-| `alias`      | Aliases installed · already-set confirmed                   | `adde` not found in PATH · install failed                                                                              | —                                                                     |
+| Command      | 0                                                       | 1                                                                                                                      | 2                                                                 |
+| ------------ | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `up`         | Daemon registration succeeded                           | launchd registration failure · an already-running project has an unhealthy lane                                        | Missing `<proj>` · unsupported flag / bad flag value              |
+| `down`       | Daemon stop succeeded (0 even if already gone)          | Error occurred                                                                                                         | Missing `<proj>` · unsupported flag / bad flag value              |
+| `restart`    | down+up succeeded and every lane started                | down/up failed, or one or more lanes failed to start                                                                   | Missing `<proj>` · unsupported flag / bad flag value              |
+| `status`     | All healthy                                             | A `dead` (crash) / `stale` (hung) / `error` lane exists, **or the project has a crash-loop self-halt (`halt`)**        | Unsupported flag / bad flag value                                 |
+| `doctor`     | No FAIL (same with `--json`)                            | A FAIL item exists (same with `--json`)                                                                                | Unsupported flag / bad flag value                                 |
+| `logs`       | Read succeeded (0 with an info message even if no file) | Path-validation error                                                                                                  | Missing project/lane argument · unsupported flag / bad flag value |
+| `sessions`   | Read succeeded (empty ledger prints `[]`)               | Path-validation error                                                                                                  | Missing project/lane argument · unsupported flag / bad flag value |
+| `lane *`     | Success                                                 | Value-validation failure (e.g. an unsupported field value, or a rejected identity-field edit) · unsupported subcommand | Missing required argument · unsupported flag / bad flag value     |
+| `proj *`     | Success                                                 | Deletion guard triggered without `--force` · unsupported subcommand · error                                            | Missing required argument · unsupported flag / bad flag value     |
+| `completion` | Script output                                           | Unsupported shell                                                                                                      | Missing shell argument                                            |
+| `init`       | Wizard completed                                        | Non-TTY · missing argument · validation/creation error                                                                 | — (not part of this exit-code contract — see below)               |
+| `alias`      | Aliases installed · already-set confirmed               | `adde` not found in PATH · install failed                                                                              | —                                                                 |
 
 `init`/`alias` predate this contract and are not wired to it — they still use only `0`/`1` (a missing argument there is exit `1`, not `2`).
 

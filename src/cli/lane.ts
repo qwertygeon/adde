@@ -33,9 +33,8 @@ import {
 import { errMsg } from "../shared/errors.js";
 import { formatException } from "../shared/notify.js";
 import { t } from "../shared/i18n.js";
-import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
 import { SOURCE_IDS, SOURCE_REGISTRY } from "../src-adapters/index.js";
-import { createPrompter } from "./prompt.js";
+import { createPrompter, askYesNo } from "./prompt.js";
 import type { Ask } from "./prompt.js";
 import { findSub, valueKeys, LANE_SET_IDENTITY_FLAGS } from "./spec.js";
 import { parseCommand } from "./parse.js";
@@ -93,7 +92,9 @@ async function askEnum(
   opts: { allowEmpty?: boolean } = {},
 ): Promise<string> {
   const menu = options.map((o, i) => `  ${i + 1}) ${o}`).join("\n");
-  const question = `${label}\n${menu}`;
+  // 안내 줄을 메뉴 뒤 별도 줄로 두어, question() 이 붙이는 ` [def]: ` 가 마지막 옵션이 아니라
+  // 안내 줄에 달라붙게 한다(번호/값 입력임을 명확히 — enum 기본값 밀착 해소).
+  const question = `${label}\n${menu}\n${t("lane.prompt.enumHint")}`;
   for (;;) {
     const raw = (await ask(question, def)).trim().toLowerCase();
     if (opts.allowEmpty && raw === "") return "";
@@ -123,12 +124,13 @@ export async function collectInteractive(
   const allow = await ask(t("lane.prompt.allowlist"), "");
   if (allow) opts.allowlist = parseCsv(allow);
   if (opts.perm_tier === "autopass") {
-    const deny = await ask(t("lane.prompt.denylist"), DEFAULT_AUTOPASS_DENYLIST.join(","));
+    // 빈 입력이면 미기록 → laneAdd 가 autopass 기본 denylist 를 적용(동작 동일). 긴 기본 CSV 를
+    // `[def]` 로 노출하지 않아 프롬프트가 간결하다.
+    const deny = await ask(t("lane.prompt.denylist"), "");
     if (deny) opts.denylist = parseCsv(deny);
   }
-  // 방어심화 하드-거부 기본값(sudo·rm -rf·git 강제·자격증명 읽기 등 즉시 거부) — 기본 켬 권장.
-  const safeDefaults = (await ask(t("lane.prompt.safeDefaults"), "y")).toLowerCase();
-  if (safeDefaults === "y" || safeDefaults === "yes") opts.safe_defaults = true;
+  // 방어심화 하드-거부 기본값(sudo·rm -rf·git 강제·자격증명 읽기 등 즉시 거부) — 기본 켬 권장(Yes).
+  if (await askYesNo(ask, t("lane.prompt.safeDefaults"), true)) opts.safe_defaults = true;
 
   const lang = await askEnum(ask, t("lane.prompt.lang"), ["en", "ko"], "", { allowEmpty: true });
   if (lang) opts.lang = lang;
@@ -354,8 +356,7 @@ async function runSetWizard(proj: string, lane: string): Promise<number> {
         const from = currentDisplay(conf, e.key) || t("lane.show.unset");
         process.stdout.write(t("lane.set.diffLine", { key: e.key, from, to: e.value }) + "\n");
       }
-      const ans = await prompter.ask(t("lane.set.confirm"), "");
-      collected.confirmed = /^y(es)?$/i.test(ans.trim());
+      collected.confirmed = await askYesNo(prompter.ask, t("lane.set.confirm"), false);
     }
   } finally {
     prompter.close();

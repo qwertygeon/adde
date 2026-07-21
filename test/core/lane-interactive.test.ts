@@ -91,6 +91,17 @@ describe("collectInteractive (007 SC1)", () => {
     expect(opts.perm_tier).toBe("autopass");
   });
 
+  it("enum 프롬프트는 안내 줄을 별도 마지막 줄로 두어 기본값이 옵션에 밀착하지 않는다", async () => {
+    const { ask, questions } = scriptedAsk({ source: "markdown", "root (markdown": "/v" });
+    await collectInteractive(ask);
+    const sourceQ = questions.find((q) => q.startsWith("source"));
+    expect(sourceQ).toBeDefined();
+    const lines = (sourceQ as string).split("\n");
+    // 마지막 줄 = 안내 줄(번호/값 입력). 옵션 줄(  2) telegram)에는 안내·기본값이 붙지 않는다.
+    expect(lines[lines.length - 1]).not.toMatch(/^\s*\d+\)/);
+    expect(lines.some((l) => /^\s*2\)\s*telegram\s*$/.test(l))).toBe(true);
+  });
+
   it("잘못된 source 는 유효값이 올 때까지 재질의한다", async () => {
     let calls = 0;
     const ask: Ask = async (q, def) => {
@@ -200,9 +211,7 @@ describe("collectInteractive (007 SC1)", () => {
 // collectInteractive 를 통한 소스별 필드 수집(블랙박스, 위 007 SC1 스위트와 동일 계약)은 회귀로
 // 이미 보존되므로, 여기서는 descriptor.wizard 자체의 존재·형태(FR-006 계약)를 직접 대조한다.
 describe("SC-008: 위저드/힌트가 descriptor.wizard 위임으로 제공된다", () => {
-  const makeConf = (
-    source: string,
-  ): LaneAddResult["conf"] => ({
+  const makeConf = (source: string): LaneAddResult["conf"] => ({
     source,
     backend: "acp",
     engine: "claude-agent-acp",

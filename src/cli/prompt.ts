@@ -33,6 +33,22 @@ function pathCompleter(line: string): [string[], string] {
 /** 한 줄 질의 함수 — (질문, 기본값) → 응답. */
 export type Ask = (question: string, def?: string) => Promise<string>;
 
+/**
+ * y/N 확인 프롬프트 — 기본값 방향에 맞는 `(Y/n)`/`(y/N)` 접미를 스스로 붙이고, 유효 응답이 올 때까지
+ * 재질의한다(빈=기본, `y[es]`=참, `n[o]`=거짓). question 은 접미·기본값 표기를 포함하지 않은 순수 문구로
+ * 준다 — 라벨의 `(y/N)` 하드코딩과 `[def]` 이중 표기, 기본값 방향 모순을 프리미티브 한 곳으로 일원화한다.
+ * i18n 비의존(문구는 호출부가 번역해 전달). def 를 "" 로 넘겨 `[def]` 이중 표기를 피한다.
+ */
+export async function askYesNo(ask: Ask, question: string, defaultYes: boolean): Promise<boolean> {
+  const suffix = defaultYes ? " (Y/n)" : " (y/N)";
+  for (;;) {
+    const raw = (await ask(`${question}${suffix}`, "")).trim().toLowerCase();
+    if (raw === "") return defaultYes;
+    if (/^y(es)?$/.test(raw)) return true;
+    if (/^n(o)?$/.test(raw)) return false;
+  }
+}
+
 export interface Prompter {
   ask: Ask;
   /** 경로 입력용 질의 — 이 호출 동안만 Tab 디렉터리/파일 완성을 켠다(cwd/root/inbox 등). */

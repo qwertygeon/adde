@@ -149,7 +149,7 @@ adde down <proj> [--json]
 
 Stops that project's launchd daemon and removes the plist file. It can run **from any terminal** (cross-process termination).
 
-- **`--json`**: prints `{ "v": 1, "proj": "<proj>", "stopped": true }` instead of the plain-text confirmation. On an error the message still goes to stderr and stdout stays empty (exit 1).
+- **`--json`**: prints `{ "v": 1, "proj": "<proj>", "stopped": true, "wasRegistered": <bool> }` instead of the plain-text confirmation. `wasRegistered` is `true` when a daemon was actually registered (plist present or launchctl-loaded) before the stop, `false` for an already-stopped/unknown project (the plain-text path likewise distinguishes these two). On an error the message still goes to stderr and stdout stays empty (exit 1).
 
 ```bash
 adde down myproj --json   # machine-readable confirmation (scripts)

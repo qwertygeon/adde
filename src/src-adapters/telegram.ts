@@ -467,8 +467,8 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: "Allow", callback_data: `allow:${reqId}` },
-            { text: "Deny", callback_data: `deny:${reqId}` },
+            { text: tl("telegram.permBtnAllow"), callback_data: `allow:${reqId}` },
+            { text: tl("telegram.permBtnDeny"), callback_data: `deny:${reqId}` },
           ],
         ],
       },
@@ -609,6 +609,15 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
               if (consecutiveEnqueueFailures === ENQUEUE_FAIL_THRESHOLD) {
                 await alertEnqueueFailure(consecutiveEnqueueFailures);
               }
+            }
+          } else if (update.message) {
+            // 텍스트 없는 메시지(사진·스티커·음성·문서 등) — 인증 발신자면 조용히 버리지 않고
+            // 텍스트만 지원함을 회신(무반응 원인 안내). 미인증은 무시(fail-closed — 봇 존재 노출·주입 차단).
+            const msg = update.message;
+            if (isAuthorizedSender(authorized, [msg.chat.id, msg.from?.id])) {
+              await sendReply(msg.chat.id, tl("telegram.nonTextUnsupported"), msg.message_id).catch(
+                (err) => console.error(t("log.telegram.nonTextReplyError", { error: errMsg(err) })),
+              );
             }
           }
 

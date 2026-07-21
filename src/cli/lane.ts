@@ -398,6 +398,14 @@ async function handleSet(p: ParseResult): Promise<number> {
   const rest = positional.slice(2); // proj/lane 뒤 위치인자 = 점표기 key/value 또는 unset 키.
   const unsetMode = flags["unset"] === true;
 
+  // --unset 인데 키 미지정 — 위저드/noEdits 로 흘려보내지 않고(의도가 "제거"임이 명확) 전용 오류로 안내.
+  if (unsetMode && rest.length === 0) {
+    process.stderr.write(
+      laneError(t("laneConfig.err.unsetNoKeys")) + "\n\n" + USAGE.laneSet + "\n",
+    );
+    return EXIT.FAIL;
+  }
+
   if (unsetMode) {
     if (rest.length > 0) edits.unset = rest;
   } else if (rest.length > 0) {

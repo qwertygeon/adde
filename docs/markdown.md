@@ -161,7 +161,7 @@ An AI response is created in the output directory (`adde/<lane>/out/`) as **one 
 ```markdown
 > ↩ a1b2c3d4
 > ❓ analyze the cause of the build error
-> 🕒 requested 20260703-162045 · completed 20260703-162130
+> 🕒 sent 20260703-162045 · done 20260703-162130
 
 (AI response body)
 ```
@@ -177,6 +177,7 @@ When the AI calls a tool that needs permission — file write, Bash execution, e
 
 > rm -rf build/ (cwd: /Users/me/work/my-project)
 > 🕒 requested 20260703-162045 · auto-deny at 20260703-163045 if no response
+> check exactly one box below — allow or deny (leaving both keeps it pending)
 
 - [ ] allow
 - [ ] deny

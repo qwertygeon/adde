@@ -631,6 +631,18 @@ export async function laneSet(
   for (const [key, value] of setValues) applyConfValue(conf, findDescriptor(key)!, value);
   for (const key of unsetKeys) unsetConfValue(conf, findDescriptor(key)!);
 
+  // 티어↔목록 정합 하드 거부 — 이번 편집에서 명시 지정한 목록이 유효 perm_tier(같은 명령의 병합값)에서
+  // 게이트 no-op 이면 거부한다. acp: allowlist 로만 자동허용(denylist 미참조) / autopass: denylist 외
+  // 전부 자동허용(allowlist 무의미) — decideAutoAllow(backend/acp/client.ts) 의미 반영. 빈 값(초기화)은 무해해 허용.
+  const setDeny = setValues.get("denylist");
+  const setAllow = setValues.get("allowlist");
+  if (conf.perm_tier === "acp" && Array.isArray(setDeny) && setDeny.length > 0) {
+    throw new LaneConfigError(t("laneConfig.err.denylistNoopAcp"));
+  }
+  if (conf.perm_tier === "autopass" && Array.isArray(setAllow) && setAllow.length > 0) {
+    throw new LaneConfigError(t("laneConfig.err.allowlistNoopAutopass"));
+  }
+
   const fileModeRelaxed =
     setValues.has("file_mode") &&
     prevFileMode === "private" &&

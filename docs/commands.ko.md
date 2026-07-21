@@ -149,7 +149,7 @@ adde down <proj> [--json]
 
 해당 프로젝트의 launchd 데몬을 종료하고 plist 파일을 제거합니다. **어느 터미널에서든** 실행 가능합니다(교차 프로세스 종료).
 
-- **`--json`**: 사람용 확인 문구 대신 `{ "v": 1, "proj": "<proj>", "stopped": true }` 를 출력합니다. 오류 발생 시에도 오류는 stderr 로 나가고 stdout 은 비워둡니다(exit 1).
+- **`--json`**: 사람용 확인 문구 대신 `{ "v": 1, "proj": "<proj>", "stopped": true, "wasRegistered": <bool> }` 를 출력합니다. `wasRegistered` 는 중지 전 데몬이 실제 등록돼 있었으면(plist 존재 또는 launchctl 적재) `true`, 이미 중지됐거나 알 수 없는 프로젝트면 `false` 입니다(사람용 문구도 이 둘을 구분합니다). 오류 발생 시에도 오류는 stderr 로 나가고 stdout 은 비워둡니다(exit 1).
 
 ```bash
 adde down myproj --json   # 기계 판독 확인(스크립트)

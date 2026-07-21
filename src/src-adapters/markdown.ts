@@ -463,6 +463,16 @@ export function finalizeApprovalDeny(
     const m = PERM_MARKER.exec(lines[i]!);
     if (m && m[1] === reqId && m[2] === "pending") {
       lines[i] = `<!-- adde:perm id=${reqId} status=deny reason=${reason} -->`;
+      // 가시 헤딩도 사용자 결정 경로(parseApprovals)와 동일하게 종단 표기 — 마커만 바꾸면 화면엔
+      // ⏳ pending 이 그대로 남아 사용자가 자동거부를 못 본다. 블록 시작(직전 마커/파일 시작)까지
+      // 역주사해 첫 ### ⏳ 라인을 ⛔·req(deny) 로 갱신한다.
+      for (let j = i - 1; j >= 0; j--) {
+        if (PERM_MARKER.test(lines[j]!)) break; // 이전 블록 침범 방지
+        if (/^###\s+⏳/.test(lines[j]!)) {
+          lines[j] = lines[j]!.replace(/^###\s+⏳/, "### ⛔").replace(/\breq\b/, "req(deny)");
+          break;
+        }
+      }
       changed = true;
     }
   }

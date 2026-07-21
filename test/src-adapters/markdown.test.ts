@@ -538,6 +538,14 @@ describe("approvals 파싱", () => {
     expect(r.newContent).toContain("status=deny");
     expect(r.newContent).toContain("reason=timeout");
   });
+
+  it("finalizeApprovalDeny 는 가시 헤딩도 ⛔·req(deny) 로 갱신한다(⏳ pending 잔존 방지)", () => {
+    const r = finalizeApprovalDeny(renderApprovalBlock(req), "req-1", "timeout");
+    expect(r.newContent).toContain("### ⛔");
+    expect(r.newContent).toContain("req(deny)");
+    // ⏳ pending 헤딩 마커가 화면에 남지 않는다.
+    expect(r.newContent).not.toContain("### ⏳");
+  });
 });
 
 describe("createMarkdownSource (통합)", () => {

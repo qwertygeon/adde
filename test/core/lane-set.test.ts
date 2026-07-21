@@ -219,6 +219,42 @@ describe("hard_deny 치환 경고 (SC-014)", () => {
   });
 });
 
+describe("티어↔목록 정합 하드 거부", () => {
+  it("유효 acp 에서 denylist 를 명시 지정하면 거부한다(denylist no-op)", async () => {
+    const { laneSet } = await loadCore();
+    await laneAdd("proj", "lanet1", { base, perm_tier: "acp" });
+    await expect(laneSet("proj", "lanet1", { base, denylist: ["Bash(sudo *)"] })).rejects.toThrow(
+      LaneConfigError,
+    );
+  });
+
+  it("유효 autopass 에서 allowlist 를 명시 지정하면 거부한다(allowlist no-op)", async () => {
+    const { laneSet } = await loadCore();
+    await laneAdd("proj", "lanet2", { base, perm_tier: "autopass" });
+    await expect(laneSet("proj", "lanet2", { base, allowlist: ["Read"] })).rejects.toThrow(
+      LaneConfigError,
+    );
+  });
+
+  it("같은 명령에서 perm_tier=autopass 와 denylist 를 함께 지정하면 허용한다", async () => {
+    const { laneSet } = await loadCore();
+    await laneAdd("proj", "lanet3", { base, perm_tier: "acp" });
+    const result = await laneSet("proj", "lanet3", {
+      base,
+      perm_tier: "autopass",
+      denylist: ["Bash(sudo *)"],
+    });
+    expect(result.conf.denylist).toEqual(["Bash(sudo *)"]);
+  });
+
+  it("빈 목록(초기화)은 티어 불일치여도 거부하지 않는다", async () => {
+    const { laneSet } = await loadCore();
+    await laneAdd("proj", "lanet4", { base, perm_tier: "acp" });
+    const result = await laneSet("proj", "lanet4", { base, denylist: [] });
+    expect(result.conf.denylist).toEqual([]);
+  });
+});
+
 // ── laneAdd baseline 회귀 (validateLaneConf 추출, GAP-001 해소 지침 대응) ──────────────────
 // research.md §B: 여러 무효 필드가 동시에 있으면 canonical 순서상 첫 위반만 throw 한다.
 // 순서 = chat_id → token(telegram전용) → allow_from(telegram전용) → file_mode → allowlist →

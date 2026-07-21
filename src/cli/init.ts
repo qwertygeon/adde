@@ -11,7 +11,7 @@ import { runDoctor } from "../core/diagnostics.js";
 import { laneAdd, LaneConfigError } from "../core/lane-config.js";
 import { collectInteractive } from "./lane.js";
 import { checkSymbol } from "./ops.js";
-import { createPrompter } from "./prompt.js";
+import { createPrompter, askYesNo } from "./prompt.js";
 import { cmdError, laneError } from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
 import { RECOMMENDED_ALIASES, setupAliases, resolveAliasDeps } from "./alias.js";
@@ -69,11 +69,10 @@ export async function runInit(argv: readonly string[]): Promise<number> {
     }
     process.stdout.write("\n");
 
-    // 2) 짧은 별칭 설치(옵트인) — PATH 충돌은 실패로 표면화.
-    const wantAlias = (
-      await ask(t("init.aliasPrompt", { names: RECOMMENDED_ALIASES.join(", ") }), "y")
-    ).toLowerCase();
-    if (wantAlias === "y" || wantAlias === "yes") {
+    // 2) 짧은 별칭 설치(옵트인, 기본 Yes) — PATH 충돌은 실패로 표면화.
+    if (
+      await askYesNo(ask, t("init.aliasPrompt", { names: RECOMMENDED_ALIASES.join(", ") }), true)
+    ) {
       const deps = await resolveAliasDeps();
       if (!deps) {
         process.stdout.write(t("init.aliasNoBin") + "\n");
@@ -87,8 +86,7 @@ export async function runInit(argv: readonly string[]): Promise<number> {
     // 파일을 대신 쓰지 않고 실행할 명령을 안내한다(셸 rc/fpath 자동 수정은 위험 — 사용자가 직접 실행).
     const shell = detectShell();
     if (shell) {
-      const wantComp = (await ask(t("init.completionPrompt", { shell }), "y")).toLowerCase();
-      if (wantComp === "y" || wantComp === "yes") {
+      if (await askYesNo(ask, t("init.completionPrompt", { shell }), true)) {
         process.stdout.write(t("init.completionWhat") + "\n");
         process.stdout.write(
           t(shell === "zsh" ? "init.completionZsh" : "init.completionBash") + "\n",

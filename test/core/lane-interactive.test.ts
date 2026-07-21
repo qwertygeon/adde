@@ -91,6 +91,17 @@ describe("collectInteractive (007 SC1)", () => {
     expect(opts.perm_tier).toBe("autopass");
   });
 
+  it("enum 프롬프트는 안내 줄을 별도 마지막 줄로 두어 기본값이 옵션에 밀착하지 않는다", async () => {
+    const { ask, questions } = scriptedAsk({ source: "markdown", "root (markdown": "/v" });
+    await collectInteractive(ask);
+    const sourceQ = questions.find((q) => q.startsWith("source"));
+    expect(sourceQ).toBeDefined();
+    const lines = (sourceQ as string).split("\n");
+    // 마지막 줄 = 안내 줄(번호/값 입력). 옵션 줄(  2) telegram)에는 안내·기본값이 붙지 않는다.
+    expect(lines[lines.length - 1]).not.toMatch(/^\s*\d+\)/);
+    expect(lines.some((l) => /^\s*2\)\s*telegram\s*$/.test(l))).toBe(true);
+  });
+
   it("잘못된 source 는 유효값이 올 때까지 재질의한다", async () => {
     let calls = 0;
     const ask: Ask = async (q, def) => {
@@ -177,6 +188,25 @@ describe("collectInteractive (007 SC1)", () => {
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 
+  it("safe_defaults: 전부 기본(Enter) 응답이면 켜진다 — 라벨↔동작 일치 배선 회귀 가드", async () => {
+    // 004: safeDefaults 프롬프트 기본은 Yes(Enter=켬). askYesNo(ask, msg, true) 호출부 인자를
+    // 배선 레벨에서 고정한다 — 누군가 false 로 바꾸면(라벨↔동작 모순 재발) 이 테스트가 잡는다.
+    const { ask } = scriptedAsk({ source: "markdown", "root (markdown": "/v" });
+    const opts = await collectInteractive(ask);
+    expect(opts.safe_defaults).toBe(true);
+  });
+
+  it("safe_defaults: 명시 'n' 이면 켜지지 않는다", async () => {
+    const ask: Ask = async (q, def) => {
+      if (q.includes("source")) return "markdown";
+      if (q.includes("root (markdown")) return "/v";
+      if (q.includes("safe-defaults") || q.includes("방어심화")) return "n";
+      return def ?? "";
+    };
+    const opts = await collectInteractive(ask);
+    expect(opts.safe_defaults).toBeUndefined();
+  });
+
   it("askSecret 가 주어지면 토큰을 가려진 입력으로 수집한다 (B2)", async () => {
     const { ask } = scriptedAsk({ source: "telegram" });
     let secretAsked = false;
@@ -200,9 +230,7 @@ describe("collectInteractive (007 SC1)", () => {
 // collectInteractive 를 통한 소스별 필드 수집(블랙박스, 위 007 SC1 스위트와 동일 계약)은 회귀로
 // 이미 보존되므로, 여기서는 descriptor.wizard 자체의 존재·형태(FR-006 계약)를 직접 대조한다.
 describe("SC-008: 위저드/힌트가 descriptor.wizard 위임으로 제공된다", () => {
-  const makeConf = (
-    source: string,
-  ): LaneAddResult["conf"] => ({
+  const makeConf = (source: string): LaneAddResult["conf"] => ({
     source,
     backend: "acp",
     engine: "claude-agent-acp",

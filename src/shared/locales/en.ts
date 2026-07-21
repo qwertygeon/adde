@@ -226,17 +226,19 @@ Note: editing --file-mode only updates the conf value; existing directory permis
   },
   lane: {
     retry: {
-      chatId: "  chat_id — enter a numeric id (or leave empty)",
-      allowFrom: "  allow_from — enter comma-separated numeric ids (or leave empty)",
+      chatId: "chat_id — enter a numeric id (or leave empty)",
+      allowFrom: "allow_from — enter comma-separated numeric ids (or leave empty)",
     },
     prompt: {
-      source: "source (enter a number or the value)",
+      source: "source",
+      enumHint: "enter a number or the value",
       permTier:
         "perm_tier (acp = approve each tool in the channel / autopass = auto-allow except denylist)",
       allowlist: "allowlist (comma-separated, empty for none)",
-      denylist: "denylist (tools/patterns that fall back to channel approval, comma-separated)",
+      denylist:
+        "denylist (tools/patterns that fall back to channel approval, comma-separated; empty for the recommended default list)",
       safeDefaults:
-        "enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (y/N)",
+        "enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright",
       lang: "lang (channel message locale, empty for global)",
       token: "telegram bot token (hidden input, empty to set later)",
       cwd: "cwd (absolute lane working directory, empty to skip)",
@@ -253,7 +255,8 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       hardDeny: "hard_deny (tools/patterns refused outright for any tier, comma-separated)",
       archive: "markdown.archive (relative to root; sent bodies relocated here, empty to skip)",
       backup: "markdown.backup (local backup folder path, empty to skip)",
-      retentionDays: "markdown.retention_days (relocation cutoff in calendar days, empty for default 2)",
+      retentionDays:
+        "markdown.retention_days (relocation cutoff in calendar days, empty for default 2)",
       outRetentionDays:
         "markdown.out_retention_days (out/ prune safety window in days; must be retention_days+1 or more, empty to skip)",
       syncProvider: "markdown.sync_provider (local | icloud, empty for default local)",
@@ -272,7 +275,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
         'editing lane "{{lane}}" — leave a field blank to keep its current value (shown in parentheses); use adde lane set ... --unset <key> to restore a default.',
       diffHeader: "changes to apply:",
       diffLine: "  {{key}}: {{from}} → {{to}}",
-      confirm: "apply these changes? (y/N)",
+      confirm: "apply these changes?",
       aborted: "aborted — no changes made.",
     },
     show: {
@@ -416,9 +419,9 @@ Note: editing --file-mode only updates the conf value; existing directory permis
     intro: "adde setup — environment check, short aliases, and your first lane.",
     doctorWarn:
       "Some checks FAILed above. You can continue, but fix them before starting the daemon (adde up).",
-    aliasPrompt: "install short aliases ({{names}}) next to the adde command? (Y/n)",
+    aliasPrompt: "install short aliases ({{names}}) next to the adde command?",
     completionPrompt:
-      "set up shell tab-completion for {{shell}} now? (prints the exact command to run) (Y/n)",
+      "set up shell tab-completion for {{shell}} now? (prints the exact command to run)",
     completionWhat:
       "  Tab-completion lets you complete adde commands, project/lane names, and option values.",
     completionBash:
@@ -498,7 +501,8 @@ Note: editing --file-mode only updates the conf value; existing directory permis
         'key "{{key}}" is not an editable lane key — did you mean: {{suggestions}}?',
       badIntValue: '{{key}} must be a positive integer — got "{{value}}"',
       badEnumValue: '{{key}} "{{value}}" is invalid — one of {{allowed}}',
-      requiredUnset: 'key "{{key}}" is required and cannot be unset (recreate the lane to change it)',
+      requiredUnset:
+        'key "{{key}}" is required and cannot be unset (recreate the lane to change it)',
       keyValueIncomplete:
         "each key needs a value — usage: adde lane set <proj> <lane> <key> <value> ...",
     },

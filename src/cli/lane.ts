@@ -8,10 +8,18 @@ import {
   laneList,
   laneShow,
   laneRemove,
+  laneKeyMeta,
   LaneConfigError,
   parseCsv,
 } from "../core/lane-config.js";
 import type { LaneAddOptions, LaneSetOptions } from "../core/lane-config.js";
+import {
+  LANE_KEY_DESCRIPTORS,
+  findDescriptor,
+  exposedEditableKeys,
+  suggestKeys,
+} from "../core/lane-schema.js";
+import type { LaneConf } from "../shared/conf.js";
 import { collectStatus } from "../core/diagnostics.js";
 import {
   USAGE,
@@ -34,6 +42,9 @@ import { parseCommand } from "./parse.js";
 import type { ParseResult } from "./parse.js";
 
 export type { Ask } from "./prompt.js";
+
+/** 스키마 i18nLabel 은 런타임 동적 문자열 키라 t 의 리터럴 유니온으로 좁힐 수 없어 캐스팅한다. */
+const tLabel = t as unknown as (key: string) => string;
 
 /** `lane add` 값 플래그 키(`--` 제거) — spec.ts 의 SubSpec 선언에서 파생(SSOT). */
 const laneAddValueKeys = valueKeys(findSub("lane", "add")!.flags);
@@ -249,14 +260,8 @@ function scanIdentityFlags(argv: readonly string[]): string | undefined {
   return undefined;
 }
 
-async function handleSet(p: ParseResult): Promise<number> {
-  const { positional, flags } = p;
-  const [proj, lane] = positional;
-  if (!proj || !lane) {
-    process.stderr.write(USAGE.laneSet + "\n");
-    return EXIT.USAGE;
-  }
-
+/** 명명 플래그(하위호환)를 LaneSetOptions typed 필드로 수집. 점표기/위저드와 병존한다. */
+function collectNamedEdits(flags: Record<string, string | true>): LaneSetOptions {
   const edits: LaneSetOptions = {};
   const permTier = flagStr(flags, "perm-tier");
   if (permTier !== undefined) edits.perm_tier = permTier;
@@ -286,11 +291,130 @@ async function handleSet(p: ParseResult): Promise<number> {
   if (denylist !== undefined) edits.denylist = splitTools(denylist);
   const hardDeny = flagStr(flags, "hard-deny");
   if (hardDeny !== undefined) edits.hard_deny = splitTools(hardDeny);
+  return edits;
+}
 
-  // no-op 판정은 core laneSet 가 최종 권위(programmatic API 공유)지만, CLI 는 usage 를 함께
-  // 병기해 안내한다 — laneSet 에 그대로 넘겨도 동일 거부이나 usage 는 CLI 계층 책임.
-  if (Object.keys(edits).length === 0) {
-    // 파서 오류·위치인자 누락이 아니라 플래그 입력 완전성 검증 — exit 1 유지.
+/** conf 에서 canonical key 의 현재값을 표시 문자열로(부재=""; 리스트=CSV). 위저드 프리필·diff 용. */
+function currentDisplay(conf: LaneConf, key: string): string {
+  const d = findDescriptor(key);
+  if (!d) return "";
+  const src = conf as unknown as Record<string, unknown>;
+  const raw = d.namespace
+    ? (src[d.namespace] as Record<string, unknown> | undefined)?.[d.field]
+    : src[d.field];
+  if (raw === undefined || raw === null) return "";
+  return Array.isArray(raw) ? raw.join(",") : String(raw);
+}
+
+/**
+ * 무인자 대화형 위저드(FR-003) — 노출 편집 키를 소스별로 순회하며 현재값 프리필. 빈 입력=현재값
+ * 유지(변경 미기록), 값 입력=변경, enum=번호선택, 경로=Tab완성(askPath). identity 는 편집 표면에
+ * 없으므로 자연 건너뜀. 반환은 변경된 점표기 편집만(빈 배열=변경 없음). ask 주입으로 단위 테스트 가능.
+ */
+export async function collectSetInteractive(
+  ask: Ask,
+  conf: LaneConf,
+  askPath: Ask = ask,
+): Promise<Array<{ key: string; value: string }>> {
+  const edits: Array<{ key: string; value: string }> = [];
+  for (const d of LANE_KEY_DESCRIPTORS) {
+    if (!d.exposed || !d.editable) continue;
+    if (d.appliesTo !== "common" && d.appliesTo !== conf.source) continue;
+    const current = currentDisplay(conf, d.key);
+    const label = current ? `${tLabel(d.i18nLabel)} (${current})` : tLabel(d.i18nLabel);
+    let input: string;
+    if (d.type === "enum") {
+      input = await askEnum(ask, label, d.enumValues ?? [], "", { allowEmpty: true });
+    } else if (d.type === "path") {
+      input = await askPath(label, "");
+    } else {
+      input = await ask(label, "");
+    }
+    const val = (input ?? "").trim();
+    if (val === "" || val === current) continue; // 빈=유지 / 동일=변경 없음
+    edits.push({ key: d.key, value: val });
+  }
+  return edits;
+}
+
+/** 무인자 TTY 위저드 실행 — 수집 → diff 확인 → 적용. 취소·무변경은 exit 0. */
+async function runSetWizard(proj: string, lane: string): Promise<number> {
+  const { conf } = await laneShow(proj, lane);
+  const prompter = createPrompter();
+  const collected: { dotEdits: Array<{ key: string; value: string }>; confirmed: boolean } = {
+    dotEdits: [],
+    confirmed: false,
+  };
+  try {
+    process.stdout.write(t("lane.set.wizardHeader", { lane }) + "\n");
+    collected.dotEdits = await collectSetInteractive(prompter.ask, conf, prompter.askPath);
+    if (collected.dotEdits.length > 0) {
+      process.stdout.write(t("lane.set.diffHeader") + "\n");
+      for (const e of collected.dotEdits) {
+        const from = currentDisplay(conf, e.key) || t("lane.show.unset");
+        process.stdout.write(t("lane.set.diffLine", { key: e.key, from, to: e.value }) + "\n");
+      }
+      const ans = await prompter.ask(t("lane.set.confirm"), "");
+      collected.confirmed = /^y(es)?$/i.test(ans.trim());
+    }
+  } finally {
+    prompter.close();
+  }
+  const { dotEdits, confirmed } = collected;
+  if (dotEdits.length === 0) {
+    process.stdout.write(t("lane.set.noChange") + "\n");
+    return EXIT.OK;
+  }
+  if (!confirmed) {
+    process.stdout.write(t("lane.set.aborted") + "\n");
+    return EXIT.OK;
+  }
+  const result = await laneSet(proj, lane, { edits: dotEdits });
+  for (const w of result.warnings) process.stdout.write(w + "\n");
+  process.stdout.write(
+    t("lane.set.updated", { lane: result.lane, confPath: result.confPath }) + "\n",
+  );
+  process.stdout.write(t("lane.set.restartHint", { proj }) + "\n");
+  return EXIT.OK;
+}
+
+async function handleSet(p: ParseResult): Promise<number> {
+  const { positional, flags } = p;
+  const [proj, lane] = positional;
+  if (!proj || !lane) {
+    process.stderr.write(USAGE.laneSet + "\n");
+    return EXIT.USAGE;
+  }
+
+  const edits = collectNamedEdits(flags);
+  const rest = positional.slice(2); // proj/lane 뒤 위치인자 = 점표기 key/value 또는 unset 키.
+  const unsetMode = flags["unset"] === true;
+
+  if (unsetMode) {
+    if (rest.length > 0) edits.unset = rest;
+  } else if (rest.length > 0) {
+    if (rest.length % 2 !== 0) {
+      process.stderr.write(
+        laneError(t("laneConfig.err.keyValueIncomplete")) + "\n\n" + USAGE.laneSet + "\n",
+      );
+      return EXIT.FAIL;
+    }
+    const dotEdits: Array<{ key: string; value: string }> = [];
+    for (let i = 0; i < rest.length; i += 2) {
+      dotEdits.push({ key: rest[i]!, value: rest[i + 1]! });
+    }
+    edits.edits = dotEdits;
+  }
+
+  // 실질 편집 유무 — 명명 플래그(base 제외)·점표기 edits·unset 중 하나라도 있으면 편집.
+  const anyEdit =
+    Object.keys(edits).some((k) => k !== "base" && k !== "edits" && k !== "unset") ||
+    (edits.edits?.length ?? 0) > 0 ||
+    (edits.unset?.length ?? 0) > 0;
+
+  if (!anyEdit) {
+    // 인자 없음 + TTY → 대화형 위저드(FR-003). 비-TTY → no-op 거부(exit 1).
+    if (process.stdin.isTTY === true) return await runSetWizard(proj, lane);
     process.stderr.write(laneError(t("laneConfig.err.noEdits")) + "\n\n" + USAGE.laneSet + "\n");
     return EXIT.FAIL;
   }
@@ -323,14 +447,70 @@ async function handleList(p: ParseResult): Promise<number> {
   return EXIT.OK;
 }
 
+/** null/배열/스칼라 값을 사람용 표시 문자열로(부재=미설정 라벨). */
+function showValue(v: string | number | string[] | null): string {
+  if (v === null) return t("lane.show.unset");
+  return Array.isArray(v) ? v.join(",") : String(v);
+}
+
 async function handleShow(p: ParseResult): Promise<number> {
-  const [proj, lane] = p.positional;
+  const [proj, lane, key] = p.positional;
   if (!proj || !lane) {
     process.stderr.write(USAGE.laneShow + "\n");
     return EXIT.USAGE;
   }
   const json = p.flags.json === true;
+  const defaults = p.flags.defaults === true;
   const { confPath, conf, text } = await laneShow(proj, lane);
+
+  // 단건 key 조회 — value/default/explicit/editable/identity 메타(FR-004, SC-008).
+  if (key) {
+    const meta = laneKeyMeta(conf, text, key);
+    if (!meta) {
+      const suggestions = suggestKeys(key);
+      const msg =
+        suggestions.length > 0
+          ? t("laneConfig.err.unknownKeyDidYouMean", { key, suggestions: suggestions.join(", ") })
+          : t("laneConfig.err.unknownKey", { key });
+      process.stderr.write(laneError(msg) + "\n");
+      return EXIT.FAIL;
+    }
+    if (json) {
+      process.stdout.write(JSON.stringify(meta, null, 2) + "\n");
+    } else {
+      process.stdout.write(
+        t("lane.show.line", {
+          key: meta.key,
+          value: showValue(meta.value),
+          default: meta.default === null ? t("lane.show.unset") : String(meta.default),
+          explicit: String(meta.explicit),
+          editable: String(meta.editable),
+          identity: String(meta.identity),
+        }) + "\n",
+      );
+    }
+    return EXIT.OK;
+  }
+
+  // --defaults — 노출 편집 키와 그 기본값 열거(key 미지정 시).
+  if (defaults) {
+    const rows = exposedEditableKeys().map((k) => {
+      const d = findDescriptor(k)!;
+      return { key: k, default: d.default ?? null };
+    });
+    if (json) {
+      process.stdout.write(JSON.stringify({ v: 1, defaults: rows }, null, 2) + "\n");
+    } else {
+      process.stdout.write(t("lane.show.defaultsHeader") + "\n");
+      for (const r of rows) {
+        process.stdout.write(
+          `  ${r.key} = ${r.default === null ? t("lane.show.unset") : String(r.default)}\n`,
+        );
+      }
+    }
+    return EXIT.OK;
+  }
+
   if (json) {
     process.stdout.write(JSON.stringify({ v: 1, lane, confPath, conf }, null, 2) + "\n");
   } else {

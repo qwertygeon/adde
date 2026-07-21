@@ -62,8 +62,9 @@ adde doctor [<proj>]         # static environment/config checks (incl. daemon re
 adde logs <proj> <lane> [N] [--engine]  # last N lines of the lane transcript (or engine stderr with --engine)
 adde sessions <proj> <lane>  # list engine sessions (resume/clear via channel commands — see commands.md)
 adde lane add <proj> <lane>  # create a lane conf (options: --source/--cwd/--chat-id/--root/--safe-defaults/--interactive …)
+adde lane set <proj> <lane> [<key> <value> …]  # edit a lane conf in place (no args on a TTY: interactive wizard)
 adde lane ls <proj>          # list lanes
-adde lane show <proj> <lane> # print a lane conf
+adde lane show <proj> <lane> [key]  # print a lane conf (add a key for its value/default/metadata)
 adde lane rm <proj> <lane>   # delete a lane conf
 adde alias [names...]        # install short aliases (ad, add) next to the adde binary
 adde completion <bash|zsh>   # print a shell completion script

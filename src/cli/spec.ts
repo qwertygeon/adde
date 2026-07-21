@@ -115,6 +115,9 @@ const LANE_SET_FLAGS: readonly FlagSpec[] = [
   { name: "--inbox", takesValue: true },
   { name: "--approvals", takesValue: true },
   { name: "--outbox", takesValue: true },
+  // boolean 플래그 — 뒤따르는 위치인자(key…)를 제거 대상으로 해석한다(점표기 키는 위치인자라
+  // 값 플래그로 다중 수집이 불가하므로 --unset 은 모드 스위치, 키는 positional).
+  { name: "--unset" },
 ];
 
 /**
@@ -134,7 +137,7 @@ const LANE_SUBS: readonly SubSpec[] = [
   { name: "add", flags: LANE_ADD_FLAGS, positional: ["proj", "lane"] },
   { name: "set", flags: LANE_SET_FLAGS, positional: ["proj", "lane"] },
   { name: "ls", aliases: ["list"], flags: [{ name: "--json" }], positional: ["proj"] },
-  { name: "show", flags: [{ name: "--json" }], positional: ["proj", "lane"] },
+  { name: "show", flags: [{ name: "--json" }, { name: "--defaults" }], positional: ["proj", "lane"] }, // prettier-ignore
   { name: "rm", aliases: ["remove"], flags: LANE_RM_FLAGS, positional: ["proj", "lane"] },
   { name: "help", flags: [] },
 ];

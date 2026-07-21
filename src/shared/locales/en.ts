@@ -80,16 +80,17 @@ Tip: 'adde init' can walk you through this setup.`,
 Installs short aliases (symlinks) next to the adde binary so you can type e.g. \`ad up <proj>\` instead of \`adde up <proj>\`.
 Only works on a global install (needs a writable bin dir next to adde on PATH); if a command with that name already exists it is skipped, not overwritten.`,
     laneAdd: "Usage: adde lane add <proj> <lane> [options]",
-    laneSet: "Usage: adde lane set <proj> <lane> --<field> <value> ...",
+    laneSet:
+      "Usage: adde lane set <proj> <lane> [<key> <value> ...] [--<field> <value>] [--unset <key> ...]   (no args on a TTY: interactive wizard)",
     laneLs: "Usage: adde lane ls <proj> [--json]",
-    laneShow: "Usage: adde lane show <proj> <lane> [--json]",
+    laneShow: "Usage: adde lane show <proj> <lane> [key] [--json] [--defaults]",
     laneRm: "Usage: adde lane rm <proj> <lane>",
     daemon: "Usage: adde __daemon <proj> (internal command)",
     lane: `Usage:
   adde lane add <proj> <lane> [options]   create a lane conf
-  adde lane set <proj> <lane> --<field> <value> ...  edit an existing lane conf in place
+  adde lane set <proj> <lane> [<key> <value> ...] [--unset <key> ...]  edit an existing lane conf in place (no args on a TTY: interactive wizard)
   adde lane ls <proj> [--json]            list lanes
-  adde lane show <proj> <lane> [--json]   print a lane conf
+  adde lane show <proj> <lane> [key] [--json] [--defaults]   print a lane conf (a single key with --json shows value/default/explicit/editable/identity)
   adde lane rm <proj> <lane> [--purge] [--force]    delete a lane conf (--purge also removes its state/queue/out data; --force skips the running-lane guard/confirmation for --purge)
 
 lane add options:
@@ -127,6 +128,10 @@ lane set options (edit-only subset of lane add — identity fields, tokens, and 
   --allow-from <ids>            telegram lanes only
   --root <abs-path>              markdown lanes only
   --inbox <rel> --approvals <rel> --outbox <rel>   markdown lanes only
+  --unset <key> ...             remove keys (dot-notation) to restore their consumer default; identity/required keys are refused
+
+Positional dot-notation keys (adde lane set <proj> <lane> <key> <value> ...) edit the same surface, plus markdown-only extras:
+  markdown.archive, markdown.backup, markdown.retention_days, markdown.out_retention_days, markdown.sync_provider
 Fields left unspecified keep their current value. Changes take effect after adde restart <proj>.
 Note: editing --file-mode only updates the conf value; existing directory permissions are NOT changed even after restart (relaxing private→shared needs a manual chmod). file_mode governs only the internal state/out/queue directories, not the markdown note tree.`,
   },
@@ -245,6 +250,13 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       inbox: "inbox (relative to root)",
       approvals: "approvals (relative to root, default if empty)",
       outbox: "outbox (relative to root, default if empty)",
+      hardDeny: "hard_deny (tools/patterns refused outright for any tier, comma-separated)",
+      archive: "markdown.archive (relative to root; sent bodies relocated here, empty to skip)",
+      backup: "markdown.backup (local backup folder path, empty to skip)",
+      retentionDays: "markdown.retention_days (relocation cutoff in calendar days, empty for default 2)",
+      outRetentionDays:
+        "markdown.out_retention_days (out/ prune safety window in days; must be retention_days+1 or more, empty to skip)",
+      syncProvider: "markdown.sync_provider (local | icloud, empty for default local)",
     },
     ttyOnly: {
       situation: "--interactive only works in an interactive terminal (TTY)",
@@ -255,6 +267,18 @@ Note: editing --file-mode only updates the conf value; existing directory permis
     set: {
       updated: 'lane "{{lane}}" updated: {{confPath}}',
       restartHint: "Changes take effect after: adde restart {{proj}}",
+      noChange: "no changes — nothing to update.",
+      wizardHeader:
+        'editing lane "{{lane}}" — leave a field blank to keep its current value (shown in parentheses); use adde lane set ... --unset <key> to restore a default.',
+      diffHeader: "changes to apply:",
+      diffLine: "  {{key}}: {{from}} → {{to}}",
+      confirm: "apply these changes? (y/N)",
+      aborted: "aborted — no changes made.",
+    },
+    show: {
+      line: "{{key}}: value={{value}} default={{default}} explicit={{explicit}} editable={{editable}} identity={{identity}}",
+      defaultsHeader: "editable keys (key = default):",
+      unset: "(unset)",
     },
     noLanes: "{{proj}}: no lanes",
     removed: 'lane "{{lane}}" removed: {{confPath}}',
@@ -469,6 +493,14 @@ Note: editing --file-mode only updates the conf value; existing directory permis
         "{{field}} cannot be changed with lane set — recreate the lane to change it (adde lane rm, then adde lane add).",
       sourceFieldMismatch: "{{field}} does not apply to source={{source}} lanes",
       noEdits: "no edit flags given — nothing to update",
+      unknownKey: 'key "{{key}}" is not an editable lane key',
+      unknownKeyDidYouMean:
+        'key "{{key}}" is not an editable lane key — did you mean: {{suggestions}}?',
+      badIntValue: '{{key}} must be a positive integer — got "{{value}}"',
+      badEnumValue: '{{key}} "{{value}}" is invalid — one of {{allowed}}',
+      requiredUnset: 'key "{{key}}" is required and cannot be unset (recreate the lane to change it)',
+      keyValueIncomplete:
+        "each key needs a value — usage: adde lane set <proj> <lane> <key> <value> ...",
     },
   },
   telegram: {

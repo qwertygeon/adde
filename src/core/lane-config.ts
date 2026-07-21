@@ -8,6 +8,7 @@ import { readdir, readFile, mkdir, unlink, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   parseLaneConf,
+  parseKeyValues,
   serializeLaneConf,
   validateEngineWiring,
   parseEngineArgs,
@@ -19,7 +20,9 @@ import {
   KNOWN_BACKENDS,
 } from "../shared/conf.js";
 import type { LaneConf } from "../shared/conf.js";
-import { lanePaths, defaultBase, expandTilde } from "../shared/paths.js";
+import { LANE_KEY_DESCRIPTORS, findDescriptor, suggestKeys } from "./lane-schema.js";
+import type { LaneKeyDescriptor } from "./lane-schema.js";
+import { lanePaths, defaultBase, expandTilde, normalizeUserPath } from "../shared/paths.js";
 import { parseDenyEntry, DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
 import { atomicWrite, secureLaneDirs } from "../shared/fs-atomic.js";
 import { SOURCE_IDS, SOURCE_REGISTRY } from "../src-adapters/index.js";
@@ -113,40 +116,18 @@ export interface LaneSetOptions extends LaneCommandBaseOptions {
   inbox?: string;
   approvals?: string;
   outbox?: string;
+  /**
+   * 점표기 canonical key → raw 문자열 값 편집(위치인자 CLI·프로그램적 일반화 경로).
+   * 명명 플래그(위 typed 필드)와 병존 — 둘 다 스키마 confPath 기반 제네릭 적용으로 수렴한다.
+   * 타입/enum/format 검증은 스키마(parseSchemaValue)가 set-시점에 하드 거부한다.
+   */
+  edits?: ReadonlyArray<{ key: string; value: string }>;
+  /** 제거할 canonical key 목록(--unset) — 소비측 기본값 복원. 필수·identity 는 거부. */
+  unset?: readonly string[];
 }
 
-/** `LaneSetOptions` 의 편집 가능 키 전체(no-op 판정용 SoT — `base` 제외). */
-const LANE_SET_EDITABLE_KEYS: readonly (keyof LaneSetOptions)[] = [
-  "perm_tier",
-  "allowlist",
-  "denylist",
-  "hard_deny",
-  "cwd",
-  "engine_args",
-  "lang",
-  "file_mode",
-  "chat_id",
-  "allow_from",
-  "root",
-  "inbox",
-  "approvals",
-  "outbox",
-];
-
-/** telegram 전용 편집 필드(교차소스 하드 거부 대상). */
-const TELEGRAM_ONLY_SET_FIELDS: readonly (keyof LaneSetOptions)[] = ["chat_id", "allow_from"];
-/** markdown 전용 편집 필드(교차소스 하드 거부 대상). */
-const MARKDOWN_ONLY_SET_FIELDS: readonly (keyof LaneSetOptions)[] = [
-  "root",
-  "inbox",
-  "approvals",
-  "outbox",
-];
-
-/** 필드명 → CLI 플래그 표기(`chat_id`→`--chat-id`) — 오류 메시지용. */
-function toFlagName(field: string): string {
-  return `--${field.replace(/_/g, "-")}`;
-}
+/** 편집 적용 후 conf 필드에 담기는 값(리스트는 배열, 정수는 number, 나머지는 문자열). */
+type EditValue = string | number | string[];
 
 export interface LaneSetResult {
   lane: string;
@@ -343,31 +324,144 @@ export function validateLaneConf(
   }
 }
 
+// ── 스키마 기반 제네릭 편집(점표기 confPath) ────────────────────────────────
+// 명명 플래그(typed LaneSetOptions)와 점표기 위치인자 편집을 canonical key 로 통합해 conf 에 적용한다.
+// 스키마가 단일 SoT — 두 경로가 같은 confPath 로 수렴하므로 드리프트가 없다(하위호환 동작 보존).
+// telegram/markdown 전용 필드가 타 소스 레인에 지정되면 assertKeyApplicable 이 거부한다(FR-006).
+
 /**
- * `lane set` 전용 교차소스 하드 거부 — telegram 전용 필드(chat_id·allow_from)가
- * markdown(등 non-telegram) 레인에, markdown 전용 필드(root·inbox·approvals·outbox)가 telegram(등
- * non-markdown) 레인에 편집 지정되면 거부한다. 공용 `validateLaneConf` 밖에 둔다 — 공용에 넣으면
- * `laneAdd` 도 거부하게 되어 기존 동작(chat_id/markdown.* 를 소스 무관 수락)이 바뀐다.
+ * 편집 대상 key 를 해석한다 — 점표기 편집·unset 공용. identity 는 재생성 안내, 미노출/미지 키는
+ * 유사키 제안과 함께 거부(FR-005). 통과하면 노출 편집 가능 서술자를 반환.
  */
-export function assertSourceFieldConsistency(source: string, edits: LaneSetOptions): void {
-  if (source !== "telegram") {
-    for (const field of TELEGRAM_ONLY_SET_FIELDS) {
-      if (edits[field] !== undefined) {
+function resolveSettableDescriptor(key: string): LaneKeyDescriptor {
+  const d = findDescriptor(key);
+  if (d?.identity) {
+    throw new LaneConfigError(t("laneConfig.err.identityFieldImmutable", { field: key }));
+  }
+  if (!d || !d.exposed || !d.editable) {
+    const suggestions = suggestKeys(key);
+    throw new LaneConfigError(
+      suggestions.length > 0
+        ? t("laneConfig.err.unknownKeyDidYouMean", { key, suggestions: suggestions.join(", ") })
+        : t("laneConfig.err.unknownKey", { key }),
+    );
+  }
+  return d;
+}
+
+/** 점표기 raw 문자열 값을 스키마 타입으로 파싱·set-시점 검증(자기완결: 타입/enum/format). */
+function parseSchemaValue(d: LaneKeyDescriptor, raw: string): EditValue {
+  switch (d.type) {
+    case "csv":
+      return parseCsv(raw);
+    case "int": {
+      const n = Number.parseInt(raw, 10);
+      if (!Number.isFinite(n) || n <= 0 || String(n) !== raw.trim()) {
+        throw new LaneConfigError(t("laneConfig.err.badIntValue", { key: d.key, value: raw }));
+      }
+      return n;
+    }
+    case "enum":
+      if (!(d.enumValues ?? []).includes(raw)) {
         throw new LaneConfigError(
-          t("laneConfig.err.sourceFieldMismatch", { field: toFlagName(field), source }),
+          t("laneConfig.err.badEnumValue", {
+            key: d.key,
+            value: raw,
+            allowed: (d.enumValues ?? []).join("|"),
+          }),
         );
       }
-    }
+      return raw;
+    case "path":
+      return normalizeUserPath(raw);
+    case "string":
+      return raw;
   }
-  if (source !== "markdown") {
-    for (const field of MARKDOWN_ONLY_SET_FIELDS) {
-      if (edits[field] !== undefined) {
-        throw new LaneConfigError(
-          t("laneConfig.err.sourceFieldMismatch", { field: toFlagName(field), source }),
-        );
-      }
-    }
+}
+
+/** canonical key 가 conf.source 에 적용 가능한지 — 교차소스 편집 하드 거부(FR-006). */
+function assertKeyApplicable(source: string, key: string): void {
+  const d = findDescriptor(key);
+  if (!d || d.appliesTo === "common") return;
+  if (d.appliesTo !== source) {
+    throw new LaneConfigError(t("laneConfig.err.sourceFieldMismatch", { field: key, source }));
   }
+}
+
+/** 편집 값(EditValue)을 서술자의 confPath(top-level | ns.field)에 제자리 적용. */
+function applyConfValue(conf: LaneConf, d: LaneKeyDescriptor, value: EditValue): void {
+  const target = conf as unknown as Record<string, unknown>;
+  if (d.namespace) {
+    const sub = { ...((target[d.namespace] as Record<string, unknown> | undefined) ?? {}) };
+    sub[d.field] = value;
+    target[d.namespace] = sub;
+  } else {
+    target[d.field] = value;
+  }
+}
+
+/**
+ * 서술자 키를 conf 에서 제거해 소비측 기본값을 복원한다. 리스트는 빈 배열(serialize 가 생략),
+ * 비-optional top-level(perm_tier)은 파서 기본값으로 복원(직렬화가 항상 쓰므로 delete 불가),
+ * 그 외 optional·네임스페이스 필드는 삭제(부재 = 기본값). 필수·identity 거부는 호출부 책임.
+ */
+function unsetConfValue(conf: LaneConf, d: LaneKeyDescriptor): void {
+  const target = conf as unknown as Record<string, unknown>;
+  if (d.namespace) {
+    const sub = target[d.namespace] as Record<string, unknown> | undefined;
+    if (sub && typeof sub === "object") {
+      delete sub[d.field];
+      if (Object.keys(sub).length === 0) delete target[d.namespace];
+    }
+    return;
+  }
+  if (d.type === "csv") {
+    target[d.field] = [];
+  } else if (d.field === "perm_tier") {
+    // 파서가 항상 채우는 비-optional 필드 — 삭제하면 serialize 가 undefined 를 쓴다. 기본값 복원.
+    conf.perm_tier = (d.default as string) ?? "acp";
+  } else {
+    delete target[d.field];
+  }
+}
+
+/** conf 에서 서술자 키의 현재값을 읽는다(부재 = undefined) — lane show 메타용. */
+function readConfValue(conf: LaneConf, d: LaneKeyDescriptor): EditValue | undefined {
+  const src = conf as unknown as Record<string, unknown>;
+  const raw = d.namespace
+    ? (src[d.namespace] as Record<string, unknown> | undefined)?.[d.field]
+    : src[d.field];
+  return raw as EditValue | undefined;
+}
+
+/** `lane show <key>` 메타 — value·default·explicit·editable·identity(FR-004, SC-008). */
+export interface LaneKeyMeta {
+  key: string;
+  value: EditValue | null;
+  default: string | number | null;
+  /** conf 에 명시 기록된 키인가(원시 텍스트 기준 — 파서 기본값 채움과 무관). */
+  explicit: boolean;
+  editable: boolean;
+  identity: boolean;
+}
+
+/**
+ * conf(파싱본) + 원시 텍스트로부터 키 메타를 구성한다. explicit 은 원시 conf 키 존재로 판정해
+ * 파서가 항상 채우는 기본값(perm_tier 등)과 명시 설정을 구분한다. 미지 키는 undefined.
+ */
+export function laneKeyMeta(conf: LaneConf, rawText: string, key: string): LaneKeyMeta | undefined {
+  const d = findDescriptor(key);
+  if (!d) return undefined;
+  const rawKv = parseKeyValues(rawText);
+  const value = readConfValue(conf, d);
+  return {
+    key: d.key,
+    value: value ?? null,
+    default: d.default ?? null,
+    explicit: rawKv[d.key] !== undefined,
+    editable: d.editable,
+    identity: d.identity,
+  };
 }
 
 /**
@@ -499,56 +593,57 @@ export async function laneSet(
   }
   const conf = parseLaneConf(text);
 
-  if (!LANE_SET_EDITABLE_KEYS.some((k) => edits[k] !== undefined)) {
+  // canonical key → 적용값 통합: typed 명명 플래그(하위호환) + 점표기 edits + unset.
+  const setValues = new Map<string, EditValue>();
+  const unsetKeys = new Set<string>();
+
+  // typed 명명 플래그 → canonical. 값은 이미 타입 확정(리스트=배열/그 외=문자열).
+  for (const d of LANE_KEY_DESCRIPTORS) {
+    if (d.flag === undefined) continue;
+    const v = (edits as Record<string, unknown>)[d.field];
+    if (v !== undefined) setValues.set(d.key, v as EditValue);
+  }
+  // 점표기 위치인자 편집(raw 문자열) → 스키마 검증·파싱(set-시점 하드 거부).
+  for (const e of edits.edits ?? []) {
+    const d = resolveSettableDescriptor(e.key);
+    setValues.set(d.key, parseSchemaValue(d, e.value));
+  }
+  // unset — identity/미노출/미지 거부(resolveSettableDescriptor) + 필수 거부.
+  for (const key of edits.unset ?? []) {
+    const d = resolveSettableDescriptor(key);
+    if (d.required) throw new LaneConfigError(t("laneConfig.err.requiredUnset", { key: d.key }));
+    unsetKeys.add(d.key);
+  }
+
+  if (setValues.size === 0 && unsetKeys.size === 0) {
     throw new LaneConfigError(t("laneConfig.err.noEdits"));
   }
 
-  assertSourceFieldConsistency(conf.source, edits);
+  // 교차소스 하드 거부(FR-006) — 편집·제거 대상 전 키(공용 검증 밖 — laneAdd 동작 불변 유지).
+  for (const key of [...setValues.keys(), ...unsetKeys]) assertKeyApplicable(conf.source, key);
 
-  // overlay — 지정 필드만 덮어쓴다(미지정 = 보존, exactOptionalPropertyTypes). 리스트는 치환.
-  if (edits.perm_tier !== undefined) conf.perm_tier = edits.perm_tier;
-  if (edits.cwd !== undefined) conf.cwd = edits.cwd;
-  if (edits.engine_args !== undefined) conf.engine_args = edits.engine_args;
-  if (edits.lang !== undefined) conf.lang = edits.lang;
-  // file_mode private→shared 완화 편집 인지 경고 대비 — overlay 전 이전 모드 캡처.
+  // file_mode private→shared 완화 인지 경고 대비 — 적용 전 이전 모드 캡처.
   const prevFileMode = resolveFileMode(conf.file_mode);
-  if (edits.file_mode !== undefined) conf.file_mode = edits.file_mode;
+  // hard_deny 치환 footgun 경고 — 기존 값이 있는데 치환될 때만.
+  const hardDenyReplaced = setValues.has("hard_deny") && conf.hard_deny.length > 0;
+
+  // 제네릭 적용 — 스키마 confPath 기반. 네임스페이스는 미편집 서브필드(archive/backup 등) 보존 병합.
+  for (const [key, value] of setValues) applyConfValue(conf, findDescriptor(key)!, value);
+  for (const key of unsetKeys) unsetConfValue(conf, findDescriptor(key)!);
+
   const fileModeRelaxed =
-    edits.file_mode !== undefined &&
+    setValues.has("file_mode") &&
     prevFileMode === "private" &&
     resolveFileMode(conf.file_mode) === "shared";
-  if (edits.allowlist !== undefined) conf.allowlist = edits.allowlist;
-  if (edits.denylist !== undefined) conf.denylist = edits.denylist;
 
-  // hard_deny 치환 footgun 경고 — 기존 값이 있는데 치환될 때만.
-  const hardDenyReplaced = edits.hard_deny !== undefined && conf.hard_deny.length > 0;
-  if (edits.hard_deny !== undefined) conf.hard_deny = edits.hard_deny;
-
-  // 네임스페이스(markdown.*/telegram.*) 는 서브객체 병합 — 미편집 서브필드(archive/backup 등) 보존.
+  // perm_tier→autopass denylist 자동충전 — laneAdd 의 동일 로직과 일관. denylist 를 명시
+  // 편집(set/unset)하지 않았고 기존이 비었을 때만.
   if (
-    edits.root !== undefined ||
-    edits.inbox !== undefined ||
-    edits.approvals !== undefined ||
-    edits.outbox !== undefined
+    conf.perm_tier === "autopass" &&
+    !setValues.has("denylist") &&
+    !unsetKeys.has("denylist") &&
+    conf.denylist.length === 0
   ) {
-    conf.markdown = {
-      ...conf.markdown,
-      ...(edits.root !== undefined ? { root: edits.root } : {}),
-      ...(edits.inbox !== undefined ? { inbox: edits.inbox } : {}),
-      ...(edits.approvals !== undefined ? { approvals: edits.approvals } : {}),
-      ...(edits.outbox !== undefined ? { outbox: edits.outbox } : {}),
-    };
-  }
-  if (edits.chat_id !== undefined || edits.allow_from !== undefined) {
-    conf.telegram = {
-      ...conf.telegram,
-      ...(edits.chat_id !== undefined ? { chat_id: edits.chat_id } : {}),
-      ...(edits.allow_from !== undefined ? { allow_from: edits.allow_from } : {}),
-    };
-  }
-
-  // perm_tier→autopass denylist 자동충전 — laneAdd 의 동일 로직과 일관된 단일 조건 블록.
-  if (conf.perm_tier === "autopass" && edits.denylist === undefined && conf.denylist.length === 0) {
     conf.denylist = [...DEFAULT_AUTOPASS_DENYLIST];
   }
 

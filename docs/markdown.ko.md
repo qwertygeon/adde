@@ -95,6 +95,7 @@ allowlist=Read,Grep
 - ⚠️ **제어 노트는 `cwd` 밖에 두세요**: inbox·approvals·outbox 가 AI 작업폴더(`cwd`) 내부에 있으면 AI 가 자기 작업 중 승인 노트를 위조할 수 있어 **기동이 거부**됩니다(fail-closed). vault 와 프로젝트 폴더를 분리하세요.
 - ⚠️ **allowlist 는 자동 실행**: allowlist 에 넣은 도구는 채널 승인 없이 자동 허용됩니다(프롬프트 생략, 트랜스크립트에는 기록). `Bash`·파일 쓰기 등 광범위 도구는 넣지 마세요(자기승인 위험).
 - ⚠️ **autopass 는 옵트인 자동 허용 모드**: `perm_tier=autopass` 면 denylist 에 없는 모든 도구가 자동 허용되고, denylist 도구만 승인 노트가 생성됩니다(전량 트랜스크립트 기록). 기동·운영 경고는 outbox 의 `_adde-notice.md` 노트로 도착합니다. 티어·denylist·hard-deny 선택 기준은 [권한 가이드](permissions.ko.md).
+- 이 키들은 파일을 수기 편집하지 않고 제자리에서도 편집할 수 있습니다: `adde lane set <proj> <lane> markdown.<key> <value>`(예: `adde lane set myproj md-claude markdown.retention_days 5`) — [명령 레퍼런스](commands.ko.md#lane-set--기존-레인-conf-제자리-편집) 참고.
 
 ## 2. 레인 기동
 

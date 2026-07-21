@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findSub, subFlagNames } from "../../src/cli/spec.js";
+import { exposedEditFlags } from "../../src/core/lane-schema.js";
 
 // 017-lane-set D3 (5a AUTHORING) — CLI 표면 정적 단정. findSub/subFlagNames 는 기존 export 라
 // static import 가 안전(B1/B2 미착지여도 파일 자체는 로드되고, 개별 it 만 RED — PROC-R15).
@@ -51,16 +52,28 @@ describe("CLI 표면 등록 (SC-016)", () => {
       expect(names, `${f} 가 lane set 플래그에 없음`).toContain(f);
     }
   });
+
+  it("lane set 편집 플래그 = lane-schema 파생(exposedEditFlags) 과 정확히 일치한다(단일 SoT 대조)", () => {
+    // 003-lane-settings-commands: EXPECTED_SET_EDIT_FLAGS 를 스키마 파생과 대조해 드리프트를 잡는다.
+    // 명명 플래그를 갖는 노출 편집 키의 플래그 집합이 spec.ts 의 set 값 플래그와 일치해야 한다
+    // (--unset 은 boolean 모드 스위치라 값 플래그 목록에서 제외).
+    const schemaFlags = new Set(exposedEditFlags());
+    expect(schemaFlags).toEqual(new Set(EXPECTED_SET_EDIT_FLAGS));
+    const setValueFlags = new Set(subFlagNames("lane", "set").filter((f) => f !== "--unset"));
+    expect(setValueFlags).toEqual(schemaFlags);
+  });
 });
 
 describe("편집 플래그 부분집합 (SC-019)", () => {
-  it("set 플래그 집합 = add 플래그 − {정체성·token-stdin·safe-defaults·force·interactive·no-interactive}", () => {
+  it("set 값 플래그 집합 = add 플래그 − {정체성·token-stdin·safe-defaults·force·interactive·no-interactive} (+ boolean --unset)", () => {
     const addNames = new Set(subFlagNames("lane", "add"));
-    const setNames = new Set(subFlagNames("lane", "set"));
+    // --unset 은 003 신설 boolean 모드 스위치(점표기 키 제거) — add 표면에 없으므로 비교에서 분리한다.
+    const setNames = new Set(subFlagNames("lane", "set").filter((n) => n !== "--unset"));
     const expected = new Set(
       [...addNames].filter((n) => !(IDENTITY_EXCLUDED_FLAGS as readonly string[]).includes(n)),
     );
     expect(setNames).toEqual(expected);
+    expect(subFlagNames("lane", "set")).toContain("--unset");
   });
 
   it("제외 대상 플래그는 set 에 존재하지 않는다", () => {

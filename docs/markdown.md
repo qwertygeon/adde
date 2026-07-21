@@ -97,6 +97,7 @@ allowlist=Read,Grep
 - ⚠️ **Keep the control notes outside `cwd`**: if inbox/approvals/outbox live inside the AI working folder (`cwd`), the AI could forge an approval note during its own work, so **startup is refused** (fail-closed). Separate the vault and the project folder.
 - ⚠️ **allowlist is auto-run**: tools in the allowlist are auto-allowed without channel approval (prompt skipped, still recorded in the transcript). Don't add broad tools like `Bash` or file writes (self-approval risk).
 - ⚠️ **autopass is an opt-in auto-allow mode**: with `perm_tier=autopass`, every tool not in the denylist is auto-allowed, and only denylist tools produce an approval note (all recorded in the transcript). Startup and operational warnings arrive in the outbox's `_adde-notice.md` note. For choosing a tier, denylist, and hard-deny, see the [permissions guide](permissions.md).
+- These keys can also be edited in place without hand-editing the file: `adde lane set <proj> <lane> markdown.<key> <value>` (e.g. `adde lane set myproj md-claude markdown.retention_days 5`) — see the [command reference](commands.md#lane-set--edit-an-existing-lane-conf-in-place).
 
 ## 2. Start the lane
 

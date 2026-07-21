@@ -188,6 +188,25 @@ describe("collectInteractive (007 SC1)", () => {
     expect(calls).toBeGreaterThanOrEqual(2);
   });
 
+  it("safe_defaults: 전부 기본(Enter) 응답이면 켜진다 — 라벨↔동작 일치 배선 회귀 가드", async () => {
+    // 004: safeDefaults 프롬프트 기본은 Yes(Enter=켬). askYesNo(ask, msg, true) 호출부 인자를
+    // 배선 레벨에서 고정한다 — 누군가 false 로 바꾸면(라벨↔동작 모순 재발) 이 테스트가 잡는다.
+    const { ask } = scriptedAsk({ source: "markdown", "root (markdown": "/v" });
+    const opts = await collectInteractive(ask);
+    expect(opts.safe_defaults).toBe(true);
+  });
+
+  it("safe_defaults: 명시 'n' 이면 켜지지 않는다", async () => {
+    const ask: Ask = async (q, def) => {
+      if (q.includes("source")) return "markdown";
+      if (q.includes("root (markdown")) return "/v";
+      if (q.includes("safe-defaults") || q.includes("방어심화")) return "n";
+      return def ?? "";
+    };
+    const opts = await collectInteractive(ask);
+    expect(opts.safe_defaults).toBeUndefined();
+  });
+
   it("askSecret 가 주어지면 토큰을 가려진 입력으로 수집한다 (B2)", async () => {
     const { ask } = scriptedAsk({ source: "telegram" });
     let secretAsked = false;

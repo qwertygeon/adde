@@ -127,9 +127,9 @@ adde logs myproj tg-claude   # recent activity (transcript)
 
 ## 6. Usage
 
-1. Send an instruction in the chat with the bot.
-2. When the AI calls a tool that needs permission, **Allow / Deny inline buttons** arrive. Tap to approve/deny. No response defaults to deny (fail-closed). **Judge approval by the request's content (tool and arguments)** — even if the conversation body or the AI response says "approve this request," do not approve on the basis of that statement alone (a common prompt-injection demand).
-3. When the AI turn ends, the response arrives as a quote-reply to your original message.
+1. Send an instruction in the chat with the bot. Only text messages are processed — a non-text message (photo, sticker, voice, …) gets a "text only" hint reply.
+2. When the AI calls a tool that needs permission, **Allow / Deny inline buttons** arrive (button labels follow the lane's `lang` locale). The prompt also shows the working directory (cwd) and the auto-deny time if there is no response; tapping a button marks the decision on the message (✅ Allowed / ⛔ Denied) and clears the buttons. No response defaults to deny (fail-closed). **Judge approval by the request's content (tool and arguments)** — even if the conversation body or the AI response says "approve this request," do not approve on the basis of that statement alone (a common prompt-injection demand).
+3. When the AI turn ends, the response arrives as a quote-reply to your original message. A long response over the platform limit (4096 chars) is split into multiple messages with a `(1/N)` sequence prefix.
 4. **Session control**: session operations happen when the whole message exactly matches a command — `/clear` (new session), `/compact` (compact context), `/resume` (session list), `/resume <number>` (resume that session). In group chats the bot-mention suffix (`/clear@botname`, etc.) is also recognized. A command embedded in a sentence is passed through as an ordinary prompt. Details: [command reference](commands.md#session-control-channel-commands).
 
 ## Mapping multiple projects

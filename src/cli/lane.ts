@@ -94,13 +94,16 @@ async function askEnum(
   const menu = options.map((o, i) => `  ${i + 1}) ${o}`).join("\n");
   // 안내 줄을 메뉴 뒤 별도 줄로 두어, question() 이 붙이는 ` [def]: ` 가 마지막 옵션이 아니라
   // 안내 줄에 달라붙게 한다(번호/값 입력임을 명확히 — enum 기본값 밀착 해소).
-  const question = `${label}\n${menu}\n${t("lane.prompt.enumHint")}`;
+  const base = `${label}\n${menu}\n${t("lane.prompt.enumHint")}`;
+  let question = base;
   for (;;) {
     const raw = (await ask(question, def)).trim().toLowerCase();
     if (opts.allowEmpty && raw === "") return "";
     if (options.includes(raw)) return raw;
     const n = Number(raw);
     if (Number.isInteger(n) && n >= 1 && n <= options.length) return options[n - 1] as string;
+    // 무효 입력 — 다음 재질의에 사유 한 줄을 앞세워 왜 아무 일도 안 일어났는지 알린다(조용한 재질의 방지).
+    question = `${t("lane.prompt.enumInvalid")}\n${base}`;
   }
 }
 

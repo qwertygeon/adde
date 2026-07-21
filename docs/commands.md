@@ -73,7 +73,7 @@ install short aliases (ad, add) next to the adde command? (Y/n): y
 
 project name [default]: myproj
 lane name [main]: tg-claude
-source
+source (markdown = drive from note files / telegram = drive from a bot chat)
   1) markdown
   2) telegram
 enter a number or the value [markdown]: 2
@@ -347,7 +347,7 @@ In the wizard, the telegram bot token is prompted **last, with hidden input** (k
 
 ```text
 $ adde lane add myproj tg-claude
-source
+source (markdown = drive from note files / telegram = drive from a bot chat)
   1) markdown
   2) telegram
 enter a number or the value [markdown]: 2

@@ -63,9 +63,16 @@ function statusTable(rows: LaneStatusRow[]): string {
  * 집계 status 표 — PROJECT 컬럼을 앞에 둔다(다중 프로젝트 뷰).
  * 단일 프로젝트 표(statusTable)와 분리 — 기존 `status <proj>` 출력은 불변.
  */
-function statusTableAggregate(rows: AggregatedLaneStatusRow[], all: boolean): string {
+function statusTableAggregate(
+  rows: AggregatedLaneStatusRow[],
+  all: boolean,
+  totalRegistered: number,
+): string {
   if (rows.length === 0) {
-    return all ? t("ops.status.noLanesRegistered") : t("ops.status.noRunning");
+    // 등록 자체가 0 이면(또는 --all) 곧바로 lane add 로 유도한다 — "실행 중 없음 → --all 써봐 →
+    // 그래도 없음 → lane add" 의 2단계 탐색을 피한다. 등록은 있는데 실행만 없을 때만 --all 을 권한다.
+    if (all || totalRegistered === 0) return t("ops.status.noLanesRegistered");
+    return t("ops.status.noRunning");
   }
   const header = ["PROJECT", "LANE", "STATUS", "PID", "UPTIME", "SEEN", "SOURCE"];
   const body = rows.map((r) => [
@@ -125,7 +132,7 @@ export async function runStatus(rest: readonly string[], parsed?: ParseResult): 
       // 버전(구조 변경 시 증가 — 소비자가 해석 계약을 분기).
       process.stdout.write(JSON.stringify({ v: 1, lanes: rows, halt: haltMap }, null, 2) + "\n");
     } else {
-      process.stdout.write(statusTableAggregate(rows, all) + "\n");
+      process.stdout.write(statusTableAggregate(rows, all, allRows.length) + "\n");
       // 경고 블록은 조언성 진단 — 표(1차 데이터)와 분리해 stderr 로 출력.
       const dead = rows.filter((r) => r.status === "dead");
       if (dead.length > 0) {
@@ -346,8 +353,10 @@ export async function runSessions(
       }) + mark
     );
   });
+  // 힌트는 CLI 전용 문구를 쓴다 — 채널용(control.sessionsHint)은 "checkbox label" 을 언급해
+  // 터미널 사용자에겐 생소하다. 재개가 채널 동작임을 CLI 맥락으로 안내한다.
   process.stdout.write(
-    `${t("injector.control.sessionsHeader")}\n${lines.join("\n")}\n\n${t("injector.control.sessionsHint")}\n`,
+    `${t("injector.control.sessionsHeader")}\n${lines.join("\n")}\n\n${t("ops.sessions.hint")}\n`,
   );
   return EXIT.OK;
 }

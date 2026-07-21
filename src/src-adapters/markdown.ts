@@ -174,7 +174,8 @@ export function sentLine(id: string, stamp: string): string {
   return `- [x] ✅ sent [[${outNoteBase(stamp, id)}]]`;
 }
 export function emptyLine(): string {
-  return "- [x] ⚠️ empty (no message)";
+  // 종단 마커 겸 안내 — `⚠️ empty` 앵커는 TERMINAL_MARKER 프리픽스 매칭이라 뒤 안내문을 붙여도 파싱 불변.
+  return "- [x] ⚠️ empty (no message — type your text above the send box)";
 }
 
 /** 아카이브 적격 strict 마커 — sentLine 형식(`- [x] ✅ sent [[stamp id]]`)만. 캡처: 1=stamp, 2=id.
@@ -379,6 +380,7 @@ export function renderApprovalBlock(
     `### ⏳ req ${req.id} · ${req.tool}`,
     `> ${detail}  (cwd: ${req.cwd})`,
     `> ${tl("markdown.approvalMeta", { requested: formatStamp(now), deadline: formatStamp(deadline) })}`,
+    `> ${tl("markdown.approvalHint")}`,
     `- [ ] allow`,
     `- [ ] deny`,
     `<!-- adde:perm id=${req.id} status=pending -->`,
@@ -1581,7 +1583,8 @@ export function createMarkdownSource(cfg: SourceContext): Source {
   async function notify(text: string): Promise<void> {
     const file = join(outboxDir, "_adde-notice.md");
     const existing = (await readMaybe(file)) ?? "";
-    const stamp = new Date().toISOString();
+    // 로컬 stamp(YYYYMMDD-HHmmss) — 나머지 markdown 렌더와 표기 통일(전에는 원시 ISO-UTC 라 불일치).
+    const stamp = formatStamp(new Date());
     await atomicWrite(file, `${existing}${existing ? "\n" : ""}> ${stamp}\n\n${text}\n`);
   }
 

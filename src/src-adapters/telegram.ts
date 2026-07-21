@@ -432,9 +432,14 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   async function sendReply(chatId: number, text: string, replyToMsgId?: number): Promise<void> {
     const tok = await getToken();
     // 4096자 초과 시 분할 순차 전송(A) — 첫 청크만 원본에 quote-reply, 순서 보존.
-    const chunks = splitForTelegram(text);
+    // 단일 메시지면 그대로(임계 불변). 다중이면 "(i/N)" 순번 접두를 붙여 도착 순서 단서를 준다 —
+    // 접두 길이만큼 여유를 두고 재분할(접두 포함 4096 초과 방지).
+    let chunks = splitForTelegram(text);
+    const multi = chunks.length > 1;
+    if (multi) chunks = splitForTelegram(text, TELEGRAM_MSG_LIMIT - 16);
     for (let i = 0; i < chunks.length; i++) {
-      const params: Record<string, unknown> = { chat_id: chatId, text: chunks[i] };
+      const body = multi ? `(${i + 1}/${chunks.length}) ${chunks[i]}` : chunks[i];
+      const params: Record<string, unknown> = { chat_id: chatId, text: body };
       if (i === 0 && replyToMsgId !== undefined) {
         params["reply_to_message_id"] = replyToMsgId;
       }

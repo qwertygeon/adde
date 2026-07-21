@@ -213,6 +213,9 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       hint: "    ↳ action: {{hint}}",
       summary: "Summary: {{pass}} PASS / {{warn}} WARN / {{fail}} FAIL / {{info}} INFO",
     },
+    sessions: {
+      hint: "Resume is done from the channel: send /resume <n> (or check the resume box in a markdown lane).",
+    },
     logs: {
       whatEngine: "engine log",
       whatTranscript: "transcript",
@@ -233,8 +236,9 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       root: "root — required (enter the absolute markdown root path)",
     },
     prompt: {
-      source: "source",
+      source: "source (markdown = drive from note files / telegram = drive from a bot chat)",
       enumHint: "enter a number or the value",
+      enumInvalid: "invalid input — enter one of the numbers above or the value itself:",
       permTier:
         "perm_tier (acp = approve each tool in the channel / autopass = auto-allow except denylist)",
       allowlist: "allowlist (comma-separated, empty for none)",
@@ -253,8 +257,8 @@ Note: editing --file-mode only updates the conf value; existing directory permis
         "file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable)",
       root: "root (absolute markdown root path, required)",
       inbox: "inbox (relative to root)",
-      approvals: "approvals (relative to root, default if empty)",
-      outbox: "outbox (relative to root, default if empty)",
+      approvals: "approvals (relative to root, empty for default `approvals/`)",
+      outbox: "outbox (relative to root, empty for default `out/`)",
       hardDeny: "hard_deny (tools/patterns refused outright for any tier, comma-separated)",
       archive: "markdown.archive (relative to root; sent bodies relocated here, empty to skip)",
       backup: "markdown.backup (local backup folder path, empty to skip)",
@@ -544,6 +548,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       'invalid approval request id "{{reqId}}" — path escape blocked (fail-closed deny).',
     outMeta: "🕒 sent {{sent}} · done {{done}}",
     approvalMeta: "🕒 requested {{requested}} · auto-deny at {{deadline}} if no response",
+    approvalHint: "check exactly one box below — allow or deny (leaving both keeps it pending)",
     backupPathOverlap:
       "[markdown] backup path overlaps {{name}}({{path}}): {{backup}} — refusing startup to avoid corrupting vault/state.",
     syncProviderUnsupported:

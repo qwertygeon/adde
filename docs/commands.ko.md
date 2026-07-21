@@ -73,7 +73,7 @@ adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
 
 프로젝트 이름 [default]: myproj
 레인 이름 [main]: tg-claude
-source
+source (markdown = 노트 파일로 구동 / telegram = 봇 채팅으로 구동)
   1) markdown
   2) telegram
 번호 또는 값 입력 [markdown]: 2
@@ -347,7 +347,7 @@ adde lane show myproj tg-claude --json  # 기계 판독 conf(스크립트/모니
 
 ```text
 $ adde lane add myproj tg-claude
-source
+source (markdown = 노트 파일로 구동 / telegram = 봇 채팅으로 구동)
   1) markdown
   2) telegram
 번호 또는 값 입력 [markdown]: 2

@@ -1188,8 +1188,8 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     // 귀결한다(멱등). stamp 부재(레거시 폴백)는 flat 유지.
     const noteDir = stamp ? join(outboxDir, dateFolderFromStamp(stamp)) : outboxDir;
     const headerLines: string[] = [];
-    const replyRef = sidecar?.reply_ref?.channel_msg_id;
-    if (replyRef) headerLines.push(`> ↩ ${replyRef}`);
+    // reply_ref 는 헤더에 렌더하지 않는다: markdown 레인의 channel_msg_id 는 전송 시 생성한
+    // 이 노트 자신의 id(파일명·inbox 위키링크와 동일)라 자기순환·중복 표기만 된다.
     if (sidecar?.question) headerLines.push(`> ❓ ${sidecar.question}`);
     if (stamp && sidecar?.ts) {
       headerLines.push(

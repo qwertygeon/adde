@@ -518,7 +518,8 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 
 - **최상위 명령 + 전역 플래그** — `up`/`down`/…/`lane`/`completion`, `-h`/`--help`/`-v`/`--version`. zsh 는 각 명령 옆에 짧은 설명을 표시합니다.
 - **하위 명령·고정 값** — `lane add|set|ls|show|rm|help`, `proj ls|rm`(`proj rm` 뒤 프로젝트 이름), `completion bash|zsh`, `alias` 뒤 별칭 이름 제안, `status --all/--json`, `logs --engine`, `lane add`/`lane set` 옵션 플래그(동일 명령 스펙에서 파생되므로 `lane set` 플래그도 동일하게 완성됩니다).
-- **동적 프로젝트/레인 이름** — `${ADDE_HOME:-~/.config/adde}` 를 셸에서 직접 스캔합니다(`adde` 프로세스 미스폰): `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` 와 `lane ls|show|rm|add` 의 첫 위치에서 프로젝트 이름(예: `adde up <TAB>`, `adde status <TAB>`), 다음 위치에서 레인 이름(예: `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
+- **동적 프로젝트/레인 이름** — `${ADDE_HOME:-~/.config/adde}` 를 셸에서 직접 스캔합니다(`adde` 프로세스 미스폰): `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` 와 `lane ls|show|rm|add|set` 의 첫 위치에서 프로젝트 이름(예: `adde up <TAB>`, `adde status <TAB>`), 다음 위치에서 레인 이름(예: `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
+- **편집 가능 설정 키(점표기)** — `adde lane set <proj> <lane>` 뒤에서 편집 가능 키 이름이 옵션 플래그와 함께 완성되고(플래그 없는 markdown 그룹 포함: `markdown.retention_days`·`markdown.archive` 등), `lane show <proj> <lane>` 의 `[key]` 자리도 같은 키 목록으로 완성됩니다. 레인 키 스키마에서 파생되므로 새 키가 자동 반영됩니다.
 - **enum 플래그 값** — `--source`(markdown|telegram), `--perm-tier`(acp|autopass), `--file-mode`(private|shared), `--lang`(en|ko) 뒤.
 - **디렉터리 경로** — `--cwd`·`--root` 뒤.
 

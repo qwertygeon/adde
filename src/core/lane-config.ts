@@ -598,10 +598,14 @@ export async function laneSet(
   const unsetKeys = new Set<string>();
 
   // typed 명명 플래그 → canonical. 값은 이미 타입 확정(리스트=배열/그 외=문자열).
+  // 경로 타입은 점표기 경로(parseSchemaValue)와 동일하게 set-시점 정규화 — 반환 conf·직후 표시가
+  // reparse 전에도 정규화 값과 일치한다(경로 정규화 시점 비대칭 해소; reparse 정규화와 멱등).
   for (const d of LANE_KEY_DESCRIPTORS) {
     if (d.flag === undefined) continue;
     const v = (edits as Record<string, unknown>)[d.field];
-    if (v !== undefined) setValues.set(d.key, v as EditValue);
+    if (v === undefined) continue;
+    const value = d.type === "path" && typeof v === "string" ? normalizeUserPath(v) : v;
+    setValues.set(d.key, value as EditValue);
   }
   // 점표기 위치인자 편집(raw 문자열) → 스키마 검증·파싱(set-시점 하드 거부).
   for (const e of edits.edits ?? []) {

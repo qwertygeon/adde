@@ -1024,7 +1024,7 @@ describe("createMarkdownSource (통합)", () => {
     expect(fs.readFileSync(fileB, "utf8")).toContain("status=pending");
   });
 
-  it("renderOut(id) 호출 시 마크다운 출력 노트를 작성한다(reply_ref 역참조 포함)", async () => {
+  it("renderOut(id) 호출 시 마크다운 출력 노트를 작성한다(reply_ref 는 헤더에 미렌더)", async () => {
     fs.writeFileSync(path.join(rootDir, "inbox.md"), "");
     source = makeSource();
     await source.start();
@@ -1040,7 +1040,9 @@ describe("createMarkdownSource (통합)", () => {
     expect(fs.existsSync(notePath)).toBe(true);
     const note = fs.readFileSync(notePath, "utf8");
     expect(note).toContain("에이전트 응답입니다");
-    expect(note).toContain("orig-9");
+    // markdown 레인의 channel_msg_id 는 노트 자기 id 라 헤더에 렌더하지 않는다(자기순환 중복).
+    expect(note).not.toContain("orig-9");
+    expect(note).not.toContain("↩");
   });
 
   it("제어 라벨 체크 → control envelope 큐잉 + sent 위키링크 종단", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { completionScript, SUPPORTED_SHELLS } from "../../src/cli/completion.js";
 import { visibleCommands, subFlagNames } from "../../src/cli/spec.js";
+import { exposedEditableKeys } from "../../src/core/lane-schema.js";
 
 // 셸 자동완성 스크립트 — 스펙(SSOT)에서 명령·플래그 파생.
 
@@ -102,5 +103,35 @@ describe("drift 교정 — doctor·sessions --json, logs --follow/-f 완성 노�
     const block = commandBlock(zsh, "logs");
     expect(block).toContain("--follow");
     expect(block).toContain("-f");
+  });
+});
+
+describe("lane set/show 점표기 키 완성 (스키마 파생)", () => {
+  it("bash: lane set 에 노출 편집 키 전체와 set 플래그가 완성 후보로 포함된다", () => {
+    const bash = completionScript("bash") as string;
+    // 스키마(SoT) 파생 — 키 추가 시 자동 반영되는지 전수 대조.
+    for (const key of exposedEditableKeys()) expect(bash).toContain(key);
+    expect(bash).toContain("--unset");
+    // 명명플래그 없는 점표기 전용 키(markdown 그룹) 대표 확인.
+    expect(bash).toContain("markdown.retention_days");
+  });
+
+  it("bash: lane show 5번째 슬롯([key])에 키 완성이 배선된다", () => {
+    const bash = completionScript("bash") as string;
+    const showIdx = bash.indexOf("show)");
+    expect(showIdx).toBeGreaterThanOrEqual(0);
+    const showBlock = bash.slice(showIdx, bash.indexOf(";;", showIdx));
+    expect(showBlock).toContain('"$cword" -eq 5');
+    expect(showBlock).toContain("markdown.retention_days");
+  });
+
+  it("zsh: lane set/show 에 점표기 키 완성이 배선된다", () => {
+    const zsh = completionScript("zsh") as string;
+    for (const key of exposedEditableKeys()) expect(zsh).toContain(key);
+    const setIdx = zsh.indexOf("set)");
+    expect(setIdx).toBeGreaterThanOrEqual(0);
+    const setBlock = zsh.slice(setIdx, zsh.indexOf(";;", setIdx));
+    expect(setBlock).toContain("compadd");
+    expect(setBlock).toContain("--unset");
   });
 });

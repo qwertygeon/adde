@@ -63,6 +63,11 @@ export async function runInit(argv: readonly string[]): Promise<number> {
     const checks = await runDoctor();
     for (const c of checks) {
       process.stdout.write(`  ${checkSymbol(c.level)} ${c.name}: ${c.detail}\n`);
+      // FAIL/WARN 항목은 해결 힌트를 함께 노출 — 별도 `adde doctor` 재실행 없이 다음 조치를 안다
+      // (ops doctor 와 동일 hint 포맷 공유).
+      if (c.hint && (c.level === "FAIL" || c.level === "WARN")) {
+        process.stdout.write(t("ops.doctor.hint", { hint: c.hint }) + "\n");
+      }
     }
     if (checks.some((c) => c.level === "FAIL")) {
       process.stdout.write("\n" + t("init.doctorWarn") + "\n");

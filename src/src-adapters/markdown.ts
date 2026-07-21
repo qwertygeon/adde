@@ -615,8 +615,11 @@ async function collectMarkdownWizardFields(ctx: WizardCtx): Promise<Partial<Lane
   const fields: Partial<LaneAddOptions> = {};
   const askPath = ctx.askPath ?? ctx.ask;
 
-  const root = await askPath(t("lane.prompt.root"), "");
-  if (root) fields.root = root;
+  // root 는 markdown 레인의 구조적 필수값(없으면 동작 불가) — 빈 입력을 재질의해 "조용히 망가진
+  // 레인"(생성은 되나 기동 불가) 을 막는다. 비대화 lane add 는 --root 플래그로 공급(이 위저드 밖).
+  let root = await askPath(t("lane.prompt.root"), "");
+  while (!root) root = await askPath(t("lane.retry.root"), "");
+  fields.root = root;
   const inbox = await askPath(t("lane.prompt.inbox"), "inbox.md");
   if (inbox) fields.inbox = inbox;
   const approvals = await askPath(t("lane.prompt.approvals"), "");

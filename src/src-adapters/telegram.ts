@@ -17,6 +17,8 @@ import type { RenderHint } from "../core/out-ledger.js";
 import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
 import type { PermRequest } from "../gate/gate.js";
+import { DEFAULT_GATE_TIMEOUT_MS } from "../gate/gate.js";
+import { formatStamp } from "./markdown.js";
 import { formatException } from "../shared/notify.js";
 import type {
   Source,
@@ -108,6 +110,8 @@ export interface TelegramConfig {
   onInbound?: (() => void) | undefined;
   /** 채널 메시지 로케일(LaneConf.lang). 미지정 시 전역 로케일. */
   lang?: string | undefined;
+  /** 게이트 타임아웃(ms) — 승인 프롬프트에 자동거부 기한을 표기하기 위해 전달. 미지정 시 기본값. */
+  gateTimeoutMs?: number | undefined;
 }
 
 interface TelegramUpdate {
@@ -253,6 +257,10 @@ export function createTelegramSourceFromContext(ctx: SourceContext): Source {
     authorizedIds,
     onInbound: ctx.onInbound,
     lang: ctx.conf.lang,
+    gateTimeoutMs:
+      ctx.conf.gate_timeout_sec !== undefined
+        ? ctx.conf.gate_timeout_sec * 1000
+        : DEFAULT_GATE_TIMEOUT_MS,
   });
 }
 
@@ -389,6 +397,9 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
   // enqueue 연속 실패 카운터 — 성공 시 0 리셋, 임계 도달 시 1회 알림.
   let consecutiveEnqueueFailures = 0;
   const callbackHandlers: GateDecisionCallback[] = [];
+  const gateTimeoutMs = cfg.gateTimeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
+  // reqId → 승인 프롬프트 메시지(결정 시 버튼 제거·결정 표기 편집용). 결정·정리 시 삭제.
+  const permMessages = new Map<string, { chatId: number; messageId: number; text: string }>();
 
   // 인바운드/콜백 인증 — 허용 발신자 집합(chat_id ∪ allow_from). 비면 fail-closed.
   // chatId 는 양수(개인 chat = 그 사용자 id)일 때만 자기 인증에 포함(방어적 병합).
@@ -437,9 +448,17 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     req: PermRequest,
   ): Promise<{ messageId: number }> {
     const tok = await getToken();
+    // 프롬프트에 cwd(어느 폴더에서 실행되는 도구인지)와 자동거부 기한(무응답 시)을 함께 표기 —
+    // markdown 승인 블록과 동일 맥락을 제공(승인 어포던스 채널 간 정합).
+    const deadline = formatStamp(new Date(Date.parse(req.ts) + gateTimeoutMs));
+    const text = [
+      tl("telegram.permPrompt", { tool: req.tool, detail: req.detail }),
+      tl("telegram.permPromptCwd", { cwd: req.cwd }),
+      tl("telegram.permPromptDeadline", { deadline }),
+    ].join("\n");
     const result = await callBotApi(tok, "sendMessage", {
       chat_id: chatId,
-      text: tl("telegram.permPrompt", { tool: req.tool, detail: req.detail }),
+      text,
       reply_markup: {
         inline_keyboard: [
           [
@@ -450,13 +469,35 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
       },
     });
     const r = result as { message_id: number };
+    permMessages.set(reqId, { chatId, messageId: r.message_id, text });
     return { messageId: r.message_id };
   }
 
-  async function answerCallbackQuery(callbackQueryId: string): Promise<void> {
+  async function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
     const tok = await getToken();
     await callBotApi(tok, "answerCallbackQuery", {
       callback_query_id: callbackQueryId,
+      ...(text ? { text } : {}),
+    });
+  }
+
+  /**
+   * 결정 확정 피드백 — 프롬프트 메시지에 결정을 표기하고 버튼을 제거한다(클릭해도 화면이 안 바뀌던
+   * 문제·결정 후 stale 버튼 잔존 해소). 메시지 미추적(재기동 등)이면 무동작. 편집 실패는 로그 후 흡수.
+   */
+  async function finalizePermMessage(reqId: string, decision: "allow" | "deny"): Promise<void> {
+    const m = permMessages.get(reqId);
+    if (!m) return;
+    permMessages.delete(reqId);
+    const tok = await getToken();
+    const label = tl(decision === "allow" ? "telegram.permAllowed" : "telegram.permDenied");
+    await callBotApi(tok, "editMessageText", {
+      chat_id: m.chatId,
+      message_id: m.messageId,
+      text: `${m.text}\n${label}`,
+      reply_markup: { inline_keyboard: [] },
+    }).catch((err) => {
+      console.error(t("log.telegram.answerCallbackError", { error: errMsg(err) }));
     });
   }
 
@@ -592,6 +633,10 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
                 for (const handler of callbackHandlers) {
                   handler(reqId, rawDecision);
                 }
+                // 결정 확정 피드백 — 메시지에 결정 표기 + 버튼 제거(클릭 무반응·stale 버튼 해소).
+                await finalizePermMessage(reqId, rawDecision).catch((err) => {
+                  console.error(t("log.telegram.answerCallbackError", { error: errMsg(err) }));
+                });
               }
             }
           }

@@ -139,6 +139,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
     cmdError: "[adde {{cmd}}] error: {{detail}}",
     laneError: "[adde lane] {{detail}}",
     unknownSub: "Unknown lane subcommand: {{sub}}",
+    unknownProjSub: "Unknown proj subcommand: {{sub}}",
     unknownCmd: "Unknown command: {{cmd}}",
     didYouMean: "Did you mean: {{cmds}}?",
     unknownFlag: "unknown option: {{flag}}",
@@ -184,6 +185,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       "[adde] ADDE_UP_POLL_MS is no longer read — set ADDE_UP_WAIT_MS instead (default 8000ms unchanged if unset).",
     statusHint: "  Check status: adde status {{proj}}",
     downDone: "[adde] {{proj}} daemon stopped.",
+    downNotRunning: "[adde] {{proj}}: no daemon registered — nothing to stop.",
     restartDone: "[adde] {{proj}} restarted. Lanes are starting in the background.",
   },
   ops: {
@@ -228,6 +230,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
     retry: {
       chatId: "chat_id — enter a numeric id (or leave empty)",
       allowFrom: "allow_from — enter comma-separated numeric ids (or leave empty)",
+      root: "root — required (enter the absolute markdown root path)",
     },
     prompt: {
       source: "source",
@@ -248,7 +251,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       allowFrom: "allow_from (extra authorized sender ids, comma-separated, empty to skip)",
       fileMode:
         "file_mode (private=owner-only 0700 / shared=leave default umask, typically world-readable)",
-      root: "root (absolute markdown root path)",
+      root: "root (absolute markdown root path, required)",
       inbox: "inbox (relative to root)",
       approvals: "approvals (relative to root, default if empty)",
       outbox: "outbox (relative to root, default if empty)",
@@ -496,7 +499,8 @@ Note: editing --file-mode only updates the conf value; existing directory permis
         "{{field}} cannot be changed with lane set — recreate the lane to change it (adde lane rm, then adde lane add).",
       sourceFieldMismatch: "{{field}} does not apply to source={{source}} lanes",
       noEdits: "no edit flags given — nothing to update",
-      unknownKey: 'key "{{key}}" is not an editable lane key',
+      unknownKey:
+        'key "{{key}}" is not an editable lane key — run `adde lane show <proj> <lane> --defaults` to list editable keys',
       unknownKeyDidYouMean:
         'key "{{key}}" is not an editable lane key — did you mean: {{suggestions}}?',
       badIntValue: '{{key}} must be a positive integer — got "{{value}}"',
@@ -509,6 +513,10 @@ Note: editing --file-mode only updates the conf value; existing directory permis
   },
   telegram: {
     permPrompt: "Permission request: {{tool}}\n{{detail}}",
+    permPromptCwd: "📁 cwd: {{cwd}}",
+    permPromptDeadline: "🕒 auto-deny at {{deadline}} if no response",
+    permAllowed: "✅ Allowed",
+    permDenied: "⛔ Denied",
     enqueueFail: {
       situation: "enqueueing inbound messages has failed {{count}} times in a row",
       action:

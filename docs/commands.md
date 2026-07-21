@@ -355,7 +355,6 @@ perm_tier (acp = approve each tool in the channel / autopass = auto-allow except
   1) acp
   2) autopass
 enter a number or the value [acp]: 2
-allowlist (comma-separated, empty for none): Read,Grep
 denylist (tools/patterns that fall back to channel approval, comma-separated; empty for the recommended default list):
 enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (Y/n): y
 lang (channel message locale, empty for global)
@@ -377,7 +376,7 @@ token written: ~/.config/adde/myproj/state/tg-claude/.env (0600)
 Start: adde up myproj
 ```
 
-(The `denylist` prompt appears only when `perm_tier=autopass`. For a `markdown` source, the `chat_id`/`allow_from`/token prompts are replaced by `root`/`inbox` (default `inbox.md`)/`approvals`/`outbox`.)
+(The `allowlist` prompt appears only when `perm_tier=acp`, and the `denylist` prompt only when `perm_tier=autopass` — each tier is asked only for the list that affects it. For a `markdown` source, the `chat_id`/`allow_from`/token prompts are replaced by `root` (required)/`inbox` (default `inbox.md`)/`approvals`/`outbox`.)
 
 **Example: scripted** (non-interactive; every value from flags, token piped on stdin — nothing prompted):
 

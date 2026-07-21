@@ -121,9 +121,13 @@ export async function collectInteractive(
   opts.source = source;
   opts.perm_tier = await askEnum(ask, t("lane.prompt.permTier"), ["acp", "autopass"], "acp");
 
-  const allow = await ask(t("lane.prompt.allowlist"), "");
-  if (allow) opts.allowlist = parseCsv(allow);
-  if (opts.perm_tier === "autopass") {
+  // 티어별로 의미 있는 목록만 묻는다(비대칭 제거): acp = allowlist(자동 허용) / autopass = denylist(승인
+  // 폴백). autopass 에서 allowlist 는 denylist 미매칭 도구를 어차피 autopass 가 자동 허용하므로 게이트
+  // 결과를 바꾸지 못하는 no-op 라 묻지 않는다(로그 via 라벨만 영향).
+  if (opts.perm_tier === "acp") {
+    const allow = await ask(t("lane.prompt.allowlist"), "");
+    if (allow) opts.allowlist = parseCsv(allow);
+  } else {
     // 빈 입력이면 미기록 → laneAdd 가 autopass 기본 denylist 를 적용(동작 동일). 긴 기본 CSV 를
     // `[def]` 로 노출하지 않아 프롬프트가 간결하다.
     const deny = await ask(t("lane.prompt.denylist"), "");

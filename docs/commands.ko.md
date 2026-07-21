@@ -355,7 +355,6 @@ perm_tier (acp = 도구마다 채널 승인 / autopass = denylist 외 자동 허
   1) acp
   2) autopass
 번호 또는 값 입력 [acp]: 2
-allowlist (콤마 구분, 없으면 비움): Read,Grep
 denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분; 없으면 권장 기본 목록):
 방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (Y/n): y
 lang (채널 메시지 로케일, 전역은 비움)
@@ -377,7 +376,7 @@ telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입
 기동: adde up myproj
 ```
 
-(`denylist` 프롬프트는 `perm_tier=autopass` 일 때만 나옵니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`(기본 `inbox.md`)/`approvals`/`outbox` 로 바뀝니다.)
+(`allowlist` 프롬프트는 `perm_tier=acp` 일 때만, `denylist` 프롬프트는 `perm_tier=autopass` 일 때만 나옵니다 — 각 티어에 영향을 주는 목록만 묻습니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`(필수)/`inbox`(기본 `inbox.md`)/`approvals`/`outbox` 로 바뀝니다.)
 
 **예시: 스크립트** (비대화형, 모든 값을 플래그로, 토큰은 stdin 으로 — 프롬프트 없음):
 

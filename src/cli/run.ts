@@ -204,12 +204,20 @@ async function handleDown(rest: readonly string[], parsed?: ParseResult): Promis
   }
   const json = res.flags.json === true;
   try {
-    const { unloadDaemon } = await import("../core/launchd.js");
+    const { unloadDaemon, daemonRegState } = await import("../core/launchd.js");
+    // 등록/상주 여부를 unload 전에 확인 — 미등록·오타 proj 에 무조건 "stopped" 성공을 보고해
+    // 오타를 은폐하지 않도록 구분 안내한다(unload 는 멱등이라 그 자체로는 상태를 알려주지 못한다).
+    const reg = await daemonRegState(proj);
+    const wasRegistered = reg.plistExists || reg.launchctlRegistered;
     await unloadDaemon(proj);
     if (json) {
-      process.stdout.write(JSON.stringify({ v: 1, proj, stopped: true }, null, 2) + "\n");
+      process.stdout.write(
+        JSON.stringify({ v: 1, proj, stopped: true, wasRegistered }, null, 2) + "\n",
+      );
     } else {
-      process.stdout.write(t("run.downDone", { proj }) + "\n");
+      process.stdout.write(
+        t(wasRegistered ? "run.downDone" : "run.downNotRunning", { proj }) + "\n",
+      );
     }
     return EXIT.OK;
   } catch (err) {

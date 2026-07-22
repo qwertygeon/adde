@@ -130,6 +130,22 @@ describe("no-op CLI (SC-009)", () => {
   });
 });
 
+describe("--unset 키 없음 전용 오류", () => {
+  it("--unset 만 주고 키가 없으면 unsetNoKeys 오류로 exit 1(noEdits/위저드로 흐르지 않음)", async () => {
+    const { confPath } = await laneAdd("proj", "laneunset0", {});
+    const before = fs.readFileSync(confPath, "utf8");
+
+    const cap = captureStdio();
+    const code = await runLane(["set", "proj", "laneunset0", "--unset"]);
+    cap.restore();
+
+    expect(code).toBe(1);
+    expect(cap.err()).toContain(tAny("laneConfig.err.unsetNoKeys"));
+    expect(cap.err()).not.toContain(tAny("laneConfig.err.noEdits"));
+    expect(fs.readFileSync(confPath, "utf8")).toBe(before);
+  });
+});
+
 describe("restart 무조건 안내 (SC-015)", () => {
   it("편집 성공 시 데몬 상태 판정 없이 restart 안내(adde restart <proj>)가 표준출력에 포함된다", async () => {
     await laneAdd("proj", "lanerestart", {});

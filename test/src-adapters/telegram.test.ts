@@ -377,9 +377,13 @@ describe("TelegramSource inline 버튼 (SC-017)", () => {
 
     const row = keyboard?.[0] as Record<string, unknown>[] | undefined;
     expect(row).toHaveLength(2);
+    // 버튼 라벨은 i18n(로케일별) 이므로 로케일 불변 계약인 callback_data 로 allow/deny 액션을 단언한다.
+    const callbackData = row?.map((b) => b["callback_data"] as string);
+    expect(callbackData).toContain("allow:perm-001");
+    expect(callbackData).toContain("deny:perm-001");
+    // 라벨은 비어있지 않게 렌더된다(로케일 문자열 존재만 확인).
     const buttonTexts = row?.map((b) => b["text"] as string);
-    expect(buttonTexts?.map((t) => t.toLowerCase())).toContain("allow");
-    expect(buttonTexts?.map((t) => t.toLowerCase())).toContain("deny");
+    expect(buttonTexts?.every((t) => t.length > 0)).toBe(true);
   });
 });
 

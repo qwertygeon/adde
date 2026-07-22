@@ -156,12 +156,11 @@ The archive is a directory of plain append-only dated files (`<archive-dir>/YYYY
 
 ## 4. Receiving responses (output notes)
 
-An AI response is created in the output directory (`adde/<lane>/out/`) as **one note per message** (`<send-time> <id>.md`, e.g. `20260703-162045 a1b2c3d4.md`). Since the filename begins with the send time, they sort chronologically, and because the name matches the inbox's `✅ sent [[...]]` wikilink, the link opens it directly. The top of the note carries a back-reference to the original, a question excerpt, and time metadata:
+An AI response is created in the output directory (`adde/<lane>/out/`) as **one note per message** (`<send-time> <id>.md`, e.g. `20260703-162045 a1b2c3d4.md`). Since the filename begins with the send time, they sort chronologically, and because the name matches the inbox's `✅ sent [[...]]` wikilink, the link opens it directly. The top of the note carries a question excerpt and time metadata:
 
 ```markdown
-> ↩ a1b2c3d4
 > ❓ analyze the cause of the build error
-> 🕒 requested 20260703-162045 · completed 20260703-162130
+> 🕒 sent 20260703-162045 · done 20260703-162130
 
 (AI response body)
 ```
@@ -177,6 +176,7 @@ When the AI calls a tool that needs permission — file write, Bash execution, e
 
 > rm -rf build/ (cwd: /Users/me/work/my-project)
 > 🕒 requested 20260703-162045 · auto-deny at 20260703-163045 if no response
+> check exactly one box below — allow or deny (leaving both keeps it pending)
 
 - [ ] allow
 - [ ] deny

@@ -159,14 +159,36 @@ describe("adde proj ls --json — {v,projects} 객체 (SC-001 Happy)", () => {
   });
 });
 
-describe("adde down --json — {v,proj,stopped:true} (SC-001 Happy)", () => {
-  it("unloadDaemon 성공 시 stdout 이 {v,proj,stopped:true} JSON, exit 0", async () => {
+describe("adde down --json — {v,proj,stopped:true,wasRegistered} (SC-001 Happy)", () => {
+  it("등록된 proj 정지 시 stdout 이 {v,proj,stopped:true,wasRegistered:true} JSON, exit 0", async () => {
     unloadDaemon.mockResolvedValue(undefined);
+    daemonRegState.mockResolvedValue({ plistExists: true, launchctlRegistered: true });
     const cap = captureStdout();
     const code = await run(["down", "p", "--json"]);
     cap.restore();
-    const parsed = JSON.parse(cap.out()) as { v: number; proj: string; stopped: boolean };
-    expect(parsed).toEqual({ v: 1, proj: "p", stopped: true });
+    const parsed = JSON.parse(cap.out()) as {
+      v: number;
+      proj: string;
+      stopped: boolean;
+      wasRegistered: boolean;
+    };
+    expect(parsed).toEqual({ v: 1, proj: "p", stopped: true, wasRegistered: true });
+    expect(code).toBe(0);
+  });
+
+  it("미등록 proj 는 wasRegistered:false (오타 은폐 방지 — 여전히 stopped:true·exit 0 멱등)", async () => {
+    unloadDaemon.mockResolvedValue(undefined);
+    daemonRegState.mockResolvedValue({ plistExists: false, launchctlRegistered: false });
+    const cap = captureStdout();
+    const code = await run(["down", "nope", "--json"]);
+    cap.restore();
+    const parsed = JSON.parse(cap.out()) as {
+      v: number;
+      proj: string;
+      stopped: boolean;
+      wasRegistered: boolean;
+    };
+    expect(parsed).toEqual({ v: 1, proj: "nope", stopped: true, wasRegistered: false });
     expect(code).toBe(0);
   });
 });

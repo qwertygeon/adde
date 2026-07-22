@@ -73,7 +73,7 @@ adde 설정 — 환경 점검, 짧은 별칭, 첫 레인을 만듭니다.
 
 프로젝트 이름 [default]: myproj
 레인 이름 [main]: tg-claude
-source
+source (markdown = 노트 파일로 구동 / telegram = 봇 채팅으로 구동)
   1) markdown
   2) telegram
 번호 또는 값 입력 [markdown]: 2
@@ -149,7 +149,7 @@ adde down <proj> [--json]
 
 해당 프로젝트의 launchd 데몬을 종료하고 plist 파일을 제거합니다. **어느 터미널에서든** 실행 가능합니다(교차 프로세스 종료).
 
-- **`--json`**: 사람용 확인 문구 대신 `{ "v": 1, "proj": "<proj>", "stopped": true }` 를 출력합니다. 오류 발생 시에도 오류는 stderr 로 나가고 stdout 은 비워둡니다(exit 1).
+- **`--json`**: 사람용 확인 문구 대신 `{ "v": 1, "proj": "<proj>", "stopped": true, "wasRegistered": <bool> }` 를 출력합니다. `wasRegistered` 는 중지 전 데몬이 실제 등록돼 있었으면(plist 존재 또는 launchctl 적재) `true`, 이미 중지됐거나 알 수 없는 프로젝트면 `false` 입니다(사람용 문구도 이 둘을 구분합니다). 오류 발생 시에도 오류는 stderr 로 나가고 stdout 은 비워둡니다(exit 1).
 
 ```bash
 adde down myproj --json   # 기계 판독 확인(스크립트)
@@ -347,7 +347,7 @@ adde lane show myproj tg-claude --json  # 기계 판독 conf(스크립트/모니
 
 ```text
 $ adde lane add myproj tg-claude
-source
+source (markdown = 노트 파일로 구동 / telegram = 봇 채팅으로 구동)
   1) markdown
   2) telegram
 번호 또는 값 입력 [markdown]: 2
@@ -355,7 +355,6 @@ perm_tier (acp = 도구마다 채널 승인 / autopass = denylist 외 자동 허
   1) acp
   2) autopass
 번호 또는 값 입력 [acp]: 2
-allowlist (콤마 구분, 없으면 비움): Read,Grep
 denylist (채널 승인으로 폴백할 도구·패턴, 콤마 구분; 없으면 권장 기본 목록):
 방어심화 하드-거부 기본값을 켤까요? sudo / rm -rf / git 강제 / 자격증명 읽기를 즉시 차단 (Y/n): y
 lang (채널 메시지 로케일, 전역은 비움)
@@ -377,7 +376,7 @@ telegram 봇 토큰 (가려진 입력, 나중에 설정하려면 비움): ⟨입
 기동: adde up myproj
 ```
 
-(`denylist` 프롬프트는 `perm_tier=autopass` 일 때만 나옵니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`/`inbox`(기본 `inbox.md`)/`approvals`/`outbox` 로 바뀝니다.)
+(`allowlist` 프롬프트는 `perm_tier=acp` 일 때만, `denylist` 프롬프트는 `perm_tier=autopass` 일 때만 나옵니다 — 각 티어에 영향을 주는 목록만 묻습니다. `markdown` 소스에서는 `chat_id`/`allow_from`/토큰 프롬프트가 `root`(필수)/`inbox`(기본 `inbox.md`)/`approvals`/`outbox` 로 바뀝니다.)
 
 **예시: 스크립트** (비대화형, 모든 값을 플래그로, 토큰은 stdin 으로 — 프롬프트 없음):
 
@@ -519,7 +518,8 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 
 - **최상위 명령 + 전역 플래그** — `up`/`down`/…/`lane`/`completion`, `-h`/`--help`/`-v`/`--version`. zsh 는 각 명령 옆에 짧은 설명을 표시합니다.
 - **하위 명령·고정 값** — `lane add|set|ls|show|rm|help`, `proj ls|rm`(`proj rm` 뒤 프로젝트 이름), `completion bash|zsh`, `alias` 뒤 별칭 이름 제안, `status --all/--json`, `logs --engine`, `lane add`/`lane set` 옵션 플래그(동일 명령 스펙에서 파생되므로 `lane set` 플래그도 동일하게 완성됩니다).
-- **동적 프로젝트/레인 이름** — `${ADDE_HOME:-~/.config/adde}` 를 셸에서 직접 스캔합니다(`adde` 프로세스 미스폰): `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` 와 `lane ls|show|rm|add` 의 첫 위치에서 프로젝트 이름(예: `adde up <TAB>`, `adde status <TAB>`), 다음 위치에서 레인 이름(예: `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
+- **동적 프로젝트/레인 이름** — `${ADDE_HOME:-~/.config/adde}` 를 셸에서 직접 스캔합니다(`adde` 프로세스 미스폰): `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` 와 `lane ls|show|rm|add|set` 의 첫 위치에서 프로젝트 이름(예: `adde up <TAB>`, `adde status <TAB>`), 다음 위치에서 레인 이름(예: `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
+- **편집 가능 설정 키(점표기)** — `adde lane set <proj> <lane>` 뒤에서 편집 가능 키 이름이 옵션 플래그와 함께 완성되고(플래그 없는 markdown 그룹 포함: `markdown.retention_days`·`markdown.archive` 등), `lane show <proj> <lane>` 의 `[key]` 자리도 같은 키 목록으로 완성됩니다. 레인 키 스키마에서 파생되므로 새 키가 자동 반영됩니다.
 - **enum 플래그 값** — `--source`(markdown|telegram), `--perm-tier`(acp|autopass), `--file-mode`(private|shared), `--lang`(en|ko) 뒤.
 - **디렉터리 경로** — `--cwd`·`--root` 뒤.
 

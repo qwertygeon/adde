@@ -5,7 +5,6 @@ import { t } from "../shared/i18n.js";
 import { findCommand, suggestCommands } from "./spec.js";
 import { parseCommand } from "./parse.js";
 import type { ParseResult } from "./parse.js";
-import { completionScript, SUPPORTED_SHELLS } from "./completion.js";
 import { defaultBase } from "../shared/paths.js";
 import { readBootReport } from "../core/boot-report.js";
 import type { BootReport } from "../core/boot-report.js";
@@ -85,6 +84,9 @@ async function handleCompletion(rest: readonly string[]): Promise<number> {
     process.stderr.write(USAGE.completion + "\n");
     return EXIT.USAGE;
   }
+  // lazy import — completion 은 스크립트 생성 시에만 필요하고, lane-schema(점표기 키 완성)를
+  // 끌고 오므로 eager 로 두면 전 명령 기동 경로에 편입된다(기동 비용 불변 원칙).
+  const { completionScript, SUPPORTED_SHELLS } = await import("./completion.js");
   const script = completionScript(shell);
   if (script === null) {
     process.stderr.write(
@@ -204,12 +206,20 @@ async function handleDown(rest: readonly string[], parsed?: ParseResult): Promis
   }
   const json = res.flags.json === true;
   try {
-    const { unloadDaemon } = await import("../core/launchd.js");
+    const { unloadDaemon, daemonRegState } = await import("../core/launchd.js");
+    // 등록/상주 여부를 unload 전에 확인 — 미등록·오타 proj 에 무조건 "stopped" 성공을 보고해
+    // 오타를 은폐하지 않도록 구분 안내한다(unload 는 멱등이라 그 자체로는 상태를 알려주지 못한다).
+    const reg = await daemonRegState(proj);
+    const wasRegistered = reg.plistExists || reg.launchctlRegistered;
     await unloadDaemon(proj);
     if (json) {
-      process.stdout.write(JSON.stringify({ v: 1, proj, stopped: true }, null, 2) + "\n");
+      process.stdout.write(
+        JSON.stringify({ v: 1, proj, stopped: true, wasRegistered }, null, 2) + "\n",
+      );
     } else {
-      process.stdout.write(t("run.downDone", { proj }) + "\n");
+      process.stdout.write(
+        t(wasRegistered ? "run.downDone" : "run.downNotRunning", { proj }) + "\n",
+      );
     }
     return EXIT.OK;
   } catch (err) {

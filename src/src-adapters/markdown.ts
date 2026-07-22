@@ -174,7 +174,8 @@ export function sentLine(id: string, stamp: string): string {
   return `- [x] ✅ sent [[${outNoteBase(stamp, id)}]]`;
 }
 export function emptyLine(): string {
-  return "- [x] ⚠️ empty (no message)";
+  // 종단 마커 겸 안내 — `⚠️ empty` 앵커는 TERMINAL_MARKER 프리픽스 매칭이라 뒤 안내문을 붙여도 파싱 불변.
+  return "- [x] ⚠️ empty (no message — type your text above the send box)";
 }
 
 /** 아카이브 적격 strict 마커 — sentLine 형식(`- [x] ✅ sent [[stamp id]]`)만. 캡처: 1=stamp, 2=id.
@@ -379,6 +380,7 @@ export function renderApprovalBlock(
     `### ⏳ req ${req.id} · ${req.tool}`,
     `> ${detail}  (cwd: ${req.cwd})`,
     `> ${tl("markdown.approvalMeta", { requested: formatStamp(now), deadline: formatStamp(deadline) })}`,
+    `> ${tl("markdown.approvalHint")}`,
     `- [ ] allow`,
     `- [ ] deny`,
     `<!-- adde:perm id=${req.id} status=pending -->`,
@@ -461,6 +463,16 @@ export function finalizeApprovalDeny(
     const m = PERM_MARKER.exec(lines[i]!);
     if (m && m[1] === reqId && m[2] === "pending") {
       lines[i] = `<!-- adde:perm id=${reqId} status=deny reason=${reason} -->`;
+      // 가시 헤딩도 사용자 결정 경로(parseApprovals)와 동일하게 종단 표기 — 마커만 바꾸면 화면엔
+      // ⏳ pending 이 그대로 남아 사용자가 자동거부를 못 본다. 블록 시작(직전 마커/파일 시작)까지
+      // 역주사해 첫 ### ⏳ 라인을 ⛔·req(deny) 로 갱신한다.
+      for (let j = i - 1; j >= 0; j--) {
+        if (PERM_MARKER.test(lines[j]!)) break; // 이전 블록 침범 방지
+        if (/^###\s+⏳/.test(lines[j]!)) {
+          lines[j] = lines[j]!.replace(/^###\s+⏳/, "### ⛔").replace(/\breq\b/, "req(deny)");
+          break;
+        }
+      }
       changed = true;
     }
   }
@@ -615,8 +627,11 @@ async function collectMarkdownWizardFields(ctx: WizardCtx): Promise<Partial<Lane
   const fields: Partial<LaneAddOptions> = {};
   const askPath = ctx.askPath ?? ctx.ask;
 
-  const root = await askPath(t("lane.prompt.root"), "");
-  if (root) fields.root = root;
+  // root 는 markdown 레인의 구조적 필수값(없으면 동작 불가) — 빈 입력을 재질의해 "조용히 망가진
+  // 레인"(생성은 되나 기동 불가) 을 막는다. 비대화 lane add 는 --root 플래그로 공급(이 위저드 밖).
+  let root = await askPath(t("lane.prompt.root"), "");
+  while (!root) root = await askPath(t("lane.retry.root"), "");
+  fields.root = root;
   const inbox = await askPath(t("lane.prompt.inbox"), "inbox.md");
   if (inbox) fields.inbox = inbox;
   const approvals = await askPath(t("lane.prompt.approvals"), "");
@@ -1173,8 +1188,8 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     // 귀결한다(멱등). stamp 부재(레거시 폴백)는 flat 유지.
     const noteDir = stamp ? join(outboxDir, dateFolderFromStamp(stamp)) : outboxDir;
     const headerLines: string[] = [];
-    const replyRef = sidecar?.reply_ref?.channel_msg_id;
-    if (replyRef) headerLines.push(`> ↩ ${replyRef}`);
+    // reply_ref 는 헤더에 렌더하지 않는다: markdown 레인의 channel_msg_id 는 전송 시 생성한
+    // 이 노트 자신의 id(파일명·inbox 위키링크와 동일)라 자기순환·중복 표기만 된다.
     if (sidecar?.question) headerLines.push(`> ❓ ${sidecar.question}`);
     if (stamp && sidecar?.ts) {
       headerLines.push(
@@ -1578,7 +1593,8 @@ export function createMarkdownSource(cfg: SourceContext): Source {
   async function notify(text: string): Promise<void> {
     const file = join(outboxDir, "_adde-notice.md");
     const existing = (await readMaybe(file)) ?? "";
-    const stamp = new Date().toISOString();
+    // 로컬 stamp(YYYYMMDD-HHmmss) — 나머지 markdown 렌더와 표기 통일(전에는 원시 ISO-UTC 라 불일치).
+    const stamp = formatStamp(new Date());
     await atomicWrite(file, `${existing}${existing ? "\n" : ""}> ${stamp}\n\n${text}\n`);
   }
 

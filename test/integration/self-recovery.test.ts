@@ -188,8 +188,9 @@ describe("SC-014: auto_relaunch=false 레인 — 재기동 0·즉시 error·deny
     // 채널 통지 정확히 1회 — markdown _adde-notice.md 에 통지 블록 1개.
     const noticePath = path.join(rootDir, "out", "_adde-notice.md");
     await waitFor(() => fs.existsSync(noticePath), { timeoutMs: 6000 });
+    // 통지 블록 헤더 = `> <formatStamp>` (로컬 YYYYMMDD-HHmmss — 006 에서 ISO-UTC 에서 통일).
     const countBlocks = (): number =>
-      (fs.readFileSync(noticePath, "utf8").match(/^> \d{4}-\d{2}-\d{2}T/gm) ?? []).length;
+      (fs.readFileSync(noticePath, "utf8").match(/^> \d{8}-\d{6}/gm) ?? []).length;
     expect(countBlocks()).toBe(1);
 
     // 재진입(중복 크래시 신호)에도 통지가 재발생하지 않는다(terminal 가드).

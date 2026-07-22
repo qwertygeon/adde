@@ -73,7 +73,7 @@ install short aliases (ad, add) next to the adde command? (Y/n): y
 
 project name [default]: myproj
 lane name [main]: tg-claude
-source
+source (markdown = drive from note files / telegram = drive from a bot chat)
   1) markdown
   2) telegram
 enter a number or the value [markdown]: 2
@@ -149,7 +149,7 @@ adde down <proj> [--json]
 
 Stops that project's launchd daemon and removes the plist file. It can run **from any terminal** (cross-process termination).
 
-- **`--json`**: prints `{ "v": 1, "proj": "<proj>", "stopped": true }` instead of the plain-text confirmation. On an error the message still goes to stderr and stdout stays empty (exit 1).
+- **`--json`**: prints `{ "v": 1, "proj": "<proj>", "stopped": true, "wasRegistered": <bool> }` instead of the plain-text confirmation. `wasRegistered` is `true` when a daemon was actually registered (plist present or launchctl-loaded) before the stop, `false` for an already-stopped/unknown project (the plain-text path likewise distinguishes these two). On an error the message still goes to stderr and stdout stays empty (exit 1).
 
 ```bash
 adde down myproj --json   # machine-readable confirmation (scripts)
@@ -347,7 +347,7 @@ In the wizard, the telegram bot token is prompted **last, with hidden input** (k
 
 ```text
 $ adde lane add myproj tg-claude
-source
+source (markdown = drive from note files / telegram = drive from a bot chat)
   1) markdown
   2) telegram
 enter a number or the value [markdown]: 2
@@ -355,7 +355,6 @@ perm_tier (acp = approve each tool in the channel / autopass = auto-allow except
   1) acp
   2) autopass
 enter a number or the value [acp]: 2
-allowlist (comma-separated, empty for none): Read,Grep
 denylist (tools/patterns that fall back to channel approval, comma-separated; empty for the recommended default list):
 enable safe-defaults hard-deny? blocks sudo / rm -rf / git force / credential reads outright (Y/n): y
 lang (channel message locale, empty for global)
@@ -377,7 +376,7 @@ token written: ~/.config/adde/myproj/state/tg-claude/.env (0600)
 Start: adde up myproj
 ```
 
-(The `denylist` prompt appears only when `perm_tier=autopass`. For a `markdown` source, the `chat_id`/`allow_from`/token prompts are replaced by `root`/`inbox` (default `inbox.md`)/`approvals`/`outbox`.)
+(The `allowlist` prompt appears only when `perm_tier=acp`, and the `denylist` prompt only when `perm_tier=autopass` — each tier is asked only for the list that affects it. For a `markdown` source, the `chat_id`/`allow_from`/token prompts are replaced by `root` (required)/`inbox` (default `inbox.md`)/`approvals`/`outbox`.)
 
 **Example: scripted** (non-interactive; every value from flags, token piped on stdin — nothing prompted):
 
@@ -519,7 +518,8 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 
 - **Top-level commands + global flags** — `up`/`down`/…/`lane`/`completion`, and `-h`/`--help`/`-v`/`--version`. In zsh each command shows a short description next to it.
 - **Subcommands and fixed values** — `lane add|set|ls|show|rm|help`, `proj ls|rm` (project name after `proj rm`), `completion bash|zsh`, the alias-name suggestions after `alias`, `status --all/--json`, `logs --engine`, and the `lane add`/`lane set` option flags (derived from the same command spec, so `lane set`'s flags complete the same way).
-- **Dynamic project/lane names** — scanned live from `${ADDE_HOME:-~/.config/adde}` (no `adde` process is spawned): a project name at the first position of `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` and `lane ls|show|rm|add` (e.g. `adde up <TAB>`, `adde status <TAB>`), and a lane name at the next position (e.g. `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
+- **Dynamic project/lane names** — scanned live from `${ADDE_HOME:-~/.config/adde}` (no `adde` process is spawned): a project name at the first position of `up`/`down`/`restart`/`status`/`doctor`/`logs`/`sessions` and `lane ls|show|rm|add|set` (e.g. `adde up <TAB>`, `adde status <TAB>`), and a lane name at the next position (e.g. `adde logs <proj> <TAB>`, `adde lane show <proj> <TAB>`, `adde sessions <proj> <TAB>`).
+- **Editable config keys (dot notation)** — after `adde lane set <proj> <lane>`, the editable key names complete alongside the option flags (including the dot-only markdown group: `markdown.retention_days`, `markdown.archive`, …), and the `[key]` slot of `lane show <proj> <lane>` completes the same key list. Derived from the lane key schema, so new keys join automatically.
 - **Enum flag values** — after `--source` (markdown|telegram), `--perm-tier` (acp|autopass), `--file-mode` (private|shared), `--lang` (en|ko).
 - **Directory paths** — after `--cwd` and `--root`.
 

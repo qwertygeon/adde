@@ -119,6 +119,9 @@ describe("collectInteractive (007 SC1)", () => {
   it("enum 필드(perm_tier)는 유효값이 올 때까지 재질의한다 (B1)", async () => {
     let calls = 0;
     const ask: Ask = async (q, def) => {
+      // source=telegram 로 고정 — markdown 필수 root 재질의(빈 입력 무한 반복)를 우회. perm_tier 는
+      // 소스 무관 공통 필드라 검증 대상 불변.
+      if (q.includes("source")) return "telegram";
       if (q.includes("perm_tier")) {
         calls++;
         return calls < 2 ? "bogus" : "autopass";
@@ -148,6 +151,8 @@ describe("collectInteractive (007 SC1)", () => {
   it("enum 필드(file_mode)는 유효값이 올 때까지 재질의한다 (B1)", async () => {
     let calls = 0;
     const ask: Ask = async (q, def) => {
+      // source=telegram 고정 — markdown 필수 root 재질의 우회(file_mode 는 소스 무관 공통 필드).
+      if (q.includes("source")) return "telegram";
       if (q.includes("file_mode")) {
         calls++;
         return calls < 2 ? "bogus" : "shared";
@@ -162,6 +167,8 @@ describe("collectInteractive (007 SC1)", () => {
   it("enum 필드(lang)는 유효값이 올 때까지 재질의한다 (B1)", async () => {
     let calls = 0;
     const ask: Ask = async (q, def) => {
+      // source=telegram 고정 — markdown 필수 root 재질의 우회(lang 은 소스 무관 공통 필드).
+      if (q.includes("source")) return "telegram";
       if (q.includes("lang")) {
         calls++;
         return calls < 2 ? "fr" : "ko";

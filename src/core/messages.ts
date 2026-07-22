@@ -78,7 +78,7 @@ export function buildProjUsage(): string {
 
 /** 알 수 없는 proj 서브커맨드 안내(+ 사용법). */
 export function unknownProjSub(sub: string): string {
-  return `${t("cli.unknownSub", { sub })}\n\n${buildProjUsage()}`;
+  return `${t("cli.unknownProjSub", { sub })}\n\n${buildProjUsage()}`;
 }
 
 /** 최상위 명령 오류 — `[adde <cmd>] 오류: <detail>`. */

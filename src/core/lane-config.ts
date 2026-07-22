@@ -598,10 +598,14 @@ export async function laneSet(
   const unsetKeys = new Set<string>();
 
   // typed 명명 플래그 → canonical. 값은 이미 타입 확정(리스트=배열/그 외=문자열).
+  // 경로 타입은 점표기 경로(parseSchemaValue)와 동일하게 set-시점 정규화 — 반환 conf·직후 표시가
+  // reparse 전에도 정규화 값과 일치한다(경로 정규화 시점 비대칭 해소; reparse 정규화와 멱등).
   for (const d of LANE_KEY_DESCRIPTORS) {
     if (d.flag === undefined) continue;
     const v = (edits as Record<string, unknown>)[d.field];
-    if (v !== undefined) setValues.set(d.key, v as EditValue);
+    if (v === undefined) continue;
+    const value = d.type === "path" && typeof v === "string" ? normalizeUserPath(v) : v;
+    setValues.set(d.key, value as EditValue);
   }
   // 점표기 위치인자 편집(raw 문자열) → 스키마 검증·파싱(set-시점 하드 거부).
   for (const e of edits.edits ?? []) {
@@ -630,6 +634,18 @@ export async function laneSet(
   // 제네릭 적용 — 스키마 confPath 기반. 네임스페이스는 미편집 서브필드(archive/backup 등) 보존 병합.
   for (const [key, value] of setValues) applyConfValue(conf, findDescriptor(key)!, value);
   for (const key of unsetKeys) unsetConfValue(conf, findDescriptor(key)!);
+
+  // 티어↔목록 정합 하드 거부 — 이번 편집에서 명시 지정한 목록이 유효 perm_tier(같은 명령의 병합값)에서
+  // 게이트 no-op 이면 거부한다. acp: allowlist 로만 자동허용(denylist 미참조) / autopass: denylist 외
+  // 전부 자동허용(allowlist 무의미) — decideAutoAllow(backend/acp/client.ts) 의미 반영. 빈 값(초기화)은 무해해 허용.
+  const setDeny = setValues.get("denylist");
+  const setAllow = setValues.get("allowlist");
+  if (conf.perm_tier === "acp" && Array.isArray(setDeny) && setDeny.length > 0) {
+    throw new LaneConfigError(t("laneConfig.err.denylistNoopAcp"));
+  }
+  if (conf.perm_tier === "autopass" && Array.isArray(setAllow) && setAllow.length > 0) {
+    throw new LaneConfigError(t("laneConfig.err.allowlistNoopAutopass"));
+  }
 
   const fileModeRelaxed =
     setValues.has("file_mode") &&

@@ -131,7 +131,7 @@ lane set options (edit-only subset of lane add — identity fields, tokens, and 
   --unset <key> ...             remove keys (dot-notation) to restore their consumer default; identity/required keys are refused
 
 Positional dot-notation keys (adde lane set <proj> <lane> <key> <value> ...) edit the same surface, plus markdown-only extras:
-  markdown.archive, markdown.backup, markdown.retention_days, markdown.out_retention_days, markdown.sync_provider
+  markdown.archive, markdown.backup, markdown.retention_days, markdown.out_retention_days, markdown.sync_provider, markdown.layout, markdown.palette
 Fields left unspecified keep their current value. Changes take effect after adde restart <proj>.
 Note: editing --file-mode only updates the conf value; existing directory permissions are NOT changed even after restart (relaxing private→shared needs a manual chmod). file_mode governs only the internal state/out/queue directories, not the markdown note tree.`,
   },
@@ -267,6 +267,10 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       outRetentionDays:
         "markdown.out_retention_days (out/ prune safety window in days; must be retention_days+1 or more, empty to skip)",
       syncProvider: "markdown.sync_provider (local | icloud, empty for default local)",
+      layout:
+        "markdown.layout (on | off — inbox zoned layout: palette + compose sentinel + records zone + auto-archive on send, empty for default on)",
+      palette:
+        "markdown.palette (on | off — show the always-present palette markers at the top of the inbox, empty for default on; only relevant when layout=on)",
     },
     ttyOnly: {
       situation: "--interactive only works in an interactive terminal (TTY)",
@@ -566,6 +570,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       "[markdown] out_retention_days({{outRetentionDays}}) must be >= retention_days({{retentionDays}}) + {{margin}} — refusing startup.",
     backupNoArchiveWarn:
       "⚠️ backup relocation is on but archive is not configured — inbox content keeps accumulating (archived text is not relocated). Set markdown.archive to enable archiving.",
+    recordsHeading: "Sent history",
   },
   supervisor: {
     noLanesMsg: "{{proj}}: 0 lanes — no conf in lanes.d",
@@ -764,6 +769,8 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       backupWarnNotifyFail: "[markdown] failed to write backup/archive warning notice: {{error}}",
       legacyArchiveMoveError:
         "[markdown] failed to relocate legacy archive file {{path}}: {{error}}",
+      archiveWriteError:
+        "[markdown] lane={{lane}} auto-archive write failed (falling back to keeping the body in the inbox — no loss): {{error}}",
     },
     markdownRetention: {
       relocateFail:

@@ -24,6 +24,7 @@ import {
   isTerminalMarker,
   planArchive,
   archivedLine,
+  emptyLine,
 } from "../../src/src-adapters/markdown.js";
 import type { Source } from "../../src/src-adapters/source.js";
 import type { PermRequest } from "../../src/gate/gate.js";
@@ -699,6 +700,9 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("인박스의 체크된 send 블록을 envelope 으로 큐잉하고 sent 로 종단한다", async () => {
+    // 007 존 레이아웃 기본 켜짐(markdown.layout 기본 on)으로 최상단·기록 존 구조가 바뀌므로
+    // 이 테스트가 고정하는 레거시(위-읽기 제자리 종단) 계약은 layout=off 로 pin 한다(T-D3).
+    conf.markdown!.layout = "off";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "마크다운 노트에서 보낸 지시\n- [x] 📤 send\n");
 
@@ -739,6 +743,9 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("M8: 미체크 send 가 없는 inbox(재기동·삭제)면 빈 send 를 self-heal 한다 (액션 없음)", async () => {
+    // 007: layout=on(기본)이면 self-heal 이 healLayout(3존 정규화)로 대체되어 이 테스트가
+    // 고정하는 ensureBlankSend 전용 레거시 계약과 달라진다 → layout=off pin(T-D3).
+    conf.markdown!.layout = "off";
     const inboxPath = path.join(rootDir, "inbox.md");
     // sent 종단만 있고 사용 가능한 미체크 send 가 없는 상태(예: 재기동 후).
     fs.writeFileSync(inboxPath, "지난 메시지\n" + sentLine("old-id", STAMP) + "\n");
@@ -759,6 +766,9 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("M8: 미체크 빈 send 만 있는 inbox 는 전송하지 않고 유지한다 (오전송 없음)", async () => {
+    // 007: layout=on 기본이면 self-heal 이 팔레트·센티널·기록 존까지 재구성해 이 테스트의
+    // "정확히 그 2줄만" 전제가 깨진다 → layout=off pin(T-D3, 레거시 계약 보존).
+    conf.markdown!.layout = "off";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, blankSendLine() + "\n");
 
@@ -798,6 +808,9 @@ describe("createMarkdownSource (통합)", () => {
 
   // A3: 크래시(enqueue 전 sending 마킹만 남음) → 재기동 시 정확히 1회 enqueue
   it("A3: sending 마커가 큐에 없으면 재기동 시 재enqueue 후 sent 종단", async () => {
+    // 007: layout=on 기본이면 sent 종단이 기록 존으로 이동해 정확 문자열 위치 전제(제자리
+    // 종단)가 달라진다 → layout=off pin(T-D3). layout-on 크래시 재개는 SC-017 신규 테스트가 커버.
+    conf.markdown!.layout = "off";
     const inboxPath = path.join(rootDir, "inbox.md");
     // 크래시 시뮬레이션: sending <id> <stamp> 만 남고 enqueue 는 안 된 상태
     fs.writeFileSync(inboxPath, `복구될 메시지\n${sendingLine("crash-1", STAMP)}\n`);
@@ -832,6 +845,9 @@ describe("createMarkdownSource (통합)", () => {
 
   // A3: 이미 처리된 sending(out 존재) → 재enqueue 없이 종단만
   it("A3: sending 마커의 id 가 이미 out 에 있으면 재enqueue 하지 않는다", async () => {
+    // 007: layout=on 기본이면 sent 종단이 기록 존으로 이동한다 → 레거시 제자리 종단 계약은
+    // layout=off pin 으로 보존한다(T-D3).
+    conf.markdown!.layout = "off";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, `이미 처리됨\n${sendingLine("done-1", STAMP)}\n`);
     // out/<id>.out 존재 = 이미 완료된 메시지
@@ -1045,7 +1061,9 @@ describe("createMarkdownSource (통합)", () => {
     expect(note).not.toContain("↩");
   });
 
-  it("제어 라벨 체크 → control envelope 큐잉 + sent 위키링크 종단", async () => {
+  // 007 T-D3(재작성): layout=on 이 기본이므로 제어 라벨은 더는 sent 위키링크로 종단되지 않고
+  // FR-001/ADR-007 대로 "실행 → 그 자리 미체크 복원"(팔레트 상주 계약)된다(SC-001/SC-002).
+  it("SC-001/제어 라벨(layout-on 기본): clear 체크 → control envelope 큐잉 → 미체크 복원", async () => {
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "- [x] 🧹 clear\n");
 
@@ -1061,11 +1079,16 @@ describe("createMarkdownSource (통합)", () => {
     expect(env["control"]).toEqual({ kind: "clear" });
     expect(env["text"]).toBe("/clear");
 
-    // 라벨 라인이 sent 위키링크로 종단(재트리거 방지 + 결과 노트 링크)
-    await waitFor(() => /sent \[\[.+\]\]/.test(fs.readFileSync(inboxPath, "utf8")));
+    // sent 종단이 아니라 그 자리가 다시 미체크로 복원된다 — 팔레트는 소멸하지 않는다.
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("- [ ] 🧹 clear"));
+    const inbox = fs.readFileSync(inboxPath, "utf8");
+    expect(inbox).not.toMatch(/sent \[\[.+\]\]/);
+    // 재발화 없음(자기쓰기 echo 가드) — 1회만 enqueue.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(msgCount()).toBe(1);
   });
 
-  it("resume 번호 라벨은 세션 장부 최신순으로 해석된다", async () => {
+  it("SC-001/제어 라벨(layout-on 기본): resume 번호 라벨은 세션 장부 최신순 해석 후 미체크 복원", async () => {
     fs.mkdirSync(paths.stateDir, { recursive: true });
     fs.writeFileSync(
       paths.sessionsFile,
@@ -1094,9 +1117,16 @@ describe("createMarkdownSource (통합)", () => {
       control?: { kind: string; sessionId?: string };
     };
     expect(env.control).toEqual({ kind: "resume", sessionId: "sess-old" });
+
+    // control 종단은 sent 링크가 아니라 라벨 자리 미체크 복원(ADR-007) — 인자·라벨 보존.
+    await waitFor(() => fs.readFileSync(inboxPath, "utf8").includes("- [ ] resume 2"));
+    expect(fs.readFileSync(inboxPath, "utf8")).not.toMatch(/sent \[\[.+\]\]/);
   });
 
   it("E2E 계약: sent 위키링크 텍스트 == renderOut 노트 파일명 (전 경로 관통)", async () => {
+    // 007: 링크 텍스트 계약(outNoteBase) 자체는 zone 이동과 무관하나, 이 테스트가 검증하는
+    // 원문 그대로의 위-읽기 구조를 고정하기 위해 layout=off pin(T-D3).
+    conf.markdown!.layout = "off";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "질문입니다\n- [x] 📤 send\n");
 
@@ -1167,6 +1197,11 @@ describe("createMarkdownSource (통합)", () => {
   const archiveFilePath = (): string => path.join(archiveDirPath(), `${todayDateStr()}.md`);
 
   it("자동(config on): 전송 시점에 본문을 아카이브로 이관하고 inbox 엔 sent 마커만 남긴다", async () => {
+    // 007 T-D3: layout=on 기본이면 즉시 아카이브가 markdown.archive 지정과 무관하게 항상
+    // 켜진다(FR-004/FR-008, A-P008 동작 변경) — "config on 이 곧 autoArchive 트리거" 라는 이
+    // 테스트의 레거시 전제를 layout=off pin 으로 보존한다. layout-on 기본 즉시 아카이브는
+    // SC-007(미지정도 자동)·SC-015(archive=디렉터리 오버라이드) 신규 테스트가 커버한다.
+    conf.markdown!.layout = "off";
     conf.markdown!.archive = "sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "이관될 본문입니다\n- [x] 📤 send\n");
@@ -1186,6 +1221,8 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("자동(config on): 조용한 턴(체크 액션 없음)엔 스윕하지 않아 상위 초안이 보존된다(S4·S6)", async () => {
+    // 007 T-D3: config-on 이 곧 autoArchive 라는 레거시 전제 보존(layout=off pin) — 위와 동일 근거.
+    conf.markdown!.layout = "off";
     conf.markdown!.archive = "sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
     // sent 마커 위의 미완성 초안 — 조용한 턴엔 자동 스윕 대상 아님(전송 시점에만 아카이브).
@@ -1203,6 +1240,9 @@ describe("createMarkdownSource (통합)", () => {
 
   // SC-010: 자동 아카이브 ON 상태에서 앵커 없는 사용자 초안은 아카이브 이관·inbox 삭제 대상이 되지 않는다.
   it("SC-010: 자동 아카이브 ON — 앵커 없는 사용자 초안은 이관·삭제되지 않고 inbox 에 잔존한다", async () => {
+    // 주: 이 "SC-010" 라벨은 007 이전 spec 의 잔존 식별자(STALE_SC, 본 007 SC-010 과 무관 —
+    // code-is-truth 비차단, 소급 정정 안 함). 007 T-D3: config-on=autoArchive 레거시 전제 보존.
+    conf.markdown!.layout = "off";
     conf.markdown!.archive = "sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "사용자 초안 텍스트\n- [x] sending report to boss\n");
@@ -1219,6 +1259,10 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("수동(config off): `🗄️ archive` 체크 시 기존 sent 본문을 일괄 이관하고 종단 표기(자동 아님)", async () => {
+    // 007 T-D3: layout-on 은 archive 트리거를 "기록 존 마커 prune"(ADR-003, SC-009/010)으로
+    // 재정의해 본문 이관(body-move) 의미가 바뀐다 — 이 테스트가 고정하는 body-move 계약은
+    // layout=off pin 으로 보존(레거시 archive=body-move 는 T-C1/C2 의 off 분기가 유지).
+    conf.markdown!.layout = "off";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "지난 본문\n" + sentLine("old", STAMP) + "\n- [x] 🗄️ archive\n");
 
@@ -1236,6 +1280,8 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("수동+자동: · auto 표기 + 진행 중(sent 아님) 초안은 스윕되지 않는다", async () => {
+    // 007 T-D3: body-move archive 계약(off 분기 전용)·config-on=autoArchive 레거시 전제 보존.
+    conf.markdown!.layout = "off";
     conf.markdown!.archive = "sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(
@@ -1255,6 +1301,9 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("크래시 멱등(Order X): 아카이브 append 후 inbox 미갱신 재기동 — 재전송 없이 본문 이관 수렴", async () => {
+    // 007 T-D3: config-on=autoArchive 레거시 전제 보존(layout=off pin). layout-on 크래시
+    // 재개는 SC-017 신규 테스트가 커버.
+    conf.markdown!.layout = "off";
     conf.markdown!.archive = "sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
     // 크래시 재현: sending + 본문 잔존, ledger done entry 존재(이미 enqueue/완료), 아카이브엔 이미 append 됨.
@@ -1276,6 +1325,8 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("자동: 한 턴 두 세그먼트 — 둘 다 이관·마커 잔존·빈 send 하나(경계·bottom-up splice)", async () => {
+    // 007 T-D3: config-on=autoArchive 레거시 전제 보존(layout=off pin).
+    conf.markdown!.layout = "off";
     conf.markdown!.archive = "sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "본문하나\n- [x] 📤 send\n본문둘\n- [x] 📤 send\n");
@@ -1306,6 +1357,8 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("자동: 중첩 아카이브 경로(부모 부재)도 start 시 부모 생성 후 정상 이관", async () => {
+    // 007 T-D3: config-on=autoArchive 레거시 전제 보존(layout=off pin).
+    conf.markdown!.layout = "off";
     conf.markdown!.archive = "logs/sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "중첩 경로 본문\n- [x] 📤 send\n");
@@ -1323,6 +1376,8 @@ describe("createMarkdownSource (통합)", () => {
   });
 
   it("자동: 이관 완료 후 재이벤트는 아카이브를 다시 append 하지 않는다(멱등 — 중복 없음)", async () => {
+    // 007 T-D3: config-on=autoArchive 레거시 전제 보존(layout=off pin).
+    conf.markdown!.layout = "off";
     conf.markdown!.archive = "sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
     fs.writeFileSync(inboxPath, "멱등 본문\n- [x] 📤 send\n");
@@ -1527,5 +1582,495 @@ describe("relocateOldFolders — 라이브 inbox 파일은 이관 대상 집합�
     } finally {
       fs.rmSync(tmpBase, { recursive: true, force: true });
     }
+  });
+});
+
+// ── 007 inbox-zoned-layout — 존 레이아웃(팔레트·compose 센티널·기록 존·즉시 아카이브) ──────
+// 5a Test AUTHORING(PPG-1). production(A/B/C 레이어)은 4단계 Development 병렬 착수 — 아직
+// 미착지된 신규 export(healLayout·planRecordsPrune·paletteLines 등)는 지연(동적) import 로
+// 개별 테스트만 격리 RED 시킨다(PROC-R15 — 파일 전체 수집 붕괴 방지). 센티널/앵커 리터럴은
+// design.md 확정 상수(`<!-- adde:compose -->`/`<!-- adde:records -->`) 그대로 하드코딩해
+// 상수 자체의 미착지로 인한 불필요한 동적 import 를 피한다.
+describe("존 레이아웃(inbox-zoned-layout, 007)", () => {
+  const COMPOSE_SENTINEL = "<!-- adde:compose -->";
+  const RECORDS_ANCHOR = "<!-- adde:records -->";
+
+  let tmpBase: string;
+  let rootDir: string;
+  let paths: ReturnType<typeof lanePaths>;
+  let conf: LaneConf;
+  let source: Source | null = null;
+
+  function makeSource(): Source {
+    return createMarkdownSource({ lane: "L", proj: "myproj", engine: "claude", paths, conf });
+  }
+
+  function msgCount(): number {
+    if (!fs.existsSync(paths.queueDir)) return 0;
+    return fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length;
+  }
+
+  function inboxFilePath(): string {
+    return path.join(rootDir, "inbox.md");
+  }
+
+  function readInbox(): string {
+    return fs.readFileSync(inboxFilePath(), "utf8");
+  }
+
+  function todayDateStr(): string {
+    const d = new Date();
+    const p = (n: number): string => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
+
+  function archiveDirPath(): string {
+    return path.join(rootDir, conf.markdown?.archive ?? "sent-archive");
+  }
+
+  function archiveFilePath(): string {
+    return path.join(archiveDirPath(), `${todayDateStr()}.md`);
+  }
+
+  /** 팔레트+센티널+기록 존이 이미 갖춰진 캔버스 — records 뒤에 임의 줄을 이어붙인다. */
+  function zonedFixture(recordsLines: string[]): string {
+    return [
+      "- [ ] 🗄️ archive",
+      "- [ ] 🧹 clear",
+      "- [ ] 🗜️ compact",
+      "- [ ] ♻️ resume",
+      COMPOSE_SENTINEL,
+      "",
+      "- [ ] 📤 send",
+      "## Sent records",
+      RECORDS_ANCHOR,
+      ...recordsLines,
+      "",
+    ].join("\n");
+  }
+
+  beforeEach(() => {
+    tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-md-layout-"));
+    rootDir = path.join(tmpBase, "Notes");
+    fs.mkdirSync(rootDir, { recursive: true });
+    paths = lanePaths(tmpBase, "myproj", "L");
+    fs.mkdirSync(paths.outDir, { recursive: true });
+    conf = {
+      source: "markdown",
+      backend: "acp",
+      engine: "claude",
+      perm_tier: "acp",
+      acp_version: "v1",
+      allowlist: [],
+      denylist: [],
+      hard_deny: [],
+      auto_relaunch: true,
+      markdown: { root: rootDir, inbox: "inbox.md" },
+    };
+  });
+
+  afterEach(() => {
+    if (source) source.stop();
+    source = null;
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  });
+
+  describe("팔레트(FR-001)", () => {
+    it("SC-001: 팔레트 clear 체크 → 실행 → 미체크 복원, 나머지 팔레트 잔존", async () => {
+      fs.writeFileSync(
+        inboxFilePath(),
+        zonedFixture([]).replace("- [ ] 🧹 clear", "- [x] 🧹 clear"),
+      );
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => msgCount() >= 1);
+      const qFile = fs.readdirSync(paths.queueDir).find((f) => f.endsWith(".msg"))!;
+      const env = JSON.parse(fs.readFileSync(path.join(paths.queueDir, qFile), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(env["control"]).toEqual({ kind: "clear" });
+
+      await waitFor(() => readInbox().includes("- [ ] 🧹 clear"));
+      const inbox = readInbox();
+      expect(inbox).toContain("- [ ] 🗄️ archive");
+      expect(inbox).toContain("- [ ] 🧹 clear");
+      expect(inbox).toContain("- [ ] 🗜️ compact");
+      expect(inbox).toContain("- [ ] ♻️ resume");
+      await new Promise((r) => setTimeout(r, 200));
+      expect(msgCount()).toBe(1); // 재발화 없음(자기쓰기 echo 가드) — 1회만 실행
+    });
+
+    it("SC-001: 미체크 팔레트는 무동작(액션 0)", async () => {
+      fs.writeFileSync(inboxFilePath(), zonedFixture([]));
+      source = makeSource();
+      await source.start();
+
+      await new Promise((r) => setTimeout(r, 200));
+      expect(msgCount()).toBe(0);
+    });
+
+    it("SC-002: paletteLines() 는 archive·clear·compact·resume 4종 미체크 마커만 생성한다", async () => {
+      const { paletteLines } = await import("../../src/src-adapters/markdown.js");
+      const lines: string[] = paletteLines();
+      expect(lines).toHaveLength(4);
+      const cores = lines.map((l) => {
+        const m = /^-\s*\[ \]\s+(.*)$/.exec(l);
+        expect(m).not.toBeNull();
+        return m![1]!.replace(/^[^\p{L}]+/u, "").toLowerCase();
+      });
+      expect(new Set(cores)).toEqual(new Set(["archive", "clear", "compact", "resume"]));
+    });
+
+    it("SC-002: healLayout 출력엔 팔레트 4종이 미체크로 존재하고 신규 라벨은 0건이다", async () => {
+      const { healLayout } = await import("../../src/src-adapters/markdown.js");
+      const result = healLayout(["임의 초안", "- [x] 📤 send"], { paletteEnabled: true });
+      const knownCores = new Set(["archive", "clear", "compact", "resume", "send"]);
+      for (const line of result.lines) {
+        const m = /^-\s*\[ \]\s+(.*)$/.exec(line);
+        if (!m) continue;
+        const core = m[1]!.replace(/^[^\p{L}]+/u, "").toLowerCase();
+        if (["archive", "clear", "compact", "resume"].includes(core)) continue;
+        // 그 외 미체크 체크박스는 팔레트가 아니라 사용자 본문(send 등)이어야 한다 — 신규 명령 라벨 0건.
+        expect(knownCores.has(core) || core === "send").toBe(true);
+      }
+      const paletteCores = result.lines
+        .map((l) => /^-\s*\[ \]\s+(.*)$/.exec(l)?.[1])
+        .filter((c): c is string => !!c)
+        .map((c) => c.replace(/^[^\p{L}]+/u, "").toLowerCase())
+        .filter((c) => ["archive", "clear", "compact", "resume"].includes(c));
+      expect(new Set(paletteCores)).toEqual(new Set(["archive", "clear", "compact", "resume"]));
+    });
+
+    it("SC-002: markdown.palette=off 는 팔레트만 미표시하고 다른 존 동작은 유지한다", async () => {
+      conf.markdown!.palette = "off";
+      fs.writeFileSync(inboxFilePath(), "");
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => readInbox().includes(COMPOSE_SENTINEL));
+      const inbox = readInbox();
+      expect(inbox).not.toMatch(/-\s*\[ \]\s*🗄️\s*archive/);
+      expect(inbox).not.toMatch(/-\s*\[ \]\s*🧹\s*clear/);
+      expect(inbox).toContain(COMPOSE_SENTINEL);
+      expect(inbox).toContain(RECORDS_ANCHOR);
+    });
+  });
+
+  describe("compose 센티널(FR-002)", () => {
+    it("SC-003: 센티널 기준 본문 추출 — 체크 send 직전 3줄이 enqueue 본문과 정확히 일치", () => {
+      const content = [COMPOSE_SENTINEL, "본문1", "본문2", "본문3", "- [x] 📤 send"].join("\n");
+      const r = parseInbox(content);
+      expect(r.actions).toHaveLength(1);
+      expect(r.actions[0]).toMatchObject({ kind: "fresh", text: "본문1\n본문2\n본문3" });
+    });
+
+    it("SC-003: 센티널 앞(팔레트 영역) 텍스트는 본문에서 배제된다", () => {
+      const content = [
+        "- [ ] 🗄️ archive",
+        "- [ ] 🧹 clear",
+        COMPOSE_SENTINEL,
+        "실제 본문",
+        "- [x] 📤 send",
+      ].join("\n");
+      const r = parseInbox(content);
+      expect(r.actions).toHaveLength(1);
+      expect(r.actions[0]!.text).toBe("실제 본문");
+      expect(r.actions[0]!.text).not.toContain("archive");
+      expect(r.actions[0]!.text).not.toContain("clear");
+    });
+
+    it("SC-004: 센티널이 없는 레거시 inbox 는 위-읽기 규칙으로 본문을 추출해 정상 전송한다", async () => {
+      fs.writeFileSync(inboxFilePath(), "레거시 본문 두 줄\n계속\n- [x] 📤 send\n");
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => msgCount() >= 1);
+      const files = fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg"));
+      const env = JSON.parse(
+        fs.readFileSync(path.join(paths.queueDir, files[0]!), "utf8"),
+      ) as Record<string, unknown>;
+      expect(env["text"]).toBe("레거시 본문 두 줄\n계속");
+    });
+  });
+
+  describe("기록 존(FR-003)", () => {
+    it("SC-005: 진행 중 ⏳ sending 은 기록 존이 아니라 send 위치에 유지된다", async () => {
+      // enqueue 실패를 강제해 Phase B(sent 종단) 미도달 상태를 고정 관찰(FR-12 패턴 재사용).
+      fs.mkdirSync(path.dirname(paths.queueDir), { recursive: true });
+      fs.writeFileSync(paths.queueDir, "block"); // mkdir(recursive) 실패 유도
+      fs.writeFileSync(inboxFilePath(), "진행 중 메시지\n- [x] 📤 send\n");
+
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => /⏳\s*sending/.test(readInbox()));
+      const lines = readInbox().split("\n");
+      const sendingIdx = lines.findIndex((l) => /⏳\s*sending/.test(l));
+      const recordsIdx = lines.findIndex((l) => l.includes("adde:records"));
+      expect(sendingIdx).toBeGreaterThanOrEqual(0);
+      if (recordsIdx >= 0) expect(sendingIdx).toBeLessThan(recordsIdx);
+      expect(readInbox()).not.toMatch(/✅\s*sent/);
+    });
+
+    it("SC-006: 완료 시 ✅ sent 만 기록 존으로 이동하고 최신-위로 정렬된다", async () => {
+      fs.writeFileSync(inboxFilePath(), "첫 메시지\n- [x] 📤 send\n");
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => msgCount() >= 1);
+      await waitFor(() => /✅\s*sent\s*\[\[.+\]\]/.test(readInbox()));
+      const firstQFile = fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg"))[0]!;
+      const firstId = (
+        JSON.parse(fs.readFileSync(path.join(paths.queueDir, firstQFile), "utf8")) as {
+          id: string;
+        }
+      ).id;
+
+      const afterFirst = readInbox();
+      fs.writeFileSync(
+        inboxFilePath(),
+        afterFirst.replace(blankSendLine(), "두 번째 메시지\n- [x] 📤 send"),
+      );
+      await waitFor(() => msgCount() >= 2);
+      await waitFor(() => (readInbox().match(/✅\s*sent\s*\[\[.+\]\]/g) ?? []).length === 2);
+
+      const finalInbox = readInbox();
+      const lines = finalInbox.split("\n");
+      const recordsIdx = lines.findIndex((l) => l.includes("adde:records"));
+      expect(recordsIdx).toBeGreaterThanOrEqual(0);
+      const firstSentIdx = lines.findIndex((l) => l.includes(firstId));
+      const secondSentIdx = lines.findIndex(
+        (l, i) => i !== firstSentIdx && /✅\s*sent\s*\[\[.+\]\]/.test(l),
+      );
+      expect(firstSentIdx).toBeGreaterThan(recordsIdx);
+      expect(secondSentIdx).toBeGreaterThan(recordsIdx);
+      expect(secondSentIdx).toBeLessThan(firstSentIdx); // 최신(두 번째)이 앵커에 더 가깝다(위)
+      expect(finalInbox).not.toMatch(/⏳\s*sending/);
+    });
+  });
+
+  describe("즉시 아카이브(FR-004)", () => {
+    it("SC-007: 전송 즉시 본문을 아카이브로 이관하고 inbox 본문은 비운다(설정 미지정도 자동)", async () => {
+      fs.writeFileSync(inboxFilePath(), "전송 본문입니다\n- [x] 📤 send\n");
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => msgCount() >= 1);
+      await waitFor(() => fs.existsSync(archiveFilePath()));
+
+      const inbox = readInbox();
+      expect(inbox).not.toContain("전송 본문입니다"); // inbox 본문 비움
+      expect(inbox).toMatch(/✅\s*sent\s*\[\[.+\]\]/); // 기록 존엔 마커만
+      expect(fs.readFileSync(archiveFilePath(), "utf8")).toContain("전송 본문입니다");
+    });
+
+    // GAP-003(Development Agent 발견): archiveDir 자리에 blocking 파일을 미리 두는 픽스처는
+    // start() 가 호출하는 기존 ensureArchiveDirReady()(v0.1.5 이하 단일파일 아카이브 하이브리드
+    // 마이그레이션 — legacy 파일을 `.legacy` 로 rename 후 정상 디렉터리 재생성)에 흡수되어 실제
+    // append 실패를 유발하지 못한다. start() 가 정상 디렉터리를 만들게 둔 뒤(조용한 1회 기동),
+    // 그 디렉터리 자체를 쓰기 금지(chmod)해 "신규 파일 생성"만 막는 방식으로 교체한다 —
+    // mkdir(recursive) 는 이미 존재하는 디렉터리에 대해선 조회만으로 성공하므로 무해하고,
+    // appendFile 의 신규 파일 생성만 EACCES 로 실패한다(Development 의 독립 재현으로 폴백 정상 확인).
+    it("SC-008: 아카이브 append 실패 시 본문은 inbox 에 잔존하고 enqueue 는 정상 완료된다", async () => {
+      // root 로 돌면 디렉터리 쓰기 금지(chmod)도 무시돼 실패를 재현할 수 없다 — 환경 한정
+      // 스킵(boot-report.test.ts 의 동일 관례).
+      if (typeof process.getuid === "function" && process.getuid() === 0) return;
+
+      // 1) 조용한 기동 — ensureArchiveDirReady 가 archiveDir 를 정상(쓰기 가능) 디렉터리로 만들고
+      //    self-heal 이 안정화될 때까지 대기한다.
+      fs.writeFileSync(inboxFilePath(), "");
+      source = makeSource();
+      await source.start();
+      await waitFor(() => readInbox().includes(COMPOSE_SENTINEL));
+      await waitFor(() => fs.existsSync(archiveDirPath()));
+
+      // 2) 이미 만들어진 archiveDir 자체를 쓰기 금지로 전환 — 그 안에 신규 아카이브 파일을
+      //    만드는 appendFile 만 EACCES 로 실패한다(ensureArchiveDirReady 는 start() 시점에 이미
+      //    지나가 재실행되지 않으므로 self-heal 로 되돌아가 무해화되지 않는다).
+      fs.chmodSync(archiveDirPath(), 0o500);
+      try {
+        fs.writeFileSync(
+          inboxFilePath(),
+          readInbox().replace(blankSendLine(), "실패해도 남을 본문\n- [x] 📤 send"),
+        );
+
+        await waitFor(() => msgCount() >= 1);
+        await new Promise((r) => setTimeout(r, 250));
+        expect(readInbox()).toContain("실패해도 남을 본문"); // 유실 금지(폴백 — splice 스킵)
+        expect(msgCount()).toBe(1); // enqueue 자체는 정상 완료
+      } finally {
+        fs.chmodSync(archiveDirPath(), 0o700); // afterEach rmSync 가 실패하지 않도록 복원
+      }
+    });
+  });
+
+  describe("archive 재정의(FR-005)", () => {
+    it("SC-009: archive 트리거 — 기록 존 strict 마커 줄 삭제 + `archived N` 요약 1줄", async () => {
+      fs.writeFileSync(
+        inboxFilePath(),
+        zonedFixture([sentLine("a1", STAMP), sentLine("a2", STAMP), sentLine("a3", STAMP), emptyLine()]).replace(
+          "- [ ] 🗄️ archive",
+          "- [x] 🗄️ archive",
+        ),
+      );
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => /archived\s+4\s+\d{8}-\d{6}/.test(readInbox()));
+      const inbox = readInbox();
+      expect(inbox).not.toContain(sentLine("a1", STAMP));
+      expect(inbox).not.toContain(sentLine("a2", STAMP));
+      expect(inbox).not.toContain(sentLine("a3", STAMP));
+      expect(inbox).not.toContain(emptyLine());
+      expect(inbox).toMatch(/archived 4 \d{8}-\d{6}/);
+    });
+
+    it("SC-009: planRecordsPrune 단위 — strict `✅ sent`/`⚠️ empty` 줄만 수집·count", async () => {
+      const { planRecordsPrune } = await import("../../src/src-adapters/markdown.js");
+      const lines = ["<!-- adde:records -->", sentLine("a1", STAMP), sentLine("a2", STAMP), emptyLine()];
+      const plan = planRecordsPrune(lines, 0);
+      expect(plan.count).toBe(3);
+      expect(plan.removeIndices.slice().sort((a, b) => a - b)).toEqual([1, 2, 3]);
+    });
+
+    it("SC-010: archive 트리거는 레거시 `sent <id>`·기존 `archived N` 줄을 건너뛴다", async () => {
+      fs.writeFileSync(
+        inboxFilePath(),
+        zonedFixture([
+          "- [x] ✅ sent legacy-id",
+          archivedLine(2, STAMP, false),
+          sentLine("b1", STAMP),
+        ]).replace("- [ ] 🗄️ archive", "- [x] 🗄️ archive"),
+      );
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => /archived\s+1\s+\d{8}-\d{6}/.test(readInbox()));
+      const inbox = readInbox();
+      expect(inbox).toContain("- [x] ✅ sent legacy-id"); // 레거시 잔존
+      expect(inbox).toContain(archivedLine(2, STAMP, false)); // 기존 archived 잔존
+      expect(inbox).not.toContain(sentLine("b1", STAMP)); // strict 만 삭제
+      expect(inbox).toMatch(/archived 1 \d{8}-\d{6}/);
+    });
+
+    it("SC-010: planRecordsPrune 단위 — 레거시·기존 archived 줄 skip", async () => {
+      const { planRecordsPrune } = await import("../../src/src-adapters/markdown.js");
+      const lines = [
+        "<!-- adde:records -->",
+        "- [x] ✅ sent legacy-id",
+        archivedLine(2, STAMP, false),
+        sentLine("b1", STAMP),
+      ];
+      const plan = planRecordsPrune(lines, 0);
+      expect(plan.count).toBe(1);
+      expect(plan.removeIndices).toEqual([3]);
+    });
+  });
+
+  describe("self-heal(FR-006)", () => {
+    it("SC-011: self-heal 이 팔레트·센티널·기록 존 앵커를 무유실로 복원한다", async () => {
+      fs.writeFileSync(inboxFilePath(), "작성 중인 초안\n" + sentLine("prev-1", STAMP) + "\n");
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => readInbox().includes(COMPOSE_SENTINEL));
+      const inbox = readInbox();
+      expect(inbox).toContain(COMPOSE_SENTINEL);
+      expect(inbox).toContain(RECORDS_ANCHOR);
+      expect(inbox).toContain("작성 중인 초안"); // 초안 유실 없음
+      expect(inbox).toContain(sentLine("prev-1", STAMP)); // 기존 기록 유실 없음
+      expect(inbox.split("\n").filter((l) => l === blankSendLine())).toHaveLength(1);
+      expect(msgCount()).toBe(0); // self-heal 자체는 전송이 아니다(액션 없음)
+    });
+
+    it("SC-012: healLayout 을 2연속 실행하면 멱등(2회차 == 1회차, 중복 생성 없음)", async () => {
+      const { healLayout } = await import("../../src/src-adapters/markdown.js");
+      const seed = ["온전하지 않은 초안", "- [x] 📤 send"];
+      const first = healLayout([...seed], { paletteEnabled: true });
+      const second = healLayout([...first.lines], { paletteEnabled: true });
+      expect(second.changed).toBe(false);
+      expect(second.lines).toEqual(first.lines);
+    });
+  });
+
+  describe("conf(FR-008)", () => {
+    it("SC-014: conf 미지정 레인은 기본으로 레이아웃(팔레트·센티널·기록존)이 켜진다", async () => {
+      fs.writeFileSync(inboxFilePath(), "");
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => readInbox().includes(COMPOSE_SENTINEL));
+      const inbox = readInbox();
+      expect(inbox).toContain(COMPOSE_SENTINEL);
+      expect(inbox).toContain(RECORDS_ANCHOR);
+      expect(inbox).toMatch(/-\s*\[ \]\s*🗄️\s*archive/);
+      expect(inbox).toMatch(/-\s*\[ \]\s*🧹\s*clear/);
+      expect(inbox).toMatch(/-\s*\[ \]\s*🗜️\s*compact/);
+      expect(inbox).toMatch(/-\s*\[ \]\s*♻️\s*resume/);
+    });
+
+    it("SC-015: markdown.archive 는 디렉터리 오버라이드 의미만 갖는다(자동 아카이브는 항상 활성)", async () => {
+      conf.markdown!.archive = "custom-archive-dir";
+      fs.writeFileSync(inboxFilePath(), "커스텀 경로 본문\n- [x] 📤 send\n");
+      source = makeSource();
+      await source.start();
+
+      const customArchiveFile = path.join(rootDir, "custom-archive-dir", `${todayDateStr()}.md`);
+      await waitFor(() => fs.existsSync(customArchiveFile));
+      expect(fs.readFileSync(customArchiveFile, "utf8")).toContain("커스텀 경로 본문");
+    });
+  });
+
+  describe("불변식(NFR-001/NFR-002)", () => {
+    it("SC-016: 팔레트 복원·이사·아카이브·self-heal 순차 재작성이 재전송·중복·유실을 유발하지 않는다", async () => {
+      fs.writeFileSync(inboxFilePath(), "메시지\n- [x] 📤 send\n");
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => msgCount() >= 1);
+      await waitFor(() => /✅\s*sent/.test(readInbox()));
+      await new Promise((r) => setTimeout(r, 300)); // 조용한 관찰 구간 — 재발화 루프 여부 확인
+      expect(msgCount()).toBe(1);
+    });
+
+    it("SC-017: ⏳ sending 상태로 중단된 inbox 재기동 시 누락분만 정확히 1회 재전송된다", async () => {
+      fs.writeFileSync(inboxFilePath(), `크래시 복구 메시지\n${sendingLine("crash-zone-1", STAMP)}\n`);
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => msgCount() >= 1);
+      const files = fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg"));
+      expect(files.some((f) => f.includes("crash-zone-1"))).toBe(true);
+      await waitFor(() => /✅\s*sent/.test(readInbox()));
+      await new Promise((r) => setTimeout(r, 200));
+      expect(msgCount()).toBe(1); // 중복 enqueue 없음
+    });
+  });
+
+  describe("하위호환(NFR-003)", () => {
+    it("SC-018: 레거시 inbox(센티널·팔레트·앵커 없음)도 폴백·self-heal 로 무중단 전송된다", async () => {
+      fs.writeFileSync(inboxFilePath(), "레거시 본문\n- [x] 📤 send\n");
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => msgCount() >= 1);
+      expect(msgCount()).toBe(1);
+    });
+
+    it("SC-018: markdown.layout=off 는 기존(레이아웃 도입 이전) inbox 동작과 호환된다", async () => {
+      conf.markdown!.layout = "off";
+      fs.writeFileSync(inboxFilePath(), "레거시 동작 유지\n- [x] 📤 send\n");
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => msgCount() >= 1);
+      await waitFor(() => readInbox().includes("sent"));
+      const inbox = readInbox();
+      expect(inbox).not.toContain(COMPOSE_SENTINEL);
+      expect(inbox).not.toContain(RECORDS_ANCHOR);
+      expect(inbox).toMatch(/✅\s*sent\s*\[\[.+\]\]/);
+    });
   });
 });

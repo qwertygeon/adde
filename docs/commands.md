@@ -284,7 +284,7 @@ Resetting, compacting, and resuming a conversation session is instructed **from 
 | Session list                | `- [x] resume`                      | `/resume`                      | Respond with a recent-session list (number, excerpt, last conversation time)    |
 | Resume a session            | `- [x] resume <number\|session-id>` | `/resume <number\|session-id>` | Return to that session (falls back to a new session with a notice if not found) |
 
-- Markdown labels use the same contract as send: exact label match (leading emoji allowed), runs on check, and after processing the line terminates as `✅ sent [[...]]` with the result note linked.
+- Markdown labels use the same contract as send: exact label match (leading emoji allowed), runs on check. With the zoned layout on (the default), the palette marker is **restored to unchecked in place** after running — it's a resident control, not a one-shot message, so it never terminates as `✅ sent`. With `markdown.layout=off` the line instead terminates as `✅ sent [[...]]` with the result note linked (legacy one-shot behavior).
 - Telegram interprets it as control only when the whole message **exactly matches** a command — a `/clear` inside a sentence is passed through as an ordinary prompt. In group chats the bot-mention suffix (`/clear@botname`, `/compact@botname`, `/resume@botname <number>`) is allowed.
 - A lane restart (`adde restart`) also starts a new session (no auto-resume — to continue, restart then pick with `/resume`).
 

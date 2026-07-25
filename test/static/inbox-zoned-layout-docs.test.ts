@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  COMPOSE_SENTINEL,
+  RECORDS_ANCHOR,
+  paletteLines,
+} from "../../src/src-adapters/markdown.js";
+import { en } from "../../src/shared/locales/en.js";
+import { ko } from "../../src/shared/locales/ko.js";
 
 // SC-013(FR-007, [env:static]) — 007 inbox-zoned-layout 문서 계약 검증. 산출 주체는 T-C4(4단계
 // Development 의 Layer C, 문서는 코드가 아니라 §해당 FR 이 명시적으로 문서를 산출물로 요구하는
@@ -10,8 +17,12 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const docs = [
-  { label: "en", file: path.join(repoRoot, "docs", "markdown.md") },
-  { label: "ko", file: path.join(repoRoot, "docs", "markdown.ko.md") },
+  { label: "en", file: path.join(repoRoot, "docs", "markdown.md"), recordsHeading: en.markdown.recordsHeading },
+  { label: "ko", file: path.join(repoRoot, "docs", "markdown.ko.md"), recordsHeading: ko.markdown.recordsHeading },
+];
+const commandDocs = [
+  { label: "en", file: path.join(repoRoot, "docs", "commands.md") },
+  { label: "ko", file: path.join(repoRoot, "docs", "commands.ko.md") },
 ];
 
 function readIfExists(file: string): string {
@@ -19,17 +30,26 @@ function readIfExists(file: string): string {
 }
 
 describe("SC-013: docs/markdown.md(·ko) 존 레이아웃 계약·예시 반영", () => {
-  it("새 레이아웃 예시(팔레트·compose 센티널·기록 존 앵커)가 리터럴로 존재한다", () => {
-    for (const { label, file } of docs) {
+  it("새 레이아웃 예시 리터럴(compose 센티널·records 앵커·기록 헤딩)이 구현 상수와 정확 일치한다", () => {
+    for (const { label, file, recordsHeading } of docs) {
       const content = readIfExists(file);
       expect(content.length, `${label}: 문서 파일이 비어있거나 없음(${file})`).toBeGreaterThan(0);
-      expect(content, `${label}: compose 센티널 리터럴 누락`).toContain("adde:compose");
-      expect(content, `${label}: records 앵커 리터럴 누락`).toContain("adde:records");
-      // 팔레트 4종 라벨(archive·clear·compact·resume)이 예시에 함께 등장.
-      for (const label2 of ["archive", "clear", "compact", "resume"]) {
-        expect(content, `${label}: 팔레트 라벨 '${label2}' 예시 누락`).toMatch(
-          new RegExp(label2, "i"),
-        );
+      // 정확 문자열 고정 — 구현 상수가 바뀌면 문서 예시도 함께 갱신되도록(드리프트 차단).
+      expect(content, `${label}: compose 센티널 정확 리터럴 누락`).toContain(COMPOSE_SENTINEL);
+      expect(content, `${label}: records 앵커 정확 리터럴 누락`).toContain(RECORDS_ANCHOR);
+      expect(content, `${label}: 기록 존 헤딩(## ${recordsHeading}) 누락`).toContain(
+        `## ${recordsHeading}`,
+      );
+    }
+  });
+
+  it("팔레트 4종 라인이 구현 paletteLines() 정확 형식(체크박스·이모지·라벨)으로 예시에 존재한다", () => {
+    for (const { label, file } of docs) {
+      const content = readIfExists(file);
+      // substring 매칭이 아니라 paletteLines() 리터럴 전체(`- [ ] 🗄️ archive` 등)를 그대로 대조 —
+      // 라벨 단어만 있고 체크박스·이모지 형식이 어긋나는 드리프트를 잡는다.
+      for (const line of paletteLines()) {
+        expect(content, `${label}: 팔레트 라인 '${line}' 정확 리터럴 누락`).toContain(line);
       }
     }
   });
@@ -58,6 +78,22 @@ describe("SC-013: docs/markdown.md(·ko) 존 레이아웃 계약·예시 반영"
       expect(
         mentionsLegacy && mentionsUserResponsibility,
         `${label}: 레거시 줄 사용자 책임 서술을 찾을 수 없음`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("SC-013: docs/commands.md(·ko) 세션 제어 종단 서술이 layout-on 미체크 복원 계약을 반영한다", () => {
+  it("팔레트 제어 라벨이 layout-on 에서 미체크 복원됨을 서술한다(무조건 ✅ sent 종단 서술 아님)", () => {
+    for (const { label, file } of commandDocs) {
+      const content = readIfExists(file);
+      expect(content.length, `${label}: 문서 파일이 비어있거나 없음(${file})`).toBeGreaterThan(0);
+      // layout-on(기본)에서 제어 마커는 종단이 아니라 미체크 복원(팔레트 상주 계약, markdown.ts
+      // controlFinalized → uncheckLine). 문서가 이 조건 동작을 서술하는지 확인.
+      const mentionsRestore = /(미체크로 복원|restored to unchecked)/i.test(content);
+      expect(
+        mentionsRestore,
+        `${label}: 세션 제어 라벨의 layout-on 미체크 복원 서술을 찾을 수 없음(commands 문서)`,
       ).toBe(true);
     }
   });

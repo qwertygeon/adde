@@ -1702,6 +1702,34 @@ describe("존 레이아웃(inbox-zoned-layout, 007)", () => {
       expect(msgCount()).toBe(1); // 재발화 없음(자기쓰기 echo 가드) — 1회만 실행
     });
 
+    it("SC-002: 팔레트 compact 체크 → 실행 → 미체크 복원, 나머지 팔레트 잔존", async () => {
+      fs.writeFileSync(
+        inboxFilePath(),
+        zonedFixture([]).replace("- [ ] 🗜️ compact", "- [x] 🗜️ compact"),
+      );
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => msgCount() >= 1);
+      const qFile = fs.readdirSync(paths.queueDir).find((f) => f.endsWith(".msg"))!;
+      const env = JSON.parse(fs.readFileSync(path.join(paths.queueDir, qFile), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(env["control"]).toEqual({ kind: "compact" });
+
+      await waitFor(() => readInbox().includes("- [ ] 🗜️ compact"));
+      const inbox = readInbox();
+      // 종단(✅ sent)이 아니라 그 자리 미체크 복원 — 팔레트 4종 모두 미체크로 상주.
+      expect(inbox).toContain("- [ ] 🗄️ archive");
+      expect(inbox).toContain("- [ ] 🧹 clear");
+      expect(inbox).toContain("- [ ] 🗜️ compact");
+      expect(inbox).toContain("- [ ] ♻️ resume");
+      expect(inbox).not.toMatch(/sent \[\[.+\]\]/); // 제어 라벨은 sent 링크로 종단되지 않는다
+      await new Promise((r) => setTimeout(r, 200));
+      expect(msgCount()).toBe(1); // 재발화 없음(자기쓰기 echo 가드) — 1회만 실행
+    });
+
     it("SC-001: 미체크 팔레트는 무동작(액션 0)", async () => {
       fs.writeFileSync(inboxFilePath(), zonedFixture([]));
       source = makeSource();
@@ -1903,6 +1931,66 @@ describe("존 레이아웃(inbox-zoned-layout, 007)", () => {
       } finally {
         fs.chmodSync(archiveDirPath(), 0o700); // afterEach rmSync 가 실패하지 않도록 복원
       }
+    });
+
+    it("SC-008: 아카이브 실패 폴백은 본문을 `⏳ sending` 으로 남겨 재전송을 차단한다(sent 종단 금지)", async () => {
+      if (typeof process.getuid === "function" && process.getuid() === 0) return;
+      fs.writeFileSync(inboxFilePath(), "");
+      source = makeSource();
+      await source.start();
+      await waitFor(() => readInbox().includes(COMPOSE_SENTINEL));
+      await waitFor(() => fs.existsSync(archiveDirPath()));
+      fs.chmodSync(archiveDirPath(), 0o500);
+      try {
+        fs.writeFileSync(
+          inboxFilePath(),
+          readInbox().replace(blankSendLine(), "재전송 금지 본문\n- [x] 📤 send"),
+        );
+        await waitFor(() => msgCount() >= 1);
+        await new Promise((r) => setTimeout(r, 250));
+
+        const healed = readInbox();
+        // 폴백은 본문 마커를 sent 로 종단하지 않고 sending 으로 유지한다(resume 후보 → hasId dedup).
+        expect(healed).toContain("재전송 금지 본문"); // 유실 금지
+        expect(healed).toMatch(/⏳\s*sending\s+\S+/); // sending 마커 잔존
+        expect(healed).not.toMatch(/✅\s*sent\s*\[\[/); // sent 종단 아님(재전송 유발 상태 회피)
+
+        // 재전송 시나리오: 복원된 blank send 를 사용자가 다시 체크해도 잔존 본문은 재전송되지 않는다.
+        fs.writeFileSync(inboxFilePath(), readInbox().replace(blankSendLine(), "- [x] 📤 send"));
+        await new Promise((r) => setTimeout(r, 400));
+        expect(msgCount()).toBe(1); // 재전송 없음(sending 마커 + hasId dedup)
+      } finally {
+        fs.chmodSync(archiveDirPath(), 0o700);
+      }
+    });
+
+    it("SC-008: 아카이브 복구 후 재기동 시 sending 본문이 재전송 없이 sent 로 수렴·아카이브된다", async () => {
+      if (typeof process.getuid === "function" && process.getuid() === 0) return;
+      fs.writeFileSync(inboxFilePath(), "");
+      source = makeSource();
+      await source.start();
+      await waitFor(() => readInbox().includes(COMPOSE_SENTINEL));
+      await waitFor(() => fs.existsSync(archiveDirPath()));
+      fs.chmodSync(archiveDirPath(), 0o500);
+      fs.writeFileSync(
+        inboxFilePath(),
+        readInbox().replace(blankSendLine(), "수렴 본문\n- [x] 📤 send"),
+      );
+      await waitFor(() => msgCount() >= 1);
+      await waitFor(() => /⏳\s*sending/.test(readInbox()));
+
+      // 아카이브 복구 후 재기동 — sending 마커는 크래시 재개와 동일하게 재기동 시 수렴한다.
+      source.stop();
+      fs.chmodSync(archiveDirPath(), 0o700);
+      source = makeSource();
+      await source.start();
+
+      await waitFor(() => /✅\s*sent\s*\[\[/.test(readInbox()));
+      const finalInbox = readInbox();
+      expect(finalInbox).not.toMatch(/⏳\s*sending/); // sending → sent 수렴
+      expect(finalInbox).not.toContain("수렴 본문"); // 본문은 아카이브로 이관됨
+      expect(fs.readFileSync(archiveFilePath(), "utf8")).toContain("수렴 본문"); // 아카이브 착지
+      expect(msgCount()).toBe(1); // 재전송 없음(hasId dedup — 단 1회 enqueue)
     });
   });
 

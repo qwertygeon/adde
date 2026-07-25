@@ -1141,8 +1141,11 @@ export function createMarkdownSource(cfg: SourceContext): Source {
           }
         }
 
-        // ORDER 불변식(append 먼저) — 실패 시 폴백: splice 스킵 + in-place ✅ sent 종단(본문은
-        // healLayout 재구성에서 draft 로 분류돼 inbox 에 잔존 — 유실 금지, enqueue 는 이미 완료).
+        // ORDER 불변식(append 먼저) — 실패 시 폴백: splice 스킵 + 본문 마커를 `⏳ sending` 그대로
+        // 유지(sent 종단 금지). 본문은 draft 에 잔존하되 그 sending 마커에 묶인 resume 후보라, 다음
+        // 처리에서 hasId 로 재-enqueue 되지 않고(재전송 차단) 아카이브가 성공하면 sent 로 수렴한다
+        // (크래시 재개와 동일 계약). sent 로 종단하면 본문이 무-id draft 로 남아 send 재체크·상단
+        // 입력 시 재전송되므로 금지 — 유실 금지 + enqueue 는 이미 완료.
         let archiveFailed = false;
         if (bodyPlan.text.length > 0) {
           try {
@@ -1164,9 +1167,9 @@ export function createMarkdownSource(cfg: SourceContext): Source {
             (f) => [f.segmentStart!, f.lineIndex + 1] as [number, number],
           );
           sentRecords = bodyFinalized.map((f) => sentLine(f.id, f.stamp));
-        } else {
-          for (const f of bodyFinalized) lines[f.lineIndex] = sentLine(f.id, f.stamp);
         }
+        // archiveFailed: 본문 마커를 건드리지 않는다 — Phase A 가 기재한 `⏳ sending <id>` 가 그대로
+        // 남아 다음 처리에서 resume+hasId 로 재전송 없이 수렴한다(위 ORDER 불변식 주석 참조).
         for (const idx of pruneIndices) removeRanges.push([idx, idx + 1]);
 
         removeRanges.sort((a, b) => b[0] - a[0]); // bottom-up splice — 인덱스 보존

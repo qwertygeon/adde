@@ -6,8 +6,9 @@
  *
  * 노출 범위(exposed:true) = 현행 편집 키(perm_tier·allowlist·denylist·hard_deny·cwd·engine_args·
  * lang·file_mode·chat_id·allow_from·root·inbox·approvals·outbox) + markdown 그룹(archive·backup·
- * retention_days·out_retention_days·sync_provider). 정체성(source/backend/engine/acp_version)·내부
- * 노브(auto_relaunch·gate_timeout_sec)는 exposed:false(최소 표면·no-new-surface 정적테스트 존중).
+ * retention_days·out_retention_days·sync_provider·layout·palette). 정체성(source/backend/engine/
+ * acp_version)·내부 노브(auto_relaunch·gate_timeout_sec)는 exposed:false(최소 표면·no-new-surface
+ * 정적테스트 존중).
  */
 import { NAMESPACE_FIELDS } from "../shared/conf.js";
 
@@ -77,6 +78,8 @@ export const LANE_KEY_DESCRIPTORS: readonly LaneKeyDescriptor[] = [
   { key: "markdown.retention_days", namespace: "markdown", field: "retention_days", type: "int", appliesTo: "markdown", editable: true, identity: false, required: false, exposed: true, default: 2, i18nLabel: "lane.prompt.retentionDays" }, // prettier-ignore
   { key: "markdown.out_retention_days", namespace: "markdown", field: "out_retention_days", type: "int", appliesTo: "markdown", editable: true, identity: false, required: false, exposed: true, i18nLabel: "lane.prompt.outRetentionDays" }, // prettier-ignore
   { key: "markdown.sync_provider", namespace: "markdown", field: "sync_provider", type: "enum", appliesTo: "markdown", editable: true, identity: false, required: false, exposed: true, default: "local", enumValues: ["local", "icloud"], i18nLabel: "lane.prompt.syncProvider" }, // prettier-ignore
+  { key: "markdown.layout", namespace: "markdown", field: "layout", type: "enum", appliesTo: "markdown", editable: true, identity: false, required: false, exposed: true, default: "on", enumValues: ["on", "off"], i18nLabel: "lane.prompt.layout" }, // prettier-ignore
+  { key: "markdown.palette", namespace: "markdown", field: "palette", type: "enum", appliesTo: "markdown", editable: true, identity: false, required: false, exposed: true, default: "on", enumValues: ["on", "off"], i18nLabel: "lane.prompt.palette" }, // prettier-ignore
 ];
 
 /** canonical key → 서술자 조회. */

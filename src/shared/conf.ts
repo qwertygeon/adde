@@ -35,6 +35,17 @@ export interface MarkdownLaneConf {
   out_retention_days?: number;
   /** 동기화 제공자 id(`local`|`icloud`). 미지정 시 소비측 기본 `local`. 미지원 값은 기동 검증에서 거부(fail-closed). */
   sync_provider?: string;
+  /**
+   * inbox 3존 레이아웃 묶음(팔레트·compose 센티널·기록 존·전송 즉시 아카이브) 활성 여부(enum on|off).
+   * 미지정 시 소비측(resolvePaths) 기본 on. off 는 레거시 위-읽기·제자리 sent 종단·수동 archive 시
+   * body-move 경로를 유지한다(하위호환).
+   */
+  layout?: string;
+  /**
+   * 팔레트(archive·clear·compact·resume 미체크 트리거 상주) 표시 하위 토글(enum on|off).
+   * `layout=off` 면 무관(팔레트 자체가 비활성). 미지정 시 소비측 기본 on.
+   */
+  palette?: string;
 }
 
 /** telegram 어댑터 전용 설정(`telegram.*` 키). */
@@ -175,6 +186,8 @@ export const NAMESPACE_FIELDS = {
     "retention_days",
     "out_retention_days",
     "sync_provider",
+    "layout",
+    "palette",
   ],
   telegram: ["chat_id", "allow_from"],
 } as const;

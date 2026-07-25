@@ -284,7 +284,7 @@ adde sessions myproj tg-claude --json   # 기계 판독 장부(모니터링/스�
 | 세션 목록            | `- [x] resume`                | `/resume`                | 최근 세션 목록(번호·발췌·마지막 대화 시각) 응답   |
 | 세션 재개            | `- [x] resume <번호\|세션id>` | `/resume <번호\|세션id>` | 해당 세션으로 복귀(찾지 못하면 새 세션 폴백 통지) |
 
-- 마크다운 라벨은 send 와 같은 계약입니다: 라벨 정확 일치(앞 이모지 허용), 체크 시 실행, 처리 후 해당 줄이 `✅ sent [[...]]` 로 종단되고 결과 노트가 링크됩니다.
+- 마크다운 라벨은 send 와 같은 계약입니다: 라벨 정확 일치(앞 이모지 허용), 체크 시 실행. 존 레이아웃이 켜진 기본 상태에서는 실행 후 팔레트 마커가 **그 자리에서 미체크로 복원**됩니다 — 1회성 메시지가 아니라 상주 제어라서 `✅ sent` 로 종단되지 않습니다. `markdown.layout=off` 에서는 해당 줄이 대신 `✅ sent [[...]]` 로 종단되고 결과 노트가 링크됩니다(레거시 1회성 동작).
 - Telegram 은 메시지 전체가 명령과 **정확히 일치**할 때만 제어로 해석합니다 — 문장 속 `/clear` 는 일반 프롬프트로 전달됩니다. 그룹 채팅의 봇멘션 접미(`/clear@봇이름`·`/compact@봇이름`·`/resume@봇이름 <번호>`)는 허용합니다.
 - 레인 재기동(`adde restart`)도 새 세션으로 시작합니다(자동 재개 없음 — 이어가려면 재기동 후 `/resume` 으로 선택 복귀).
 
@@ -440,7 +440,7 @@ adde lane set <proj> <lane>                        # TTY 에서 인자 없이: �
 | `--root <abs-path>` `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | markdown 레인 전용 — telegram 레인에서는 거부됨                                             |
 | `--unset <key> …`                                                        | 키(점표기)를 제거해 기본값으로 되돌림 — 아래 참고                                           |
 
-**위치 점표기 키**: `adde lane set <proj> <lane> <key> <value> …` 는 canonical 점표기 키로 편집합니다(예: `perm_tier autopass`·`markdown.retention_days 5`). 한 명령에서 `<key> <value>` 쌍을 하나 이상 받습니다. 위 명명 플래그와 동일한 표면이며, **플래그가 없는 markdown 전용 키가 추가로 포함됩니다**: `markdown.archive`·`markdown.backup`·`markdown.retention_days`·`markdown.out_retention_days`·`markdown.sync_provider`(각 키의 의미는 [마크다운 가이드](markdown.ko.md#1-레인-설정) 참고). 배치는 **전부-또는-무**입니다 — 미지 키(근접 이름은 "did you mean…" 제안), 타입/enum/format 위반 값, 홀수 개 토큰이면 명령 전체를 거부하고 아무 것도 기록하지 않습니다.
+**위치 점표기 키**: `adde lane set <proj> <lane> <key> <value> …` 는 canonical 점표기 키로 편집합니다(예: `perm_tier autopass`·`markdown.retention_days 5`). 한 명령에서 `<key> <value>` 쌍을 하나 이상 받습니다. 위 명명 플래그와 동일한 표면이며, **플래그가 없는 markdown 전용 키가 추가로 포함됩니다**: `markdown.archive`·`markdown.backup`·`markdown.retention_days`·`markdown.out_retention_days`·`markdown.sync_provider`·`markdown.layout`·`markdown.palette`(각 키의 의미는 [마크다운 가이드](markdown.ko.md#1-레인-설정) 참고). 배치는 **전부-또는-무**입니다 — 미지 키(근접 이름은 "did you mean…" 제안), 타입/enum/format 위반 값, 홀수 개 토큰이면 명령 전체를 거부하고 아무 것도 기록하지 않습니다.
 
 **`--unset <key> …`**: 키(점표기)를 하나 이상 제거해 소비측 기본값으로 되돌립니다. 정체성 키(`source`/`backend`/`engine`/`acp_version`)·필수 키(`markdown.root`/`markdown.inbox`·telegram `chat_id`)는 되돌릴 기본값이 없어 거부됩니다.
 

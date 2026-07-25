@@ -73,6 +73,8 @@ describe("노출 편집 표면", () => {
         "markdown.retention_days",
         "markdown.out_retention_days",
         "markdown.sync_provider",
+        "markdown.layout",
+        "markdown.palette",
       ]),
     );
   });

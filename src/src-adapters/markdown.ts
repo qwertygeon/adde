@@ -162,6 +162,10 @@ export interface InboxParse {
   trailingNewline: boolean;
   /** 파싱 시점에 이미 존재하던 strict `✅ sent [[stamp id]]` 세그먼트(레거시/이전 턴 — 수동 스윕 대상). */
   sentSegments: SentSegment[];
+  /** compose 센티널 첫 발견 라인 인덱스 — 부재 시 null(레거시 폴백, 위-읽기 그대로 유지). */
+  composeIndex?: number | null;
+  /** 기록 존 앵커 첫 발견 라인 인덱스 — 부재 시 null. */
+  recordsIndex?: number | null;
 }
 
 /** send 트리거 라인을 단계별 마커로 재작성하는 헬퍼(2단계 내구 마킹). */
@@ -239,6 +243,34 @@ export function blankSendLine(): string {
   return "- [ ] 📤 send";
 }
 
+// --- 3존 레이아웃 — 팔레트·compose 센티널·기록 존 상수·렌더러 ------------------------------------
+
+/** compose 본문 경계 센티널 — 이 줄 아래부터 체크된 send 사이가 본문(위-읽기 유지, 상단 팔레트/여백만
+ * bound). 부재 시 parseInbox 는 레거시 "send 위 세그먼트" 폴백으로 계속 동작한다. */
+export const COMPOSE_SENTINEL = "<!-- adde:compose -->";
+/** 기록 존 시작 앵커 — 이 줄 아래에 `✅ sent`/`⚠️ empty`/`archived` 종단 마커가 최신-위로 쌓인다. */
+export const RECORDS_ANCHOR = "<!-- adde:records -->";
+
+/** compose 센티널 라인 판별(좌우 공백·CRLF 관용 — trim 비교). */
+export function matchComposeSentinel(line: string): boolean {
+  return line.trim() === COMPOSE_SENTINEL;
+}
+/** 기록 존 앵커 라인 판별. */
+export function matchRecordsAnchor(line: string): boolean {
+  return line.trim() === RECORDS_ANCHOR;
+}
+
+/** 기록 존 사람용 헤딩(i18n) — 앵커 바로 위에 렌더(파싱 비대상, 안내 문구일 뿐). */
+export function recordsHeading(tl: NotifyT = t): string {
+  return `## ${tl("markdown.recordsHeading")}`;
+}
+
+/** 팔레트 4종 미체크 상주 라인 — 기존 세션 제어 라벨(archive·clear·compact·resume)의 재배치이며
+ * 신규 명령 라벨을 추가하지 않는다(A-P005). 이모지는 시각용 — 파서 labelCore 매칭은 이모지 무관. */
+export function paletteLines(): string[] {
+  return ["- [ ] 🗄️ archive", "- [ ] 🧹 clear", "- [ ] 🗜️ compact", "- [ ] ♻️ resume"];
+}
+
 /**
  * inbox 에 미체크 빈 `- [ ] 📤 send` 트리거가 하나도 없으면 하나 추가(M8, 상시 빈 send).
  * 이미 있으면 무변경(중복 방지). 추가는 미체크라 parseInbox 가 액션으로 삼지 않는다(오전송 없음).
@@ -279,10 +311,24 @@ export function parseInbox(content: string): InboxParse {
   const actions: InboxAction[] = [];
   const sentSegments: SentSegment[] = [];
   let segmentStart = 0;
+  let composeIndex: number | null = null;
+  let recordsIndex: number | null = null;
 
   const segment = (end: number): string => lines.slice(segmentStart, end).join("\n").trim();
 
   for (let i = 0; i < lines.length; i++) {
+    // compose 센티널 — 상단 경계 리셋. 팔레트·여백 등 센티널 위 텍스트를 본문에서 배제한다.
+    // 첫 발견만 기록(재-heal 로 중복 삽입돼도 이후 발견은 인덱스 갱신하지 않음).
+    if (matchComposeSentinel(lines[i]!)) {
+      if (composeIndex === null) composeIndex = i;
+      segmentStart = i + 1;
+      continue;
+    }
+    // 기록 존 앵커 — 파싱 경계가 아니다(하단 종단 마커는 기존 로직대로 계속 스캔). 위치만 기록.
+    if (matchRecordsAnchor(lines[i]!)) {
+      if (recordsIndex === null) recordsIndex = i;
+      continue;
+    }
     const cb = CHECKBOX.exec(lines[i]!);
     if (!cb) continue; // 일반 텍스트 — 세그먼트 본문
 
@@ -359,7 +405,129 @@ export function parseInbox(content: string): InboxParse {
     // send/sent/sending/empty/제어 가 아닌 체크박스 → 본문(경계 아님, segmentStart 유지)
   }
 
-  return { actions, lines, trailingNewline, sentSegments };
+  return { actions, lines, trailingNewline, sentSegments, composeIndex, recordsIndex };
+}
+
+// --- self-heal — 3존 정규 구조 리빌드 --------------------------------------
+
+export interface HealLayoutOptions {
+  /** 팔레트 4종 표시 여부(markdown.palette conf) — false 면 팔레트 블록을 렌더하지 않는다. */
+  paletteEnabled: boolean;
+  /** 이번 턴 신규 확정 종단 마커(최신 것부터) — 기록 존 앵커 바로 아래(기존 기록보다 위)에 삽입. */
+  newRecords?: string[];
+}
+
+export interface HealLayoutResult {
+  lines: string[];
+  changed: boolean;
+}
+
+/** 체크된 체크박스 라인을 미체크로 되돌린다(라벨·이모지·후행 텍스트 보존) — 팔레트 제자리 복원. */
+function uncheckLine(line: string): string {
+  return line.replace(/^(\s*-\s*)\[[xX]\]/, "$1[ ]");
+}
+
+/**
+ * canonical 팔레트 라인(paletteLines() 4종, 무인자) 정확 일치 판별 — 미체크/체크(잔존 손상 상태 방어)
+ * 둘 다 인정한다. **인자 있는 resume(`resume 2` 등)이나 위치·문구가 다른 ad hoc 제어 체크박스는
+ * 매칭하지 않는다** — 그런 라인은 상주 팔레트의 중복 인스턴스가 아니라 사용자가 별도로 둔 유효한
+ * 제어 트리거이므로 healLayout 이 draft 로 보존해야 한다(무유실). core 기반 느슨한 매칭(라벨 종류만
+ * 비교)은 `resume 2` 같은 인자 있는 라인을 무인자 팔레트로 오인해 삭제해버리므로 반드시 정확 일치로 비교한다.
+ */
+function isCanonicalPaletteLine(line: string): boolean {
+  const trimmed = line.trim();
+  return paletteLines().some((l) => trimmed === l || trimmed === l.replace("[ ]", "[x]"));
+}
+
+/** send 트리거 라인 인덱스(체크 여부 무관 — 위치 탐색용). 없으면 -1. */
+function findSendIndex(lines: string[]): number {
+  for (let i = 0; i < lines.length; i++) {
+    const cb = CHECKBOX.exec(lines[i]!);
+    if (cb && isSendLabel(cb[2]!.trim())) return i;
+  }
+  return -1;
+}
+
+/**
+ * inbox 구조 요소(팔레트·compose 센티널·빈 send·기록 헤딩/앵커)를 정규(canonical) 구조로 리빌드한다.
+ * 증분 패치가 아니라 **존별 분류 후 전량 재구성** — 구조 요소가 일부만 남아도(또는 전부 삭제돼도)
+ * 초안 본문·기존 기록을 유실 없이 각 존으로 이관한다.
+ *
+ * 분류 규칙:
+ *  - **초안 본문**: compose 센티널(있으면 그 다음 줄, 없으면 문서 시작) ~ send 트리거(있으면 그 앞,
+ *    없으면 문서 끝) 범위에서 팔레트·센티널·앵커·종단 마커·기록 헤딩이 아닌 나머지 줄(원문 순서 보존,
+ *    선행/후행 공백줄만 트리밍).
+ *  - **기존 기록**: 문서 전체에서 `isTerminalMarker` 매칭 줄(`✅ sent`/`⚠️ empty`/`🗄️ archived`).
+ *    상시 빈 send 를 매번 최상단에 두는 기존 계약상 최근 기록일수록 문서 위쪽에 쌓이므로, 발견 순서
+ *    그대로가 이미 최신-위 — 재정렬 불요.
+ *  - 그 외(팔레트·센티널·앵커·send·기록 헤딩 자신)는 canonical 형태로 새로 렌더(원본 폐기).
+ *
+ * 멱등: 이미 canonical + `newRecords` 미지정이면 재빌드 결과가 입력과 동일 → `changed=false`.
+ */
+export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayoutResult {
+  const { paletteEnabled, newRecords = [] } = opts;
+  const parsed = parseInbox(lines.join("\n"));
+  // 기록 헤딩은 파싱 비대상 장식 텍스트라 로케일 무관하게(en/ko 둘 다) 초안에서 배제 —
+  // 과거 다른 로케일로 heal 됐던 문서를 재-heal 해도 헤딩 줄이 초안으로 잘못 흡수되지 않는다.
+  const headingTexts = new Set([recordsHeading(tFor("en")).trim(), recordsHeading(tFor("ko")).trim()]);
+
+  const composeIdx = parsed.composeIndex;
+  const draftStart = composeIdx !== null && composeIdx !== undefined ? composeIdx + 1 : 0;
+  const sendIdx = findSendIndex(lines);
+  const draftEnd = sendIdx === -1 ? lines.length : sendIdx;
+
+  const draftLines = lines.slice(Math.min(draftStart, draftEnd), draftEnd).filter((line) => {
+    if (matchComposeSentinel(line) || matchRecordsAnchor(line)) return false;
+    if (isTerminalMarker(line)) return false;
+    // paletteEnabled 일 때만 canonical(무인자) 팔레트 잔존 줄을 배제 — 이미 최상단에 고정 렌더되므로
+    // 중복 방지. 인자 있는 resume 등 ad hoc 제어 체크박스는 canonical 과 불일치하므로 여기 걸리지
+    // 않고 draft 로 보존된다(무유실). palette=off 면 애초에 canonical 배제 자체가 무의미.
+    if (paletteEnabled && isCanonicalPaletteLine(line)) return false;
+    if (headingTexts.has(line.trim())) return false;
+    return true;
+  });
+  // 선행/후행 공백줄 트리밍 — 재-heal 시 공백줄이 누적되지 않게(멱등성 유지).
+  while (draftLines.length > 0 && draftLines[0]!.trim() === "") draftLines.shift();
+  while (draftLines.length > 0 && draftLines[draftLines.length - 1]!.trim() === "") draftLines.pop();
+
+  const existingRecords = lines.filter((line) => isTerminalMarker(line));
+
+  const rebuilt: string[] = [];
+  if (paletteEnabled) rebuilt.push(...paletteLines());
+  rebuilt.push(
+    COMPOSE_SENTINEL,
+    ...draftLines,
+    blankSendLine(),
+    recordsHeading(),
+    RECORDS_ANCHOR,
+    ...newRecords,
+    ...existingRecords,
+  );
+
+  const changed = rebuilt.length !== lines.length || rebuilt.some((l, i) => l !== lines[i]);
+  return { lines: rebuilt, changed };
+}
+
+/**
+ * 기록 존 archive 재정의 — 기록 존(앵커 아래) 의 strict `✅ sent [[…]]`·`⚠️ empty` 종단 마커 줄
+ * 인덱스를 수집한다(본문은 이미 즉시 아카이브됐으므로 이관 대상이 아니라 삭제 대상).
+ * 레거시 `sent <id>`(위키링크 없는 구버전 표기) 와 기존 `archived N` 요약 줄은 건너뛴다 — strict
+ * 마커가 아니므로 `isTerminalMarker`/`SENT_MARKER` 매칭 규칙에 걸리지 않아 자연히 제외된다.
+ */
+export function planRecordsPrune(
+  lines: string[],
+  recordsStart: number,
+): { removeIndices: number[]; count: number } {
+  const removeIndices: number[] = [];
+  for (let i = recordsStart; i < lines.length; i++) {
+    const line = lines[i]!;
+    // strict sent(위키링크 포함) 또는 empty 종단만 prune 대상. archived 요약 줄(기존/타 archive 실행
+    // 결과)은 isTerminalMarker 는 매칭하지만 별도 재요약 대상이 아니므로 제외한다.
+    if (matchSentMarker(line) || /^\s*-\s*\[[xX]\]\s+⚠️?\s+empty\b/.test(line)) {
+      removeIndices.push(i);
+    }
+  }
+  return { removeIndices, count: removeIndices.length };
 }
 
 const PERM_MARKER = /<!--\s*adde:perm\s+id=(\S+)\s+status=(\S+)\s*-->/;
@@ -492,7 +660,13 @@ interface MarkdownResolvedPaths {
   quarantineDir: string;
   /** 전용 아카이브 디렉터리 — `<archiveDir>/<YYYY-MM-DD>.md` 날짜 파일만 이 하위에 쓴다. */
   archiveDir: string;
+  /** 전송 즉시 본문 아카이브 활성 여부 — layout-on 이면 항상 true(`markdown.archive` 존재 여부와
+   * 무관, 디렉터리 오버라이드 의미만 유지). layout-off 는 레거시대로 `markdown.archive` 지정 시에만 true. */
   autoArchive: boolean;
+  /** inbox 3존 레이아웃 묶음(팔레트·compose 센티널·기록 존·즉시 아카이브) 활성 여부(`markdown.layout`). */
+  layoutEnabled: boolean;
+  /** 팔레트(archive/clear/compact/resume 상주 트리거) 표시 여부 — layoutEnabled 가 false 면 무관. */
+  paletteEnabled: boolean;
   /** 로컬 백업 폴더(옵트인, expandTilde 적용). 미지정 = 이관 기능 off. */
   backupDir?: string;
   /** 이관 기준일(캘린더일). 미지정 시 DEFAULT_RETENTION_DAYS 적용. */
@@ -517,10 +691,19 @@ function resolvePaths(conf: LaneConf): MarkdownResolvedPaths {
   const quarantineDir = join(inboxDir, ".conflicts");
   // 전용 아카이브 디렉터리 — 기존(v0.1.4 이하) 단일 파일 해석에서 디렉터리 해석으로 진화(오래된
   // 산출물을 오이관하지 않도록 아카이브를 vault 의 다른 파일과 겹치지 않는 전용 위치로 분리).
-  // 지정 시 그 이름을 디렉터리로 + 전송시점 자동 아카이브 ON. 미지정 시 기본 디렉터리(수동
-  // 라벨용) + 자동 OFF. 기존 단일 파일과의 경로 충돌은 ensureArchiveDirReady 가 흡수한다.
+  // 지정 시 그 이름을 디렉터리로 사용, 미지정 시 기본 디렉터리(수동 라벨용). 기존 단일 파일과의
+  // 경로 충돌은 ensureArchiveDirReady 가 흡수한다.
   const archiveDir = md.archive ? join(rootDir, md.archive) : join(inboxDir, "sent-archive");
-  const autoArchive = md.archive !== undefined && md.archive.length > 0;
+  // 단일 블록 결정 — layoutEnabled/paletteEnabled/autoArchive 는 전부 이 conf 한 입력에서 함께
+  // 파생돼야 서로 어긋나는 조합(동기화 실패)을 막는다.
+  // layoutEnabled: markdown.layout=off 명시일 때만 레거시 전면 폴백, 그 외(미지정 포함)는 기본 on.
+  // paletteEnabled: layout 이 꺼지면 팔레트 자체가 무의미 — layout on && palette!=off.
+  // autoArchive: layout-on 이면 markdown.archive 지정 여부와 무관하게 항상 즉시 아카이브 활성(레이아웃
+  // 묶음의 기본 동작 — 기존 동작 변경, archiveDir 는 여전히 디렉터리 오버라이드 의미만 유지). layout-off
+  // 는 레거시 계약 그대로 archive 지정 시에만 활성(하위호환).
+  const layoutEnabled = md.layout !== "off";
+  const paletteEnabled = layoutEnabled && md.palette !== "off";
+  const autoArchive = layoutEnabled || (md.archive !== undefined && md.archive.length > 0);
   const result: MarkdownResolvedPaths = {
     rootDir,
     inboxPath,
@@ -529,6 +712,8 @@ function resolvePaths(conf: LaneConf): MarkdownResolvedPaths {
     quarantineDir,
     archiveDir,
     autoArchive,
+    layoutEnabled,
+    paletteEnabled,
     retentionDays: md.retention_days ?? DEFAULT_RETENTION_DAYS,
     syncProvider: md.sync_provider ?? "local",
   };
@@ -664,6 +849,8 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     quarantineDir,
     archiveDir,
     autoArchive,
+    layoutEnabled,
+    paletteEnabled,
     backupDir,
     retentionDays,
     outRetentionDays,
@@ -798,11 +985,16 @@ export function createMarkdownSource(cfg: SourceContext): Source {
       if (content === null) return; // 부재 또는 변경 진행 중(B1) — 다음 이벤트 재시도
       if (lastSelfWrite.get(inboxPath) === content) return; // 자기쓰기 echo
 
-      const { actions, lines, trailingNewline, sentSegments } = parseInbox(content);
+      const { actions, lines, trailingNewline, sentSegments, recordsIndex } = parseInbox(content);
       if (actions.length === 0) {
-        // 액션이 없어도 상시 빈 send 유지(M8) — 초기·재기동·사용자 삭제 시 self-heal.
-        // 미체크 추가라 재파싱서 액션이 되지 않고, echo 가드가 자기쓰기 재트리거를 막는다.
-        if (ensureBlankSend(lines)) {
+        // 액션이 없어도 상시 구조 유지 — 초기·재기동·사용자 삭제 시 self-heal.
+        // 미체크/구조 보정 write 는 재파싱서 액션이 되지 않고, echo 가드가 재트리거를 막는다.
+        if (layoutEnabled) {
+          const healed = healLayout(lines, { paletteEnabled });
+          if (healed.changed) {
+            await atomicWrite(inboxPath, joinLines(healed.lines, trailingNewline));
+          }
+        } else if (ensureBlankSend(lines)) {
           await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
         }
         return;
@@ -917,57 +1109,132 @@ export function createMarkdownSource(cfg: SourceContext): Source {
         }
       }
 
-      // Phase B: enqueue 확정분을 sent 로 종단(인덱스로 먼저 표기 — splice 전이라 인덱스 유효).
-      for (const f of finalize) lines[f.lineIndex] = sentLine(f.id, f.stamp);
+      if (layoutEnabled) {
+        // --- Phase B(layout-on 재설계) --------------------------------------------------------
+        // control(clear/compact/resume) 확정분은 sent 종단이 아니라 그 자리 미체크 복원(팔레트 상주 계약).
+        // segmentStart 유무가 discriminator — fresh/resume 만 본문 세그먼트를 가진다(parseInbox 계약,
+        // control 은 마킹 없이 pending 되어 segmentStart 를 실은 적이 없다).
+        const bodyFinalized = finalize.filter((f) => f.segmentStart !== undefined);
+        const controlFinalized = finalize.filter((f) => f.segmentStart === undefined);
+        for (const f of controlFinalized) lines[f.lineIndex] = uncheckLine(lines[f.lineIndex]!);
 
-      // 아카이브 계획 — 전송 시점 자동(config on) + 수동 스윕(🗄️ archive). ORDER 불변식:
-      // 아카이브 append 를 inbox write(본문 splice) 보다 먼저 한다. 사이 크래시 시 본문이 양쪽에
-      // 잔존해 재기동 시 `✅ sent` 경계로 재전송 없이 수렴(무해 중복 1). 역순은 본문 유실 창.
-      let archiveText = "";
-      let removeRanges: Array<[number, number]> = [];
-      if (autoArchive || hasArchive) {
-        // 이번 턴 확정 세그먼트(전송 시점 대상 — fresh/resume 만 segmentStart 보유).
-        const finalizedSegs: SentSegment[] = finalize
-          .filter((f) => f.segmentStart !== undefined)
-          .map((f) => ({
-            bodyStart: f.segmentStart!,
-            markerIndex: f.lineIndex,
-            id: f.id,
-            stamp: f.stamp,
-          }));
-        // 수동 스윕은 이전 턴/레거시 sent 까지 전량, 자동만이면 이번 턴만.
-        const targets = hasArchive ? [...sentSegments, ...finalizedSegs] : finalizedSegs;
-        const plan = planArchive(lines, targets);
-        archiveText = plan.text;
-        removeRanges = plan.ranges;
-      }
+        // 본문 아카이브 텍스트(레거시 planArchive 재사용 — 본문 생성 로직은 layout 무관 동일).
+        const bodySegs: SentSegment[] = bodyFinalized.map((f) => ({
+          bodyStart: f.segmentStart!,
+          markerIndex: f.lineIndex,
+          id: f.id,
+          stamp: f.stamp,
+        }));
+        const bodyPlan = planArchive(lines, bodySegs);
 
-      // 수동 archive 트리거 라인 → 종단 표기(자동 ON 이면 · auto 부기). splice 전 인덱스로 반영.
-      if (hasArchive) {
-        const stamp = formatStamp(new Date());
-        for (const a of actions) {
-          if (a.kind === "archive")
-            lines[a.lineIndex] = archivedLine(removeRanges.length, stamp, autoArchive);
+        // 팔레트 archive 트리거(재정의) — 본문 이동이 아니라 기록 존 strict 마커 prune.
+        // sentSegments(레거시 미이관 잔존)도 함께 훑는 것은 layout-off 전용 관례라 layout-on 은
+        // 배제한다 — 즉시 아카이브로 미이관 잔존이 발생하지 않기 때문(정상 운영 시).
+        let archivedRecord: string | null = null;
+        let pruneIndices: number[] = [];
+        if (hasArchive) {
+          const prune = planRecordsPrune(lines, recordsIndex ?? 0);
+          pruneIndices = prune.removeIndices;
+          archivedRecord = archivedLine(prune.count, formatStamp(new Date()), autoArchive);
+          for (const a of actions) {
+            if (a.kind === "archive") lines[a.lineIndex] = uncheckLine(lines[a.lineIndex]!);
+          }
         }
-      }
 
-      // write 필요 판정: 종단 마킹·아카이브 스윕·수동 표기 중 하나라도 있으면. 없고 전량 enqueue 실패면
-      // 빈 send 만 별도 보장(드묾, 종전 else-if 동치).
-      let needWrite = finalize.length > 0 || hasArchive || removeRanges.length > 0;
-      if (!needWrite && pending.length > 0) needWrite = ensureBlankSend(lines);
-
-      if (needWrite) {
-        if (archiveText.length > 0) {
-          // 전용 아카이브 디렉터리 하위 날짜 파일(아카이브 시점 로컬일).
-          const archiveFile = join(archiveDir, `${formatDateFolder(new Date())}.md`);
-          await mkdir(archiveDir, { recursive: true });
-          await appendFile(archiveFile, archiveText, "utf8");
+        // ORDER 불변식(append 먼저) — 실패 시 폴백: splice 스킵 + 본문 마커를 `⏳ sending` 그대로
+        // 유지(sent 종단 금지). 본문은 draft 에 잔존하되 그 sending 마커에 묶인 resume 후보라, 다음
+        // 처리에서 hasId 로 재-enqueue 되지 않고(재전송 차단) 아카이브가 성공하면 sent 로 수렴한다
+        // (크래시 재개와 동일 계약). sent 로 종단하면 본문이 무-id draft 로 남아 send 재체크·상단
+        // 입력 시 재전송되므로 금지 — 유실 금지 + enqueue 는 이미 완료.
+        let archiveFailed = false;
+        if (bodyPlan.text.length > 0) {
+          try {
+            const archiveFile = join(archiveDir, `${formatDateFolder(new Date())}.md`);
+            await mkdir(archiveDir, { recursive: true });
+            await appendFile(archiveFile, bodyPlan.text, "utf8");
+          } catch (err) {
+            archiveFailed = true;
+            console.error(
+              t("log.markdown.archiveWriteError", { lane: cfg.lane, error: errMsg(err) }),
+            );
+          }
         }
+
+        let removeRanges: Array<[number, number]> = [];
+        let sentRecords: string[] = [];
+        if (!archiveFailed) {
+          removeRanges = bodyFinalized.map(
+            (f) => [f.segmentStart!, f.lineIndex + 1] as [number, number],
+          );
+          sentRecords = bodyFinalized.map((f) => sentLine(f.id, f.stamp));
+        }
+        // archiveFailed: 본문 마커를 건드리지 않는다 — Phase A 가 기재한 `⏳ sending <id>` 가 그대로
+        // 남아 다음 처리에서 resume+hasId 로 재전송 없이 수렴한다(위 ORDER 불변식 주석 참조).
+        for (const idx of pruneIndices) removeRanges.push([idx, idx + 1]);
+
         removeRanges.sort((a, b) => b[0] - a[0]); // bottom-up splice — 인덱스 보존
         for (const [s, e] of removeRanges) lines.splice(s, e - s);
-        ensureBlankSend(lines); // 소모된 send 대체(멱등 — 이미 있으면 무변경)
-        await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
+
+        const newRecords = archivedRecord ? [...sentRecords, archivedRecord] : sentRecords;
+        const healed = healLayout(lines, { paletteEnabled, newRecords });
+        if (healed.changed) {
+          await atomicWrite(inboxPath, joinLines(healed.lines, trailingNewline));
+        }
         if (finalize.length > 0) cfg.onInbound?.(); // injector 깨우기(in-process)
+      } else {
+        // --- Phase B(layout-off — 레거시 유지, 하위호환) --------------------------------------
+        // enqueue 확정분을 sent 로 종단(인덱스로 먼저 표기 — splice 전이라 인덱스 유효).
+        for (const f of finalize) lines[f.lineIndex] = sentLine(f.id, f.stamp);
+
+        // 아카이브 계획 — 전송 시점 자동(config on) + 수동 스윕(🗄️ archive). ORDER 불변식:
+        // 아카이브 append 를 inbox write(본문 splice) 보다 먼저 한다. 사이 크래시 시 본문이 양쪽에
+        // 잔존해 재기동 시 `✅ sent` 경계로 재전송 없이 수렴(무해 중복 1). 역순은 본문 유실 창.
+        let archiveText = "";
+        let removeRanges: Array<[number, number]> = [];
+        if (autoArchive || hasArchive) {
+          // 이번 턴 확정 세그먼트(전송 시점 대상 — fresh/resume 만 segmentStart 보유).
+          const finalizedSegs: SentSegment[] = finalize
+            .filter((f) => f.segmentStart !== undefined)
+            .map((f) => ({
+              bodyStart: f.segmentStart!,
+              markerIndex: f.lineIndex,
+              id: f.id,
+              stamp: f.stamp,
+            }));
+          // 수동 스윕은 이전 턴/레거시 sent 까지 전량, 자동만이면 이번 턴만.
+          const targets = hasArchive ? [...sentSegments, ...finalizedSegs] : finalizedSegs;
+          const plan = planArchive(lines, targets);
+          archiveText = plan.text;
+          removeRanges = plan.ranges;
+        }
+
+        // 수동 archive 트리거 라인 → 종단 표기(자동 ON 이면 · auto 부기). splice 전 인덱스로 반영.
+        if (hasArchive) {
+          const stamp = formatStamp(new Date());
+          for (const a of actions) {
+            if (a.kind === "archive")
+              lines[a.lineIndex] = archivedLine(removeRanges.length, stamp, autoArchive);
+          }
+        }
+
+        // write 필요 판정: 종단 마킹·아카이브 스윕·수동 표기 중 하나라도 있으면. 없고 전량 enqueue
+        // 실패면 빈 send 만 별도 보장(드묾, 종전 else-if 동치).
+        let needWrite = finalize.length > 0 || hasArchive || removeRanges.length > 0;
+        if (!needWrite && pending.length > 0) needWrite = ensureBlankSend(lines);
+
+        if (needWrite) {
+          if (archiveText.length > 0) {
+            // 전용 아카이브 디렉터리 하위 날짜 파일(아카이브 시점 로컬일).
+            const archiveFile = join(archiveDir, `${formatDateFolder(new Date())}.md`);
+            await mkdir(archiveDir, { recursive: true });
+            await appendFile(archiveFile, archiveText, "utf8");
+          }
+          removeRanges.sort((a, b) => b[0] - a[0]); // bottom-up splice — 인덱스 보존
+          for (const [s, e] of removeRanges) lines.splice(s, e - s);
+          ensureBlankSend(lines); // 소모된 send 대체(멱등 — 이미 있으면 무변경)
+          await atomicWrite(inboxPath, joinLines(lines, trailingNewline));
+          if (finalize.length > 0) cfg.onInbound?.(); // injector 깨우기(in-process)
+        }
       }
     } finally {
       inboxBusy = false;

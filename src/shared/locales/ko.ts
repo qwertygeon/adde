@@ -132,7 +132,7 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
   --unset <key> ...             키(점표기)를 제거해 소비측 기본값 복원; 정체성·필수 키는 거부
 
 위치 점표기 키(adde lane set <proj> <lane> <key> <value> ...)로 같은 표면을 편집하며, markdown 전용 추가 키:
-  markdown.archive, markdown.backup, markdown.retention_days, markdown.out_retention_days, markdown.sync_provider
+  markdown.archive, markdown.backup, markdown.retention_days, markdown.out_retention_days, markdown.sync_provider, markdown.layout, markdown.palette
 지정하지 않은 필드는 기존 값을 유지합니다. 변경은 adde restart <proj> 이후 반영됩니다.
 참고: --file-mode 편집은 conf 값만 갱신하며, 재시작 후에도 기존 디렉터리 권한은 변경되지 않습니다(private→shared 완화는 수동 chmod 필요). file_mode 는 내부 state/out/queue 디렉터리만 지배하며 마크다운 노트 트리는 대상이 아닙니다.`,
   },
@@ -265,6 +265,10 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
       outRetentionDays:
         "markdown.out_retention_days (out/ 정리 안전창, 일; retention_days+1 이상, 없으면 비움)",
       syncProvider: "markdown.sync_provider (local | icloud, 없으면 기본 local)",
+      layout:
+        "markdown.layout (on | off — inbox 3존 레이아웃: 팔레트+compose 센티널+기록 존+전송 즉시 아카이브, 없으면 기본 on)",
+      palette:
+        "markdown.palette (on | off — inbox 최상단 상주 팔레트 마커 표시 여부, 없으면 기본 on; layout=on 일 때만 의미)",
     },
     ttyOnly: {
       situation: "--interactive 는 대화형 터미널(TTY)에서만 동작합니다",
@@ -558,6 +562,7 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
       "[markdown] out_retention_days({{outRetentionDays}}) 는 retention_days({{retentionDays}}) + {{margin}} 이상이어야 합니다 — 기동을 거부합니다.",
     backupNoArchiveWarn:
       "⚠️ 백업 이관은 켜져 있으나 archive 가 설정되지 않았습니다 — inbox 내용이 계속 쌓입니다(전송 본문이 이관되지 않음). markdown.archive 를 설정하면 아카이브도 이관됩니다.",
+    recordsHeading: "전송 기록",
   },
   supervisor: {
     noLanesMsg: "{{proj}}: 레인 0개 — lanes.d 에 conf 없음",
@@ -742,6 +747,8 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
       decidedMoveError: "[markdown] 결정완료 승인 아카이브 실패 {{file}}: {{error}}",
       backupWarnNotifyFail: "[markdown] 백업/아카이브 경고 노트 기록 실패: {{error}}",
       legacyArchiveMoveError: "[markdown] 구버전 단일 아카이브 파일 이관 실패 {{path}}: {{error}}",
+      archiveWriteError:
+        "[markdown] lane={{lane}} 자동 아카이브 쓰기 실패(본문을 inbox 에 잔존시켜 폴백 — 유실 없음): {{error}}",
     },
     markdownRetention: {
       relocateFail:

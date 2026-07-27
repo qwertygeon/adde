@@ -80,6 +80,7 @@ export const LANE_KEY_DESCRIPTORS: readonly LaneKeyDescriptor[] = [
   { key: "markdown.sync_provider", namespace: "markdown", field: "sync_provider", type: "enum", appliesTo: "markdown", editable: true, identity: false, required: false, exposed: true, default: "local", enumValues: ["local", "icloud"], i18nLabel: "lane.prompt.syncProvider" }, // prettier-ignore
   { key: "markdown.layout", namespace: "markdown", field: "layout", type: "enum", appliesTo: "markdown", editable: true, identity: false, required: false, exposed: true, default: "on", enumValues: ["on", "off"], i18nLabel: "lane.prompt.layout" }, // prettier-ignore
   { key: "markdown.palette", namespace: "markdown", field: "palette", type: "enum", appliesTo: "markdown", editable: true, identity: false, required: false, exposed: true, default: "on", enumValues: ["on", "off"], i18nLabel: "lane.prompt.palette" }, // prettier-ignore
+  { key: "markdown.records_cap", namespace: "markdown", field: "records_cap", type: "int", appliesTo: "markdown", editable: true, identity: false, required: false, exposed: true, i18nLabel: "lane.prompt.recordsCap" }, // prettier-ignore
 ];
 
 /** canonical key → 서술자 조회. */

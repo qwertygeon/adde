@@ -24,6 +24,7 @@ import {
   isTerminalMarker,
   planArchive,
   archivedLine,
+  planRecordsCap,
   emptyLine,
 } from "../../src/src-adapters/markdown.js";
 import type { Source } from "../../src/src-adapters/source.js";
@@ -1197,10 +1198,10 @@ describe("createMarkdownSource (통합)", () => {
   const archiveFilePath = (): string => path.join(archiveDirPath(), `${todayDateStr()}.md`);
 
   it("자동(config on): 전송 시점에 본문을 아카이브로 이관하고 inbox 엔 sent 마커만 남긴다", async () => {
-    // 007 T-D3: layout=on 기본이면 즉시 아카이브가 markdown.archive 지정과 무관하게 항상
-    // 켜진다(FR-004/FR-008, A-P008 동작 변경) — "config on 이 곧 autoArchive 트리거" 라는 이
-    // 테스트의 레거시 전제를 layout=off pin 으로 보존한다. layout-on 기본 즉시 아카이브는
-    // SC-007(미지정도 자동)·SC-015(archive=디렉터리 오버라이드) 신규 테스트가 커버한다.
+    // layout=on 기본이면 즉시 아카이브가 markdown.archive 지정과 무관하게 항상 켜지는 동작 변경이
+    // 있어, "config on 이 곧 autoArchive 트리거" 라는 이 테스트의 레거시 전제를 layout=off pin 으로
+    // 보존한다. layout-on 기본 즉시 아카이브(미지정도 자동·archive=디렉터리 오버라이드)는 별도 신규
+    // 테스트가 커버한다.
     conf.markdown!.layout = "off";
     conf.markdown!.archive = "sent-archive.md";
     const inboxPath = path.join(rootDir, "inbox.md");
@@ -2108,6 +2109,97 @@ describe("존 레이아웃(inbox-zoned-layout, 007)", () => {
       const customArchiveFile = path.join(rootDir, "custom-archive-dir", `${todayDateStr()}.md`);
       await waitFor(() => fs.existsSync(customArchiveFile));
       expect(fs.readFileSync(customArchiveFile, "utf8")).toContain("커스텀 경로 본문");
+    });
+  });
+
+  describe("기록 존 자동 상한(records_cap)", () => {
+    // 단위 — planRecordsCap 순수 함수(recordsStart=0 으로 배열 전체를 기록 존으로 취급).
+    it("cap 이하이면 무동작(멱등)", () => {
+      const lines = [sentLine("m3", STAMP), sentLine("m2", STAMP), sentLine("m1", STAMP)];
+      expect(planRecordsCap(lines, 0, 3, STAMP).changed).toBe(false); // 3 <= 3
+    });
+
+    it("cap 초과 시 최근 1건만 남기고 나머지를 단일 archived 요약으로 정리", () => {
+      const lines = [
+        sentLine("m4", STAMP),
+        sentLine("m3", STAMP),
+        sentLine("m2", STAMP),
+        sentLine("m1", STAMP),
+      ];
+      const r = planRecordsCap(lines, 0, 3, STAMP); // 4 > 3
+      expect(r.changed).toBe(true);
+      expect(r.lines).toHaveLength(2); // 최근 1 + 요약 1
+      const sent = r.lines.filter((l) => /✅\s*sent/.test(l));
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toContain("m4"); // 최신-위라 맨 위(m4)가 최근
+      expect(r.lines.some((l) => /🗄️\s*archived\s+3\b/.test(l))).toBe(true); // 3건 요약
+    });
+
+    it("기존 archived 요약과 누계 병합(요약줄 누적 방지)", () => {
+      const lines = [
+        sentLine("m4", STAMP),
+        sentLine("m3", STAMP),
+        sentLine("m2", STAMP),
+        sentLine("m1", STAMP),
+        archivedLine(6, STAMP, true), // 기존 누계
+      ];
+      const r = planRecordsCap(lines, 0, 3, STAMP);
+      expect(r.lines.filter((l) => /archived/.test(l))).toHaveLength(1); // 요약 1줄로 병합
+      expect(r.lines.some((l) => /🗄️\s*archived\s+9\b/.test(l))).toBe(true); // 6 + 3 = 9
+      expect(r.lines).toHaveLength(2);
+    });
+
+    it("⚠️ empty 마커도 상한 카운트에 포함된다", () => {
+      const lines = [
+        sentLine("m3", STAMP),
+        "- [x] ⚠️ empty",
+        sentLine("m2", STAMP),
+        sentLine("m1", STAMP),
+      ];
+      expect(planRecordsCap(lines, 0, 3, STAMP).changed).toBe(true); // strict 4 > 3
+    });
+
+    // 통합 — 전송으로 상한을 넘겨 자동 정리 발화(본문은 아카이브 보존).
+    it("SC: records_cap 초과 전송 시 최근 1건 유지 + 누계 요약, 본문은 아카이브 보존", async () => {
+      conf.markdown!.records_cap = 2;
+      fs.writeFileSync(
+        inboxFilePath(),
+        zonedFixture([sentLine("old2", STAMP), sentLine("old1", STAMP)]),
+      );
+      source = makeSource();
+      await source.start();
+      await waitFor(() => readInbox().includes(blankSendLine()));
+
+      fs.writeFileSync(
+        inboxFilePath(),
+        readInbox().replace(blankSendLine(), "새 메시지 본문\n- [x] 📤 send"),
+      );
+      await waitFor(() => /🗄️\s*archived\s+2\b/.test(readInbox())); // old1·old2 → 요약 2
+      const inbox = readInbox();
+      expect((inbox.match(/✅\s*sent/g) ?? []).length).toBe(1); // 최근(새 메시지)만
+      expect(fs.existsSync(archiveFilePath())).toBe(true);
+      expect(fs.readFileSync(archiveFilePath(), "utf8")).toContain("새 메시지 본문"); // 본문 유실 없음
+      expect(msgCount()).toBe(1); // 재전송 없음
+    });
+
+    it("SC: records_cap 미지정이면 자동 정리 없이 sent 마커가 누적된다", async () => {
+      fs.writeFileSync(
+        inboxFilePath(),
+        zonedFixture([sentLine("old2", STAMP), sentLine("old1", STAMP)]),
+      );
+      source = makeSource();
+      await source.start();
+      await waitFor(() => readInbox().includes(blankSendLine()));
+
+      fs.writeFileSync(
+        inboxFilePath(),
+        readInbox().replace(blankSendLine(), "세 번째 본문\n- [x] 📤 send"),
+      );
+      await waitFor(() => (readInbox().match(/✅\s*sent/g) ?? []).length >= 3);
+      await new Promise((r) => setTimeout(r, 150));
+      const inbox = readInbox();
+      expect((inbox.match(/✅\s*sent/g) ?? []).length).toBe(3); // 누적, 정리 없음
+      expect(inbox).not.toMatch(/🗄️\s*archived\s+\d+.*·\s*auto/); // 자동 요약 없음
     });
   });
 

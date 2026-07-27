@@ -75,6 +75,7 @@ describe("노출 편집 표면", () => {
         "markdown.sync_provider",
         "markdown.layout",
         "markdown.palette",
+        "markdown.records_cap",
       ]),
     );
   });

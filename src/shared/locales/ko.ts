@@ -132,7 +132,7 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
   --unset <key> ...             키(점표기)를 제거해 소비측 기본값 복원; 정체성·필수 키는 거부
 
 위치 점표기 키(adde lane set <proj> <lane> <key> <value> ...)로 같은 표면을 편집하며, markdown 전용 추가 키:
-  markdown.archive, markdown.backup, markdown.retention_days, markdown.out_retention_days, markdown.sync_provider, markdown.layout, markdown.palette
+  markdown.archive, markdown.backup, markdown.retention_days, markdown.out_retention_days, markdown.sync_provider, markdown.layout, markdown.palette, markdown.records_cap
 지정하지 않은 필드는 기존 값을 유지합니다. 변경은 adde restart <proj> 이후 반영됩니다.
 참고: --file-mode 편집은 conf 값만 갱신하며, 재시작 후에도 기존 디렉터리 권한은 변경되지 않습니다(private→shared 완화는 수동 chmod 필요). file_mode 는 내부 state/out/queue 디렉터리만 지배하며 마크다운 노트 트리는 대상이 아닙니다.`,
   },
@@ -269,6 +269,8 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
         "markdown.layout (on | off — inbox 3존 레이아웃: 팔레트+compose 센티널+기록 존+전송 즉시 아카이브, 없으면 기본 on)",
       palette:
         "markdown.palette (on | off — inbox 최상단 상주 팔레트 마커 표시 여부, 없으면 기본 on; layout=on 일 때만 의미)",
+      recordsCap:
+        "markdown.records_cap (기록 존의 sent/empty 마커가 이 수를 넘으면 최근 1건만 남기고 나머지를 누계 archived 요약으로 자동 정리; 없으면 자동 정리 off; layout=on 일 때만 의미)",
     },
     ttyOnly: {
       situation: "--interactive 는 대화형 터미널(TTY)에서만 동작합니다",

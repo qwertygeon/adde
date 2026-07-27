@@ -508,6 +508,9 @@ export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayout
   return { lines: rebuilt, changed };
 }
 
+/** 기록 존 strict `⚠️ empty` 종단 마커(빈 전송 기록 — 위키링크 없음). planRecordsPrune·planRecordsCap 공용. */
+const EMPTY_MARKER = /^\s*-\s*\[[xX]\]\s+⚠️?\s+empty\b/;
+
 /**
  * 기록 존 archive 재정의 — 기록 존(앵커 아래) 의 strict `✅ sent [[…]]`·`⚠️ empty` 종단 마커 줄
  * 인덱스를 수집한다(본문은 이미 즉시 아카이브됐으므로 이관 대상이 아니라 삭제 대상).
@@ -523,7 +526,7 @@ export function planRecordsPrune(
     const line = lines[i]!;
     // strict sent(위키링크 포함) 또는 empty 종단만 prune 대상. archived 요약 줄(기존/타 archive 실행
     // 결과)은 isTerminalMarker 는 매칭하지만 별도 재요약 대상이 아니므로 제외한다.
-    if (matchSentMarker(line) || /^\s*-\s*\[[xX]\]\s+⚠️?\s+empty\b/.test(line)) {
+    if (matchSentMarker(line) || EMPTY_MARKER.test(line)) {
       removeIndices.push(i);
     }
   }
@@ -558,7 +561,7 @@ export function planRecordsCap(
   let summarySum = 0;
   for (let i = recordsStart; i < lines.length; i++) {
     const line = lines[i]!;
-    if (matchSentMarker(line) || /^\s*-\s*\[[xX]\]\s+⚠️?\s+empty\b/.test(line)) {
+    if (matchSentMarker(line) || EMPTY_MARKER.test(line)) {
       strictIdx.push(i);
     } else {
       const n = matchArchivedSummary(line);
@@ -756,9 +759,9 @@ function resolvePaths(conf: LaneConf): MarkdownResolvedPaths {
   const layoutEnabled = md.layout !== "off";
   const paletteEnabled = layoutEnabled && md.palette !== "off";
   const autoArchive = layoutEnabled || (md.archive !== undefined && md.archive.length > 0);
-  // 기록 존 자동 상한 — 양의 정수만 활성(옵트인), 그 외(미지정·0·음수)는 0=off. layout-off 는 기록 존
-  // 자체가 없어 소비측(Phase B)이 발화하지 않으므로 여기선 값만 전달한다.
-  const recordsCap = md.records_cap !== undefined && md.records_cap > 0 ? md.records_cap : 0;
+  // 기록 존 자동 상한 — conf 파싱이 양의 정수만 통과시키므로(그 외 undefined) 미지정 시 0=off. 비양수
+  // 방어는 소비측 가드(recordsCap>0)·planRecordsCap(cap<=0 no-op)에 있어 여기선 값만 전달한다.
+  const recordsCap = md.records_cap ?? 0;
   const result: MarkdownResolvedPaths = {
     rootDir,
     inboxPath,

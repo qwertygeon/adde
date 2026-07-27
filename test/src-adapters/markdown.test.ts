@@ -2149,6 +2149,27 @@ describe("존 레이아웃(inbox-zoned-layout, 007)", () => {
       expect(r.lines).toHaveLength(2);
     });
 
+    it("기존 archived 요약이 여러 개여도 모두 누계 병합(단일 줄)", () => {
+      const lines = [
+        sentLine("m3", STAMP),
+        sentLine("m2", STAMP),
+        sentLine("m1", STAMP),
+        archivedLine(4, STAMP, true),
+        archivedLine(5, STAMP, true),
+      ];
+      const r = planRecordsCap(lines, 0, 2, STAMP); // strict 3 > 2
+      expect(r.lines.filter((l) => /archived/.test(l))).toHaveLength(1); // 여러 요약 → 1줄 병합
+      expect(r.lines.some((l) => /🗄️\s*archived\s+11\b/.test(l))).toBe(true); // 4 + 5 + 2 = 11
+      expect(r.lines).toHaveLength(2); // 최근 1 + 병합 요약 1
+    });
+
+    it("정상상태([최근1, archived N]) 재입력 시 무동작(멱등 — 요약 반복 누적 없음)", () => {
+      const steady = [sentLine("m1", STAMP), archivedLine(9, STAMP, true)];
+      const r = planRecordsCap(steady, 0, 2, STAMP); // strict 1 <= 2
+      expect(r.changed).toBe(false);
+      expect(r.lines).toBe(steady); // 동일 배열 참조 반환(무변경)
+    });
+
     it("⚠️ empty 마커도 상한 카운트에 포함된다", () => {
       const lines = [
         sentLine("m3", STAMP),

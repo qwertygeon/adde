@@ -26,7 +26,11 @@ import {
   UnsupportedSyncProviderError,
 } from "./sync-provider.js";
 import type { SyncProviderDescriptor } from "./sync-provider.js";
-import { relocateOldFolders, migrateFlatToDated, migrateLegacyArchiveFile } from "./markdown-retention.js";
+import {
+  relocateOldFolders,
+  migrateFlatToDated,
+  migrateLegacyArchiveFile,
+} from "./markdown-retention.js";
 import { formatDateFolder, dateFolderFromStamp } from "../shared/date-folder.js";
 import type { Envelope, ControlRequest } from "../shared/envelope.js";
 import { readLedger, resolveResumeControl } from "../core/session-ledger.js";
@@ -469,7 +473,10 @@ export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayout
   const parsed = parseInbox(lines.join("\n"));
   // 기록 헤딩은 파싱 비대상 장식 텍스트라 로케일 무관하게(en/ko 둘 다) 초안에서 배제 —
   // 과거 다른 로케일로 heal 됐던 문서를 재-heal 해도 헤딩 줄이 초안으로 잘못 흡수되지 않는다.
-  const headingTexts = new Set([recordsHeading(tFor("en")).trim(), recordsHeading(tFor("ko")).trim()]);
+  const headingTexts = new Set([
+    recordsHeading(tFor("en")).trim(),
+    recordsHeading(tFor("ko")).trim(),
+  ]);
 
   const composeIdx = parsed.composeIndex;
   const draftStart = composeIdx !== null && composeIdx !== undefined ? composeIdx + 1 : 0;
@@ -488,7 +495,8 @@ export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayout
   });
   // 선행/후행 공백줄 트리밍 — 재-heal 시 공백줄이 누적되지 않게(멱등성 유지).
   while (draftLines.length > 0 && draftLines[0]!.trim() === "") draftLines.shift();
-  while (draftLines.length > 0 && draftLines[draftLines.length - 1]!.trim() === "") draftLines.pop();
+  while (draftLines.length > 0 && draftLines[draftLines.length - 1]!.trim() === "")
+    draftLines.pop();
 
   const existingRecords = lines.filter((line) => isTerminalMarker(line));
 
@@ -816,7 +824,11 @@ function validateMarkdownConf(input: SourceValidateInput): SourceValidateResult 
       insideNorm(inboxPath, outboxDir)
     ) {
       warnings.push(
-        t("laneConfig.warn.mdPathOverlap", { inbox: inboxPath, approvals: approvalsDir, outbox: outboxDir }),
+        t("laneConfig.warn.mdPathOverlap", {
+          inbox: inboxPath,
+          approvals: approvalsDir,
+          outbox: outboxDir,
+        }),
       );
     }
   }

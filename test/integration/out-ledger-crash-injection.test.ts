@@ -28,9 +28,13 @@ const LANE = "crash-lane";
 
 function runWorker(mode: string, ...args: string[]): Promise<number | null> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", WORKER, tmpBase, PROJ, LANE, mode, ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", WORKER, tmpBase, PROJ, LANE, mode, ...args],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let stderr = "";
     child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
     child.on("exit", (code) => resolve(code));
@@ -133,7 +137,10 @@ describe("SC-004: done 기록 + processing 잔존 크래시 재개 — 재주입
   it("실 프로세스로 done 확정된 id 의 processing 잔존분이 있어도 재시작 injector 가 엔진에 재주입하지 않는다", async () => {
     const paths = lanePaths(tmpBase, PROJ, LANE);
     await enqueue(paths, makeEnvelope("dd1"));
-    fs.writeFileSync(path.join(paths.processingDir, "dd1.msg"), JSON.stringify(makeEnvelope("dd1")));
+    fs.writeFileSync(
+      path.join(paths.processingDir, "dd1.msg"),
+      JSON.stringify(makeEnvelope("dd1")),
+    );
     await runWorker("done-then-crash", "dd1");
 
     const inject = async (): Promise<void> => {

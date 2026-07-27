@@ -557,7 +557,11 @@ describe("readHalt / clearHalt", () => {
     fs.mkdirSync(path.dirname(haltPath), { recursive: true });
     fs.writeFileSync(
       haltPath,
-      JSON.stringify({ reason: "x", haltedAt: "2026-07-08T00:00:00.000Z", consecutiveShortLived: 5 }),
+      JSON.stringify({
+        reason: "x",
+        haltedAt: "2026-07-08T00:00:00.000Z",
+        consecutiveShortLived: 5,
+      }),
     );
 
     await clearHalt(tmpBase, "haltproj");
@@ -573,7 +577,11 @@ describe("readHalt / clearHalt", () => {
     fs.mkdirSync(path.dirname(haltPath), { recursive: true });
     fs.writeFileSync(
       haltPath,
-      JSON.stringify({ reason: "x", haltedAt: "2026-07-08T00:00:00.000Z", consecutiveShortLived: 6 }),
+      JSON.stringify({
+        reason: "x",
+        haltedAt: "2026-07-08T00:00:00.000Z",
+        consecutiveShortLived: 6,
+      }),
     );
     fs.writeFileSync(bootsPath, JSON.stringify({ consecutiveShortLived: 6 }));
 
@@ -616,7 +624,9 @@ describe("runDoctor — halt 자가정지 표면화 (SC-024)", () => {
     );
 
     const checks = await runDoctor("haltp", { base: tmpBase });
-    const haltCheck = checks.find((c) => c.detail.includes("자가 정지") || c.hint?.includes("restart"));
+    const haltCheck = checks.find(
+      (c) => c.detail.includes("자가 정지") || c.hint?.includes("restart"),
+    );
     expect(haltCheck).toBeDefined();
     expect(haltCheck?.level).toBe("FAIL");
     expect(haltCheck?.hint).toBeTruthy();

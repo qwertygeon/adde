@@ -18,10 +18,11 @@ describe("전역 플래그 위치 무관 인식 behavior change 기재 (SC-008 H
       .split("\n")
       .some(
         (line) =>
-          /위치\s*무관|position/i.test(line) &&
-          /(--version|-v\b|--help|-h\b|전역)/i.test(line),
+          /위치\s*무관|position/i.test(line) && /(--version|-v\b|--help|-h\b|전역)/i.test(line),
       );
-    expect(hasLine, "CHANGELOG 에 전역 플래그 위치 무관 인식 변화 기재 항목을 찾을 수 없음").toBe(true);
+    expect(hasLine, "CHANGELOG 에 전역 플래그 위치 무관 인식 변화 기재 항목을 찾을 수 없음").toBe(
+      true,
+    );
   });
 });
 

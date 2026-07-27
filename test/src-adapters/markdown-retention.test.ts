@@ -103,7 +103,13 @@ describe("relocateOldFolders — cutoff 경계일 판정 (SC-006, FR-007·FR-011
     makeDateFolder("out", "2026-07-10");
 
     const result = await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: async () => "ready",
     });
@@ -119,7 +125,13 @@ describe("relocateOldFolders — cutoff 경계일 판정 (SC-006, FR-007·FR-011
     const relocateOldFolders = await loadRelocateOldFolders();
     makeDateFolder("out", "2026-07-09");
     const result = await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: async () => "ready",
     });
@@ -140,7 +152,13 @@ describe("relocateOldFolders — 판정 비용 (SC-007·SC-024, FR-008·NFR-002)
 
     h.statSpyCount = 0;
     await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08", // 07-09 는 이내 — 이동 없음, 판정만 수행
       materialize: async () => "ready",
     });
@@ -163,12 +181,24 @@ describe("relocateOldFolders — 판정 비용 (SC-007·SC-024, FR-008·NFR-002)
     // 조건에서 두 실행의 결과 소요가 파일 수와 무관함(동일 판정 성공)만 관측 가능한 결과로 확인한다.
     void readdirSpy;
     const r1 = await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-10",
       materialize: async () => "ready",
     });
     const r2 = await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out2"), backupDir: path.join(backupDir, "out2"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out2"),
+          backupDir: path.join(backupDir, "out2"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-10",
       materialize: async () => "ready",
     });
@@ -189,7 +219,11 @@ describe("relocateOldFolders — mirror 레이아웃·단위 이동 (SC-008, FR-
 
     await relocateOldFolders({
       roots: [
-        { vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" },
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
         { vaultDir: archiveDir, backupDir: path.join(backupDir, "archive"), unit: "file" },
       ],
       cutoffDate: "2026-07-08",
@@ -212,7 +246,13 @@ describe("relocateOldFolders — 안착 검증 후 원본 제거 (SC-009, FR-012
     h.copyFileFailOnce = true; // 복사 도중 크래시 모사
 
     await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: async () => "ready",
     });
@@ -224,7 +264,13 @@ describe("relocateOldFolders — 안착 검증 후 원본 제거 (SC-009, FR-012
 
     h.copyFileFailOnce = false; // 재실행(다음 일간 실행 모사) — 정상 완료
     await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: async () => "ready",
     });
@@ -242,7 +288,13 @@ describe("relocateOldFolders — 대상 폴더 병합·멱등 (SC-010, FR-013·N
     makeDateFolder("out", "2026-07-07", "new.md", "새로 생긴 항목");
 
     await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: async () => "ready",
     });
@@ -251,7 +303,13 @@ describe("relocateOldFolders — 대상 폴더 병합·멱등 (SC-010, FR-013·N
 
     // 2회차 — 이미 이관된 상태라 오류 없이 no-op 수렴.
     const r2 = await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: async () => "ready",
     });
@@ -268,7 +326,13 @@ describe("relocateOldFolders — 타 볼륨(EXDEV) 복사·검증·원본제거 
     h.renameAlwaysExdev = true;
 
     await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: async () => "ready",
     });
@@ -287,7 +351,13 @@ describe("relocateOldFolders — 타 볼륨(EXDEV) 복사·검증·원본제거 
     h.copyFileFailOnce = true;
 
     await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: async () => "ready",
     });
@@ -312,7 +382,13 @@ describe("relocateOldFolders — 이관 실패가 파이프라인을 막지 않�
 
     await expect(
       relocateOldFolders({
-        roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+        roots: [
+          {
+            vaultDir: path.join(vaultDir, "out"),
+            backupDir: path.join(backupDir, "out"),
+            unit: "folder",
+          },
+        ],
         cutoffDate: "2026-07-08",
         materialize: failingMaterialize,
       }),
@@ -334,7 +410,13 @@ describe("relocateOldFolders — icloud dataless skip + 재시도 (SC-012, FR-01
     };
 
     const r1 = await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: providerLikeMaterialize,
     });
@@ -342,7 +424,13 @@ describe("relocateOldFolders — icloud dataless skip + 재시도 (SC-012, FR-01
     expect(r1.skipped.length).toBeGreaterThan(0);
 
     const r2 = await relocateOldFolders({
-      roots: [{ vaultDir: path.join(vaultDir, "out"), backupDir: path.join(backupDir, "out"), unit: "folder" }],
+      roots: [
+        {
+          vaultDir: path.join(vaultDir, "out"),
+          backupDir: path.join(backupDir, "out"),
+          unit: "folder",
+        },
+      ],
       cutoffDate: "2026-07-08",
       materialize: providerLikeMaterialize,
     });
@@ -408,8 +496,8 @@ describe("일간 이관 — 실행 누락 날짜 만회 (SC-014, FR-017·ADR-009
         "2026-07-10",
       ),
     );
-    expect(
-      fs.existsSync(path.join(conf.markdown!.backup!, "out", "2026-07-07", "old.md")),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(conf.markdown!.backup!, "out", "2026-07-07", "old.md"))).toBe(
+      true,
+    );
   });
 });

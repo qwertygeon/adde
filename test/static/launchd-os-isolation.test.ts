@@ -34,13 +34,16 @@ describe("SC-N04: launchd 전용 로직은 assertMacOS 분기 하에 있다", ()
 describe("SC-N04: OS 무관 프리미티브는 OS 분기에 종속되지 않는다", () => {
   const osIndependentFiles = ["shared/log-rotate.ts", "core/crash-guard.ts", "core/crash-loop.ts"];
 
-  it.each(osIndependentFiles)("%s 는 assertMacOS·process.platform 분기를 포함하지 않는다", (rel) => {
-    const content = read(rel);
-    if (content === null) {
-      expect(true).toBe(true); // TDD Red — 구현 전
-      return;
-    }
-    expect(content).not.toContain("assertMacOS");
-    expect(content).not.toContain("process.platform");
-  });
+  it.each(osIndependentFiles)(
+    "%s 는 assertMacOS·process.platform 분기를 포함하지 않는다",
+    (rel) => {
+      const content = read(rel);
+      if (content === null) {
+        expect(true).toBe(true); // TDD Red — 구현 전
+        return;
+      }
+      expect(content).not.toContain("assertMacOS");
+      expect(content).not.toContain("process.platform");
+    },
+  );
 });

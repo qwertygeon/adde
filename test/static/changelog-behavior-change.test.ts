@@ -35,11 +35,15 @@ describe("status --json BREAKING + 마이그레이션 안내 (SC-021)", () => {
       .split("\n")
       .some(
         (line) =>
-          /status/i.test(line) && /--json/.test(line) && /BREAKING/.test(line) && /\.lanes/.test(line),
+          /status/i.test(line) &&
+          /--json/.test(line) &&
+          /BREAKING/.test(line) &&
+          /\.lanes/.test(line),
       );
-    expect(hasCombinedLine, "status --json BREAKING + .lanes 마이그레이션 기재 항목을 찾을 수 없음").toBe(
-      true,
-    );
+    expect(
+      hasCombinedLine,
+      "status --json BREAKING + .lanes 마이그레이션 기재 항목을 찾을 수 없음",
+    ).toBe(true);
   });
 });
 
@@ -76,8 +80,7 @@ describe("status/doctor 진단·경고 stdout→stderr 이동 기재 (SC-016, NF
     const hasCombinedLine = changelog
       .split("\n")
       .some(
-        (line) =>
-          /(status|doctor)/i.test(line) && /stdout/i.test(line) && /stderr/i.test(line),
+        (line) => /(status|doctor)/i.test(line) && /stdout/i.test(line) && /stderr/i.test(line),
       );
     expect(hasCombinedLine, "status/doctor stdout→stderr 이동 기재 항목을 찾을 수 없음").toBe(true);
   });

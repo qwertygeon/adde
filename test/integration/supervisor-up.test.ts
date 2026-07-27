@@ -53,7 +53,10 @@ vi.mock("../../src/src-adapters/index.js", async (importOriginal) => {
   };
   return {
     ...actual,
-    SOURCE_REGISTRY: { ...actual.SOURCE_REGISTRY, [stubSource.ASYNC_STUB_SOURCE_ID]: asyncStubDescriptor },
+    SOURCE_REGISTRY: {
+      ...actual.SOURCE_REGISTRY,
+      [stubSource.ASYNC_STUB_SOURCE_ID]: asyncStubDescriptor,
+    },
   };
 });
 
@@ -545,7 +548,7 @@ describe("supervisorUp — 미지원/오타 engine·backend 거부 (SC-001/SC-00
 describe("supervisorUp — engine 미지정/빈 값은 안전 기본 엔진으로 기동한다 (SC-006)", () => {
   it("engine 라인이 아예 없는 conf 도 기본 엔진으로 기동한다 (Happy, 관측 불변)", async () => {
     const conf = "source=telegram\nbackend=acp\nperm_tier=acp\nacp_version=v1\n"; // engine 라인 부재
-    const { base } = setupProject("noengineproj", { "lane1": conf });
+    const { base } = setupProject("noengineproj", { lane1: conf });
     const result = await runUp("noengineproj", { base, acpFactory: makeFakeAcpFactory() });
     expect(result.lanes[0]?.status).toBe("running");
 
@@ -557,7 +560,7 @@ describe("supervisorUp — engine 미지정/빈 값은 안전 기본 엔진으�
 
   it("engine=(빈 값)도 동일하게 기본 엔진으로 처리한다 (Edge)", async () => {
     const conf = "source=telegram\nbackend=acp\nengine=\nperm_tier=acp\nacp_version=v1\n";
-    const { base } = setupProject("emptyengineproj", { "lane1": conf });
+    const { base } = setupProject("emptyengineproj", { lane1: conf });
     const result = await runUp("emptyengineproj", { base, acpFactory: makeFakeAcpFactory() });
     expect(result.lanes[0]?.status).toBe("running");
 

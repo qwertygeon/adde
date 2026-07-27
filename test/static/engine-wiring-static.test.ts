@@ -14,12 +14,8 @@ describe("정적 분석 — acp_version 단일 소스 (SC-007)", () => {
     expect(ACP_VERSION).toBe(`v${acp.PROTOCOL_VERSION}`);
   });
 
-  it("acp_version 리터럴 \"v1\" 은 conf.ts 의 상수 정의 1곳에만 존재한다(다른 소비처는 상수 참조)", () => {
-    const targets = [
-      "src/shared/conf.ts",
-      "src/backend/acp/client.ts",
-      "src/core/lane-config.ts",
-    ];
+  it('acp_version 리터럴 "v1" 은 conf.ts 의 상수 정의 1곳에만 존재한다(다른 소비처는 상수 참조)', () => {
+    const targets = ["src/shared/conf.ts", "src/backend/acp/client.ts", "src/core/lane-config.ts"];
     const literalPattern = /"v1"/g;
     let totalMatches = 0;
     const perFile: Record<string, number> = {};

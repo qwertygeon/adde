@@ -592,7 +592,11 @@ describe("SC-017: 하드 오류/경고 구분이 유지된다", () => {
 describe("SC-021: 토큰 값이 메시지에 노출되지 않는다 (lane-config 경고)", () => {
   it("형식이 이상한 토큰으로 telegram 레인을 생성해도 경고 메시지에 토큰 원문이 포함되지 않는다", async () => {
     const secretToken = "not-a-real-token-xyz789";
-    const res = await laneAdd("proj", "tg-secret", { base, source: "telegram", token: secretToken });
+    const res = await laneAdd("proj", "tg-secret", {
+      base,
+      source: "telegram",
+      token: secretToken,
+    });
     for (const w of res.warnings) {
       expect(w).not.toContain(secretToken);
     }

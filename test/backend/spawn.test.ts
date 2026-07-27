@@ -189,9 +189,9 @@ describe("spawnEngine stderrRotate — 재열기 창 무손실 (SC-016)", () => 
       const files = (await readdirDir(dir)).filter((f) => f.startsWith("engine.log"));
       expect(files.length).toBeGreaterThan(1); // 회전이 최소 1회 이상 발생
 
-      const combined = (
-        await Promise.all(files.map((f) => readFile(join(dir, f), "utf8")))
-      ).join("\n");
+      const combined = (await Promise.all(files.map((f) => readFile(join(dir, f), "utf8")))).join(
+        "\n",
+      );
 
       for (let i = 0; i < N; i++) {
         expect(combined).toContain(`MARK-${i}-`);

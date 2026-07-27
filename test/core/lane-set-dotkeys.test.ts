@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { laneAdd, laneSet, laneShow, laneKeyMeta, LaneConfigError } from "../../src/core/lane-config.js";
+import {
+  laneAdd,
+  laneSet,
+  laneShow,
+  laneKeyMeta,
+  LaneConfigError,
+} from "../../src/core/lane-config.js";
 import { parseLaneConf } from "../../src/shared/conf.js";
 import { collectSetInteractive } from "../../src/cli/lane.js";
 import type { Ask } from "../../src/cli/lane.js";

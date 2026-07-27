@@ -46,7 +46,9 @@ function markerFilesExist(): string[] {
   if (!fs.existsSync(paths.outDir)) return [];
   return fs
     .readdirSync(paths.outDir)
-    .filter((f) => [".out.json", ".sent", ".sending", ".aborted", ".failed"].some((ext) => f.endsWith(ext)));
+    .filter((f) =>
+      [".out.json", ".sent", ".sending", ".aborted", ".failed"].some((ext) => f.endsWith(ext)),
+    );
 }
 
 /** 소스 텍스트에서 `export function <name>` 선언부터 다음 최상위 함수 선언 전까지를 추출

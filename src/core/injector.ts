@@ -15,7 +15,13 @@ import { readFile } from "node:fs/promises";
 import { appendTranscript } from "./transcript.js";
 import { recordSession, touchSession, readLedger, formatWhen } from "./session-ledger.js";
 import { errMsg } from "../shared/errors.js";
-import { claimNext, scanProcessing, processingFilePath, clearProcessing, quarantineCorrupt } from "./queue.js";
+import {
+  claimNext,
+  scanProcessing,
+  processingFilePath,
+  clearProcessing,
+  quarantineCorrupt,
+} from "./queue.js";
 import {
   isDone,
   writeOutBody,

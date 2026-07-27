@@ -97,7 +97,12 @@ export function usageDriftIssues(
         : globalUnion;
     for (const token of tokens) {
       if (!allowed.has(token)) {
-        issues.push({ usageKey: check.usageKey, kind: "undeclared", flag: token, locale: catalog.locale });
+        issues.push({
+          usageKey: check.usageKey,
+          kind: "undeclared",
+          flag: token,
+          locale: catalog.locale,
+        });
       }
     }
   }
@@ -200,9 +205,7 @@ if (isMain) {
     process.stdout.write("usage:check OK — declared flags and usage text agree\n");
   } else {
     for (const issue of issues) {
-      process.stderr.write(
-        `[${issue.kind}] ${issue.usageKey} (${issue.locale}) — ${issue.flag}\n`,
-      );
+      process.stderr.write(`[${issue.kind}] ${issue.usageKey} (${issue.locale}) — ${issue.flag}\n`);
     }
     process.stderr.write(`usage:check FAIL — ${issues.length} issue(s)\n`);
     process.exitCode = 1;

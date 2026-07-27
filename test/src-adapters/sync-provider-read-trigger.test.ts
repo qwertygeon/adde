@@ -38,8 +38,16 @@ afterEach(() => {
 function fakeHandle(readBody: () => Promise<{ bytesRead: number }> | Promise<never>) {
   return {
     read: (buffer: Buffer, offset: number, length: number, position: number) => {
-      if (!Buffer.isBuffer(buffer) || buffer.length < 1 || length < 1 || offset !== 0 || position !== 0) {
-        throw new Error(`fake FileHandle.read 계약 위반: offset=${offset} length=${length} position=${position}`);
+      if (
+        !Buffer.isBuffer(buffer) ||
+        buffer.length < 1 ||
+        length < 1 ||
+        offset !== 0 ||
+        position !== 0
+      ) {
+        throw new Error(
+          `fake FileHandle.read 계약 위반: offset=${offset} length=${length} position=${position}`,
+        );
       }
       return readBody();
     },
@@ -53,8 +61,7 @@ describe("icloud read-trigger — 타임아웃·실패 경로 (018 SC-2/SC-3)", 
   it("SC-2: read 가 상한(10s)을 넘기면 skip 을 반환하고 fd 를 닫는다(유계화) — read 트리거 발화도 단언", async () => {
     vi.useFakeTimers();
     fsCtl.statImpl = async () => ({ blocks: 0, size: 100 }); // 항상 dataless 로 보고
-    fsCtl.openImpl = async () =>
-      fakeHandle(() => new Promise(() => {})); // never-resolve — FileProvider 다운로드 블록 quirk 재현
+    fsCtl.openImpl = async () => fakeHandle(() => new Promise(() => {})); // never-resolve — FileProvider 다운로드 블록 quirk 재현
     const { SYNC_PROVIDER_REGISTRY } = await import("../../src/src-adapters/sync-provider.js");
     const pending = SYNC_PROVIDER_REGISTRY["icloud"]!.ensureLocal("/fake/dataless.md");
     await vi.advanceTimersByTimeAsync(10_000);

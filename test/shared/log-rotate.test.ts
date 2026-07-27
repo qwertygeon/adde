@@ -54,9 +54,7 @@ describe("rotateGenerations (SC-007 Happy) — 임계 초과 회전·keep=2", ()
 
     await rotateGenerations(logPath, { maxBytes: 10, keep: 2 });
 
-    const generations = fs
-      .readdirSync(tmpDir)
-      .filter((f) => f.startsWith("app.log."));
+    const generations = fs.readdirSync(tmpDir).filter((f) => f.startsWith("app.log."));
     expect(generations.sort()).toEqual(["app.log.1", "app.log.2"]);
   });
 });

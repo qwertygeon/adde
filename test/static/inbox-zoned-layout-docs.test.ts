@@ -2,11 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  COMPOSE_SENTINEL,
-  RECORDS_ANCHOR,
-  paletteLines,
-} from "../../src/src-adapters/markdown.js";
+import { COMPOSE_SENTINEL, RECORDS_ANCHOR, paletteLines } from "../../src/src-adapters/markdown.js";
 import { en } from "../../src/shared/locales/en.js";
 import { ko } from "../../src/shared/locales/ko.js";
 
@@ -17,8 +13,16 @@ import { ko } from "../../src/shared/locales/ko.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const docs = [
-  { label: "en", file: path.join(repoRoot, "docs", "markdown.md"), recordsHeading: en.markdown.recordsHeading },
-  { label: "ko", file: path.join(repoRoot, "docs", "markdown.ko.md"), recordsHeading: ko.markdown.recordsHeading },
+  {
+    label: "en",
+    file: path.join(repoRoot, "docs", "markdown.md"),
+    recordsHeading: en.markdown.recordsHeading,
+  },
+  {
+    label: "ko",
+    file: path.join(repoRoot, "docs", "markdown.ko.md"),
+    recordsHeading: ko.markdown.recordsHeading,
+  },
 ];
 const commandDocs = [
   { label: "en", file: path.join(repoRoot, "docs", "commands.md") },
@@ -72,9 +76,8 @@ describe("SC-013: docs/markdown.md(·ko) 존 레이아웃 계약·예시 반영"
     for (const { label, file } of docs) {
       const content = readIfExists(file);
       const mentionsLegacy = /(레거시|legacy)/i.test(content);
-      const mentionsUserResponsibility = /(사용자.*(책임|직접)|your.*(own|responsibility)|manually)/i.test(
-        content,
-      );
+      const mentionsUserResponsibility =
+        /(사용자.*(책임|직접)|your.*(own|responsibility)|manually)/i.test(content);
       expect(
         mentionsLegacy && mentionsUserResponsibility,
         `${label}: 레거시 줄 사용자 책임 서술을 찾을 수 없음`,

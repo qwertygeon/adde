@@ -81,7 +81,9 @@ describe("doctor --json — 요약 줄 부재 (SC-004 Edge)", () => {
     const parsed = JSON.parse(out) as { v: number; checks: unknown[] };
     expect(parsed.v).toBe(1);
     expect(Array.isArray(parsed.checks)).toBe(true);
-    expect(out.split("\n").filter((l) => /pass|warn|fail/i.test(l) && !l.trim().startsWith('"')).length).toBe(0);
+    expect(
+      out.split("\n").filter((l) => /pass|warn|fail/i.test(l) && !l.trim().startsWith('"')).length,
+    ).toBe(0);
   });
 });
 

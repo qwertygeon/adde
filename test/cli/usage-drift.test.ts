@@ -56,7 +56,8 @@ describe("per-command usage 가 다른 명령에만 선언된 플래그를 광�
     // 강화 후(per-command: 그 명령 선언 ∪ 전역)에는 A 의 광고가 A 자신의 선언에 없어 undeclared 로 검출된다.
     expect(
       issues.some(
-        (i) => i.usageKey === "usage.aSynthetic" && i.kind === "undeclared" && i.flag === "--engine",
+        (i) =>
+          i.usageKey === "usage.aSynthetic" && i.kind === "undeclared" && i.flag === "--engine",
       ),
       "명령 A 가 광고한 타 명령(B) 전용 --engine 이 cross-command undeclared 로 검출되지 않음",
     ).toBe(true);

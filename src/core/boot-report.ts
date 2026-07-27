@@ -48,11 +48,7 @@ export async function readBootReport(base: string, proj: string): Promise<BootRe
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      (parsed as { v?: unknown }).v !== 1
-    ) {
+    if (typeof parsed !== "object" || parsed === null || (parsed as { v?: unknown }).v !== 1) {
       return null;
     }
     return parsed as BootReport;

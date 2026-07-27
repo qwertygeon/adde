@@ -717,10 +717,7 @@ export function createTelegramSource(cfg: TelegramConfig): TelegramSource {
     // AbortController·상한 타이머는 첫 await(getToken) 전에 동기적으로 등록한다 — 등록을 토큰
     // 읽기(fs I/O) 뒤로 미루면 상한 시작점이 지연돼 실질 상한이 늘어난다(무한 대기 회피 취지 약화).
     const probeController = new AbortController();
-    const probeTimer = setTimeout(
-      () => probeController.abort(),
-      TELEGRAM_STARTUP_PROBE_TIMEOUT_MS,
-    );
+    const probeTimer = setTimeout(() => probeController.abort(), TELEGRAM_STARTUP_PROBE_TIMEOUT_MS);
     try {
       const tok = await getToken();
       // 토큰 읽기(로컬 fs, 네트워크 아님) 중 상한이 이미 지났으면 네트워크 호출 없이 즉시 실패

@@ -5,7 +5,13 @@
  * D-07, tasks.md 테스트 런타임 제약). CLI: node --import tsx out-ledger-crash-worker.mts
  *   <tmpBase> <proj> <lane> <mode> [...args]
  */
-import { writeOutBody, setDone, setSending, setSent, migrateLegacyOut } from "../../src/core/out-ledger.js";
+import {
+  writeOutBody,
+  setDone,
+  setSending,
+  setSent,
+  migrateLegacyOut,
+} from "../../src/core/out-ledger.js";
 import { lanePaths } from "../../src/shared/paths.js";
 
 async function main(): Promise<void> {

@@ -515,7 +515,10 @@ export async function readLogs(
   } finally {
     await fh.close();
   }
-  const all = buf.toString("utf8").split("\n").filter((l) => l.length > 0);
+  const all = buf
+    .toString("utf8")
+    .split("\n")
+    .filter((l) => l.length > 0);
   return {
     path: target,
     exists: true,

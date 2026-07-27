@@ -75,7 +75,11 @@ describe("appendTranscript 옵션 3번째 인자 — 회전 트리거 (SC-010 Ha
   it("작은 maxBytes 로 회전이 발생해도 이후 읽기 경로(readLogs)가 현재 로그를 정상 반환한다", async () => {
     const rotateOpts = { rotate: { maxBytes: 50, keep: 2 } };
     for (let i = 0; i < 10; i++) {
-      await appendTranscript(paths, { type: "agent_message_chunk" as const, content: `line-${i}` }, rotateOpts);
+      await appendTranscript(
+        paths,
+        { type: "agent_message_chunk" as const, content: `line-${i}` },
+        rotateOpts,
+      );
     }
 
     // 회전이 최소 1회 발생했어야 한다(임계 50바이트 대비 10줄 누적).

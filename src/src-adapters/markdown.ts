@@ -508,6 +508,9 @@ export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayout
   return { lines: rebuilt, changed };
 }
 
+/** 기록 존 strict `⚠️ empty` 종단 마커(빈 전송 기록 — 위키링크 없음). planRecordsPrune·planRecordsCap 공용. */
+const EMPTY_MARKER = /^\s*-\s*\[[xX]\]\s+⚠️?\s+empty\b/;
+
 /**
  * 기록 존 archive 재정의 — 기록 존(앵커 아래) 의 strict `✅ sent [[…]]`·`⚠️ empty` 종단 마커 줄
  * 인덱스를 수집한다(본문은 이미 즉시 아카이브됐으므로 이관 대상이 아니라 삭제 대상).
@@ -523,11 +526,61 @@ export function planRecordsPrune(
     const line = lines[i]!;
     // strict sent(위키링크 포함) 또는 empty 종단만 prune 대상. archived 요약 줄(기존/타 archive 실행
     // 결과)은 isTerminalMarker 는 매칭하지만 별도 재요약 대상이 아니므로 제외한다.
-    if (matchSentMarker(line) || /^\s*-\s*\[[xX]\]\s+⚠️?\s+empty\b/.test(line)) {
+    if (matchSentMarker(line) || EMPTY_MARKER.test(line)) {
       removeIndices.push(i);
     }
   }
   return { removeIndices, count: removeIndices.length };
+}
+
+const ARCHIVED_SUMMARY = /^\s*-\s*\[[xX]\]\s+🗄️?\s+archived\s+(\d+)\b/;
+/** 기록 존 `archived N` 요약줄의 누계 N 파싱(병합용). 요약줄이 아니면 null. */
+function matchArchivedSummary(line: string): number | null {
+  const m = ARCHIVED_SUMMARY.exec(line);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * 기록 존 자동 상한 정리(옵트인) — 앵커 아래 strict `✅ sent`/`⚠️ empty` 마커 수가 `cap` 을 초과하면
+ * 최근 1건(최신-위라 맨 위)만 남기고 나머지를 prune, 기존 `archived N` 요약과 누계 병합해 단일
+ * `archived TOTAL · auto` 줄로 대체한다. cap 이하이거나 변화 없으면 `changed:false`(멱등).
+ *
+ * healLayout 이 기록 존을 완성한 뒤(post-heal) 호출한다 — 이번 턴 신규 마커까지 포함해 카운트가
+ * 정확하고(카운팅 함정 회피), 여전히 단일 atomic write 안의 in-memory 변형이라 크래시 불변식을
+ * 보존한다. 요약줄은 카운트 대상이 아니므로(strict 만 셈) 발화 후 정상상태는 최근 1 + 요약 1 = 2줄.
+ */
+export function planRecordsCap(
+  lines: string[],
+  recordsStart: number,
+  cap: number,
+  stamp: string,
+): { lines: string[]; changed: boolean } {
+  if (cap <= 0) return { lines, changed: false };
+  const strictIdx: number[] = [];
+  const summaryIdx: number[] = [];
+  let summarySum = 0;
+  for (let i = recordsStart; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (matchSentMarker(line) || EMPTY_MARKER.test(line)) {
+      strictIdx.push(i);
+    } else {
+      const n = matchArchivedSummary(line);
+      if (n !== null) {
+        summaryIdx.push(i);
+        summarySum += n;
+      }
+    }
+  }
+  if (strictIdx.length <= cap) return { lines, changed: false };
+  const KEEP = 1; // 최근 1건 유지(설계 상수 — 최근성 실이득이 직전 응답 링크에 집중, conf 미노출)
+  const pruneStrict = strictIdx.slice(KEEP); // 최신 KEEP 이후 = 오래된 마커
+  const mergedTotal = summarySum + pruneStrict.length;
+  const remove = [...pruneStrict, ...summaryIdx].sort((a, b) => b - a); // bottom-up splice
+  const out = [...lines];
+  for (const idx of remove) out.splice(idx, 1);
+  // 유지된 최근 KEEP 마커 바로 아래에 병합 요약 삽입 → 기록 존 = [최근 KEEP] + [archived TOTAL].
+  out.splice(recordsStart + KEEP, 0, archivedLine(mergedTotal, stamp, true));
+  return { lines: out, changed: true };
 }
 
 const PERM_MARKER = /<!--\s*adde:perm\s+id=(\S+)\s+status=(\S+)\s*-->/;
@@ -667,6 +720,8 @@ interface MarkdownResolvedPaths {
   layoutEnabled: boolean;
   /** 팔레트(archive/clear/compact/resume 상주 트리거) 표시 여부 — layoutEnabled 가 false 면 무관. */
   paletteEnabled: boolean;
+  /** 기록 존 자동 상한(옵트인). 0 = 자동 정리 off. layout-on 에서만 발화. */
+  recordsCap: number;
   /** 로컬 백업 폴더(옵트인, expandTilde 적용). 미지정 = 이관 기능 off. */
   backupDir?: string;
   /** 이관 기준일(캘린더일). 미지정 시 DEFAULT_RETENTION_DAYS 적용. */
@@ -704,6 +759,9 @@ function resolvePaths(conf: LaneConf): MarkdownResolvedPaths {
   const layoutEnabled = md.layout !== "off";
   const paletteEnabled = layoutEnabled && md.palette !== "off";
   const autoArchive = layoutEnabled || (md.archive !== undefined && md.archive.length > 0);
+  // 기록 존 자동 상한 — conf 파싱이 양의 정수만 통과시키므로(그 외 undefined) 미지정 시 0=off. 비양수
+  // 방어는 소비측 가드(recordsCap>0)·planRecordsCap(cap<=0 no-op)에 있어 여기선 값만 전달한다.
+  const recordsCap = md.records_cap ?? 0;
   const result: MarkdownResolvedPaths = {
     rootDir,
     inboxPath,
@@ -714,6 +772,7 @@ function resolvePaths(conf: LaneConf): MarkdownResolvedPaths {
     autoArchive,
     layoutEnabled,
     paletteEnabled,
+    recordsCap,
     retentionDays: md.retention_days ?? DEFAULT_RETENTION_DAYS,
     syncProvider: md.sync_provider ?? "local",
   };
@@ -851,6 +910,7 @@ export function createMarkdownSource(cfg: SourceContext): Source {
     autoArchive,
     layoutEnabled,
     paletteEnabled,
+    recordsCap,
     backupDir,
     retentionDays,
     outRetentionDays,
@@ -1177,8 +1237,28 @@ export function createMarkdownSource(cfg: SourceContext): Source {
 
         const newRecords = archivedRecord ? [...sentRecords, archivedRecord] : sentRecords;
         const healed = healLayout(lines, { paletteEnabled, newRecords });
-        if (healed.changed) {
-          await atomicWrite(inboxPath, joinLines(healed.lines, trailingNewline));
+        let outLines = healed.lines;
+        let outChanged = healed.changed;
+        // 기록 존 자동 상한(옵트인) — healLayout 이 신규+기존 마커로 기록 존을 완성한 뒤 판정해야
+        // 카운트가 정확하다(카운팅 함정 회피). 같은 턴에 수동 archive 가 이미 발화했으면(hasArchive)
+        // 중복 정리 방지로 건너뛴다. post-heal in-memory 변형이라 아래 단일 write 를 그대로 탄다.
+        if (recordsCap > 0 && !hasArchive) {
+          const anchorIdx = outLines.findIndex(matchRecordsAnchor);
+          if (anchorIdx >= 0) {
+            const capped = planRecordsCap(
+              outLines,
+              anchorIdx + 1,
+              recordsCap,
+              formatStamp(new Date()),
+            );
+            if (capped.changed) {
+              outLines = capped.lines;
+              outChanged = true;
+            }
+          }
+        }
+        if (outChanged) {
+          await atomicWrite(inboxPath, joinLines(outLines, trailingNewline));
         }
         if (finalize.length > 0) cfg.onInbound?.(); // injector 깨우기(in-process)
       } else {

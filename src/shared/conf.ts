@@ -46,6 +46,12 @@ export interface MarkdownLaneConf {
    * `layout=off` 면 무관(팔레트 자체가 비활성). 미지정 시 소비측 기본 on.
    */
   palette?: string;
+  /**
+   * 기록 존 자동 상한(옵트인 정수). 기록 존의 `✅ sent`/`⚠️ empty` 마커 수가 이 값을 초과하면
+   * 최근 1건만 남기고 나머지를 `🗄️ archived N · auto` 요약 1줄로 자동 정리(기존 요약과 누계 병합).
+   * 미지정 시 자동 정리 off(수동 `🗄️ archive` 만). `layout=off` 면 기록 존이 없어 무관.
+   */
+  records_cap?: number;
 }
 
 /** telegram 어댑터 전용 설정(`telegram.*` 키). */
@@ -188,6 +194,7 @@ export const NAMESPACE_FIELDS = {
     "sync_provider",
     "layout",
     "palette",
+    "records_cap",
   ],
   telegram: ["chat_id", "allow_from"],
 } as const;
@@ -197,7 +204,7 @@ export const NAMESPACE_FIELDS = {
  * `Number.parseInt`+`isFinite&&>0`) 준용. retention_days 기본값 2 는 소비측(resolvePaths)에서
  * 적용하며 여기선 미지정을 undefined 로 보존한다.
  */
-const NAMESPACE_INT_FIELDS = new Set(["retention_days", "out_retention_days"]);
+const NAMESPACE_INT_FIELDS = new Set(["retention_days", "out_retention_days", "records_cap"]);
 
 /**
  * 파일시스템 경로로 해석되는 네임스페이스 필드 — 셸 이스케이프를 normalizeUserPath 로 제거한다.

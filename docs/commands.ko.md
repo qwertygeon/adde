@@ -440,7 +440,7 @@ adde lane set <proj> <lane>                        # TTY 에서 인자 없이: �
 | `--root <abs-path>` `--inbox <rel>` `--approvals <rel>` `--outbox <rel>` | markdown 레인 전용 — telegram 레인에서는 거부됨                                             |
 | `--unset <key> …`                                                        | 키(점표기)를 제거해 기본값으로 되돌림 — 아래 참고                                           |
 
-**위치 점표기 키**: `adde lane set <proj> <lane> <key> <value> …` 는 canonical 점표기 키로 편집합니다(예: `perm_tier autopass`·`markdown.retention_days 5`). 한 명령에서 `<key> <value>` 쌍을 하나 이상 받습니다. 위 명명 플래그와 동일한 표면이며, **플래그가 없는 markdown 전용 키가 추가로 포함됩니다**: `markdown.archive`·`markdown.backup`·`markdown.retention_days`·`markdown.out_retention_days`·`markdown.sync_provider`·`markdown.layout`·`markdown.palette`(각 키의 의미는 [마크다운 가이드](markdown.ko.md#1-레인-설정) 참고). 배치는 **전부-또는-무**입니다 — 미지 키(근접 이름은 "did you mean…" 제안), 타입/enum/format 위반 값, 홀수 개 토큰이면 명령 전체를 거부하고 아무 것도 기록하지 않습니다.
+**위치 점표기 키**: `adde lane set <proj> <lane> <key> <value> …` 는 canonical 점표기 키로 편집합니다(예: `perm_tier autopass`·`markdown.retention_days 5`). 한 명령에서 `<key> <value>` 쌍을 하나 이상 받습니다. 위 명명 플래그와 동일한 표면이며, **플래그가 없는 markdown 전용 키가 추가로 포함됩니다**: `markdown.archive`·`markdown.backup`·`markdown.retention_days`·`markdown.out_retention_days`·`markdown.sync_provider`·`markdown.layout`·`markdown.palette`·`markdown.records_cap`(각 키의 의미는 [마크다운 가이드](markdown.ko.md#1-레인-설정) 참고). 배치는 **전부-또는-무**입니다 — 미지 키(근접 이름은 "did you mean…" 제안), 타입/enum/format 위반 값, 홀수 개 토큰이면 명령 전체를 거부하고 아무 것도 기록하지 않습니다.
 
 **`--unset <key> …`**: 키(점표기)를 하나 이상 제거해 소비측 기본값으로 되돌립니다. 정체성 키(`source`/`backend`/`engine`/`acp_version`)·필수 키(`markdown.root`/`markdown.inbox`·telegram `chat_id`)는 되돌릴 기본값이 없어 거부됩니다.
 

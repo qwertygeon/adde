@@ -79,6 +79,11 @@ markdown.archive=adde/my-lane/sent-archive/
 # still work wherever you place them in the note.
 # markdown.palette=on
 
+# optional (opt-in, off by default; only relevant when markdown.layout is on): auto-tidy the records
+# zone. When it holds more than this many sent/empty markers, keep only the most recent 1 and fold the
+# rest into a single running "archived N · auto" summary (see "The records zone and archiving" below).
+# markdown.records_cap=30
+
 # optional (opt-in, off by default): local backup folder. Output notes, decided approvals, and
 # archive files older than retention_days are moved here once a day — see "Keeping the vault light"
 # below for details.
@@ -180,6 +185,7 @@ You're free to delete any line in the records zone yourself, any time — **the 
 With the layout on, the message body is moved into the archive **the moment it's sent** — the inbox only ever holds the compact `✅ sent [[...]]` marker afterward. This happens automatically whether or not `markdown.archive` is set (see config above; that key only overrides *where*). If the archive write itself fails (disk full, permission denied, …), the entry stays as `⏳ sending` with the body kept in the inbox instead of being lost — the message was still delivered, and it finalizes to `✅ sent` (moving the body into the archive) on the next pass once the write succeeds, e.g. after a restart. It is never re-sent while it waits.
 
 - **Tidying the records zone**: check the `- [x] 🗄️ archive` palette marker to delete all completed `✅ sent [[...]]`/`⚠️ empty` lines from the records zone in one go, replaced by a single `- [x] 🗄️ archived N <time> · auto` summary line (bodies were already archived at send time, so this only cleans up the records zone — it doesn't move anything). It only touches completed segments; a message you're still drafting is never touched.
+- **Automatic cap (`markdown.records_cap`, opt-in)**: set an integer to auto-tidy without touching the palette. Once the records zone holds more than `records_cap` `✅ sent`/`⚠️ empty` markers, ADDE keeps only the most recent one and folds the rest into a single running `- [x] 🗄️ archived N · auto` summary (merging any prior summary, so the records zone stays bounded at ~2 lines). It fires roughly once every `records_cap` sends, so a larger cap means rarer tidying; leave it unset to disable (manual `🗄️ archive` only). Only relevant when `markdown.layout` is on. Bodies are already in the archive, so this only ever prunes the inbox marker list — nothing is lost.
 - **Legacy lines are your own responsibility**: older-format `sent <id>` lines (no wikilink, from before this version) and any pre-existing `archived N` summary line are left untouched by the `archive` marker — remove them yourself if you don't want them around.
 
 The archive is a directory of plain append-only dated files (`<archive-dir>/YYYY-MM-DD.md`, each entry a `## [[send-time id]]` heading + the body). Your delivered messages and responses are unaffected — archiving only rewrites the inbox surface, never the queue or the response notes, so it can never lose or re-send a message.

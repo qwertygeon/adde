@@ -131,7 +131,7 @@ lane set options (edit-only subset of lane add — identity fields, tokens, and 
   --unset <key> ...             remove keys (dot-notation) to restore their consumer default; identity/required keys are refused
 
 Positional dot-notation keys (adde lane set <proj> <lane> <key> <value> ...) edit the same surface, plus markdown-only extras:
-  markdown.archive, markdown.backup, markdown.retention_days, markdown.out_retention_days, markdown.sync_provider, markdown.layout, markdown.palette
+  markdown.archive, markdown.backup, markdown.retention_days, markdown.out_retention_days, markdown.sync_provider, markdown.layout, markdown.palette, markdown.records_cap
 Fields left unspecified keep their current value. Changes take effect after adde restart <proj>.
 Note: editing --file-mode only updates the conf value; existing directory permissions are NOT changed even after restart (relaxing private→shared needs a manual chmod). file_mode governs only the internal state/out/queue directories, not the markdown note tree.`,
   },
@@ -271,6 +271,8 @@ Note: editing --file-mode only updates the conf value; existing directory permis
         "markdown.layout (on | off — inbox zoned layout: palette + compose sentinel + records zone + auto-archive on send, empty for default on)",
       palette:
         "markdown.palette (on | off — show the always-present palette markers at the top of the inbox, empty for default on; only relevant when layout=on)",
+      recordsCap:
+        "markdown.records_cap (max sent/empty markers kept in the records zone before auto-pruning to the most recent 1 + a running archived summary; empty to disable auto-pruning; only relevant when layout=on)",
     },
     ttyOnly: {
       situation: "--interactive only works in an interactive terminal (TTY)",

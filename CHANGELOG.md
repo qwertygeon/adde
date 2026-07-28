@@ -6,6 +6,7 @@
 
 ### Added
 
+- **`adde status` 에 레인별 "마지막 채널 활동"(`ACTIVITY`) 표시** — 기존 `SEEN`(데몬 하트비트 = 생존 신호)과 별개로, 각 레인이 마지막으로 채널 메시지를 처리한 시각을 세션 장부에서 읽어 `ACTIVITY` 컬럼으로 보여준다(활동 없으면 `-`). `status --json` 에도 각 레인 항목에 `lastActivityAt`(ISO 또는 `null`)가 추가된다(additive — 스키마 버전 `v` 불변). "살아는 있으나 유휴"인 레인을 하트비트와 구분해 파악할 수 있다.
 - **markdown 기록 존 자동 상한 `markdown.records_cap`(옵트인)** — 정수를 지정하면 기록 존의 `✅ sent`/`⚠️ empty` 마커가 그 수를 넘을 때 수동 `🗄️ archive` 체크 없이도 자동으로 정리된다: 최근 1건만 남기고 나머지를 단일 `🗄️ archived N · auto` 누계 요약으로 접으며, 기존 요약과 병합해 기록 존을 약 2줄로 유계 유지한다(대략 `records_cap` 전송마다 1회 발화 — 값이 클수록 정리가 드묾). 미지정 시 자동 정리 off(수동 정리만). `markdown.layout` 이 켜진 레인에서만 의미가 있고, 본문은 이미 아카이브에 있어 inbox 마커 목록만 줄일 뿐 유실은 없다. 요약 병합 정리는 `healLayout` 이 기록 존을 완성한 뒤(post-heal) 단일 atomic write 안에서 수행돼 크래시 무손실 불변식을 보존한다.
 - **markdown 인박스 3존 레이아웃(팔레트·compose 센티널·기록 존)** — 기본 켜짐(`markdown.layout`, off 로 이전 동작 복원). inbox 최상단에 `archive`·`clear`·`compact`·`resume` 4종 마커가 항상 미체크로 상주하며(체크→실행→그 자리 미체크 복원, 소멸 없음 — `markdown.palette=off` 로 팔레트만 숨김 가능), `<!-- adde:compose -->` 센티널이 작성 영역 경계를 표시하고, 하단 `<!-- adde:records -->` 기록 존에 `✅ sent` 마커가 최신-위로 쌓인다. `🗄️ archive` 마커는 기록 존의 완료된 마커 줄만 정리(`archived N` 요약으로 대체)하며 본문 이동은 더 이상 하지 않는다(전송 즉시 이관되므로). 레거시 inbox(구조 요소 없음)는 self-heal 로 무중단 이관된다.
 - **`adde lane set` 로 레인 설정을 생성 이후에도 커맨드로 수정·추가·해제** — 이제 점표기 키로 편집 표면 전반을 다룬다: `adde lane set <proj>/<lane> <key> <value>...`(여러 개 한 번에·전부 성공하거나 전부 미반영), `adde lane set <proj>/<lane> --unset <key>...`(기본값으로 되돌림), 인자 없이 `adde lane set <proj>/<lane>`(터미널) 실행 시 **대화형 편집 위저드**(현재값이 채워진 채로 표시 — 빈 입력=그대로 유지, 값 입력=변경, 경로는 Tab 완성, 열거형은 번호 선택, 마지막에 변경 요약 확인). 전에는 명명 플래그가 있는 필드만 편집 가능해 `markdown.archive`·`backup`·`retention_days`·`out_retention_days`·`sync_provider` 등은 conf 파일 수동 편집만 가능했다. 오타 키는 유사 키를 제안하고, 정체성 필드(source/backend/engine)·필수 필드는 안전하게 거부한다.
@@ -27,6 +28,7 @@
 
 ### Fixed
 
+- **`adde lane show <proj>/<lane> <key> --json` 출력에 최상위 스키마 버전 키 `v` 누락** — 단일 키 조회의 `--json` 만 다른 `--json` 출력(형제 `lane ls`·`lane show --defaults`·전체 conf 조회)과 달리 최상위 `v: 1` 을 빠뜨려, 소비자가 스키마 버전으로 분기할 수 없었다. 이제 `{ v: 1, ... }` 로 감싸 정합한다(최상위 키 추가일 뿐이라 특정 필드를 읽는 소비자에는 영향 없음). 신규 `--json` 출력이 다시 `v` 를 빠뜨리지 않도록 정적 검사도 함께 추가했다.
 - **markdown 승인 자동거부(타임아웃) 시 화면이 갱신되지 않던 문제** — 무응답 자동거부가 숨은 마커(`status=deny`)만 바꾸고 가시 헤딩은 `⏳ req …` 로 남겨, 사용자가 승인 노트만 봐서는 이미 자동거부됐음을 알 수 없었다. 이제 사용자 결정 경로와 동일하게 헤딩을 `⛔ req(deny) …` 로 종단 표기한다.
 - **`adde lane set --unset` 을 키 없이 호출하면 오해 소지 있는 안내가 나오던 문제** — 키 없는 `--unset` 이 "편집 플래그 없음"(비-TTY) 또는 편집 위저드(TTY)로 흘러가 "제거"라는 의도와 어긋났다. 이제 "`--unset` 은 키가 하나 이상 필요하다"는 전용 오류로 안내한다.
 - **한국어 문구 정합** — 세션 목록 렌더의 "마지막 대화"를 영문(`last activity`)·usage 설명과 맞춰 "마지막 활동"으로 통일하고, 데몬 로그 부재 안내(`logs`)의 비문("실행되지 않았거나(또는 출력이 없음).")을 "실행되지 않았거나 아무것도 기록하지 않았습니다." 로 바로잡았다. `adde doctor --json` 도움말 표기도 실제 출력 형태(`{v, checks}` 객체)에 맞게 정정했다(전에는 "checks 배열"로 표기).

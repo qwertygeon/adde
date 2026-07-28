@@ -100,6 +100,19 @@ describe("lane ls --json — 표·심볼 없이 순수 배열 (SC-004 Happy)", (
   });
 });
 
+describe("lane show <key> --json — 최상위 v 보유 (N16 회귀)", () => {
+  it("stdout 이 { v:1, ...meta } 객체로 파싱된다", async () => {
+    writeConf("p", "a");
+    const { runLane } = await import("../../src/cli/lane.js");
+    const cap = captureStdout();
+    await runLane(["show", "p", "a", "perm_tier", "--json"]);
+    cap.restore();
+    const parsed = JSON.parse(cap.out()) as { v: number; key: string };
+    expect(parsed.v).toBe(1);
+    expect(parsed.key).toBe("perm_tier");
+  });
+});
+
 describe("status --json — 표·경고 텍스트 미혼입 (SC-004 Happy, 회귀)", () => {
   it("stdout 전체가 단일 JSON.parse 객체로 파싱된다", async () => {
     const { runStatus } = await import("../../src/cli/ops.js");

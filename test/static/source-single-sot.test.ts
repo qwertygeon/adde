@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SOURCE_IDS, SOURCE_REGISTRY } from "../../src/src-adapters/index.js";
+import { LANE_KEY_DESCRIPTORS } from "../../src/core/lane-schema.js";
+import { FLAG_VALUES } from "../../src/cli/spec.js";
 
 // SC-001 (FR-001): 지원 소스 목록이 레지스트리(SOURCE_REGISTRY)에서 파생되고, 지원 소스를
 // 정의하는 별개 하드코딩 배열(구 SUPPORTED_SOURCES/SupportedSource)이 존재하지 않는다. 모든
@@ -50,5 +52,20 @@ describe("SC-001: 지원 소스 목록이 레지스트리에서 파생된다", (
     // 소비 지점이 src-adapters/index.js 에서 import 한다(레지스트리 파생 — 별개 하드코딩 아님).
     expect(laneConfigSrc).toMatch(/from ["']\.\.\/src-adapters\/index\.js["']/);
     expect(diagnosticsSrc).toMatch(/from ["']\.\.\/src-adapters\/index\.js["']/);
+  });
+});
+
+describe("N16: 소스 enum 3중 미러 동치 — 드리프트 방지", () => {
+  // SOURCE_REGISTRY(=SOURCE_IDS)가 authoritative SoT. lane-schema 의 source enumValues 와 spec 의
+  // FLAG_VALUES["--source"] 는 부팅비용 회피용 경량 하드코딩 미러라, 셋이 어긋나면 조용한 드리프트가
+  // 된다(자동완성·검증 표면 불일치). 셋을 정적으로 묶어 강제한다.
+  it("lane-schema source enumValues · FLAG_VALUES[--source] 가 SOURCE_IDS 와 정확히 일치한다", () => {
+    const ids = [...SOURCE_IDS].sort();
+    const schemaEnum = LANE_KEY_DESCRIPTORS.find((d) => d.key === "source")?.enumValues;
+    const flagValues = FLAG_VALUES["--source"];
+    expect(schemaEnum, "lane-schema 에 source 디스크립터 enumValues 가 있어야 한다").toBeDefined();
+    expect([...(schemaEnum ?? [])].sort()).toEqual(ids);
+    expect(flagValues, "spec 에 FLAG_VALUES[--source] 가 있어야 한다").toBeDefined();
+    expect([...(flagValues ?? [])].sort()).toEqual(ids);
   });
 });

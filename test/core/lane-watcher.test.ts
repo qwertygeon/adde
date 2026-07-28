@@ -242,6 +242,73 @@ describe("createLaneWatcher — auto_relaunch=false 는 백오프 없이 즉시 
   });
 });
 
+describe("createLaneWatcher — markRecovered 수동 복구 (M12)", () => {
+  it("terminal(포기) 이후 markRecovered 는 armed·healthy 로 되돌리고 onSessionUpdated(running) 를 호출한다", async () => {
+    const isAlive = vi.fn().mockReturnValue(true);
+    const deps = makeDeps({ autoRelaunch: false, isAlive });
+    const watcher = createLaneWatcher(deps);
+    // OFF crash → 즉시 terminal + healthy=false
+    watcher.onCrash({ code: 1, signal: null });
+    await flush();
+    expect(watcher.isHealthy()).toBe(false);
+
+    watcher.markRecovered("s3");
+    await flush();
+
+    expect(deps.setHealth).toHaveBeenCalledWith(true);
+    expect(watcher.isHealthy()).toBe(true);
+    expect(deps.onSessionUpdated).toHaveBeenCalledWith("s3");
+  });
+
+  it("markRecovered 시 이미 죽었으면(isAlive=false) running 되쓰기를 생략하되 상태는 리셋한다", async () => {
+    const isAlive = vi.fn().mockReturnValue(false);
+    const deps = makeDeps({ autoRelaunch: false, isAlive });
+    const watcher = createLaneWatcher(deps);
+    watcher.onCrash({ code: 1, signal: null }); // terminal
+    await flush();
+
+    watcher.markRecovered("s4");
+    await flush();
+
+    expect(deps.onSessionUpdated).not.toHaveBeenCalled(); // running 오주장 회피(데몬 pid 가림 방지)
+    expect(watcher.isHealthy()).toBe(true); // 상태 리셋은 수행 — 이후 onCrash 가 처리하도록
+  });
+
+  it("자가재기동 포기(cap 초과) 후 markRecovered 하면 이후 크래시가 백오프를 재예약한다(재무장+attempt 리셋)", async () => {
+    const { scheduler, fire, pendingCount } = makeManualScheduler();
+    const resumeSession = vi.fn().mockRejectedValue(new Error("re-crash"));
+    const isAlive = vi.fn().mockReturnValue(false);
+    const backoff: BackoffConfig = {
+      initialDelayMs: 5,
+      multiplier: 2,
+      maxDelayMs: 20,
+      maxAttempts: 1,
+      stabilityResetMs: 1_000_000,
+    };
+    const deps = makeDeps({ autoRelaunch: true, scheduler, resumeSession, isAlive, backoff });
+    const watcher = createLaneWatcher(deps);
+    watcher.arm();
+
+    // cap=1: 1번째 크래시 → attempt=1 예약; fire → resume 실패 → attempt=2 > cap → terminal.
+    watcher.onCrash({ code: 1, signal: null });
+    await waitFor(() => pendingCount() === 1);
+    fire();
+    await waitFor(() => deps.writeError.mock.calls.length > 0);
+    expect(pendingCount()).toBe(0); // terminal
+
+    // 수동 복구 성공 — 이제 살아있음.
+    isAlive.mockReturnValue(true);
+    watcher.markRecovered("s-manual");
+    await flush();
+    expect(deps.onSessionUpdated).toHaveBeenCalledWith("s-manual");
+
+    // 재무장 확인 — 새 크래시가 다시 백오프를 예약한다(attempt=0 리셋됐으므로 즉시 terminal 이 아님).
+    isAlive.mockReturnValue(false);
+    watcher.onCrash({ code: 1, signal: null });
+    expect(pendingCount()).toBe(1);
+  });
+});
+
 describe("createLaneWatcher — auto_relaunch=true(또는 키부재) 는 백오프 경로 (SC-015)", () => {
   it("ON 레인 crash 는 즉시 error 확정이 아니라 백오프를 예약한다(cap 초과 전까지 error 미기록)", () => {
     const { scheduler, pendingCount, delays } = makeManualScheduler();

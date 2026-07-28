@@ -42,6 +42,12 @@ export interface LaneWatcher {
   disarm(): void;
   /** 엔진 child 종료(크래시) 신호 — backend.onExit 콜백에서 호출. */
   onCrash(info: { code: number | null; signal: NodeJS.Signals | null }): void;
+  /**
+   * 수동 복구(채널 /clear·/resume) 성공 신호 — 자가회복 상태기계를 armed 로 되돌리고
+   * 기존 running-writer(onSessionUpdated)를 재사용해 runtime.json 의 status:error 를 해제한다.
+   * terminal(포기) 이후 수동 복구해도 status·healthy 가 잔존하던 것을 막는다.
+   */
+  markRecovered(sessionId: string): void;
   isHealthy(): boolean;
 }
 
@@ -167,6 +173,22 @@ export function createLaneWatcher(deps: LaneWatcherDeps): LaneWatcher {
       clearTimers();
     },
     onCrash,
+    markRecovered(sessionId: string): void {
+      // 수동 복구 — auto-recovery 성공(fire)과 같은 상태로 리셋: 백오프 정리·시도 카운터 초기화·
+      // healthy 복구·armed 재무장. writer 는 새로 만들지 않고 onSessionUpdated 를 재사용한다(단일화).
+      clearTimers();
+      attempt = 0;
+      setHealthy(true);
+      state = "armed";
+      // 재기동 직후 크래시 경합 — 이미 죽었으면 running 오주장 대신 생략하고 armed watcher 의
+      // 다음 onCrash 에 위임한다(runtime.json 의 pid 는 데몬 pid 라 엔진 죽음을 가리므로).
+      if (!deps.isAlive()) return;
+      void deps
+        .onSessionUpdated(sessionId)
+        .catch((err: unknown) =>
+          console.warn(`[lane-watcher] lane=${deps.lane} onSessionUpdated failed: ${errMsg(err)}`),
+        );
+    },
     isHealthy(): boolean {
       return healthy;
     },

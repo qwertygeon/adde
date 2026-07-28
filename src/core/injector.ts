@@ -116,6 +116,11 @@ export function createInjector(
   laneT: NotifyT = t,
   /** 소스별 전송 dedup 옵션(멱등성·불확실 통지). 미지정 = 비멱등(중복 회피 방향 fail-safe). */
   delivery: DeliveryOptions = {},
+  /**
+   * 수동 복구(clear/resume relaunch) 성공 시 새 sessionId 로 발화 — supervisor 가
+   * watcher.markRecovered 로 배선해 runtime.json 의 status:error 를 해제한다. 미배선 시 no-op.
+   */
+  onRecovered?: (sessionId: string) => void,
 ): Injector {
   const idempotentDelivery = delivery.idempotent ?? false;
   const onDeliveryUncertain = delivery.onUncertain;
@@ -159,6 +164,7 @@ export function createInjector(
           return laneT("injector.control.relaunchFailed", { error: maskSecrets(errMsg(err)) });
         }
         await recordSession(paths, sessionId).catch(() => {});
+        onRecovered?.(sessionId); // relaunch 성공 → watcher 재무장 + status:error 해제(수동 복구)
         return laneT("injector.control.cleared");
       }
       case "compact": {
@@ -180,6 +186,7 @@ export function createInjector(
           return laneT("injector.control.relaunchFailed", { error: maskSecrets(errMsg(err)) });
         }
         await recordSession(paths, r.sessionId).catch(() => {});
+        onRecovered?.(r.sessionId); // relaunch 성공(새 세션 폴백 포함) → watcher 재무장 + status:error 해제
         return r.resumed
           ? laneT("injector.control.resumed", { id: r.sessionId })
           : laneT("injector.control.resumeFallback", { id: control.sessionId });

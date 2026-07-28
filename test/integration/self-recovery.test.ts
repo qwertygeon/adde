@@ -9,6 +9,12 @@ import { createInjector } from "../../src/core/injector.js";
 import { createLaneWatcher } from "../../src/core/lane-watcher.js";
 import { enqueue } from "../../src/core/queue.js";
 import { getEntry } from "../../src/core/out-ledger.js";
+import {
+  writeRuntime,
+  writeErrorRuntime,
+  livenessOf,
+  type RuntimeInfo,
+} from "../../src/core/runtime-state.js";
 import { makeCrashableAcpFactory } from "../helpers/fake-crashable-acp.js";
 import { FAKE_ACP_CAPS } from "../helpers/fake-acp.js";
 import { makeEnvelope } from "../helpers/envelope.js";
@@ -317,5 +323,100 @@ describe("SC-010: 무손실·무중복 — 재기동 전후 dedup·큐·processi
     // 동일 id 의 중복 출력 0 — .out 파일은 정확히 1개, 유실도 0(실제로 기록됨).
     const outFiles = fs.readdirSync(paths.outDir).filter((f) => f === `${id}.out`);
     expect(outFiles).toHaveLength(1);
+  });
+});
+
+describe("M12: 자가재기동 포기(status:error) 후 채널 수동 복구가 runtime.json 을 running 으로 되돌린다", () => {
+  // supervisorUp 은 injector 를 노출하지 않으므로(SC-010 과 동일 한계), production 함수 그대로
+  // createInjector + createLaneWatcher 를 supervisor 와 동일하게 배선(runtime-state 실 I/O)해 전 경로를
+  // 결정적으로 관통한다: onRecovered → watcher.markRecovered → onSessionUpdated → writeRuntime(running).
+  it("/resume 수동 복구 성공 시 status:error 가 해제되고 livenessOf=running 으로 전이한다", async () => {
+    const proj = "m12proj";
+    const lane = "m12-lane";
+    const paths = lanePaths(tmpBase, proj, lane);
+    fs.mkdirSync(paths.queueDir, { recursive: true });
+    fs.mkdirSync(paths.processingDir, { recursive: true });
+    fs.mkdirSync(paths.outDir, { recursive: true });
+    fs.mkdirSync(paths.stateDir, { recursive: true });
+
+    const { factory, entryFor } = makeCrashableAcpFactory();
+    const backend = factory(lane, "");
+    await backend.launch(lane);
+    const entry = entryFor(lane);
+
+    // supervisor 와 동일 배선 — watcher deps 의 writeError/onSessionUpdated 는 실 runtime-state 쓰기.
+    const meta = { source: "markdown", backend: "acp", engine: "claude-agent-acp" };
+    const watcher = createLaneWatcher({
+      lane,
+      autoRelaunch: false, // 크래시 즉시 terminal + status:error 기록(결정적 — 백오프 대기 없음)
+      resumeSession: (sid) =>
+        backend.resumeSession
+          ? backend.resumeSession(lane, sid)
+          : Promise.reject(new Error("fake has no resumeSession")),
+      isAlive: () => backend.isAlive?.(lane) ?? false,
+      lastSessionId: async () => "s1",
+      denyPending: () => {},
+      setHealth: () => {},
+      writeError: () =>
+        writeErrorRuntime(paths, {
+          lane,
+          ...meta,
+          error: "engine crashed; self-recovery did not keep the lane running",
+        }),
+      onSessionUpdated: (sid) =>
+        writeRuntime(paths, {
+          v: 1,
+          pid: process.pid,
+          lane,
+          sessionId: sid,
+          startedAt: new Date().toISOString(),
+          ...meta,
+        }),
+      notify: () => {},
+    });
+    backend.onExit?.(lane, (_l, info) => watcher.onCrash(info));
+
+    const injector = createInjector(
+      paths,
+      lane,
+      backend,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (sid) => watcher.markRecovered(sid),
+    );
+
+    // 1) 자가재기동 포기 모사 — OFF 레인 크래시 → 즉시 status:error 기록.
+    entry.crash();
+    await waitFor(
+      () => {
+        if (!fs.existsSync(paths.runtimeJson)) return false;
+        const info = JSON.parse(fs.readFileSync(paths.runtimeJson, "utf8")) as { status?: string };
+        return info.status === "error";
+      },
+      { timeoutMs: 4000 },
+    );
+    // 되쓰기 전에는 엔진 생존과 무관하게 error 로 고착됨을 확인(livenessOf error 우선).
+    expect(livenessOf(JSON.parse(fs.readFileSync(paths.runtimeJson, "utf8")) as RuntimeInfo)).toBe(
+      "error",
+    );
+
+    // 2) 채널 /resume 수동 복구 — control envelope 을 큐에 넣고 injector 가 처리(runControl→resumeSession).
+    await enqueue(paths, {
+      ...makeEnvelope("m12-resume", "/resume"),
+      control: { kind: "resume", sessionId: "s1" },
+    });
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "m12-resume.out")), {
+      timeoutMs: 4000,
+    });
+
+    // 3) runtime.json 이 running 으로 전이 — status:error 해제 + livenessOf=running.
+    const info = JSON.parse(fs.readFileSync(paths.runtimeJson, "utf8")) as RuntimeInfo;
+    expect(info.status).toBeUndefined();
+    expect(info.sessionId).toBe("s1");
+    expect(livenessOf(info)).toBe("running");
+    expect(watcher.isHealthy()).toBe(true); // 재무장(armed·healthy) — heartbeat 재개
   });
 });

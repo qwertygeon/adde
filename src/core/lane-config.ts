@@ -124,7 +124,18 @@ export interface LaneSetOptions extends LaneCommandBaseOptions {
   edits?: ReadonlyArray<{ key: string; value: string }>;
   /** 제거할 canonical key 목록(--unset) — 소비측 기본값 복원. 필수·identity 는 거부. */
   unset?: readonly string[];
+  /**
+   * 목록 필드 증분 추가(--add-allow 등) — 현재 conf 목록 기준 합집합. 전체 교체(위 typed 필드)와
+   * 같은 키를 동시 지정하면 거부. laneSet 이 명시 목록을 base 로 해소해 최종 목록을 setValues 에 반영한다.
+   */
+  listAdd?: Partial<Record<ListFieldKey, readonly string[]>>;
+  /** 목록 필드 증분 제거(--rm-allow 등) — 차집합. 없는 항목은 멱등 no-op(warning 안내). */
+  listRemove?: Partial<Record<ListFieldKey, readonly string[]>>;
 }
+
+/** 증분 편집 대상 목록 필드(권한 게이트 목록). */
+export type ListFieldKey = "allowlist" | "denylist" | "hard_deny";
+const LIST_FIELD_KEYS: readonly ListFieldKey[] = ["allowlist", "denylist", "hard_deny"];
 
 /** 편집 적용 후 conf 필드에 담기는 값(리스트는 배열, 정수는 number, 나머지는 문자열). */
 type EditValue = string | number | string[];
@@ -619,6 +630,38 @@ export async function laneSet(
     unsetKeys.add(d.key);
   }
 
+  // 목록 증분(--add-*/--rm-*) → 명시 conf 목록을 base 로 union/subtract 후 최종 목록을 setValues 에
+  // 반영한다(다운스트림 티어정합·형식검증·원자쓰기 재사용). 유효 perm_tier = 같은 명령의 병합값.
+  const effectiveTier = (setValues.get("perm_tier") as string | undefined) ?? conf.perm_tier;
+  const listNotices: string[] = [];
+  const incrementedKeys = new Set<ListFieldKey>(); // 증분으로 setValues 에 얹은 키(전체 치환과 구분)
+  for (const key of LIST_FIELD_KEYS) {
+    const add = edits.listAdd?.[key] ?? [];
+    const remove = edits.listRemove?.[key] ?? [];
+    if (add.length === 0 && remove.length === 0) continue;
+    // 전체 교체(--allowlist 등)와 증분 동시 지정 = 의도 모순 → 거부.
+    if (setValues.has(key)) throw new LaneConfigError(t("laneConfig.err.listIncrementConflict", { key })); // prettier-ignore
+    // 같은 항목 add·rm 동시 지정 = 모순 → 거부.
+    const overlap = add.filter((x) => remove.includes(x));
+    if (overlap.length > 0) {
+      throw new LaneConfigError(t("laneConfig.err.listAddRemoveOverlap", { key, tools: overlap.join(", ") })); // prettier-ignore
+    }
+    // base = 명시 목록. denylist 가 비었고 유효 tier 가 autopass 면 기본 denylist 를 시드해
+    // 증분이 기본 deny 보호를 조용히 제거하지 않게 한다(laneSet default-fill 세이프넷과 동일 취지).
+    let base = [...(conf[key] as string[])];
+    if (key === "denylist" && base.length === 0 && effectiveTier === "autopass") {
+      base = [...DEFAULT_AUTOPASS_DENYLIST];
+    }
+    for (const x of add) if (!base.includes(x)) base.push(x);
+    const absent = remove.filter((x) => !base.includes(x));
+    if (absent.length > 0) {
+      listNotices.push(t("laneConfig.warn.listRemoveAbsent", { key, tools: absent.join(", ") }));
+    }
+    const removeSet = new Set(remove);
+    setValues.set(key, base.filter((x) => !removeSet.has(x)) as EditValue);
+    incrementedKeys.add(key);
+  }
+
   if (setValues.size === 0 && unsetKeys.size === 0) {
     throw new LaneConfigError(t("laneConfig.err.noEdits"));
   }
@@ -628,8 +671,10 @@ export async function laneSet(
 
   // file_mode private→shared 완화 인지 경고 대비 — 적용 전 이전 모드 캡처.
   const prevFileMode = resolveFileMode(conf.file_mode);
-  // hard_deny 치환 footgun 경고 — 기존 값이 있는데 치환될 때만.
-  const hardDenyReplaced = setValues.has("hard_deny") && conf.hard_deny.length > 0;
+  // hard_deny 치환 footgun 경고 — 기존 값이 있는데 전체 치환될 때만. 증분(--add-hard-deny 등)은
+  // 병합이라 "이전 목록 사라짐" 경고가 사실과 어긋나므로 제외한다.
+  const hardDenyReplaced =
+    setValues.has("hard_deny") && conf.hard_deny.length > 0 && !incrementedKeys.has("hard_deny");
 
   // 제네릭 적용 — 스키마 confPath 기반. 네임스페이스는 미편집 서브필드(archive/backup 등) 보존 병합.
   for (const [key, value] of setValues) applyConfValue(conf, findDescriptor(key)!, value);
@@ -684,6 +729,7 @@ export async function laneSet(
   const warnings = [...validated.warnings, ...(await collectAddWarnings(conf))];
   if (hardDenyReplaced) warnings.push(t("laneConfig.warn.hardDenyReplaced"));
   if (fileModeRelaxed) warnings.push(t("laneConfig.warn.fileModeRelaxNotice"));
+  warnings.push(...listNotices); // 없는 항목 rm 멱등 안내(DEC-004)
 
   return { lane, confPath: paths.confFile, conf, warnings };
 }

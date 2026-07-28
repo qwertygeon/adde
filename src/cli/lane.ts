@@ -12,7 +12,7 @@ import {
   LaneConfigError,
   parseCsv,
 } from "../core/lane-config.js";
-import type { LaneAddOptions, LaneSetOptions } from "../core/lane-config.js";
+import type { LaneAddOptions, LaneSetOptions, ListFieldKey } from "../core/lane-config.js";
 import {
   LANE_KEY_DESCRIPTORS,
   findDescriptor,
@@ -303,6 +303,31 @@ function collectNamedEdits(flags: Record<string, string | true>): LaneSetOptions
   return edits;
 }
 
+/** 목록 증분 플래그(--add-allow·--rm-allow 등)를 listAdd/listRemove 로 수집(CSV split). 전체 교체 플래그와 병존. */
+function collectListIncrements(
+  flags: Record<string, string | true>,
+): Pick<LaneSetOptions, "listAdd" | "listRemove"> {
+  const listAdd: Partial<Record<ListFieldKey, string[]>> = {};
+  const listRemove: Partial<Record<ListFieldKey, string[]>> = {};
+  const specs: ReadonlyArray<readonly [flag: string, op: "add" | "rm", key: ListFieldKey]> = [
+    ["add-allow", "add", "allowlist"],
+    ["rm-allow", "rm", "allowlist"],
+    ["add-deny", "add", "denylist"],
+    ["rm-deny", "rm", "denylist"],
+    ["add-hard-deny", "add", "hard_deny"],
+    ["rm-hard-deny", "rm", "hard_deny"],
+  ];
+  for (const [flag, op, key] of specs) {
+    const raw = flagStr(flags, flag);
+    if (raw === undefined) continue;
+    (op === "add" ? listAdd : listRemove)[key] = splitTools(raw);
+  }
+  const out: Pick<LaneSetOptions, "listAdd" | "listRemove"> = {};
+  if (Object.keys(listAdd).length > 0) out.listAdd = listAdd;
+  if (Object.keys(listRemove).length > 0) out.listRemove = listRemove;
+  return out;
+}
+
 /** conf 에서 canonical key 의 현재값을 표시 문자열로(부재=""; 리스트=CSV). 위저드 프리필·diff 용. */
 function currentDisplay(conf: LaneConf, key: string): string {
   const d = findDescriptor(key);
@@ -395,6 +420,9 @@ async function handleSet(p: ParseResult): Promise<number> {
   }
 
   const edits = collectNamedEdits(flags);
+  const increments = collectListIncrements(flags);
+  if (increments.listAdd) edits.listAdd = increments.listAdd;
+  if (increments.listRemove) edits.listRemove = increments.listRemove;
   const rest = positional.slice(2); // proj/lane 뒤 위치인자 = 점표기 key/value 또는 unset 키.
   const unsetMode = flags["unset"] === true;
 

@@ -82,7 +82,7 @@ adde 실행 파일 옆에 짧은 별칭(심링크)을 설치해 \`adde up <proj>
 전역 설치에서만 동작(PATH 의 adde 옆 쓰기 가능한 bin 디렉터리 필요)하며, 동명 명령이 이미 있으면 덮어쓰지 않고 건너뜁니다.`,
     laneAdd: "사용법: adde lane add <proj> <lane> [옵션]",
     laneSet:
-      "사용법: adde lane set <proj> <lane> [<key> <value> ...] [--<field> <value>] [--unset <key> ...]   (TTY 에서 인자 없이 실행 시 대화형 위저드)",
+      "사용법: adde lane set <proj> <lane> [<key> <value> ...] [--<field> <value>] [--unset <key> ...]   (TTY 에서 인자 없이 실행 시 대화형 위저드)\n  팁: 목록 필드(allowlist/denylist/hard_deny)는 증분 추가/제거 플래그도 지원합니다(adde lane help 참고).",
     laneLs: "사용법: adde lane ls <proj> [--json]",
     laneShow: "사용법: adde lane show <proj> <lane> [key] [--json] [--defaults]",
     laneRm: "사용법: adde lane rm <proj> <lane>",
@@ -121,6 +121,9 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
   --allowlist <a,b,c>           전체 치환(병합 아님)
   --denylist <항목,...>         전체 치환(병합 아님)
   --hard-deny <항목,...>        전체 치환(병합 아님; 기존 값이 있었으면 경고)
+  --add-allow <a,b,c> / --rm-allow <a,b,c>          allowlist 에 추가 / 에서 제거(현재 목록과 병합; 전체 치환하는 --allowlist 와 대비)
+  --add-deny <항목,...> / --rm-deny <항목,...>          denylist 에 추가 / 에서 제거
+  --add-hard-deny <항목,...> / --rm-hard-deny <항목,...>   hard_deny 에 추가 / 에서 제거
   --cwd <abs-path>
   --engine-args <args>
   --lang <en|ko>
@@ -481,6 +484,7 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
         "[경고] hard_deny 가 치환되었습니다 — 기존 목록은 사라졌습니다(lane set 은 기존 목록과 병합하지 않고 전체 치환합니다).",
       fileModeRelaxNotice:
         "[경고] file_mode 를 shared 로 바꿨으나 기존 디렉터리 권한(0700)은 adde restart 후에도 유지됩니다.\n  ↳ 조치: 완화하려면 레인의 state/out/queue 디렉터리를 수동으로 chmod 하세요(file_mode 는 이 내부 디렉터리만 지배하며 마크다운 노트 트리는 대상이 아닙니다).",
+      listRemoveAbsent: "[경고] {{key}}: 목록에 없어 --rm 이 무시한 항목: {{tools}}",
     },
     err: {
       emptyIdent: "{{kind}} 가 비어있습니다",
@@ -511,6 +515,9 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
         "perm_tier=acp 에서는 denylist 가 효과가 없습니다(acp 는 allowlist 도구만 자동 허용하고 나머지는 승인 요청). denylist 를 쓰려면 같은 명령에서 perm_tier=autopass 도 함께 지정하세요.",
       allowlistNoopAutopass:
         "perm_tier=autopass 에서는 allowlist 가 효과가 없습니다(autopass 는 denylist 외 전부 자동 허용). 도구를 제한하려면 denylist 를, allowlist 를 쓰려면 같은 명령에서 perm_tier=acp 도 함께 지정하세요.",
+      listIncrementConflict:
+        "{{key}}: 전체 교체와 증분 추가/제거(--add-*/--rm-*)를 같은 명령에서 함께 쓸 수 없습니다 — 둘 중 하나만 쓰세요.",
+      listAddRemoveOverlap: "{{key}}: 같은 항목을 추가와 제거에 동시 지정했습니다: {{tools}}",
       unknownKey:
         'key "{{key}}" 는 편집 가능한 레인 키가 아닙니다 — 편집 가능 키 목록: adde lane show <proj> <lane> --defaults',
       unknownKeyDidYouMean:

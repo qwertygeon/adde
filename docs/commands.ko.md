@@ -434,6 +434,9 @@ adde lane set <proj> <lane>                        # TTY 에서 인자 없이: �
 | `--allowlist <a,b,c>`                                                    | **전체 목록을 치환**(병합 아님) — 생략하면 변경 없음                                        |
 | `--denylist <항목,...>`                                                  | **전체 목록을 치환**(병합 아님)                                                             |
 | `--hard-deny <항목,...>`                                                 | **전체 목록을 치환**(병합 아님) — 기존 목록이 비어있지 않았으면 경고 출력                   |
+| `--add-allow <a,b,c>` `--rm-allow <a,b,c>`                               | allowlist 에 **추가 / 에서 제거**(현재 목록과 병합, 치환 아님) — 아래 참고                  |
+| `--add-deny <항목,...>` `--rm-deny <항목,...>`                           | denylist 에 추가 / 에서 제거                                                                |
+| `--add-hard-deny <항목,...>` `--rm-hard-deny <항목,...>`                 | hard-deny 목록에 추가 / 에서 제거                                                           |
 | `--lang <en\|ko>`                                                        | `lane add` 와 동일                                                                          |
 | `--file-mode <private\|shared>`                                          | conf 값만 갱신 — 실 디렉터리 권한은 다음 `adde restart` 시점에 재적용됩니다(즉시 반영 아님) |
 | `--chat-id <id>` `--allow-from <ids>`                                    | telegram 레인 전용 — markdown 레인에서는 거부됨                                             |
@@ -441,6 +444,8 @@ adde lane set <proj> <lane>                        # TTY 에서 인자 없이: �
 | `--unset <key> …`                                                        | 키(점표기)를 제거해 기본값으로 되돌림 — 아래 참고                                           |
 
 **위치 점표기 키**: `adde lane set <proj> <lane> <key> <value> …` 는 canonical 점표기 키로 편집합니다(예: `perm_tier autopass`·`markdown.retention_days 5`). 한 명령에서 `<key> <value>` 쌍을 하나 이상 받습니다. 위 명명 플래그와 동일한 표면이며, **플래그가 없는 markdown 전용 키가 추가로 포함됩니다**: `markdown.archive`·`markdown.backup`·`markdown.retention_days`·`markdown.out_retention_days`·`markdown.sync_provider`·`markdown.layout`·`markdown.palette`·`markdown.records_cap`(각 키의 의미는 [마크다운 가이드](markdown.ko.md#1-레인-설정) 참고). 배치는 **전부-또는-무**입니다 — 미지 키(근접 이름은 "did you mean…" 제안), 타입/enum/format 위반 값, 홀수 개 토큰이면 명령 전체를 거부하고 아무 것도 기록하지 않습니다.
+
+**목록 증분 편집**(`--add-allow`/`--rm-allow`, `--add-deny`/`--rm-deny`, `--add-hard-deny`/`--rm-hard-deny`): 보안 목록의 항목 하나를 전체 재입력 없이 편집합니다. 각 플래그는 콤마로 구분된 집합을 현재 목록에 합집합(`--add-*`)하거나 차집합(`--rm-*`)합니다. 목록에 없는 항목 제거는 no-op 이며(무시된 항목을 안내로 표시), 같은 명령에서 전체 치환(`--allowlist`)과 증분 변형을 함께 쓰거나 같은 항목을 추가와 제거에 동시 지정하면 거부됩니다. denylist 가 아직 내장 기본값인 `autopass` 레인에서 denylist 증분 편집 시 기본 항목이 먼저 시드된 뒤 add/remove 가 적용되므로, `--add-deny`/`--rm-deny` 한 번이 기본 보호를 조용히 없애지 않습니다.
 
 **`--unset <key> …`**: 키(점표기)를 하나 이상 제거해 소비측 기본값으로 되돌립니다. 정체성 키(`source`/`backend`/`engine`/`acp_version`)·필수 키(`markdown.root`/`markdown.inbox`·telegram `chat_id`)는 되돌릴 기본값이 없어 거부됩니다.
 

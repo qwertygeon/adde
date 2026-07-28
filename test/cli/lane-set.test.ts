@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { runLane } from "../../src/cli/lane.js";
 import { laneAdd } from "../../src/core/lane-config.js";
+import { parseLaneConf } from "../../src/shared/conf.js";
 import { t } from "../../src/shared/i18n.js";
 
 // 017-lane-set D2 (5a AUTHORING) — CLI 경로: 정체성 pre-scan 친절 거부(SC-004)·safe-defaults
@@ -181,6 +182,51 @@ describe("교차소스 CLI 거부 (SC-010)", () => {
 
     const cap = captureStdio();
     const code = await runLane(["set", "proj", "lanexsrc2", "--root", "/v"]);
+    cap.restore();
+
+    expect(code).toBe(1);
+    expect(fs.readFileSync(confPath, "utf8")).toBe(before);
+  });
+});
+
+describe("목록 증분 편집 CLI 배선 (I5)", () => {
+  it("--add-allow 가 현재 allowlist 에 항목을 합집합으로 추가한다(전 경로 관통)", async () => {
+    const { confPath } = await laneAdd("proj", "inc1", { perm_tier: "acp", allowlist: ["Read"] });
+
+    const cap = captureStdio();
+    const code = await runLane(["set", "proj", "inc1", "--add-allow", "Bash,Write"]);
+    cap.restore();
+
+    expect(code).toBe(0);
+    expect(parseLaneConf(fs.readFileSync(confPath, "utf8")).allowlist).toEqual([
+      "Read",
+      "Bash",
+      "Write",
+    ]);
+  });
+
+  it("--rm-deny 가 denylist 에서 항목만 제거하고 나머지는 보존한다", async () => {
+    const { confPath } = await laneAdd("proj", "inc2", {
+      perm_tier: "autopass",
+      denylist: ["Fetch", "Bash(sudo *)"],
+    });
+
+    const cap = captureStdio();
+    const code = await runLane(["set", "proj", "inc2", "--rm-deny", "Fetch"]);
+    cap.restore();
+
+    expect(code).toBe(0);
+    const conf = parseLaneConf(fs.readFileSync(confPath, "utf8"));
+    expect(conf.denylist).not.toContain("Fetch");
+    expect(conf.denylist).toContain("Bash(sudo *)");
+  });
+
+  it("전체 교체(--allowlist)와 증분(--add-allow)을 동시 지정하면 exit 1 로 거부된다", async () => {
+    const { confPath } = await laneAdd("proj", "inc3", { perm_tier: "acp", allowlist: ["Read"] });
+    const before = fs.readFileSync(confPath, "utf8");
+
+    const cap = captureStdio();
+    const code = await runLane(["set", "proj", "inc3", "--allowlist", "X", "--add-allow", "Y"]);
     cap.restore();
 
     expect(code).toBe(1);

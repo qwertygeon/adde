@@ -49,13 +49,14 @@ function formatAge(iso: string | null): string {
 
 function statusTable(rows: LaneStatusRow[]): string {
   if (rows.length === 0) return t("ops.status.noLanesConf");
-  const header = ["LANE", "STATUS", "PID", "UPTIME", "SEEN", "SOURCE"];
+  const header = ["LANE", "STATUS", "PID", "UPTIME", "SEEN", "ACTIVITY", "SOURCE"];
   const body = rows.map((r) => [
     r.lane,
     r.status,
     r.pid === null ? "-" : String(r.pid),
     formatUptime(r.uptimeMs),
     formatAge(r.lastSeenAt),
+    formatAge(r.lastActivityAt),
     r.source ?? "-",
   ]);
   const widths = header.map((h, i) =>
@@ -80,7 +81,7 @@ function statusTableAggregate(
     if (all || totalRegistered === 0) return t("ops.status.noLanesRegistered");
     return t("ops.status.noRunning");
   }
-  const header = ["PROJECT", "LANE", "STATUS", "PID", "UPTIME", "SEEN", "SOURCE"];
+  const header = ["PROJECT", "LANE", "STATUS", "PID", "UPTIME", "SEEN", "ACTIVITY", "SOURCE"];
   const body = rows.map((r) => [
     r.proj,
     r.lane,
@@ -88,6 +89,7 @@ function statusTableAggregate(
     r.pid === null ? "-" : String(r.pid),
     formatUptime(r.uptimeMs),
     formatAge(r.lastSeenAt),
+    formatAge(r.lastActivityAt),
     r.source ?? "-",
   ]);
   const widths = header.map((h, i) =>

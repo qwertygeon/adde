@@ -492,7 +492,8 @@ async function handleShow(p: ParseResult): Promise<number> {
       return EXIT.FAIL;
     }
     if (json) {
-      process.stdout.write(JSON.stringify(meta, null, 2) + "\n");
+      // 최상위 `v`(스키마 버전) — 형제 --json 사이트(ls/defaults/conf)와 정합. meta 는 그 아래 spread.
+      process.stdout.write(JSON.stringify({ v: 1, ...meta }, null, 2) + "\n");
     } else {
       process.stdout.write(
         t("lane.show.line", {

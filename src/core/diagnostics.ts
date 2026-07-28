@@ -9,6 +9,7 @@ import { laneList, resolveFileMode } from "./lane-config.js";
 import { resolveAdapterBin } from "./supervisor.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
 import type { Liveness } from "./runtime-state.js";
+import { readLedger } from "./session-ledger.js";
 import {
   lanePaths,
   defaultBase,
@@ -49,6 +50,8 @@ export interface LaneStatusRow {
   uptimeMs: number | null;
   /** 마지막 하트비트 시각(runtime.json mtime) ISO. 파일 없거나 stat 실패 시 null. */
   lastSeenAt: string | null;
+  /** 마지막 채널 활동(세션 장부 최신 lastActivityAt) ISO. 하트비트(생존)와 구분 — 활동 없으면 null. */
+  lastActivityAt: string | null;
   /** status==="error" 일 때 기동 실패 사유(그 외 null). */
   error: string | null;
 }
@@ -77,6 +80,8 @@ export async function collectStatus(
       }
     }
     const status = livenessOf(info, { mtimeMs });
+    // 마지막 채널 활동 — 세션 장부는 lastActivityAt DESC 정렬이라 [0]=최신(하트비트와 독립).
+    const ledger = await readLedger(paths);
     rows.push({
       lane,
       status,
@@ -91,6 +96,7 @@ export async function collectStatus(
           ? Math.max(0, Date.now() - Date.parse(info.startedAt))
           : null,
       lastSeenAt: mtimeMs !== undefined ? new Date(mtimeMs).toISOString() : null,
+      lastActivityAt: ledger[0]?.lastActivityAt ?? null,
       error: info?.error ?? null,
     });
   }

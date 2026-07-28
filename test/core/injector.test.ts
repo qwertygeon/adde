@@ -393,6 +393,119 @@ describe("세션 제어 envelope (control)", () => {
       "지원하지 않습니다",
     );
   });
+
+  // M12: 수동 복구(/clear·/resume relaunch) 성공 시 onRecovered 발화 → supervisor 가 watcher.markRecovered
+  // 로 배선해 자가재기동 포기(status:error) 후 수동 복구해도 error 가 잔존하던 것을 해소한다.
+  it("clear relaunch 성공 시 onRecovered 를 새 sessionId 로 발화한다", async () => {
+    const backend = {
+      ...makeBackend(),
+      reset: vi.fn().mockResolvedValue({ sessionId: "fresh-1" }),
+    };
+    const onRecovered = vi.fn();
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onRecovered,
+    );
+    await enqueue(paths, controlEnvelope("cr1", { kind: "clear" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "cr1.out")));
+
+    expect(onRecovered).toHaveBeenCalledWith("fresh-1");
+  });
+
+  it("resume relaunch 성공 시 onRecovered 를 새 sessionId 로 발화한다(resumed=false 새 세션 폴백 포함)", async () => {
+    const backend = {
+      ...makeBackend(),
+      resumeSession: vi.fn().mockResolvedValue({ sessionId: "fresh-2", resumed: false }),
+    };
+    const onRecovered = vi.fn();
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onRecovered,
+    );
+    await enqueue(paths, controlEnvelope("cr2", { kind: "resume", sessionId: "gone-1" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "cr2.out")));
+
+    expect(onRecovered).toHaveBeenCalledWith("fresh-2");
+  });
+
+  it("clear 가 미지원 백엔드면 onRecovered 를 발화하지 않는다(relaunch 미수행)", async () => {
+    const backend = makeBackend(); // reset 없음
+    const onRecovered = vi.fn();
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onRecovered,
+    );
+    await enqueue(paths, controlEnvelope("cr3", { kind: "clear" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "cr3.out")));
+
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
+
+  it("resume sessionId 없음이면 onRecovered 를 발화하지 않는다", async () => {
+    const backend = { ...makeBackend(), resumeSession: vi.fn() };
+    const onRecovered = vi.fn();
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onRecovered,
+    );
+    await enqueue(paths, controlEnvelope("cr4", { kind: "resume" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "cr4.out")));
+
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
+
+  it("clear relaunch 실패(reset throw)면 onRecovered 를 발화하지 않는다", async () => {
+    const backend = {
+      ...makeBackend(),
+      reset: vi.fn().mockRejectedValue(new Error("relaunch boom")),
+    };
+    const onRecovered = vi.fn();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const injector: Injector = createInjector(
+      paths,
+      "test-lane",
+      backend,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onRecovered,
+    );
+    await enqueue(paths, controlEnvelope("cr5", { kind: "clear" }));
+    await injector.start();
+    await waitFor(() => fs.existsSync(path.join(paths.outDir, "cr5.out")));
+
+    expect(onRecovered).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
 });
 
 describe("주입 실패 채널 표면화 (onFail)", () => {

@@ -392,6 +392,9 @@ async function assembleLane(
       // 전달 불확실 종단 시 채널 통지(보조) — 레인 로케일. 실패는 injector 가 로그 후 흡수.
       onUncertain: (id) => source.notify(laneT("injector.deliverUncertain", { id })),
     },
+    // 수동 복구(/clear·/resume) 성공 → watcher 상태 리셋 + running 되쓰기.
+    // 자가재기동 포기(status:error) 후 수동 복구해도 error 가 잔존하던 것을 해소한다.
+    (sid) => watcher.markRecovered(sid),
   );
   const onInbound = () => injector.notify();
 

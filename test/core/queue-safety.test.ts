@@ -33,9 +33,8 @@ vi.mock("node:fs/promises", async (orig) => {
   };
 });
 
-const { writeOutBody, readOutBody, getEntry, setDone, setSent, findUnsent } = await import(
-  "../../src/core/out-ledger.js"
-);
+const { writeOutBody, readOutBody, getEntry, setDone, setSent, findUnsent } =
+  await import("../../src/core/out-ledger.js");
 const { claimNext, enqueue } = await import("../../src/core/queue.js");
 import { lanePaths } from "../../src/shared/paths.js";
 
@@ -71,9 +70,7 @@ describe("body-first 전이 순서 (SC-005)", () => {
   it("본문 쓰기는 성공했으나 ledger 커밋(setDone)이 실패하면 body 는 있고 done entry 는 없다(크래시해도 done 오인 없음)", async () => {
     await writeOutBody(paths, "m2", "응답");
     h.failLedgerWrite = true;
-    await expect(
-      setDone(paths, "m2", { reply_ref: { channel_msg_id: "7" } }),
-    ).rejects.toThrow();
+    await expect(setDone(paths, "m2", { reply_ref: { channel_msg_id: "7" } })).rejects.toThrow();
 
     // 본문(body-first)은 이미 확정 → 존재. ledger done entry(commit)는 실패 → 부재.
     // 재시작 시 리더는 "전이 전"(entry 없음) 상태만 관측하고 부분조합을 만나지 않는다.

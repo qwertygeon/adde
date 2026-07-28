@@ -186,9 +186,7 @@ describe("parseInbox (actions)", () => {
 
   // SC-003 (S1): 앵커 없는 "sent …" 접두 사용자 라인은 종단 경계가 아니며 그 앞 메시지가 유실되지 않는다.
   it("SC-003: 앵커 없는 sent 접두 사용자 라인은 경계가 아니라 send 트리거의 fresh 본문에 포함된다", () => {
-    const r = parseInbox(
-      "안녕하세요 질문이 있습니다\n- [x] sent invoice to client\n- [x] 📤 send",
-    );
+    const r = parseInbox("안녕하세요 질문이 있습니다\n- [x] sent invoice to client\n- [x] 📤 send");
     expect(r.actions).toHaveLength(1);
     expect(r.actions[0]).toMatchObject({ kind: "fresh" });
     expect(r.actions[0]!.text).toContain("안녕하세요 질문이 있습니다");
@@ -979,7 +977,9 @@ describe("createMarkdownSource (통합)", () => {
     await source.start();
 
     const decidedDate = todayDateStr();
-    await waitFor(() => fs.existsSync(path.join(approvals, ".decided", decidedDate, "req-term.md")));
+    await waitFor(() =>
+      fs.existsSync(path.join(approvals, ".decided", decidedDate, "req-term.md")),
+    );
     expect(fs.existsSync(path.join(approvals, "req-term.md"))).toBe(false); // 종단분 이동됨
     expect(fs.existsSync(path.join(approvals, "req-pend.md"))).toBe(true); // pending 유지(무결성)
     expect(fs.existsSync(path.join(approvals, ".decided", decidedDate, "req-pend.md"))).toBe(false);
@@ -1151,9 +1151,9 @@ describe("createMarkdownSource (통합)", () => {
 
     // 링크 텍스트 그대로가 노트 파일명이어야 링크가 해소된다 — 파일은 stamp 파생 날짜 폴더 아래(FR-001).
     const stamp = link.split(" ")[0]!;
-    expect(
-      fs.existsSync(path.join(rootDir, "out", dateFolderFromStamp(stamp), `${link}.md`)),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(rootDir, "out", dateFolderFromStamp(stamp), `${link}.md`))).toBe(
+      true,
+    );
   });
 
   it("renderOut: origin_ts sidecar → 스탬프 파일명 + 질문·시각 헤더", async () => {
@@ -1427,7 +1427,9 @@ describe("createMarkdownSource (통합)", () => {
     const outboxDir = path.join(rootDir, "out");
     const dateDirs = fs
       .readdirSync(outboxDir)
-      .filter((f) => /^\d{4}-\d{2}-\d{2}$/.test(f) && fs.statSync(path.join(outboxDir, f)).isDirectory());
+      .filter(
+        (f) => /^\d{4}-\d{2}-\d{2}$/.test(f) && fs.statSync(path.join(outboxDir, f)).isDirectory(),
+      );
     expect(dateDirs).toEqual(["2026-07-05"]); // 재렌더로 다른 날짜 폴더가 새로 생기지 않음
     const files = fs.readdirSync(path.join(outboxDir, "2026-07-05"));
     expect(files).toHaveLength(1); // 같은 파일 갱신 — 중복 노트 없음
@@ -1999,10 +2001,12 @@ describe("존 레이아웃(inbox-zoned-layout, 007)", () => {
     it("SC-009: archive 트리거 — 기록 존 strict 마커 줄 삭제 + `archived N` 요약 1줄", async () => {
       fs.writeFileSync(
         inboxFilePath(),
-        zonedFixture([sentLine("a1", STAMP), sentLine("a2", STAMP), sentLine("a3", STAMP), emptyLine()]).replace(
-          "- [ ] 🗄️ archive",
-          "- [x] 🗄️ archive",
-        ),
+        zonedFixture([
+          sentLine("a1", STAMP),
+          sentLine("a2", STAMP),
+          sentLine("a3", STAMP),
+          emptyLine(),
+        ]).replace("- [ ] 🗄️ archive", "- [x] 🗄️ archive"),
       );
       source = makeSource();
       await source.start();
@@ -2018,7 +2022,12 @@ describe("존 레이아웃(inbox-zoned-layout, 007)", () => {
 
     it("SC-009: planRecordsPrune 단위 — strict `✅ sent`/`⚠️ empty` 줄만 수집·count", async () => {
       const { planRecordsPrune } = await import("../../src/src-adapters/markdown.js");
-      const lines = ["<!-- adde:records -->", sentLine("a1", STAMP), sentLine("a2", STAMP), emptyLine()];
+      const lines = [
+        "<!-- adde:records -->",
+        sentLine("a1", STAMP),
+        sentLine("a2", STAMP),
+        emptyLine(),
+      ];
       const plan = planRecordsPrune(lines, 0);
       expect(plan.count).toBe(3);
       expect(plan.removeIndices.slice().sort((a, b) => a - b)).toEqual([1, 2, 3]);
@@ -2237,7 +2246,10 @@ describe("존 레이아웃(inbox-zoned-layout, 007)", () => {
     });
 
     it("SC-017: ⏳ sending 상태로 중단된 inbox 재기동 시 누락분만 정확히 1회 재전송된다", async () => {
-      fs.writeFileSync(inboxFilePath(), `크래시 복구 메시지\n${sendingLine("crash-zone-1", STAMP)}\n`);
+      fs.writeFileSync(
+        inboxFilePath(),
+        `크래시 복구 메시지\n${sendingLine("crash-zone-1", STAMP)}\n`,
+      );
       source = makeSource();
       await source.start();
 

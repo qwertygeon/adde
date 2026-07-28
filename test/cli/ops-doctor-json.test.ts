@@ -26,7 +26,12 @@ const WITH_FAIL: DoctorCheck[] = [
 ];
 const WITH_INFO: DoctorCheck[] = [
   ...PASS_ONLY,
-  { name: "l: file permissions", level: "INFO", detail: "state dir is 0700 (mode 700)", hint: "chmod" },
+  {
+    name: "l: file permissions",
+    level: "INFO",
+    detail: "state dir is 0700 (mode 700)",
+    hint: "chmod",
+  },
 ];
 
 afterEach(() => vi.clearAllMocks());

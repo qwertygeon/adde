@@ -2,7 +2,13 @@
  * `adde status|doctor|logs` — 운영 가시성 명령의 CLI 표면.
  * core/diagnostics 의 읽기 전용 로직을 호출하고 표/JSON/텍스트로 표면화한다.
  */
-import { collectStatus, collectAllStatus, runDoctor, readLogs, readHalt } from "../core/diagnostics.js";
+import {
+  collectStatus,
+  collectAllStatus,
+  runDoctor,
+  readLogs,
+  readHalt,
+} from "../core/diagnostics.js";
 import { checkForUpdate, formatUpdateNotice } from "../core/update-check.js";
 import { errMsg } from "../shared/errors.js";
 import type { LaneStatusRow, AggregatedLaneStatusRow, DoctorCheck } from "../core/diagnostics.js";
@@ -240,10 +246,7 @@ export function checkSymbol(level: DoctorCheck["level"]): string {
   return level === "PASS" ? "✔" : level === "WARN" ? "▲" : level === "INFO" ? "ℹ" : "✘";
 }
 
-export async function runDoctorCli(
-  rest: readonly string[],
-  parsed?: ParseResult,
-): Promise<number> {
+export async function runDoctorCli(rest: readonly string[], parsed?: ParseResult): Promise<number> {
   const p = parsed ?? parseCommand(DOCTOR_SPEC, rest);
   if (p.error) {
     process.stderr.write(`${cmdError("doctor", flagErrorText(p.error))}\n\n${t("usage.doctor")}\n`);
@@ -289,15 +292,10 @@ export async function runDoctorCli(
 }
 
 /** `adde sessions <proj> <lane>` — 세션 장부 목록(read-only). 재개는 채널 명령으로 수행. */
-export async function runSessions(
-  rest: readonly string[],
-  parsed?: ParseResult,
-): Promise<number> {
+export async function runSessions(rest: readonly string[], parsed?: ParseResult): Promise<number> {
   const p = parsed ?? parseCommand(SESSIONS_SPEC, rest);
   if (p.error) {
-    process.stderr.write(
-      `${cmdError("sessions", flagErrorText(p.error))}\n\n${USAGE.sessions}\n`,
-    );
+    process.stderr.write(`${cmdError("sessions", flagErrorText(p.error))}\n\n${USAGE.sessions}\n`);
     return EXIT.USAGE;
   }
   const json = p.flags.json === true;

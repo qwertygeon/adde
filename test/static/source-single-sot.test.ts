@@ -23,12 +23,16 @@ function listTsFiles(dir: string): string[] {
 
 describe("SC-001: 지원 소스 단일 SoT — 별개 하드코딩 배열 부재", () => {
   it("src/ 내 SUPPORTED_SOURCES 식별자가 존재하지 않는다(구 하드코딩 배열 제거)", () => {
-    const hits = listTsFiles(srcDir).filter((f) => /\bSUPPORTED_SOURCES\b/.test(fs.readFileSync(f, "utf8")));
+    const hits = listTsFiles(srcDir).filter((f) =>
+      /\bSUPPORTED_SOURCES\b/.test(fs.readFileSync(f, "utf8")),
+    );
     expect(hits).toEqual([]);
   });
 
   it("src/ 내 SupportedSource 타입이 존재하지 않는다(런타임 SOURCE_IDS 관문으로 대체, ADR-006)", () => {
-    const hits = listTsFiles(srcDir).filter((f) => /\bSupportedSource\b/.test(fs.readFileSync(f, "utf8")));
+    const hits = listTsFiles(srcDir).filter((f) =>
+      /\bSupportedSource\b/.test(fs.readFileSync(f, "utf8")),
+    );
     expect(hits).toEqual([]);
   });
 });

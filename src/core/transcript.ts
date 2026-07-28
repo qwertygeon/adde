@@ -99,7 +99,10 @@ export async function appendTranscript(
   const rendered = renderEvent(event);
   const masked = maskSecrets(rendered);
   const line = `${masked}\n`;
-  const cfg: RotateConfig = opts?.rotate ?? { maxBytes: DEFAULT_LOG_MAX_BYTES, keep: DEFAULT_LOG_KEEP };
+  const cfg: RotateConfig = opts?.rotate ?? {
+    maxBytes: DEFAULT_LOG_MAX_BYTES,
+    keep: DEFAULT_LOG_KEEP,
+  };
   const transcriptLog = paths.transcriptLog;
 
   const prev = rotateChains.get(transcriptLog) ?? Promise.resolve();
@@ -132,6 +135,9 @@ export async function appendTranscript(
     }
   });
   // 체인 끊김 방지 — 이번 호출이 실패해도(위에서 흡수됨) 다음 호출이 이어받을 수 있게 항상 resolve.
-  rotateChains.set(transcriptLog, next.catch(() => {}));
+  rotateChains.set(
+    transcriptLog,
+    next.catch(() => {}),
+  );
   await next;
 }

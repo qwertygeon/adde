@@ -85,7 +85,10 @@ describe("집계 status 기본 뷰 — 전 레인 stopped halt 프로젝트 감�
   it("halt 대상 프로젝트에 running 레인이 섞여도(부분 stopped) halt 가 누락되지 않는다", async () => {
     writeConf("haltproj2", "stoppedlane"); // stopped
     writeConf("haltproj2", "runninglane");
-    await writeRuntime(lanePaths(tmpBase, "haltproj2", "runninglane"), rt(process.pid, "runninglane"));
+    await writeRuntime(
+      lanePaths(tmpBase, "haltproj2", "runninglane"),
+      rt(process.pid, "runninglane"),
+    );
     writeHalt("haltproj2", {
       reason: "crash loop — 5 consecutive short-lived boots (< 60000ms)",
       haltedAt: new Date().toISOString(),

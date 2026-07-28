@@ -10,7 +10,10 @@ const { collectStatus, projRemove, unloadDaemon } = vi.hoisted(() => ({
   unloadDaemon: vi.fn(),
 }));
 
-vi.mock("../../src/core/diagnostics.js", () => ({ collectStatus, listRegisteredProjects: vi.fn() }));
+vi.mock("../../src/core/diagnostics.js", () => ({
+  collectStatus,
+  listRegisteredProjects: vi.fn(),
+}));
 vi.mock("../../src/core/lane-config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/core/lane-config.js")>();
   return { ...actual, projRemove };

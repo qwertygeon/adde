@@ -84,9 +84,9 @@ describe("i18n 패리티 — lane set 키 (SC-020)", () => {
     expect(
       [...placeholders(enFlat.get("laneConfig.err.identityFieldImmutable") ?? "")].sort(),
     ).toEqual(["field"]);
-    expect([...placeholders(enFlat.get("laneConfig.err.sourceFieldMismatch") ?? "")].sort()).toEqual(
-      ["field", "source"],
-    );
+    expect(
+      [...placeholders(enFlat.get("laneConfig.err.sourceFieldMismatch") ?? "")].sort(),
+    ).toEqual(["field", "source"]);
   });
 
   it("lane set 신규 키 포함 전체 i18n:check 통과(패리티 회귀 없음)", () => {

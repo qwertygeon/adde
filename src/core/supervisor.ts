@@ -551,9 +551,11 @@ async function assembleLane(
         );
     }
     if (launched) {
-      await backend.close(lane).catch((e: unknown) =>
-        console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),
-      );
+      await backend
+        .close(lane)
+        .catch((e: unknown) =>
+          console.warn(t("log.supervisor.laneCleanupFail", { lane, error: errMsg(e) })),
+        );
     }
     // 실패 상태를 runtime.json 에 남겨 교차 프로세스(adde up·status)가 볼 수 있게 한다 —
     // 안 남기면 파일 부재라 status 가 stopped(미기동)와 구분 못 한다. 기록 실패는 흡수(보조).

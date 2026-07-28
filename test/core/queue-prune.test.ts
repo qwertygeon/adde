@@ -85,7 +85,9 @@ describe("pruneOut — 종단 그룹 id 원자 삭제·안전창 경과분만 (S
     // 재전송 대기 중인 미전달 응답의 body(dedup 앵커)가 파괴된다(PR #44 독립 리뷰 발견 quirk 보존).
     const oldIso = "2026-06-01T00:00:00.000Z";
     fs.writeFileSync(path.join(paths.outDir, "undelivered.out"), "미전달 응답");
-    writeLedgerFixture({ undelivered: { state: "failed", ts: oldIso, reason: "deliver 실패 기록" } });
+    writeLedgerFixture({
+      undelivered: { state: "failed", ts: oldIso, reason: "deliver 실패 기록" },
+    });
 
     const result = await pruneOut(paths, 5, NOW);
 

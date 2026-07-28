@@ -196,7 +196,9 @@ describe("markdown 백업/이관 설정 파싱 (backup·retention_days·out_rete
   });
 
   it("무효/0/음수 retention_days 는 무시되어 undefined 로 남는다(소비측 기본값 적용 위임)", () => {
-    expect(parseLaneConf(base + "markdown.retention_days=0\n").markdown?.retention_days).toBeUndefined();
+    expect(
+      parseLaneConf(base + "markdown.retention_days=0\n").markdown?.retention_days,
+    ).toBeUndefined();
     expect(
       parseLaneConf(base + "markdown.retention_days=-1\n").markdown?.retention_days,
     ).toBeUndefined();

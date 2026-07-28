@@ -135,9 +135,13 @@ With the inbox zoned layout on (the default — see `markdown.layout` in the con
 - [ ] 🧹 clear
 - [ ] 🗜️ compact
 - [ ] ♻️ resume
+
 <!-- adde:compose -->
+
 - [ ] 📤 send
+
 ## Sent history
+
 <!-- adde:records -->
 ```
 
@@ -162,9 +166,9 @@ Four control markers sit permanently at the top of the note, always unchecked an
 
 ```markdown
 - [ ] 🗄️ archive ← on check, clean up the records zone (see below)
-- [ ] 🧹 clear    ← on check, start a new session (clears prior conversation context)
-- [ ] 🗜️ compact  ← on check, compact the context
-- [ ] ♻️ resume   ← on check, list recent sessions (number, excerpt, last conversation time) into a response note
+- [ ] 🧹 clear ← on check, start a new session (clears prior conversation context)
+- [ ] 🗜️ compact ← on check, compact the context
+- [ ] ♻️ resume ← on check, list recent sessions (number, excerpt, last conversation time) into a response note
 ```
 
 Check any marker to run that action once — ADDE runs it and **restores the same marker back to unchecked** right where it is; the palette never disappears or gets consumed. `resume 2` (with a session number, typed anywhere in the note) also works to jump straight to session #2, and is restored the same way. This is a repositioning of the pre-existing session-control checkboxes (`clear`/`compact`/`resume`) into one resident block, not a new command surface — `archive` is the one addition (previously a separate ad hoc checkbox, now part of the palette). Details: [command reference](commands.md#session-control-channel-commands).
@@ -175,14 +179,16 @@ The bottom of the note carries a human-readable heading and an `<!-- adde:record
 
 ```markdown
 ## Sent history
+
 <!-- adde:records -->
+
 - [x] ✅ sent [[20260703-163000 b2c3d4e5]]
 - [x] ✅ sent [[20260703-162045 a1b2c3d4]]
 ```
 
 You're free to delete any line in the records zone yourself, any time — **the one exception is `⏳ sending`**, which must never be removed while a send is in flight (deleting it would make ADDE unable to tell whether that message was ever delivered; once it becomes `✅ sent` it's just a compact marker and safe to delete manually).
 
-With the layout on, the message body is moved into the archive **the moment it's sent** — the inbox only ever holds the compact `✅ sent [[...]]` marker afterward. This happens automatically whether or not `markdown.archive` is set (see config above; that key only overrides *where*). If the archive write itself fails (disk full, permission denied, …), the entry stays as `⏳ sending` with the body kept in the inbox instead of being lost — the message was still delivered, and it finalizes to `✅ sent` (moving the body into the archive) on the next pass once the write succeeds, e.g. after a restart. It is never re-sent while it waits.
+With the layout on, the message body is moved into the archive **the moment it's sent** — the inbox only ever holds the compact `✅ sent [[...]]` marker afterward. This happens automatically whether or not `markdown.archive` is set (see config above; that key only overrides _where_). If the archive write itself fails (disk full, permission denied, …), the entry stays as `⏳ sending` with the body kept in the inbox instead of being lost — the message was still delivered, and it finalizes to `✅ sent` (moving the body into the archive) on the next pass once the write succeeds, e.g. after a restart. It is never re-sent while it waits.
 
 - **Tidying the records zone**: check the `- [x] 🗄️ archive` palette marker to delete all completed `✅ sent [[...]]`/`⚠️ empty` lines from the records zone in one go, replaced by a single `- [x] 🗄️ archived N <time> · auto` summary line (bodies were already archived at send time, so this only cleans up the records zone — it doesn't move anything). It only touches completed segments; a message you're still drafting is never touched.
 - **Automatic cap (`markdown.records_cap`, opt-in)**: set an integer to auto-tidy without touching the palette. Once the records zone holds more than `records_cap` `✅ sent`/`⚠️ empty` markers, ADDE keeps only the most recent one and folds the rest into a single running `- [x] 🗄️ archived N · auto` summary (merging any prior summary, so the records zone stays bounded at ~2 lines). It fires roughly once every `records_cap` sends, so a larger cap means rarer tidying; leave it unset to disable (manual `🗄️ archive` only). Only relevant when `markdown.layout` is on. Bodies are already in the archive, so this only ever prunes the inbox marker list — nothing is lost.

@@ -8,9 +8,11 @@ import type { FollowDeps } from "../../src/core/log-follow.js";
 // 모듈 미착지 시 개별 테스트 단위로 격리되도록 각 it 내부에서 동적 import 한다(PROC-R15).
 
 function fakeWatch(): NonNullable<FollowDeps["watch"]> {
-  return vi.fn((_path: string, _listener: (eventType: string, filename: string | null) => void) => ({
-    close: () => {},
-  }));
+  return vi.fn(
+    (_path: string, _listener: (eventType: string, filename: string | null) => void) => ({
+      close: () => {},
+    }),
+  );
 }
 
 describe("SC-102: stat 성공 후 read ENOENT 격리 — 크래시 없이 skip 후 회전 수렴", () => {

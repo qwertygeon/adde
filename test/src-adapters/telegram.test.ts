@@ -802,11 +802,9 @@ describe("telegram getMe bounded probe — 10초 상한 (SC-013)", () => {
                 reject(new Error("aborted"));
                 return;
               }
-              options.signal?.addEventListener(
-                "abort",
-                () => reject(new Error("aborted")),
-                { once: true },
-              );
+              options.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+                once: true,
+              });
             });
           }
           return { ok: true, json: async () => ({ ok: true, result: [] }) } as Response;
@@ -839,50 +837,51 @@ describe("telegram 기동 후 일시 폴링 오류는 상태를 바꾸지 않는
     "probe 성공 후 getUpdates 1회 실패해도 폴링을 재시도해 이후 메시지를 정상 처리한다(running 유지)",
     { timeout: 15_000 },
     async () => {
-    const fakeUpdate = {
-      update_id: 5101,
-      message: { message_id: 1, chat: { id: 99 }, text: "복구", from: { id: 99 } },
-    };
-    let getUpdatesCall = 0;
-    let releaseNext!: () => void;
-    const pending = new Promise<void>((r) => (releaseNext = r));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation(async (url: string) => {
-        const method = (url as string).split("/").pop() ?? "";
-        if (method === "getMe") return { ok: true, json: async () => ({ ok: true, result: true }) };
-        if (method === "getUpdates") {
-          getUpdatesCall++;
-          if (getUpdatesCall === 1) {
-            return { ok: false, status: 500, json: async () => ({ ok: false }) };
+      const fakeUpdate = {
+        update_id: 5101,
+        message: { message_id: 1, chat: { id: 99 }, text: "복구", from: { id: 99 } },
+      };
+      let getUpdatesCall = 0;
+      let releaseNext!: () => void;
+      const pending = new Promise<void>((r) => (releaseNext = r));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation(async (url: string) => {
+          const method = (url as string).split("/").pop() ?? "";
+          if (method === "getMe")
+            return { ok: true, json: async () => ({ ok: true, result: true }) };
+          if (method === "getUpdates") {
+            getUpdatesCall++;
+            if (getUpdatesCall === 1) {
+              return { ok: false, status: 500, json: async () => ({ ok: false }) };
+            }
+            if (getUpdatesCall === 2) {
+              return { ok: true, json: async () => ({ ok: true, result: [fakeUpdate] }) };
+            }
+            await pending;
+            return { ok: true, json: async () => ({ ok: true, result: [] }) };
           }
-          if (getUpdatesCall === 2) {
-            return { ok: true, json: async () => ({ ok: true, result: [fakeUpdate] }) };
-          }
-          await pending;
-          return { ok: true, json: async () => ({ ok: true, result: [] }) };
-        }
-        return { ok: true, json: async () => ({ ok: true, result: true }) };
-      }),
-    );
+          return { ok: true, json: async () => ({ ok: true, result: true }) };
+        }),
+      );
 
-    const source: TelegramSource = createTelegramSource({
-      lane: "test-lane",
-      proj: "myproj",
-      engine: "claude-agent-acp",
-      paths,
-      authorizedIds: [99],
-    });
-    await source.start(); // probe 성공 — resolve(기동 실패로 취급되지 않음)
+      const source: TelegramSource = createTelegramSource({
+        lane: "test-lane",
+        proj: "myproj",
+        engine: "claude-agent-acp",
+        paths,
+        authorizedIds: [99],
+      });
+      await source.start(); // probe 성공 — resolve(기동 실패로 취급되지 않음)
 
-    await waitFor(
-      () => fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length >= 1,
-    );
-    releaseNext();
-    source.stop();
+      await waitFor(
+        () => fs.readdirSync(paths.queueDir).filter((f) => f.endsWith(".msg")).length >= 1,
+      );
+      releaseNext();
+      source.stop();
 
-    // 1회 실패 후에도 폴 루프가 죽지 않고 재시도해 이후 메시지를 수신 — 레인이 error 로 전환되지 않았다.
-    expect(getUpdatesCall).toBeGreaterThanOrEqual(2);
+      // 1회 실패 후에도 폴 루프가 죽지 않고 재시도해 이후 메시지를 수신 — 레인이 error 로 전환되지 않았다.
+      expect(getUpdatesCall).toBeGreaterThanOrEqual(2);
     },
   );
 });

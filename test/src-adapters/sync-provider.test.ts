@@ -105,9 +105,8 @@ describe("icloud read-trigger 물질화 (018 — SC-1/SC-2/SC-3)", () => {
 
 describe("SC-030: 새 제공자가 기존 코드 수정 없이 확장점 등록만으로 디스패치된다", () => {
   it("신규 제공자가 SYNC_PROVIDER_IDS 에 반영되고 정상 디스패치된다(코드 변경 0)", async () => {
-    const { resolveSyncProvider, SYNC_PROVIDER_IDS } = await import(
-      "../../src/src-adapters/sync-provider.js"
-    );
+    const { resolveSyncProvider, SYNC_PROVIDER_IDS } =
+      await import("../../src/src-adapters/sync-provider.js");
     expect(SYNC_PROVIDER_IDS).toContain(TEST_PROVIDER_ID);
     const provider = resolveSyncProvider(TEST_PROVIDER_ID);
     expect(provider.id).toBe(TEST_PROVIDER_ID);

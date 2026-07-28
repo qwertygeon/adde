@@ -26,6 +26,8 @@ jobs:
 
       - run: pnpm run lint
 
+      - run: pnpm run format:check
+
       - run: pnpm run i18n:check
 
       # 실 프로세스 spawn 통합 테스트는 dist 산출물을 실행한다 — 빌드 없이 test 를 돌리면

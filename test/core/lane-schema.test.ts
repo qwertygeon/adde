@@ -56,7 +56,14 @@ describe("노출 편집 표면", () => {
   });
 
   it("내부 노브·정체성은 노출·편집되지 않는다(최소 표면)", () => {
-    for (const k of ["source", "backend", "engine", "acp_version", "auto_relaunch", "gate_timeout_sec"]) {
+    for (const k of [
+      "source",
+      "backend",
+      "engine",
+      "acp_version",
+      "auto_relaunch",
+      "gate_timeout_sec",
+    ]) {
       const d = findDescriptor(k);
       expect(d?.editable, `${k} editable`).toBe(false);
       expect(d?.exposed, `${k} exposed`).toBe(false);

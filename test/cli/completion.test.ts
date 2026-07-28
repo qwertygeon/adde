@@ -75,7 +75,9 @@ function commandBlock(script: string, name: string): string {
   expect(startIdx, `${name}) 블록을 찾을 수 없음`).toBeGreaterThanOrEqual(0);
   const rest = lines.slice(startIdx + 1);
   const endOffset = rest.findIndex((l) => /^ {4}\S.*\)/.test(l) || l.trim() === "esac");
-  return lines.slice(startIdx, startIdx + 1 + (endOffset === -1 ? rest.length : endOffset)).join("\n");
+  return lines
+    .slice(startIdx, startIdx + 1 + (endOffset === -1 ? rest.length : endOffset))
+    .join("\n");
 }
 
 describe("drift 교정 — doctor·sessions --json, logs --follow/-f 완성 노출 (SC-003 Happy)", () => {

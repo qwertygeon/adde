@@ -99,9 +99,9 @@ export function exposedEditableKeys(): string[] {
  * canonical 이름이 문서화됐는지를 별도 정적 체크가 대조한다(check-usage-drift keyDocIssues).
  */
 export function dotOnlyEditableKeys(): string[] {
-  return LANE_KEY_DESCRIPTORS.filter(
-    (d) => d.exposed && d.editable && d.flag === undefined,
-  ).map((d) => d.key);
+  return LANE_KEY_DESCRIPTORS.filter((d) => d.exposed && d.editable && d.flag === undefined).map(
+    (d) => d.key,
+  );
 }
 
 /** 노출 편집 키에 대응하는 기존 명명 플래그 목록(정적 게이트 파생 대조용). */

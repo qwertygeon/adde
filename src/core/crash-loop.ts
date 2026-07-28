@@ -69,7 +69,8 @@ export function createCrashLoopGuard(deps: CrashLoopDeps): CrashLoopGuard {
   const haltPath = daemonHaltPath(deps.base, deps.proj);
 
   const readBoots = deps.readBoots ?? (() => defaultReadBoots(bootsPath));
-  const writeBoots = deps.writeBoots ?? ((s: { consecutiveShortLived: number }) => defaultWriteJson(bootsPath, s));
+  const writeBoots =
+    deps.writeBoots ?? ((s: { consecutiveShortLived: number }) => defaultWriteJson(bootsPath, s));
   const writeHalt = deps.writeHalt ?? ((r: HaltRecord) => defaultWriteJson(haltPath, r));
 
   let stabilityTimer: ReturnType<typeof setTimeout> | undefined;

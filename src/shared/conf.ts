@@ -167,7 +167,9 @@ export function parseEngineArgs(raw: string | undefined): string[] {
   if (raw === undefined) return [];
   if (/[\n\r\0]/.test(raw)) {
     // 값을 에러 메시지에 담지 않는다(주입 페이로드 로그 노출 방지).
-    throw new EngineArgsParseError("engine_args contains unsupported control characters (newline/NUL)");
+    throw new EngineArgsParseError(
+      "engine_args contains unsupported control characters (newline/NUL)",
+    );
   }
   const trimmed = raw.trim();
   if (trimmed.length === 0) return [];
@@ -210,7 +212,14 @@ const NAMESPACE_INT_FIELDS = new Set(["retention_days", "out_retention_days", "r
  * 파일시스템 경로로 해석되는 네임스페이스 필드 — 셸 이스케이프를 normalizeUserPath 로 제거한다.
  * 비경로 값(telegram.chat_id·allow_from, markdown.sync_provider 등)은 대상 아님.
  */
-const PATH_NAMESPACE_FIELDS = new Set(["root", "inbox", "approvals", "outbox", "archive", "backup"]);
+const PATH_NAMESPACE_FIELDS = new Set([
+  "root",
+  "inbox",
+  "approvals",
+  "outbox",
+  "archive",
+  "backup",
+]);
 
 /**
  * 구 평면 어댑터 키(네임스페이스 이전 포맷). 클린 브레이크로 값은 읽지 않으며(무시),

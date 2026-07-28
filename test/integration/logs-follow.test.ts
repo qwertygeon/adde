@@ -129,10 +129,7 @@ describe("SIGINT(abort) 즉시 정지 (SC-010)", () => {
     await Promise.race([
       done,
       new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error("followFile 이 abort 후에도 정지하지 않음(hang)")),
-          1000,
-        ),
+        setTimeout(() => reject(new Error("followFile 이 abort 후에도 정지하지 않음(hang)")), 1000),
       ),
     ]);
 

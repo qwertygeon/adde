@@ -21,9 +21,13 @@ const LANE = "migrate-lane";
 
 function runMigrateWorker(): Promise<{ migrated: number }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", WORKER, tmpBase, PROJ, LANE, "migrate"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      process.execPath,
+      ["--import", "tsx", WORKER, tmpBase, PROJ, LANE, "migrate"],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
@@ -55,7 +59,10 @@ describe("migrateLegacyOut — SC-013 레거시 마커 1회성 마이그레이�
 
     // 레거시 픽스처: unsent(.out 만) · sent(.out+.sent) · aborted(.out+.aborted) · failed(.out 없음+.failed)
     fs.writeFileSync(path.join(paths.outDir, "unsent.out"), "미전송 응답");
-    fs.writeFileSync(path.join(paths.outDir, "unsent.out.json"), JSON.stringify({ reply_ref: { channel_msg_id: "1" } }));
+    fs.writeFileSync(
+      path.join(paths.outDir, "unsent.out.json"),
+      JSON.stringify({ reply_ref: { channel_msg_id: "1" } }),
+    );
 
     fs.writeFileSync(path.join(paths.outDir, "sent.out"), "전송완료 응답");
     fs.writeFileSync(path.join(paths.outDir, "sent.out.json"), "{}");

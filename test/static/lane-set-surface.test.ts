@@ -38,6 +38,25 @@ const IDENTITY_EXCLUDED_FLAGS = [
   "--no-interactive",
 ] as const;
 
+// I5(v0.2.1/011): 목록 필드 증분 편집 플래그 — 스키마 필드 플래그가 아니라 기존 목록 필드
+// (allowlist/denylist/hard_deny)의 add/rm 연산 변형이다. --unset 과 마찬가지로 스키마-파생 값 플래그
+// 집합 대조에서 제외한다(스키마 필드 단일 SoT 불변식은 이 변형을 뺀 뒤 성립).
+const LIST_INCREMENT_FLAGS = new Set([
+  "--add-allow",
+  "--rm-allow",
+  "--add-deny",
+  "--rm-deny",
+  "--add-hard-deny",
+  "--rm-hard-deny",
+]);
+
+/** 스키마-파생 대조 대상인 값 플래그만 남긴다(boolean --unset·증분 변형 제외). */
+function schemaComparableSetFlags(): Set<string> {
+  return new Set(
+    subFlagNames("lane", "set").filter((f) => f !== "--unset" && !LIST_INCREMENT_FLAGS.has(f)),
+  );
+}
+
 describe("CLI 표면 등록 (SC-016)", () => {
   it("findSub('lane','set') 이 정의되고 위치 인자가 [proj, lane] 이며 편집 플래그가 비어있지 않다", () => {
     const sub = findSub("lane", "set");
@@ -59,16 +78,23 @@ describe("CLI 표면 등록 (SC-016)", () => {
     // (--unset 은 boolean 모드 스위치라 값 플래그 목록에서 제외).
     const schemaFlags = new Set(exposedEditFlags());
     expect(schemaFlags).toEqual(new Set(EXPECTED_SET_EDIT_FLAGS));
-    const setValueFlags = new Set(subFlagNames("lane", "set").filter((f) => f !== "--unset"));
-    expect(setValueFlags).toEqual(schemaFlags);
+    // 증분 변형·--unset 을 뺀 값 플래그 집합이 스키마 파생과 정확히 일치(단일 SoT).
+    expect(schemaComparableSetFlags()).toEqual(schemaFlags);
+  });
+
+  it("목록 증분 편집 플래그 6종이 lane set 표면에 모두 등록돼 있다(I5)", () => {
+    const setNames = new Set(subFlagNames("lane", "set"));
+    for (const f of LIST_INCREMENT_FLAGS) {
+      expect(setNames.has(f), `${f} 가 lane set 플래그에 없음`).toBe(true);
+    }
   });
 });
 
 describe("편집 플래그 부분집합 (SC-019)", () => {
   it("set 값 플래그 집합 = add 플래그 − {정체성·token-stdin·safe-defaults·force·interactive·no-interactive} (+ boolean --unset)", () => {
     const addNames = new Set(subFlagNames("lane", "add"));
-    // --unset 은 003 신설 boolean 모드 스위치(점표기 키 제거) — add 표면에 없으므로 비교에서 분리한다.
-    const setNames = new Set(subFlagNames("lane", "set").filter((n) => n !== "--unset"));
+    // --unset(boolean 모드 스위치)·증분 변형(I5)은 add 표면에 없으므로 부분집합 비교에서 분리한다.
+    const setNames = schemaComparableSetFlags();
     const expected = new Set(
       [...addNames].filter((n) => !(IDENTITY_EXCLUDED_FLAGS as readonly string[]).includes(n)),
     );

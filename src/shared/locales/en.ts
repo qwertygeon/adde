@@ -81,7 +81,7 @@ Installs short aliases (symlinks) next to the adde binary so you can type e.g. \
 Only works on a global install (needs a writable bin dir next to adde on PATH); if a command with that name already exists it is skipped, not overwritten.`,
     laneAdd: "Usage: adde lane add <proj> <lane> [options]",
     laneSet:
-      "Usage: adde lane set <proj> <lane> [<key> <value> ...] [--<field> <value>] [--unset <key> ...]   (no args on a TTY: interactive wizard)",
+      "Usage: adde lane set <proj> <lane> [<key> <value> ...] [--<field> <value>] [--unset <key> ...]   (no args on a TTY: interactive wizard)\n  Tip: list fields (allowlist/denylist/hard_deny) also support incremental add/remove flags (see adde lane help).",
     laneLs: "Usage: adde lane ls <proj> [--json]",
     laneShow: "Usage: adde lane show <proj> <lane> [key] [--json] [--defaults]",
     laneRm: "Usage: adde lane rm <proj> <lane>",
@@ -120,6 +120,9 @@ lane set options (edit-only subset of lane add — identity fields, tokens, and 
   --allowlist <a,b,c>           replaces the whole list (not merged)
   --denylist <entries,...>      replaces the whole list (not merged)
   --hard-deny <entries,...>     replaces the whole list (not merged; warns if it had entries before)
+  --add-allow <a,b,c> / --rm-allow <a,b,c>          add to / remove from allowlist (merged with current; vs --allowlist which replaces)
+  --add-deny <entries,...> / --rm-deny <entries,...>          add to / remove from denylist
+  --add-hard-deny <entries,...> / --rm-hard-deny <entries,...>   add to / remove from hard_deny
   --cwd <abs-path>
   --engine-args <args>
   --lang <en|ko>
@@ -485,6 +488,8 @@ Note: editing --file-mode only updates the conf value; existing directory permis
         "[warning] hard_deny was replaced — the previous list is gone (lane set replaces the whole list, it does not merge with the old one).",
       fileModeRelaxNotice:
         "[warning] file_mode changed to shared, but the existing directory permissions (0700) stay unchanged even after adde restart.\n  ↳ action: chmod the lane's state/out/queue directories manually to relax them (file_mode only governs those internal dirs, not the markdown note tree).",
+      listRemoveAbsent:
+        "[warning] {{key}}: these entries were not in the list, so --rm ignored them: {{tools}}",
     },
     err: {
       emptyIdent: "{{kind}} is empty",
@@ -515,6 +520,10 @@ Note: editing --file-mode only updates the conf value; existing directory permis
         "denylist has no effect under perm_tier=acp (acp auto-allows only allowlisted tools; everything else prompts). To use a denylist, also set perm_tier=autopass in the same command.",
       allowlistNoopAutopass:
         "allowlist has no effect under perm_tier=autopass (autopass auto-allows everything except denylist entries). To restrict tools use denylist; to use an allowlist, also set perm_tier=acp in the same command.",
+      listIncrementConflict:
+        "{{key}}: cannot combine whole-list replacement with incremental add/remove (--add-*/--rm-*) in the same command — use one or the other.",
+      listAddRemoveOverlap:
+        "{{key}}: the same entries were passed to both add and remove: {{tools}}",
       unknownKey:
         'key "{{key}}" is not an editable lane key — run `adde lane show <proj> <lane> --defaults` to list editable keys',
       unknownKeyDidYouMean:

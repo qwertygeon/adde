@@ -105,6 +105,13 @@ const LANE_SET_FLAGS: readonly FlagSpec[] = [
   { name: "--allowlist", takesValue: true },
   { name: "--denylist", takesValue: true },
   { name: "--hard-deny", takesValue: true },
+  // 목록 증분 편집(전체 교체 플래그와 병존) — 현재 목록 기준 합집합/차집합. CSV 다중 항목.
+  { name: "--add-allow", takesValue: true },
+  { name: "--rm-allow", takesValue: true },
+  { name: "--add-deny", takesValue: true },
+  { name: "--rm-deny", takesValue: true },
+  { name: "--add-hard-deny", takesValue: true },
+  { name: "--rm-hard-deny", takesValue: true },
   { name: "--cwd", takesValue: true },
   { name: "--engine-args", takesValue: true },
   { name: "--lang", takesValue: true },

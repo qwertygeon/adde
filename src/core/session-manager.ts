@@ -196,6 +196,13 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
   async function refreshNotes(sid: string, turn: number): Promise<void> {
     const rec = records.get(sid);
     if (!rec) return;
+    // 턴이 완결됐으므로 이제 엔진 전사가 존재한다 — 재개 핸들을 영속해도 안전하다(위 admit 주석).
+    // TurnRunner 는 turn_end append 성공 후에만 이 콜백을 부른다(turn-runner.ts 최종 투영 구간).
+    const liveRef = runtimes.get(sid)?.engineSession?.engineRef;
+    if (liveRef !== undefined && rec.engineRef !== liveRef) {
+      rec.engineRef = liveRef;
+      await persist(rec);
+    }
     await recordStore.project(sid, {
       turn,
       retention: policy(),
@@ -479,7 +486,10 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
         engineSession.onExit((info) => {
           rt.watcher.onCrash(info);
         });
-        rec.engineRef = engineSession.engineRef;
+        // engineRef(재개 핸들)는 여기서 영속하지 않는다 — 엔진 전사는 **턴이 1회 이상 실행된 뒤에만**
+        // 기록되므로, 턴 0회 세션의 핸들을 남기면 프로세스가 죽은 뒤의 재개가 "전사 없음" 으로 실패해
+        // 세션이 detached 로 확정된다(실측: 생성→내림→첫 지시 순서에서 첫 지시가 죽었다).
+        // 첫 턴이 완결되는 시점(refreshNotes)에 영속한다.
         rec.status = "active";
         rec.lastActivityAt = nowIso();
         await persist(rec);

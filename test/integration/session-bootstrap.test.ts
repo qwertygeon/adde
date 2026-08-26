@@ -43,8 +43,22 @@ async function makeHarness(): Promise<Harness> {
     import("../../src/shared/paths.js"),
   ]);
   const fakeDriver = makeFakeEngineDriver("acp", FAKE_CAPS_PRESETS.fullNative);
-  const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
+  // 더블 엔진은 매 턴 권한 요청을 1회 방출한다 — 기본 harness 의 no-op askPermission 으로는 게이트가
+  // 결정을 못 받아 턴이 기본 600초 타임아웃까지 완결되지 않는다. 턴 완결을 관측하는 케이스가 있으므로
+  // 자동 승인으로 배선한다(권한 게이트 자체의 검증은 별 스위트 소관).
+  const smHolder: { sm?: import("../../src/core/session-manager.js").SessionManagerWithLoad } = {};
+  const deps = makeSessionManagerDeps(
+    roots,
+    PROJ,
+    { acp: fakeDriver.descriptor },
+    {
+      askPermission: async (sid: string, req: { reqId: string }) => {
+        smHolder.sm?.resolvePermissionDecision(sid, req.reqId, "allow");
+      },
+    },
+  );
   const sm = smMod.createSessionManager(deps as never);
+  smHolder.sm = sm;
   const router = routerMod.createRouter({ base: roots.base, proj: PROJ, sessionManager: sm });
   const surface = surfaceMod.createMarkdownSurface({
     base: roots.base,
@@ -198,4 +212,41 @@ describe("SC-5: 기동 시점에 hibernated 인 세션도 지시를 받을 수 �
       await h.surface.stop();
     }
   }, 15000);
+});
+
+describe("SC-6: 턴 0회 세션은 재개 핸들을 남기지 않는다", () => {
+  it("Happy: 턴 없이 엔진만 열린 세션은 engineRef 가 영속되지 않고, 첫 턴 완결 후에 영속된다", async () => {
+    const h = await makeHarness();
+    await writeRecordOutOfBand("sess-ref");
+    await h.sm.load();
+
+    // 엔진만 연다(턴 없음) — 이 시점의 엔진 전사는 아직 디스크에 없다(실 어댑터 실측).
+    await h.sm.admit("sess-ref");
+    expect(h.sm.get("sess-ref")?.engineRef, "턴 0회인데 재개 핸들이 남았다").toBeNull();
+
+    // 디스크 레코드에도 남지 않아야 한다 — 재기동 후 재개 시도를 유발하면 detached 로 죽는다.
+    const store = await import("../../src/core/session-store.js");
+    const persisted = (await store.loadSessions(roots.base, PROJ)).find(
+      (r) => r.sid === "sess-ref",
+    );
+    expect(persisted?.engineRef).toBeNull();
+
+    // 턴 1회 완결 — 입력 노트 경로를 거쳐 실제 턴을 돌린다.
+    await h.surface.start(undefined as never);
+    try {
+      await waitFor(() => fs.existsSync(h.inboxPath("sess-ref")));
+      const before = fs.readFileSync(h.inboxPath("sess-ref"), "utf8");
+      fs.writeFileSync(
+        h.inboxPath("sess-ref"),
+        before
+          .replace("<!-- adde:compose -->", "<!-- adde:compose -->\n지시")
+          .replace(/- \[ \] (.*send.*)/, "- [x] $1"),
+      );
+      await waitFor(() => h.sm.get("sess-ref")?.engineRef !== null);
+      const after = (await store.loadSessions(roots.base, PROJ)).find((r) => r.sid === "sess-ref");
+      expect(after?.engineRef, "첫 턴 완결 후에도 재개 핸들이 없다").not.toBeNull();
+    } finally {
+      await h.surface.stop();
+    }
+  }, 20000);
 });

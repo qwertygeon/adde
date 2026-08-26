@@ -86,6 +86,10 @@ describe("SC-009: 유휴 30분 경과 세션이 내려가고 다음 지시에 �
     const { sm, fakeDriver } = await makeSM();
     const created = await sm.create({ engine: "acp" });
     await sm.admit(created.sid);
+    // 재개 가능 상태 전제 — engineRef 는 **첫 턴 완결 후에만** 영속된다(턴 0회 세션은 엔진 전사가
+    // 없어 재개 자체가 성립하지 않는다). 본 케이스는 "재개 실패 → detached" 계약을 검증하므로
+    // 턴을 1회 완료한 세션을 픽스처로 재현한다.
+    sm.get(created.sid)!.engineRef = "prior-turn-engine-ref";
     await sm.hibernate(created.sid, "idle");
 
     fakeDriver.control.failNextOpen("resume boot failure");

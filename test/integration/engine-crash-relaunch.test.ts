@@ -134,6 +134,10 @@ describe("SC-061: 크래시 시 대기 승인이 즉시 거부되고 재기동�
     const { sm, sessionStore, fakeDriver } = await makeSM(true);
     const created = await sm.create({ engine: "acp" });
     const engine = await sm.admit(created.sid);
+    // 재개 가능 상태 전제 — engineRef 는 **첫 턴 완결 후에만** 영속된다(턴 0회 세션은 엔진 전사가
+    // 없어 재개 자체가 성립하지 않는다). 본 케이스는 "재개 실패 → detached" 계약을 검증하므로
+    // 턴을 1회 완료한 세션을 픽스처로 재현한다.
+    sm.get(created.sid)!.engineRef = "prior-turn-engine-ref";
     fakeDriver.control.crash(engine.engineRef);
     fakeDriver.control.failNextOpen("relaunch exhausted");
     await sm.admit(created.sid).catch(() => {});

@@ -28,14 +28,27 @@ pnpm dev <command>    # run locally (tsx, e.g. pnpm dev --version)
 
 ## Verification (required before committing)
 
-A PR must pass the gates below (CI runs the same checks):
+Run every gate with one command — CI runs this exact script, so a green run locally means a green run in CI:
+
+```bash
+pnpm gates
+```
+
+It chains the individual gates, which you can also run on their own:
 
 ```bash
 pnpm typecheck        # type checking
 pnpm lint             # ESLint
-pnpm test             # vitest
 pnpm format:check     # Prettier format check (fix with pnpm format)
+pnpm i18n:check       # en/ko catalog parity
+pnpm usage:check      # flag declarations vs. usage text
+pnpm build            # TypeScript build (must precede tests — spawn tests run dist/)
+pnpm test             # vitest
 ```
+
+A `pre-push` hook runs `pnpm gates` and blocks the push if any gate fails. It activates
+automatically on `pnpm install` (which points `core.hooksPath` at `.githooks/`). To push past it
+deliberately, use `ADDE_SKIP_HOOKS=1 git push` or `git push --no-verify`.
 
 Coverage measurement (optional):
 

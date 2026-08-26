@@ -1,0 +1,29 @@
+#!/bin/sh
+# 푸시 전 게이트 선행 실행. CI 는 main·develop 대상 PR 과 main push 에서만 돌기 때문에,
+# feature 브랜치에 쌓는 동안 게이트 red 가 드러나지 않는 구간을 이 훅이 메운다.
+# 우회: ADDE_SKIP_HOOKS=1 git push  또는  git push --no-verify
+
+if [ -n "$ADDE_SKIP_HOOKS" ]; then
+  echo "[pre-push] ADDE_SKIP_HOOKS 설정됨 — 게이트를 건너뜁니다."
+  exit 0
+fi
+
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+cd "$repo_root" || exit 1
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "[pre-push] pnpm 을 찾을 수 없어 게이트를 검증할 수 없습니다 — 푸시를 중단합니다." >&2
+  echo "[pre-push] 의도적으로 넘기려면: ADDE_SKIP_HOOKS=1 git push" >&2
+  exit 1
+fi
+
+echo "[pre-push] 게이트 실행 — pnpm run gates"
+if pnpm run gates; then
+  echo "[pre-push] 게이트 전부 통과."
+  exit 0
+fi
+
+echo "" >&2
+echo "[pre-push] 게이트 실패 — 푸시를 중단합니다. 위 출력에서 실패한 스크립트를 확인하세요." >&2
+echo "[pre-push] 의도적으로 넘기려면: ADDE_SKIP_HOOKS=1 git push" >&2
+exit 1

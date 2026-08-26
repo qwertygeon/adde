@@ -28,14 +28,27 @@ pnpm dev <command>    # 로컬 실행(tsx, 예: pnpm dev --version)
 
 ## 검증 (커밋 전 필수)
 
-PR 은 아래 게이트를 통과해야 합니다(CI 도 동일하게 검증):
+게이트 전량을 한 명령으로 실행합니다 — CI 도 같은 스크립트를 그대로 돌리므로, 로컬에서 통과하면 CI 에서도 통과합니다:
+
+```bash
+pnpm gates
+```
+
+개별 게이트를 따로 돌릴 수도 있습니다:
 
 ```bash
 pnpm typecheck        # 타입 검사
 pnpm lint             # ESLint
-pnpm test             # vitest
 pnpm format:check     # Prettier 포맷 확인 (수정: pnpm format)
+pnpm i18n:check       # en/ko 카탈로그 패리티
+pnpm usage:check      # 플래그 선언↔usage 문구 정합
+pnpm build            # 타입스크립트 빌드 (테스트보다 먼저 — spawn 테스트가 dist/ 를 실행)
+pnpm test             # vitest
 ```
+
+`pre-push` 훅이 `pnpm gates` 를 실행해 게이트가 하나라도 실패하면 푸시를 막습니다. `pnpm install`
+시점에 자동 활성화됩니다(`core.hooksPath` 를 `.githooks/` 로 지정). 의도적으로 넘기려면
+`ADDE_SKIP_HOOKS=1 git push` 또는 `git push --no-verify` 를 씁니다.
 
 커버리지 측정(선택):
 

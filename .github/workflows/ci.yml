@@ -1,11 +1,12 @@
 name: CI
 
-# 브랜치 정책상 develop push 는 미실행, develop→main PR 과 main push 시점에 게이트 검증.
+# 브랜치 정책상 push 트리거는 main 만. PR 은 main·develop 양쪽 대상에서 검증한다 —
+# feature→develop PR 에서도 게이트를 돌려, red 가 develop→main PR 까지 늦게 드러나지 않게 한다.
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 jobs:
   verify:
@@ -22,16 +23,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm run typecheck
-
-      - run: pnpm run lint
-
-      - run: pnpm run format:check
-
-      - run: pnpm run i18n:check
-
-      # 실 프로세스 spawn 통합 테스트는 dist 산출물을 실행한다 — 빌드 없이 test 를 돌리면
-      # 그 스위트가 스킵된 채 green 이 되므로 반드시 선행한다.
-      - run: pnpm run build
-
-      - run: pnpm test
+      # 게이트 목록의 SoT 는 package.json 의 `gates` 스크립트 — 로컬 pre-push 훅(.githooks/pre-push)
+      # 도 같은 스크립트를 호출해 CI 와 로컬이 어긋나지 않는다(usage:check·build 순서 포함).
+      - run: pnpm run gates

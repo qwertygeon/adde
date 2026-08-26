@@ -32,6 +32,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "gates": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run i18n:check && pnpm run usage:check && pnpm run build && pnpm run test",
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "prepack": "pnpm run build",
     "dev": "tsx src/cli/adde.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",

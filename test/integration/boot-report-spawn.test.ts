@@ -10,6 +10,10 @@ import { writeMinimalProjectConf } from "../helpers/v2-fixtures.js";
 import { newSid, saveSession } from "../../src/core/session-store.js";
 import { waitFor } from "../helpers/wait.js";
 
+// 대기 상한 note: 본 파일은 실 node 프로세스를 spawn 해 dist 산출물을 적재하므로, 병렬 스위트의
+// CPU·디스크 경합에서 기동이 수 초 이상 밀린다. 상한이 촘촘하면 계약 위반이 아닌 경합으로 실패한다
+// (전체 스위트 반복 실행에서 간헐 실패 실측) → spawn 대기·테스트 상한을 넉넉하게 둔다.
+
 // PROC-R18: 포그라운드 상주 데몬 워커(runDaemonForeground)의 부팅 리포트 기록/미기록을 vitest
 // 워커 내 함수 직접 호출이 아니라 빌드 산출물(dist)의 실 OS 프로세스로 spawn 해 관통 검증한다
 // (process-liveness·기록 시점 결함은 in-worker 호출로 재현 불가). 선행 `pnpm build` 필요 — dist
@@ -89,7 +93,7 @@ describe.skipIf(!distAvailable)(
       const child = spawnDaemon(proj);
       const reportPath = daemonBootReportPath(tmpBase, proj);
       try {
-        await waitFor(() => fs.existsSync(reportPath), { timeoutMs: 10_000 });
+        await waitFor(() => fs.existsSync(reportPath), { timeoutMs: 30_000 });
         const report = JSON.parse(fs.readFileSync(reportPath, "utf8")) as {
           bootId: number;
           sessions: { sid: string; status: string; error?: string }[];
@@ -102,7 +106,7 @@ describe.skipIf(!distAvailable)(
       }
       const exitCode = await waitExit(child);
       expect(exitCode).toBe(0); // graceful shutdown(SIGTERM 수신 → supervisorDown → exit 0)
-    }, 15000);
+    }, 45000);
 
     it("halt 마커 사전 기록(크래시루프 임계 도달) 후 spawn 하면 supervisorUp 전에 종료되어 리포트가 기록되지 않는다 (SC-004 데몬측 Error)", async () => {
       const proj = "spawnproj2";
@@ -123,6 +127,6 @@ describe.skipIf(!distAvailable)(
       expect(exitCode).toBe(0); // halt 확정 종료(크래시루프 자가 정지, 재시도 무익)
       const reportPath = daemonBootReportPath(tmpBase, proj);
       expect(fs.existsSync(reportPath)).toBe(false); // supervisorUp 미도달 — 리포트 기록 없음
-    }, 15000);
+    }, 45000);
   },
 );

@@ -134,6 +134,13 @@ function newSidGen(): string {
 
 export function createSessionManager(deps: SessionManagerDeps): SessionManagerWithLoad {
   const records = new Map<string, SessionRecord>();
+  /**
+   * 레코드 타임스탬프는 **주입 시계**로 찍는다 — 유휴 판정(`runIdleSweep`)이 `deps.clock.now()` 와
+   * `lastActivityAt` 을 비교하므로 둘이 다른 시계면 경과 시간이 뒤섞인다. 실 시계(`new Date()`)로
+   * 찍으면 LRU 동률(tie) 상황을 결정론적으로 재현할 수도 없다. 프로덕션 주입값은
+   * `() => Date.now()`(supervisor)이므로 동작은 동일하다.
+   */
+  const nowIso = (): string => new Date(deps.clock.now()).toISOString();
   const runtimes = new Map<string, Runtime>();
   let admitChain: Promise<unknown> = Promise.resolve();
   // 유휴 스윕 타이머 핸들 — `api`(runIdleSweep 이 참조)가 완전히 초기화된 뒤에 등록해야 한다.
@@ -355,7 +362,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
         );
       }
       const sid = newSidGen();
-      const now = new Date().toISOString();
+      const now = nowIso();
       const rec: SessionRecord = {
         v: 1,
         sid,
@@ -380,7 +387,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
       if (old.status === "archived")
         throw new Error(`session-manager: 이미 보존 종료된 세션은 초기화할 수 없습니다 (${sid})`);
       await api.hibernate(sid, "attach").catch(() => {});
-      const now = new Date().toISOString();
+      const now = nowIso();
       const newSidValue = newSidGen();
       const next: SessionRecord = {
         v: 1,
@@ -474,7 +481,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
         });
         rec.engineRef = engineSession.engineRef;
         rec.status = "active";
-        rec.lastActivityAt = new Date().toISOString();
+        rec.lastActivityAt = nowIso();
         await persist(rec);
         await recordStore
           .appendEvent(sid, {

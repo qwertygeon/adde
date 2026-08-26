@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { gateRequestDecision } from "../gate/gate.js";
 import type { PermRequest } from "../gate/gate.js";
-import { projectPaths, sessionPaths } from "../shared/paths.js";
+import { engineLogPath, projectPaths, sessionPaths } from "../shared/paths.js";
 import type { ProjectConf } from "../shared/conf.js";
 import { appendEvent, readEvents } from "../record/events.js";
 import { putBlob } from "../record/blobs.js";
@@ -461,6 +461,8 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
             ...(rec.engineRef ? { engineRef: rec.engineRef } : {}),
             args: rec.engineArgs,
             ...(deps.conf.lang ? { lang: deps.conf.lang } : {}),
+            // 엔진 진단 로그 — `logs --engine` 이 읽는 경로와 같은 도출식을 쓴다(양쪽 합의).
+            stderrLogPath: engineLogPath(deps.base, deps.proj, sid),
             policy: {
               perm_tier: deps.conf.perm_tier,
               allowlist: deps.conf.allowlist,

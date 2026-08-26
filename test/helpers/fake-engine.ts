@@ -29,6 +29,8 @@ export interface FakeOpenCtx {
   cwd: string;
   engineRef?: string | undefined;
   args?: readonly string[] | undefined;
+  /** 엔진 진단 로그 경로 — 코어가 실제로 넘겨주는지(배선) 검증용. */
+  stderrLogPath?: string | undefined;
 }
 
 export interface FakeEngineSession {
@@ -57,6 +59,8 @@ export interface FakeEngineControl {
   holdNextTurn(): () => void;
   isAlive(engineRef: string): boolean;
   openCallCount(): number;
+  /** 마지막 open() 이 받은 ctx — 코어→드라이버 배선 검증용(전달 누락은 더블 없이는 관측 불가). */
+  lastOpenCtx(): FakeOpenCtx | undefined;
 }
 
 /**
@@ -83,11 +87,13 @@ export function makeFakeEngineDriver(
     (info: { code: number | null; signal: NodeJS.Signals | null }) => void
   >();
   let openCalls = 0;
+  let lastCtx: FakeOpenCtx | undefined;
   const extraQueue: string[] = [];
   let pendingHold: { promise: Promise<void>; release: () => void } | undefined;
 
   const open = vi.fn(async (ctx: FakeOpenCtx): Promise<FakeEngineSession> => {
     openCalls++;
+    lastCtx = ctx;
     if (failNext !== undefined) {
       const reason = failNext;
       failNext = undefined;
@@ -171,6 +177,9 @@ export function makeFakeEngineDriver(
       },
       openCallCount() {
         return openCalls;
+      },
+      lastOpenCtx() {
+        return lastCtx;
       },
     },
   };

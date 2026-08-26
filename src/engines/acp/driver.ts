@@ -378,15 +378,22 @@ export const acpDriver: EngineDriverDescriptor = {
 
     let sessionId: string;
     if (ctx.engineRef) {
-      // 재개 — 실패는 새 세션 폴백 없이 throw(ADR-009·FR-007).
-      await withTimeout(
-        Promise.race([
-          conn.loadSession({ sessionId: ctx.engineRef, cwd: ctx.cwd, mcpServers: [] }),
-          spawnFailed,
-        ]),
-        HANDSHAKE_TIMEOUT_MS,
-        () => timeoutErr("loadSession"),
-      );
+      // 재개 — 실패는 새 세션 폴백 없이 throw(ADR-009·FR-007). 단 throw 전에 자식을 회수한다:
+      // 재개 실패는 정상 계약이라 반복 발생하므로, 정리를 빠뜨리면 실패 1회마다 엔진 프로세스가
+      // 하나씩 남는다.
+      try {
+        await withTimeout(
+          Promise.race([
+            conn.loadSession({ sessionId: ctx.engineRef, cwd: ctx.cwd, mcpServers: [] }),
+            spawnFailed,
+          ]),
+          HANDSHAKE_TIMEOUT_MS,
+          () => timeoutErr("loadSession"),
+        );
+      } catch (err) {
+        killChild(child);
+        throw err;
+      }
       sessionId = ctx.engineRef;
     } else {
       try {

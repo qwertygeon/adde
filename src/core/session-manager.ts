@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { gateRequestDecision } from "../gate/gate.js";
 import type { PermRequest } from "../gate/gate.js";
-import { sessionPaths } from "../shared/paths.js";
+import { projectPaths, sessionPaths } from "../shared/paths.js";
 import type { ProjectConf } from "../shared/conf.js";
 import { appendEvent, readEvents } from "../record/events.js";
 import { putBlob } from "../record/blobs.js";
@@ -16,7 +16,12 @@ import { rebuild } from "../record/rebuild.js";
 import type { RebuildReport } from "../record/rebuild.js";
 import type { AddeEvent, BlobRef, RecordCtx, TurnRef } from "../record/types.js";
 import type { RetentionPolicy } from "../record/retention.js";
-import { runRetention, readRetentionLastRun, writeRetentionLastRun } from "../record/retention.js";
+import {
+  assertBackupNotOverlapping,
+  runRetention,
+  readRetentionLastRun,
+  writeRetentionLastRun,
+} from "../record/retention.js";
 import { resolveSyncProvider } from "../record/sync-provider.js";
 import type { EngineDriverDescriptor, EngineSession } from "../engines/types.js";
 import { createTurnRunner } from "./turn-runner.js";
@@ -129,6 +134,9 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
   // 테스트 스케줄러가 setInterval 콜백을 등록 즉시(동기) 호출하는 경우 TDZ("api" 미초기화 접근)를
   // 막기 위해 초기화(undefined)와 실제 등록(파일 하단, api 선언 이후)을 분리한다.
   let idleTimer: unknown = undefined;
+  // 보관 위치 겹침 경고를 방출한 UTC 날짜 — 스윕은 60초 타이머마다 재검사하므로(설정을 고치면
+  // 곧바로 재시도되도록 last-run 을 기록하지 않는다) 경고만 날짜별 1회로 묶는다.
+  let overlapWarnedDate: string | null = null;
 
   // deps.retentionPolicy 는 테스트 주입용 오버라이드(결정론적 now() 등). 미주입 시 실제 project.conf
   // (vault.backup·vault.retention_days)에서 파생한다 — 이전에는 항상 defaultRetentionPolicy()
@@ -681,6 +689,38 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
     const today = new Date(deps.clock.now()).toISOString().slice(0, 10);
     const last = await readRetentionLastRun(deps.base, deps.proj);
     if (last?.date === today) return; // 오늘 이미 실행됨
+
+    // 겹침 검증을 실행 시점에 한 번 더 한다 — `project add`/`project set` 의 1회 검증만으로는
+    // project.conf 직접 편집이나 검증 이후의 vault·설정 루트·cwd 재배치를 잡을 수 없고, 겹친
+    // 경로로 스윕이 돌면 턴 노트가 저장소·설정·작업 경로 안으로 이동한다.
+    try {
+      assertBackupNotOverlapping(
+        p.backupDir,
+        deps.vaultRoot,
+        projectPaths(deps.base, deps.proj).root,
+        deps.conf.cwd ?? process.cwd(),
+      );
+    } catch (err) {
+      if (overlapWarnedDate !== today) {
+        overlapWarnedDate = today;
+        const message = `retention: 보관 위치가 겹쳐 이관을 건너뜁니다 — ${errMsg(err)}`;
+        for (const rec of records.values()) {
+          await recordStore
+            .appendEvent(rec.sid, {
+              v: 1,
+              sid: rec.sid,
+              turn: 0,
+              seq: Date.now(),
+              ts: new Date().toISOString(),
+              t: "note",
+              kind: "warning",
+              message,
+            })
+            .catch(() => {});
+        }
+      }
+      return;
+    }
 
     const materialize = resolveSyncProvider(deps.conf["vault.sync_provider"]).ensureLocal;
     let moved = 0;

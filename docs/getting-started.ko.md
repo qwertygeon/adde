@@ -89,7 +89,7 @@ adde project set myproj perm_tier autopass --add-deny "Bash(sudo *)"
 adde session new myproj --title "frontend work"
 ```
 
-각 세션은 자체 대화 이력·엔진 재개 핸들을 가지며, (markdown 서페이스의 경우) `<vault>/adde/projects/myproj/sessions/<sid>/inbox.md` 아래 입력 노트가 자동으로 만들어집니다. 그 노트를 편집해 지시를 보냅니다 — 팔레트·작성 영역·기록 존 전체 레이아웃은 [마크다운 가이드](markdown.ko.md) 참조.
+각 세션은 자체 대화 이력·엔진 재개 핸들을 가지며, (markdown 서페이스의 경우) `<vault>/adde/projects/myproj/sessions/<sid>/inbox.md` 아래 입력 노트가 만들어집니다. 이 노트는 프로젝트 데몬이 실행 중이면 몇 초 안에 나타나고(아래 [시작/중지](#시작중지) 참조), 아직 실행 전이면 데몬을 시작한 뒤에 나타납니다. 그 노트를 편집해 지시를 보냅니다 — 팔레트·작성 영역·기록 존 전체 레이아웃은 [마크다운 가이드](markdown.ko.md) 참조.
 
 ```bash
 adde session ls myproj             # 세션 목록

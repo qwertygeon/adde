@@ -14,6 +14,7 @@
   - **채널 서페이스 레지스트리**(`Surface`/`SURFACE_REGISTRY`) — `markdown` 이 구현됐고 `telegram`/`discord` 는 등록만 된 stub 이다(목록·진단에는 나타나되 바인딩 생성은 거부됨). v0.2.x 의 Telegram 연동은 이번 릴리스에 포함되지 않는다.
   - **markdown 노트 3존 레이아웃 재정의** — 상주 팔레트(`archive`/`clear`/`compact`/`resume`)·`<!-- adde:compose -->` 작성 경계·`<!-- adde:records -->` 기록 존은 유지되나, 링크 대상이 별도 아카이브/out 노트가 아니라 **턴 노트**(무손실 기록의 직접 파생물)로 바뀌었다. 별도 전송 아카이브 파일은 더 이상 존재하지 않는다.
   - **세션 자동 재개·유휴 내림** — 데몬 (재)기동 시 `active` 세션을 저장된 재개 핸들로 자동 재개하고(재개 실패는 조용한 새 세션 대체 없이 `detached`), 유휴 시간(기본 30분) 경과 세션은 엔진만 내리고(`hibernated`) 다음 지시에서 투명하게 재개하며, 동시 상주 엔진 수는 상한(기본 3)으로 제한한다.
+  - **신규 세션은 데몬 재기동 없이 바로 사용 가능** — `session new` 로 만든 세션은 데몬이 실행 중이면 몇 초 안에 입력 노트(`inbox.md`)를 받고, 그 노트에 넣은 지시가 재기동 없이 처리된다. `hibernated` 세션도 데몬 재기동 없이 다음 지시를 그대로 소비한다.
   - **권한 설정이 프로젝트 수준으로 통합** — 레인별이 아니라 프로젝트의 모든 세션이 권한 티어(`acp`/`autopass`)·allowlist·denylist·hard-deny 를 공유한다.
   - **보관 이관·동기화 제공자가 프로젝트 설정으로 이관**(`vault.backup`/`vault.retention_days`/`vault.sync_provider`) — 대상은 턴 노트 파일만이며 목적지는 턴 시작 날짜 하위 폴더로 분류된다. 하루 1회 자동 실행되며, `vault.backup` 을 지정한 프로젝트는 `adde doctor` 출력에서 이관 결과를 확인할 수 있다.
   - **npm 패키지·설치 명령은 변경 없음** — `npm i -g adde-acp`, 실행 명령 `adde`.

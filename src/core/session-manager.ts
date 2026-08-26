@@ -112,6 +112,12 @@ export interface SessionManager {
 /** 부팅 조립부(daemon.ts)만 쓰는 확장 — 명시 `load()` 로 세션 레코드를 로드한다(암묵적 비동기 생성 지양). */
 export interface SessionManagerWithLoad extends SessionManager {
   load(): Promise<void>;
+  /**
+   * 외부(CLI) 프로세스가 만든 세션 레코드를 상주 중에 흡수한다 — **미지 sid 만 추가**하고 이미 알고 있는
+   * 세션은 손대지 않는다. `load()` 재호출은 디스크 값이 in-memory 를 덮어써 런타임 상태(status·engineRef·
+   * lastActivityAt)를 되돌릴 수 있으므로 상주 중에는 쓰지 않는다(A-P002 세션 상태 비침해).
+   */
+  refresh(): Promise<{ added: string[] }>;
 }
 
 interface Runtime {
@@ -263,6 +269,20 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
     };
     runtimes.set(sid, rt);
     return rt;
+  }
+
+  /**
+   * 세션의 TurnRunner 를 만들고 기동한다 — 엔진은 열지 않는다(`admit()` 은 턴이 실제로 돌 때 호출).
+   * `router.dispatch()` 가 `turnRunner(sid)?.notify()` 로 큐를 깨우므로, 런타임이 없는 세션은 지시가
+   * 큐에 적재된 채 영원히 소비되지 않는다 — 부팅 시 `active` 가 아니어서 `admit()` 을 거치지 않는
+   * 세션(hibernated)과 상주 중 흡수된 세션이 그 상태였다. `start()` 는 중단된 processing 회수와
+   * 최초 drain 도 수행한다.
+   */
+  function armRunner(sid: string): void {
+    const rt = ensureRuntime(sid);
+    void rt.turnRunner.start().catch((err: unknown) => {
+      console.error(`session-manager: TurnRunner 기동 실패(sid=${sid}): ${errMsg(err)}`);
+    });
   }
 
   async function requestPermission(
@@ -523,6 +543,11 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
 
     async resumeAllOnBoot(): Promise<BootResumeReport> {
       const report: BootResumeReport = { resumed: [], detached: [], skipped: [] };
+      // 재개 대상(active)이 아닌 세션도 런너는 필요하다 — hibernated 세션은 다음 지시에서 투명하게
+      // 재개돼야 하는데, 런타임이 없으면 dispatch 의 notify() 가 no-op 이 되어 큐만 쌓인다.
+      for (const rec of records.values()) {
+        if (rec.status === "active" || rec.status === "hibernated") armRunner(rec.sid);
+      }
       for (const rec of records.values()) {
         if (rec.status !== "active") continue;
         // driverFor()/admit() 실패를 세션 단위로 격리한다 — 세션 1개(예: 미등록 엔진 id)가
@@ -665,6 +690,18 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
     for (const r of loaded) records.set(r.sid, r);
   }
 
+  async function refresh(): Promise<{ added: string[] }> {
+    const loaded = await loadSessions(deps.base, deps.proj);
+    const added: string[] = [];
+    for (const r of loaded) {
+      if (records.has(r.sid)) continue; // 기존 세션은 덮어쓰지 않는다(런타임 상태 보존).
+      records.set(r.sid, r);
+      added.push(r.sid);
+      if (r.status === "active" || r.status === "hibernated") armRunner(r.sid);
+    }
+    return { added };
+  }
+
   async function runIdleSweep(): Promise<void> {
     if (!deps.conf.idle_hibernate) return;
     const thresholdMs = deps.conf.hibernate_after_min * 60_000;
@@ -761,5 +798,5 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
     void runRetentionSweep();
   }, 60_000);
 
-  return Object.assign(api, { load });
+  return Object.assign(api, { load, refresh });
 }

@@ -80,6 +80,11 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
     }
     const caps = capsFor(sid);
     const lines = content.length > 0 ? content.split("\n") : [];
+    // 미소비 액션(체크된 체크박스)이 있으면 치유 쓰기를 건너뛴다 — `healLayout` 은 노트를 재구성하며
+    // send 줄을 **무조건 미체크**(`blankSendLine()`)로 되돌리므로, 액션 소비(processSession) 앞에서
+    // 치유하면 사용자가 방금 체크한 전송이 읽히기 전에 지워진다. 치유는 액션이 없는 idle 상태에서만
+    // 하고, 액션 소비 후의 정규화는 processSession 이 담당한다.
+    if (content.length > 0 && parseInbox(content).actions.length > 0) return;
     const healed = healLayout(lines, { paletteEnabled: true, caps });
     ensureBlankSend(healed.lines);
     if (healed.changed || content.length === 0) {
@@ -87,13 +92,18 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
     }
   }
 
-  async function knownSids(): Promise<string[]> {
-    const vp = vaultPaths(ctx.vaultRoot, ctx.proj);
-    try {
-      return (await readdir(vp.sessionDir)).filter((e) => !e.startsWith("."));
-    } catch {
-      return [];
-    }
+  /**
+   * poll 대상 세션 — **세션 레코드의 markdown 바인딩에서 파생**한다. vault 디렉터리 목록을 읽던 이전
+   * 구현은 씨딩 대상 집합이 씨딩 결과(`ensureInboxSkeleton` → `ensureVaultLayout`)에 의존해, 신규 세션이
+   * 영원히 입력 노트를 받지 못하는 교착이었다. 바인딩 파생은 부수적으로 (a) 레코드가 사라진 세션의 잔존
+   * 디렉터리를 재씨딩하지 않고 (b) `clear` 로 바인딩을 넘긴 archived 세션을 자동 제외하며 (c) 동기화 폴더의
+   * 디렉터리 목록 지연·충돌 파일 영향을 받지 않는다.
+   */
+  function knownSids(): string[] {
+    return sm!
+      .list()
+      .filter((rec) => rec.bindings.some((b) => b.surface === "markdown"))
+      .map((rec) => rec.sid);
   }
 
   async function processSession(sid: string): Promise<void> {
@@ -239,8 +249,11 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
   async function pollOnce(): Promise<void> {
     if (stopped) return;
     try {
+      // CLI 프로세스가 만든 신규 세션 레코드를 흡수한다 — 데몬은 부팅 시 로드한 레코드만 보므로,
+      // 이 호출 없이는 기동 중 생성된 세션이 재기동 전까지 인지되지 않는다(additive-only).
+      await sm!.refresh();
       await handleProjectNoteTriggers(ctx.vaultRoot, ctx.proj, sm!);
-      for (const sid of await knownSids()) {
+      for (const sid of knownSids()) {
         await ensureInboxSkeleton(sid);
         await processSession(sid);
         await processApprovals(sid);

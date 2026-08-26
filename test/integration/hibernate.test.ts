@@ -119,16 +119,23 @@ describe("SC-010: 상주 엔진 상한 초과 시 가장 오래 쓰이지 않은
   });
 
   it("Edge: 마지막 활동 시각이 동률이면 sid 사전순으로 결정론적 tie-break 한다", async () => {
-    const { sm } = await makeSM({ maxActiveEngines: 1 });
+    // 상한 2 로 둬야 후보가 2개(A·B 둘 다 상주)가 되어 sid tie-break 이 실제로 판정에 쓰인다.
+    // 상한 1 로 하면 admit(B) 시점의 상주 세션이 A 하나뿐이라 후보가 유일해지고, sid 비교 없이
+    // A 가 뽑힌다 — 그러면 단언이 "A 의 sid 가 더 작다"에 의존하게 되는데 sid 는
+    // `base36(ms)-랜덤hex` 라 같은 밀리초에 생성되면 순서가 무작위다(위양성 실패 관측).
+    const { sm } = await makeSM({ maxActiveEngines: 2 });
     const a = await sm.create({ engine: "acp" });
     const b = await sm.create({ engine: "acp" });
-    // 동시(같은 clock 값)에 admit — tie-break 은 sid 사전순으로 결정돼야 한다.
     await sm.admit(a.sid);
-    await sm.admit(b.sid);
+    await sm.admit(b.sid); // 같은 clock 값 — lastActivityAt 동률
+    const c = await sm.create({ engine: "acp" });
+    await sm.admit(c.sid); // 상한 초과 → 동률 후보 A·B 중 sid 사전순 앞쪽이 내려간다
+
     const [lo, hi] = [a.sid, b.sid].sort();
     const sessions = await sm.list();
     expect(sessions.find((s) => s.sid === lo)?.status).toBe("hibernated");
     expect(sessions.find((s) => s.sid === hi)?.status).toBe("active");
+    expect(sessions.find((s) => s.sid === c.sid)?.status).toBe("active");
   });
 
   it("Error: 내림 대상의 close 실패 시 error 이벤트를 남기고 다음 후보를 시도한다", async () => {

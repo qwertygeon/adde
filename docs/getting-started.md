@@ -89,7 +89,7 @@ adde project set myproj perm_tier autopass --add-deny "Bash(sudo *)"
 adde session new myproj --title "frontend work"
 ```
 
-Each session gets its own conversation history, engine resume handle, and (for the markdown surface) an input note under `<vault>/adde/projects/myproj/sessions/<sid>/inbox.md` created automatically. You send instructions by editing that note — see the [markdown guide](markdown.md) for the full palette/compose/records layout.
+Each session gets its own conversation history, engine resume handle, and (for the markdown surface) an input note under `<vault>/adde/projects/myproj/sessions/<sid>/inbox.md`. The note appears within a couple of seconds while the project's daemon is running (see [Start / stop](#start--stop) below) — if the daemon isn't running yet, it appears once you start it. You send instructions by editing that note — see the [markdown guide](markdown.md) for the full palette/compose/records layout.
 
 ```bash
 adde session ls myproj             # list sessions

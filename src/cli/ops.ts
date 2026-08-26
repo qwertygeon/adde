@@ -20,19 +20,12 @@ import { followFile } from "../core/log-follow.js";
 import { renderSessionLog, followSessionLog } from "../record/render.js";
 import { findCommand } from "./spec.js";
 import { parseCommand } from "./parse.js";
+import { table } from "./table.js";
 import type { ParseResult } from "./parse.js";
 
 const STATUS_SPEC = findCommand("status")!;
 const DOCTOR_SPEC = findCommand("doctor")!;
 const LOGS_SPEC = findCommand("logs")!;
-
-function table(header: string[], body: string[][]): string {
-  const widths = header.map((h, i) =>
-    Math.max(h.length, ...body.map((row) => (row[i] ?? "").length)),
-  );
-  const fmt = (cols: string[]): string => cols.map((c, i) => c.padEnd(widths[i] ?? 0)).join("  ");
-  return [fmt(header), ...body.map(fmt)].join("\n");
-}
 
 function statusTable(rows: SessionStatusRow[]): string {
   if (rows.length === 0) return "(세션 없음)";

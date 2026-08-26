@@ -113,7 +113,7 @@ project set 목록 증분 편집:
   cwd, engine, engine_args, perm_tier, allowlist, denylist, hard_deny, gate_timeout_sec, lang, file_mode, auto_restart, auto_resume, idle_hibernate, hibernate_after_min, max_active_engines, auto_relaunch, markdown.palette, markdown.records_cap, vault.backup, vault.retention_days, vault.sync_provider`,
     session: `사용법:
   adde session new <proj> [--engine <id>] [--title <t>] [--engine-args <args>] [--json]
-  adde session ls <proj> [--json]
+  adde session ls <proj> [--json]            레코드 뷰(데몬 무관) — 엔진 상주 여부는 adde status
   adde session show <proj> <sid> [--json]
   adde session clear <proj> <sid>            초기화(승계 — 새 세션 생성, 기존 세션은 archived)
   adde session rm <proj> <sid> [--purge] [--force]`,

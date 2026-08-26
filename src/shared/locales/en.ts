@@ -112,7 +112,7 @@ Editable keys (adde project set <proj> <key> <value>...):
   cwd, engine, engine_args, perm_tier, allowlist, denylist, hard_deny, gate_timeout_sec, lang, file_mode, auto_restart, auto_resume, idle_hibernate, hibernate_after_min, max_active_engines, auto_relaunch, markdown.palette, markdown.records_cap, vault.backup, vault.retention_days, vault.sync_provider`,
     session: `Usage:
   adde session new <proj> [--engine <id>] [--title <t>] [--engine-args <args>] [--json]
-  adde session ls <proj> [--json]
+  adde session ls <proj> [--json]            record view (daemon-independent) — for live engine presence use adde status
   adde session show <proj> <sid> [--json]
   adde session clear <proj> <sid>            initialize (succession — creates a new session, old one archived)
   adde session rm <proj> <sid> [--purge] [--force]`,

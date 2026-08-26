@@ -242,7 +242,12 @@ describe("SC-6: 턴 0회 세션은 재개 핸들을 남기지 않는다", () => 
           .replace("<!-- adde:compose -->", "<!-- adde:compose -->\n지시")
           .replace(/- \[ \] (.*send.*)/, "- [x] $1"),
       );
-      await waitFor(() => h.sm.get("sess-ref")?.engineRef !== null);
+      // in-memory 세팅과 persist() 사이에 await 경계가 있어, in-memory 값으로 대기하면 디스크
+      // 읽기가 그 사이에 끼어들 수 있다(경합) — 영속된 값 자체를 대기 조건으로 둔다.
+      await waitFor(async () => {
+        const r = (await store.loadSessions(roots.base, PROJ)).find((x) => x.sid === "sess-ref");
+        return r?.engineRef != null;
+      });
       const after = (await store.loadSessions(roots.base, PROJ)).find((r) => r.sid === "sess-ref");
       expect(after?.engineRef, "첫 턴 완결 후에도 재개 핸들이 없다").not.toBeNull();
     } finally {

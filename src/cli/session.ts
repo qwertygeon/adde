@@ -5,6 +5,7 @@ import { rm } from "node:fs/promises";
 import { defaultBase, sessionPaths, vaultPaths } from "../shared/paths.js";
 import { withSessionManager } from "./session-manager-helper.js";
 import { findSub } from "./spec.js";
+import { table } from "./table.js";
 import { parseCommand } from "./parse.js";
 import type { ParseResult } from "./parse.js";
 import {
@@ -63,11 +64,15 @@ async function handleList(p: ParseResult): Promise<number> {
       process.stdout.write("(세션 없음)\n");
       return EXIT.OK;
     }
-    for (const r of rows) {
-      process.stdout.write(
-        `${r.sid}\t${r.status}\t${r.title ?? "(제목 없음)"}\t${r.lastActivityAt}\n`,
-      );
-    }
+    // 세션 **레코드** 뷰 — 데몬 기동 여부와 무관하게 설정 루트의 레코드만 읽는다. 엔진 상주 여부
+    // (PRESENT)는 데몬 상태에 의존하므로 여기 싣지 않고 `adde status` 가 담당한다. 컬럼 표기는
+    // `status` 표와 동일하게 맞춘다(같은 개념에 다른 라벨 금지).
+    process.stdout.write(
+      table(
+        ["SID", "STATUS", "ENGINE", "TITLE", "LAST_ACTIVITY"],
+        rows.map((r) => [r.sid, r.status, r.engine, r.title ?? "-", r.lastActivityAt]),
+      ) + "\n",
+    );
     return EXIT.OK;
   });
 }

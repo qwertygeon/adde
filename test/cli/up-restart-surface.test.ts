@@ -40,9 +40,9 @@ describe("restart 결과 표면화 — up 과 동등 (리포트 기반 판정)",
       v: 1,
       bootId: 1,
       bootedAt: "x",
-      lanes: [
-        { lane: "ok", status: "running" },
-        { lane: "bad", status: "error", error: "engine spawn ENOENT" },
+      sessions: [
+        { sid: "ok", status: "active" },
+        { sid: "bad", status: "detached", error: "engine spawn ENOENT" },
       ],
       running: 1,
     });
@@ -69,7 +69,7 @@ describe("restart 결과 표면화 — up 과 동등 (리포트 기반 판정)",
       v: 1,
       bootId: 1,
       bootedAt: "x",
-      lanes: [{ lane: "a", status: "running" }],
+      sessions: [{ sid: "a", status: "active" }],
       running: 1,
     });
     const code = await run(["restart", "demo"]);

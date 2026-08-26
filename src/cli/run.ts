@@ -2,7 +2,7 @@ import { readVersion } from "../core/version.js";
 import { errMsg } from "../shared/errors.js";
 import { COMMANDS, buildUsage, USAGE, cmdError, flagErrorText, EXIT } from "../core/messages.js";
 import { t } from "../shared/i18n.js";
-import { findCommand, suggestCommands } from "./spec.js";
+import { findCommand, suggestCommands, REMOVED_COMMANDS } from "./spec.js";
 import { parseCommand } from "./parse.js";
 import type { ParseResult } from "./parse.js";
 import { defaultBase } from "../shared/paths.js";
@@ -57,7 +57,7 @@ async function surfaceStartResult(proj: string, baseline: number, json = false):
     }
     return EXIT.FAIL;
   }
-  const failed = report.lanes.filter((l) => l.status === "error");
+  const failed = report.sessions.filter((s) => s.status === "detached");
   if (json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
     return failed.length > 0 ? EXIT.FAIL : EXIT.OK;
@@ -65,7 +65,7 @@ async function surfaceStartResult(proj: string, baseline: number, json = false):
   if (failed.length > 0) {
     process.stderr.write(
       t("run.upFailed", {
-        lanes: failed.map((f) => `${f.lane}${f.error ? ` (${f.error})` : ""}`).join(", "),
+        lanes: failed.map((f) => `${f.sid}${f.error ? ` (${f.error})` : ""}`).join(", "),
         proj,
       }) + "\n",
     );
@@ -146,27 +146,21 @@ async function handleUp(rest: readonly string[], parsed?: ParseResult): Promise<
     const reg = await daemonRegState(proj);
     if (reg.launchctlRegistered) {
       const rows = await collectStatus(proj);
-      const running = rows.filter((r) => r.status === "running").length;
+      const running = rows.filter((r) => r.status === "active").length;
       if (running === 0) {
-        // 등록 잔존 + 상주 레인 없음(부팅-실패-잔존 포함) — alreadyUp 조기반환
+        // 등록 잔존 + 상주 세션 없음(부팅-실패-잔존 포함) — alreadyUp 조기반환
         // 대신 재적재해 데드엔드를 해소한다. 아래 신규 기동과 동일한 load+poll 경로로 합류(--json 은
         // surfaceStartResult 가 처리 — 여기 안내 텍스트만 억제).
         if (!json) process.stdout.write(t("run.deadRegistered", { proj }) + "\n");
         await unloadDaemon(proj);
       } else {
-        // 이미 기동 중이어도 건강하지 않은 레인(error/dead/stale)이 있으면 표면화하고 종료코드 1.
-        // 데몬이 이미 상주하므로 freshness 판별은 무의미(신규 기동 경로와 달리): 현재 상태를 그대로 보고한다.
-        // stale(하트비트 끊긴 행) 도 포함 — 상주 데몬에서 가장 알려야 할 상태다(status 도 stale 을 경고).
-        const unhealthy = rows.filter(
-          (r) => r.status === "error" || r.status === "dead" || r.status === "stale",
-        );
-        // 비정상 레인 경고는 조언성 스트림 — --json 여부와 무관하게 stderr 유지.
+        // 이미 기동 중이어도 건강하지 않은 세션(detached)이 있으면 표면화하고 종료코드 1.
+        const unhealthy = rows.filter((r) => r.status === "detached");
+        // 비정상 세션 경고는 조언성 스트림 — --json 여부와 무관하게 stderr 유지.
         if (unhealthy.length > 0) {
           process.stderr.write(
             t("run.alreadyUpUnhealthy", {
-              lanes: unhealthy
-                .map((r) => `${r.lane} (${r.status}${r.error ? `: ${r.error}` : ""})`)
-                .join(", "),
+              lanes: unhealthy.map((r) => `${r.sid} (${r.status})`).join(", "),
               proj,
             }) + "\n",
           );
@@ -273,8 +267,10 @@ export const DISPATCH: Record<string, { run: CommandHandler; parse: boolean }> =
   completion: { run: handleCompletion, parse: false },
   init: { run: async (rest) => (await import("./init.js")).runInit(rest), parse: false },
   alias: { run: async (rest) => (await import("./init.js")).runAlias(rest), parse: false },
-  lane: { run: async (rest) => (await import("./lane.js")).runLane(rest), parse: false },
-  proj: { run: async (rest) => (await import("./proj.js")).runProj(rest), parse: false },
+  project: { run: async (rest) => (await import("./project.js")).runProject(rest), parse: false },
+  session: { run: async (rest) => (await import("./session.js")).runSession(rest), parse: false },
+  bind: { run: async (rest) => (await import("./bind.js")).runBind(rest), parse: false },
+  vault: { run: async (rest) => (await import("./vault.js")).runVault(rest), parse: false },
   __daemon: { run: handleDaemon, parse: false },
   status: {
     run: async (rest, parsed) => (await import("./ops.js")).runStatus(rest, parsed),
@@ -286,10 +282,6 @@ export const DISPATCH: Record<string, { run: CommandHandler; parse: boolean }> =
   },
   logs: {
     run: async (rest, parsed) => (await import("./ops.js")).runLogs(rest, parsed),
-    parse: true,
-  },
-  sessions: {
-    run: async (rest, parsed) => (await import("./ops.js")).runSessions(rest, parsed),
     parse: true,
   },
   up: { run: handleUp, parse: true },
@@ -308,6 +300,15 @@ export async function run(argv: readonly string[]): Promise<number> {
     return EXIT.OK;
   }
   const spec = findCommand(first);
+
+  // (A0) v0.2.x 제거 명령(FR-030·SC-044) — 조용한 실패 대신 "제거됨 + 대체 명령" 안내 후 exit 2.
+  const removedReplacement = REMOVED_COMMANDS[first];
+  if (removedReplacement !== undefined) {
+    process.stderr.write(
+      `"${first}" 명령은 제거되었습니다. 대신 다음을 사용하세요: ${removedReplacement}\n`,
+    );
+    return EXIT.USAGE;
+  }
 
   // (A) 알려진 명령이 아님 — 미지원 명령·전역 플래그 선두(위치 무관 인식).
   if (!spec) {
@@ -332,8 +333,10 @@ export async function run(argv: readonly string[]): Promise<number> {
     return EXIT.FAIL;
   }
 
-  // 서브커맨드별 도움말 — `adde <cmd> --help`. lane 은 runLane 이 자체 처리(하위 명령 도움말).
-  if (first !== "lane" && parseCommand({ flags: [] }, argv.slice(1)).help) {
+  // 서브커맨드별 도움말 — `adde <cmd> --help`. subs 를 가진 그룹 명령(project/session/bind/vault)은
+  // 각자의 run* 핸들러가 하위 명령 도움말을 자체 처리한다(pre-parse 그룹).
+  const isGroupCommand = spec.subs !== undefined;
+  if (!isGroupCommand && parseCommand({ flags: [] }, argv.slice(1)).help) {
     if (spec.usageKey && !spec.hidden) {
       process.stdout.write(t(spec.usageKey as never) + "\n");
       return EXIT.OK;

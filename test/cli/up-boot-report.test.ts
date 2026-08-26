@@ -60,7 +60,7 @@ describe("자기 부팅만 소비 (SC-002 Edge)", () => {
           v: 1,
           bootId: 5,
           bootedAt: "2026-01-01T00:00:00.000Z",
-          lanes: [{ lane: "a", status: "error", error: "OLD FAIL" }],
+          sessions: [{ sid: "a", status: "detached", error: "OLD FAIL" }],
           running: 0,
         };
       }
@@ -69,7 +69,7 @@ describe("자기 부팅만 소비 (SC-002 Edge)", () => {
         v: 1,
         bootId: 6,
         bootedAt: "2026-01-01T00:05:00.000Z",
-        lanes: [{ lane: "a", status: "running" }],
+        sessions: [{ sid: "a", status: "active" }],
         running: 1,
       };
     });
@@ -94,7 +94,7 @@ describe("실패 레인 stderr 표면화 (SC-003 Error)", () => {
         v: 1,
         bootId: 1,
         bootedAt: "x",
-        lanes: [{ lane: "B", status: "error", error: "markdown root 누락" }],
+        sessions: [{ sid: "B", status: "detached", error: "markdown root 누락" }],
         running: 0,
       };
     });
@@ -135,10 +135,10 @@ describe("전부 실패 즉시 확정 (SC-005 Error)", () => {
         v: 1,
         bootId: 1,
         bootedAt: "x",
-        lanes: [
-          { lane: "a", status: "error", error: "fail-a" },
-          { lane: "b", status: "error", error: "fail-b" },
-          { lane: "c", status: "error", error: "fail-c" },
+        sessions: [
+          { sid: "a", status: "detached", error: "fail-a" },
+          { sid: "b", status: "detached", error: "fail-b" },
+          { sid: "c", status: "detached", error: "fail-c" },
         ],
         running: 0,
       };
@@ -165,9 +165,9 @@ describe("조건부 exit (SC-008 Happy/Error)", () => {
       v: 1,
       bootId: 1,
       bootedAt: "x",
-      lanes: [
-        { lane: "a", status: "running" },
-        { lane: "b", status: "error", error: "boom" },
+      sessions: [
+        { sid: "a", status: "active" },
+        { sid: "b", status: "detached", error: "boom" },
       ],
       running: 1,
     });
@@ -180,7 +180,7 @@ describe("조건부 exit (SC-008 Happy/Error)", () => {
       v: 1,
       bootId: 1,
       bootedAt: "x",
-      lanes: [{ lane: "a", status: "running" }],
+      sessions: [{ sid: "a", status: "active" }],
       running: 1,
     });
     const code = await run(["up", "demo"]);
@@ -215,7 +215,7 @@ describe("첫 기동 안전 (SC-012 Edge)", () => {
         v: 1,
         bootId: 1,
         bootedAt: "x",
-        lanes: [{ lane: "a", status: "running" }],
+        sessions: [{ sid: "a", status: "active" }],
         running: 1,
       };
     });
@@ -237,7 +237,7 @@ describe("구 변수 무시 (SC-015 Edge)", () => {
         v: 1,
         bootId: 1,
         bootedAt: "x",
-        lanes: [{ lane: "a", status: "running" }],
+        sessions: [{ sid: "a", status: "active" }],
         running: 1,
       };
     });

@@ -4,13 +4,13 @@
  * 병렬 스위트의 디스크 경합에서 틱이 먼저 소진돼 위양성(flaky)이 난다 → 타이머 폴링.
  */
 export async function waitFor(
-  cond: () => boolean,
+  cond: () => boolean | Promise<boolean>,
   opts: { timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<void> {
   const timeoutMs = opts.timeoutMs ?? 8_000;
   const intervalMs = opts.intervalMs ?? 5;
   const start = Date.now();
-  while (!cond()) {
+  while (!(await cond())) {
     if (Date.now() - start > timeoutMs) {
       throw new Error("waitFor: 조건이 제한 시간 내 충족되지 않음");
     }

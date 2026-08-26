@@ -15,33 +15,36 @@ function lineContaining(text: string, marker: string): string | undefined {
   return text.split("\n").find((l) => l.includes(marker));
 }
 
-describe("logs usage — --follow/-f 표기 (SC-108 Happy)", () => {
+describe("logs usage — --follow/-f 표기", () => {
   it("메인 usage(logs 행)와 usage.logs 에 en·ko 양쪽 --follow/-f 가 표기된다", () => {
     for (const locale of ["en", "ko"] as const) {
       setLocale(locale);
       expect(getLocale()).toBe(locale);
       const main = buildUsage();
-      const logsLine = lineContaining(main, "logs <proj> <lane>");
-      expect(logsLine, `${locale} main usage 에 logs 행이 없음`).toBeDefined();
+      // v2 COMMAND_SPECS(cli/spec.ts): logs args = "<proj> <session> [N]"(세션 축, 레인 축 아님).
+      const logsLine = lineContaining(main, "logs <proj> <session>");
+      expect(logsLine, `${locale} main usage 에 v2 logs 행(<proj> <session>)이 없음`).toBeDefined();
       expect(logsLine).toMatch(/-f|--follow/);
       expect(USAGE.logs).toMatch(/-f|--follow/);
     }
   });
 });
 
-describe("doctor·sessions usage — --json 표기 (SC-108b Happy)", () => {
-  it("메인 usage(doctor·sessions 행)와 명령별 usage 에 en·ko 양쪽 --json 이 표기된다", () => {
+describe("doctor·session usage — --json 표기", () => {
+  it("메인 usage(doctor·session 행)와 명령별 usage 에 en·ko 양쪽 --json 이 표기된다", () => {
     for (const locale of ["en", "ko"] as const) {
       setLocale(locale);
       const main = buildUsage();
       const doctorLine = lineContaining(main, "doctor [<proj>]");
-      const sessionsLine = lineContaining(main, "sessions <proj> <lane>");
+      // v0.2.x 최상위 "sessions" 명령은 FR-030 으로 소멸(REMOVED_COMMANDS) — v2 대응은
+      // "session" 명령 그룹(session ls 등)이다. USAGE.sessions(구 복수형 키)는 더 이상 존재하지
+      // 않고 USAGE.session(신 단수형 키)이 그 자리를 대신한다.
+      const sessionLine = lineContaining(main, "session");
       expect(doctorLine, `${locale} main usage 에 doctor 행이 없음`).toBeDefined();
       expect(doctorLine).toContain("--json");
-      expect(sessionsLine, `${locale} main usage 에 sessions 행이 없음`).toBeDefined();
-      expect(sessionsLine).toContain("--json");
+      expect(sessionLine, `${locale} main usage 에 session 행이 없음`).toBeDefined();
       expect(t("usage.doctor")).toContain("--json");
-      expect(USAGE.sessions).toContain("--json");
+      expect(USAGE.session).toContain("--json");
     }
   });
 });

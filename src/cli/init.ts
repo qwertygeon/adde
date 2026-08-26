@@ -1,27 +1,22 @@
 /**
- * `adde init [proj]` — 신규 사용자 온보딩 위저드.
- * 환경 점검(doctor) → 짧은 별칭 설치(옵트인) → 대화형 레인 생성 → 토큰·기동 안내를
- * 한 흐름으로 묶어 첫 설정 마찰을 줄인다. 시크릿 비노출: 토큰은 여기서 받지 않고
- * 생성 후 .env/--token-stdin 안내로 위임한다(collectInteractive 와 동일 원칙).
+ * `adde init [proj]` — 신규 사용자 온보딩 위저드(v2).
+ * 환경 점검(doctor) → 짧은 별칭 설치(옵트인) → 대화형 프로젝트 생성(vault 경로 필수 질의) →
+ * 기동 안내를 한 흐름으로 묶어 첫 설정 마찰을 줄인다.
  * `adde alias [names...]` — 별칭만 따로 설치하는 경량 진입점(재실행용).
  */
 import { t } from "../shared/i18n.js";
 import { formatException } from "../shared/notify.js";
 import { runDoctor } from "../core/diagnostics.js";
-import { laneAdd, LaneConfigError } from "../core/lane-config.js";
-import { collectInteractive } from "./lane.js";
 import { checkSymbol } from "./ops.js";
 import { createPrompter, askYesNo } from "./prompt.js";
-import { cmdError, laneError } from "../core/messages.js";
+import { cmdError } from "../core/messages.js";
 import { errMsg } from "../shared/errors.js";
 import { RECOMMENDED_ALIASES, setupAliases, resolveAliasDeps } from "./alias.js";
 import type { AliasSetupResult } from "./alias.js";
-import { SOURCE_REGISTRY } from "../src-adapters/index.js";
 
-/** proj/lane 식별자 — 경로 세그먼트 안전 문자셋(lane-config NAME_RE 와 동일 규약). */
+/** proj 식별자 — 경로 세그먼트 안전 문자셋. */
 const NAME_RE = /^[A-Za-z0-9_-]+$/;
 
-/** $SHELL 로 사용자 셸 추정(bash|zsh). 그 외·미상은 null — 자동완성 안내를 건너뛴다. */
 function detectShell(): "bash" | "zsh" | null {
   const sh = process.env["SHELL"] ?? "";
   if (sh === "zsh" || sh.endsWith("/zsh")) return "zsh";
@@ -29,18 +24,18 @@ function detectShell(): "bash" | "zsh" | null {
   return null;
 }
 
-/** 별칭 설치 결과를 stdout 에 표면화(init·alias 공용). */
 function printAliasResult(result: AliasSetupResult, binDir: string): void {
   for (const n of result.created)
     process.stdout.write(t("init.aliasCreated", { name: n, dir: binDir }) + "\n");
   for (const n of result.alreadyLinked)
     process.stdout.write(t("init.aliasAlready", { name: n }) + "\n");
-  for (const s of result.skipped)
+  for (const s of result.skipped) {
     process.stdout.write(
       (s.reason === "error"
         ? t("init.aliasFailed", { name: s.name, detail: s.detail ?? "" })
         : t("init.aliasSkipped", { name: s.name })) + "\n",
     );
+  }
 }
 
 export async function runInit(argv: readonly string[]): Promise<number> {
@@ -59,36 +54,26 @@ export async function runInit(argv: readonly string[]): Promise<number> {
   try {
     process.stdout.write(t("init.intro") + "\n\n");
 
-    // 1) 환경 점검(전역 doctor) — 결과 요약 후 FAIL 이 있으면 주의 안내(계속 진행).
     const checks = await runDoctor();
     for (const c of checks) {
       process.stdout.write(`  ${checkSymbol(c.level)} ${c.name}: ${c.detail}\n`);
-      // FAIL/WARN 항목은 해결 힌트를 함께 노출 — 별도 `adde doctor` 재실행 없이 다음 조치를 안다
-      // (ops doctor 와 동일 hint 포맷 공유).
       if (c.hint && (c.level === "FAIL" || c.level === "WARN")) {
         process.stdout.write(t("ops.doctor.hint", { hint: c.hint }) + "\n");
       }
     }
-    if (checks.some((c) => c.level === "FAIL")) {
+    if (checks.some((c) => c.level === "FAIL"))
       process.stdout.write("\n" + t("init.doctorWarn") + "\n");
-    }
     process.stdout.write("\n");
 
-    // 2) 짧은 별칭 설치(옵트인, 기본 Yes) — PATH 충돌은 실패로 표면화.
     if (
       await askYesNo(ask, t("init.aliasPrompt", { names: RECOMMENDED_ALIASES.join(", ") }), true)
     ) {
       const deps = await resolveAliasDeps();
-      if (!deps) {
-        process.stdout.write(t("init.aliasNoBin") + "\n");
-      } else {
-        printAliasResult(await setupAliases(RECOMMENDED_ALIASES, deps), deps.binDir);
-      }
+      if (!deps) process.stdout.write(t("init.aliasNoBin") + "\n");
+      else printAliasResult(await setupAliases(RECOMMENDED_ALIASES, deps), deps.binDir);
     }
     process.stdout.write("\n");
 
-    // 2.5) 셸 탭 자동완성 설정 안내(옵트인) — 감지된 셸에 맞는 설치 명령을 출력한다.
-    // 파일을 대신 쓰지 않고 실행할 명령을 안내한다(셸 rc/fpath 자동 수정은 위험 — 사용자가 직접 실행).
     const shell = detectShell();
     if (shell) {
       if (await askYesNo(ask, t("init.completionPrompt", { shell }), true)) {
@@ -100,34 +85,22 @@ export async function runInit(argv: readonly string[]): Promise<number> {
       process.stdout.write("\n");
     }
 
-    // 3) 레인 생성(대화형) — proj/lane 이름을 먼저 검증(잘못되면 재질의)한 뒤 필드 수집.
+    // 프로젝트 생성(대화형) — vault 경로는 필수(FR-028, 기본 경로 자동 생성 없음).
     let proj = projArg ?? (await ask(t("init.projPrompt"), "default"));
     while (!NAME_RE.test(proj)) proj = await ask(t("init.projRetry"), "default");
-    let lane = await ask(t("init.lanePrompt"), "main");
-    while (!NAME_RE.test(lane)) lane = await ask(t("init.laneRetry"), "main");
+    let vault = await ask("마크다운 저장소(vault) 루트 절대경로: ", "");
+    while (vault.trim().length === 0) vault = await ask("vault 경로는 필수입니다. 다시 입력: ", "");
 
-    const opts = await collectInteractive(ask, prompter.askSecret, prompter.askPath);
-    const result = await laneAdd(proj, lane, opts);
-    for (const w of result.warnings) process.stdout.write(w + "\n");
-    process.stdout.write(
-      t("lane.created", { lane: result.lane, confPath: result.confPath }) + "\n",
-    );
-    if (result.envPath) {
-      process.stdout.write(t("lane.tokenWritten", { envPath: result.envPath }) + "\n");
-    } else {
-      // 생성 후 힌트 위임 — 훅 미제공 소스는 힌트 없음(생략).
-      const hint = SOURCE_REGISTRY[result.conf.source]?.wizard?.postCreateHint?.(result);
-      if (hint) process.stdout.write(hint + "\n");
-    }
+    const { runProject } = await import("./project.js");
+    const code = await runProject(["add", proj, "--vault", vault]);
+    if (code !== 0) return code;
+
     process.stdout.write("\n" + t("init.done", { proj }) + "\n");
-    process.stdout.write(t("lane.startHint", { proj }) + "\n");
+    process.stdout.write(`다음 명령으로 데몬을 기동하세요: adde up ${proj}\n`);
     return 0;
   } catch (err) {
-    if (err instanceof LaneConfigError) {
-      process.stderr.write(laneError(err.message) + "\n");
-      return 1;
-    }
-    throw err;
+    process.stderr.write(cmdError("init", errMsg(err)) + "\n");
+    return 1;
   } finally {
     prompter.close();
   }
@@ -145,11 +118,9 @@ export async function runAlias(argv: readonly string[]): Promise<number> {
     }
     const result = await setupAliases(chosen, deps);
     printAliasResult(result, deps.binDir);
-    // 아무것도 설치/기존확인되지 않고 전부 실패면 비정상 종료(충돌 등).
     const progressed = result.created.length > 0 || result.alreadyLinked.length > 0;
     return progressed || result.skipped.length === 0 ? 0 : 1;
   } catch (err) {
-    // resolveAliasDeps/setupAliases 의 예기치 못한 fs·OS 오류(EACCES 등)를 원시 스택 대신 친절 메시지로.
     process.stderr.write(cmdError("alias", errMsg(err)) + "\n");
     return 1;
   }

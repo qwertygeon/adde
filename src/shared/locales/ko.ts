@@ -11,28 +11,25 @@ export const ko = {
   {{primary}} [command]      주 진입점 ('adde alias' 후 {{short}} 사용 가능)
 
 명령:
-  init [<proj>]            가이드 설정 (doctor + 짧은 별칭 + 레인 생성)
-  up <proj>                프로젝트의 모든 레인 백그라운드 데몬으로 기동
-  down <proj>              데몬 종료 (어느 터미널에서든 동작)
-  restart <proj>           데몬 재기동 (down + up)
-  status [<proj>] [--all] [--json]  레인 상태 조회 (<proj> 생략 시 실행 중 전체, --all 정지 포함)
-  doctor [<proj>] [--json]  환경·설정 정적 점검(상태 비의존)
-  logs <proj> <lane> [N] [-f|--follow]  레인 transcript 최근 N줄(기본 50, --engine 시 엔진 stderr; -f/--follow 로 실시간 추적)
-  sessions <proj> <lane> [--json]  기록된 엔진 세션 목록(재개는 채널에서: /resume 또는 resume 체크박스)
-  lane add <proj> <lane>   레인 conf 생성
-  lane ls <proj>           레인 목록
-  lane show <proj> <lane>  레인 conf 출력
-  lane rm <proj> <lane>    레인 conf 삭제 (--purge 시 state/queue/out 도 삭제)
-  proj ls                  등록된 프로젝트 목록(레인·실행 수 포함)
-  proj rm <proj>           프로젝트 삭제(모든 레인 + state; 확인 후 삭제)
-  completion <bash|zsh>    셸 자동완성 스크립트 출력(명령·프로젝트/레인 Tab 완성; 설정은 'adde completion --help')
+  init [<proj>]                       가이드 설정 (doctor + 짧은 별칭 + 프로젝트 생성)
+  up <proj> [--json]                  프로젝트의 모든 세션을 백그라운드 데몬으로 기동
+  down <proj> [--json]                데몬 종료 (어느 터미널에서든 동작)
+  restart <proj> [--json]             데몬 재기동 (down + up)
+  status [<proj>] [--all] [--json]    세션 상태 조회 (<proj> 생략 시 실행 중 전체, --all 정지 포함)
+  doctor [<proj>] [--json]            환경·설정 정적 점검(상태 비의존)
+  logs <proj> <session> [N] [-f|--follow] [--json]  세션 transcript 최근 N줄(기본 50, --engine 시 엔진 stderr; -f/--follow 로 실시간 추적)
+  project <add|set|show|ls|rm>        프로젝트 관리('adde project help' 로 옵션 확인)
+  session <new|ls|show|clear|rm>      세션 관리('adde session help' 로 옵션 확인)
+  bind <add|rm|ls>                    채널 바인딩 관리('adde bind help' 로 옵션 확인)
+  vault <rebuild>                     이벤트 기록에서 노트·dedup 원장 재생성
+  completion <bash|zsh>    셸 자동완성 스크립트 출력(명령·프로젝트/세션 Tab 완성; 설정은 'adde completion --help')
   alias [names...]         짧은 별칭 설치(기본 ad, add) — adde 실행 파일 옆에
 
 옵션:
   -v, --version            버전 출력
   -h, --help               도움말 출력
 
-명령별 도움말은 \`{{primary}} <command> --help\`, 레인 옵션은 \`adde lane help\` 참조.`,
+명령별 도움말은 \`{{primary}} <command> --help\`, 프로젝트 옵션은 \`adde project help\` 참조.`,
     up: `사용법: adde up <proj> [--json]
 
   --json       기계가독 출력(부팅 리포트: 레인별 상태 + running 수; 미확정 시 null)`,
@@ -47,14 +44,14 @@ export const ko = {
 
 환경·설정 정적 점검(상태 비의존).
   --json       기계가독 출력({v, checks}; 요약 줄·업데이트 알림 없음)`,
-    logs: `사용법: adde logs <proj> <lane> [N] [--engine] [--daemon] [-f|--follow] [--json]
+    logs: `사용법: adde logs <proj> <session> [N] [--engine] [--daemon] [-f|--follow] [--json]
 
-레인 로그의 최근 N줄(기본 50)을 출력합니다.
-  (기본)       레인 transcript(메시지·결정·알림)
+세션 로그의 최근 N줄(기본 50)을 출력합니다.
+  (기본)       세션 transcript(메시지·결정·알림)
   --engine     엔진 stderr 캡처(engine.log) — 엔진 크래시 진단
-  --daemon     <proj> launchd 데몬 로그(기동 실패 원인이 여기 쌓임; <lane> 불필요)
+  --daemon     <proj> launchd 데몬 로그(기동 실패 원인이 여기 쌓임; <session> 불필요)
   -f, --follow 실시간 추적 — 종료 없이 계속 실행하며 신규 라인을 방출(Ctrl-C 로 정지)
-  --json       기계가독 출력({proj, lane, path, exists, lines}; --follow 보다 우선 — 스냅샷만 출력, 실시간 추적 없음)`,
+  --json       기계가독 출력({proj, sid, path, exists, lines}; --follow 보다 우선 — 스냅샷만 출력, 실시간 추적 없음)`,
     sessions: `사용법: adde sessions <proj> <lane> [--json]
 
 레인에 기록된 엔진 세션 목록(번호·첫 프롬프트 발췌·마지막 활동·id; 현재 세션 ◀ 표시).
@@ -87,6 +84,45 @@ adde 실행 파일 옆에 짧은 별칭(심링크)을 설치해 \`adde up <proj>
     laneShow: "사용법: adde lane show <proj> <lane> [key] [--json] [--defaults]",
     laneRm: "사용법: adde lane rm <proj> <lane>",
     daemon: "사용법: adde __daemon <proj> (내부 명령)",
+    project: `사용법:
+  adde project add <proj> --vault <path> [옵션]   프로젝트 생성(vault 경로 필수)
+  adde project set <proj> <key> <value>... [--unset <key>...]   설정 편집
+  adde project show <proj> [key] [--json] [--defaults]           설정 조회
+  adde project ls [--json]                                        프로젝트 목록
+  adde project rm <proj> --force                                  프로젝트 삭제(설정 루트만 — vault 데이터 보존)
+
+project add 옵션:
+  --vault <path>                 마크다운 저장소 루트(필수)
+  --cwd <path>                   프로젝트 실행 경로
+  --engine <id>                  기본 엔진(기본값 acp)
+  --perm-tier <acp|autopass>     권한 티어(기본 acp)
+  --allowlist <a,b,c>            자동 허용 도구
+  --denylist <entries,...>       autopass 에서 채널 승인으로 폴백할 도구
+  --hard-deny <entries,...>      방어심화 즉시 거부 도구
+  --safe-defaults                내장 기본 위험 목록으로 hard-deny 시드
+  --backup <path>                보관 이관 위치(옵트인)
+  --retention-days <n>           보관 일수(기본 2)
+  --sync-provider <local|icloud> 동기화 제공자(기본 local)
+
+project set 목록 증분 편집:
+  --add-allow <a,b,c> / --rm-allow <a,b,c>
+  --add-deny <a,b,c> / --rm-deny <a,b,c>
+  --add-hard-deny <a,b,c> / --rm-hard-deny <a,b,c>
+
+편집 가능 키(adde project set <proj> <key> <value>...):
+  cwd, engine, engine_args, perm_tier, allowlist, denylist, hard_deny, gate_timeout_sec, lang, file_mode, auto_restart, auto_resume, idle_hibernate, hibernate_after_min, max_active_engines, auto_relaunch, markdown.palette, markdown.records_cap, vault.backup, vault.retention_days, vault.sync_provider`,
+    session: `사용법:
+  adde session new <proj> [--engine <id>] [--title <t>] [--engine-args <args>] [--json]
+  adde session ls <proj> [--json]
+  adde session show <proj> <sid> [--json]
+  adde session clear <proj> <sid>            초기화(승계 — 새 세션 생성, 기존 세션은 archived)
+  adde session rm <proj> <sid> [--purge] [--force]`,
+    bind: `사용법:
+  adde bind add <proj> <sid> --surface <id> --address <addr>
+  adde bind rm <proj> <sid> --surface <id> --address <addr>
+  adde bind ls <proj> [--json]`,
+    vault: `사용법:
+  adde vault rebuild <proj> [--sid <sid>] [--json]   이벤트 기록에서 노트·dedup 원장 재생성`,
     lane: `사용법:
   adde lane add <proj> <lane> [옵션]   레인 conf 생성
   adde lane set <proj> <lane> [<key> <value> ...] [--unset <key> ...]  기존 레인 conf 를 제자리 편집 (TTY 에서 인자 없이 실행 시 대화형 위저드)

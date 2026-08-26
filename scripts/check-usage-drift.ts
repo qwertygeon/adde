@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { en } from "../src/shared/locales/en.js";
 import { ko } from "../src/shared/locales/ko.js";
 import { GLOBAL_FLAGS, findCommand, subFlagNames, flagNames } from "../src/cli/spec.js";
-import { dotOnlyEditableKeys } from "../src/core/lane-schema.js";
+import { dotOnlyEditableKeys } from "../src/shared/project-schema.js";
 
 export interface DriftIssue {
   usageKey: string;
@@ -149,8 +149,6 @@ function buildChecks(): UsageCheck[] {
   return [
     // summary usage — (b) 전용(플래그 비열거, declaredFlags 는 (a) 미적용을 위해 빈 배열).
     { usageKey: "usage.main", declaredFlags: [] },
-    { usageKey: "usage.laneAdd", declaredFlags: [] },
-    { usageKey: "usage.laneSet", declaredFlags: [] },
     // enumerating usage — (a)+(b) 모두 적용.
     { usageKey: "usage.up", declaredFlags: cmdFlags("up") },
     { usageKey: "usage.down", declaredFlags: cmdFlags("down") },
@@ -158,28 +156,42 @@ function buildChecks(): UsageCheck[] {
     { usageKey: "usage.status", declaredFlags: cmdFlags("status") },
     { usageKey: "usage.doctor", declaredFlags: cmdFlags("doctor") },
     { usageKey: "usage.logs", declaredFlags: cmdFlags("logs") },
-    { usageKey: "usage.sessions", declaredFlags: cmdFlags("sessions") },
-    { usageKey: "usage.laneLs", declaredFlags: subFlagNames("lane", "ls") },
-    { usageKey: "usage.laneShow", declaredFlags: subFlagNames("lane", "show") },
     // 그룹 help — 하위 명령 플래그 union(그룹 help 가 전 플래그 열거처, research §E-3).
-    // add/set/ls/show/rm 전체를 포함해야 한다 — 좁힌 undeclared 판정에서 ls/show 의
-    // --json 을 undeclared 로 오탐하지 않도록.
     {
-      usageKey: "usage.lane",
+      usageKey: "usage.project",
       declaredFlags: [
         ...new Set([
-          ...subFlagNames("lane", "add"),
-          ...subFlagNames("lane", "set"),
-          ...subFlagNames("lane", "ls"),
-          ...subFlagNames("lane", "show"),
-          ...subFlagNames("lane", "rm"),
+          ...subFlagNames("project", "add"),
+          ...subFlagNames("project", "set"),
+          ...subFlagNames("project", "show"),
+          ...subFlagNames("project", "ls"),
+          ...subFlagNames("project", "rm"),
         ]),
       ],
     },
     {
-      usageKey: "usage.proj",
-      declaredFlags: [...new Set([...subFlagNames("proj", "ls"), ...subFlagNames("proj", "rm")])],
+      usageKey: "usage.session",
+      declaredFlags: [
+        ...new Set([
+          ...subFlagNames("session", "new"),
+          ...subFlagNames("session", "ls"),
+          ...subFlagNames("session", "show"),
+          ...subFlagNames("session", "clear"),
+          ...subFlagNames("session", "rm"),
+        ]),
+      ],
     },
+    {
+      usageKey: "usage.bind",
+      declaredFlags: [
+        ...new Set([
+          ...subFlagNames("bind", "add"),
+          ...subFlagNames("bind", "rm"),
+          ...subFlagNames("bind", "ls"),
+        ]),
+      ],
+    },
+    { usageKey: "usage.vault", declaredFlags: [...new Set(subFlagNames("vault", "rebuild"))] },
   ];
 }
 
@@ -187,13 +199,13 @@ export function runCheck(): DriftIssue[] {
   const checks = buildChecks();
   const enCatalog: UsageCatalog = { locale: "en", texts: flattenCatalog(en) };
   const koCatalog: UsageCatalog = { locale: "ko", texts: flattenCatalog(ko) };
-  // 점표기 전용 편집 키(플래그 없음)는 그룹 help(usage.lane)에 canonical 이름 문서화를 강제한다.
+  // 점표기 전용 편집 키(플래그 없음)는 그룹 help(usage.project)에 canonical 이름 문서화를 강제한다.
   const dotKeys = dotOnlyEditableKeys();
   return [
     ...usageDriftIssues(enCatalog, checks),
     ...usageDriftIssues(koCatalog, checks),
-    ...keyDocIssues(enCatalog, "usage.lane", dotKeys),
-    ...keyDocIssues(koCatalog, "usage.lane", dotKeys),
+    ...keyDocIssues(enCatalog, "usage.project", dotKeys),
+    ...keyDocIssues(koCatalog, "usage.project", dotKeys),
   ];
 }
 

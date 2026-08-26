@@ -5,13 +5,13 @@
  */
 import { t } from "../shared/i18n.js";
 import { execFile as nodeExecFile } from "node:child_process";
-import { writeFile, unlink, mkdir, stat, open, rename } from "node:fs/promises";
+import { readFile, writeFile, unlink, mkdir, stat, open, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatBlock } from "../shared/notify.js";
-import { assertSafeSegment, defaultBase } from "../shared/paths.js";
-import { readProjConf } from "../shared/conf.js";
+import { assertSafeSegment, defaultBase, projectPaths } from "../shared/paths.js";
+import { parseProjectConf } from "../shared/conf.js";
 import { DEFAULT_LOG_MAX_BYTES } from "../shared/log-rotate.js";
 
 // ── 타입 정의 ───────────────────────────────────────────────────────────────
@@ -266,8 +266,11 @@ export async function loadDaemon(proj: string, deps?: LaunchdDeps): Promise<void
   // 데몬 stdout/stderr 로그 경로 base: ~/Library/Logs/adde/<proj> (adde logs --daemon 과 동일 SSOT).
   const logPath = daemonLogBase(proj, deps);
 
-  // proj.conf 의 auto_restart — 레인 base(defaultBase/$ADDE_HOME)에 위치(launchd 로그 base 와 별개).
-  const { auto_restart: autoRestart } = await readProjConf(defaultBase(), proj);
+  // project.conf 의 auto_restart — 설정 루트(defaultBase/$ADDE_HOME)에 위치(launchd 로그 base 와 별개).
+  const { projectConf } = projectPaths(defaultBase(), proj);
+  const autoRestart = await readFile(projectConf, "utf8")
+    .then((text) => parseProjectConf(text).auto_restart)
+    .catch(() => true);
   const plistContent = renderPlist(proj, { nodeBin, addeBin, logPath, pathEnv, autoRestart });
 
   // launchd 표준출력/표준오류 로그 — (재)적재 시점(현재, launchd fd 미보유 창)에만 keep-tail 트림.

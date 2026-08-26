@@ -1,15 +1,15 @@
 /**
- * fail-closed 권한 게이트.
+ * fail-closed 권한 게이트(v2 — 필드명 lane→sid, ADR-016·FR-044 승계).
  * Promise.race([userDecision, timeout]).
  * timeout/sendMessage 오류/도달 실패 → decision:deny (default).
  * allow 는 명시적 사용자 콜백 수신 시에만.
- * 기본 타임아웃 = 600초(10분) (레인 conf 에서 재정의 가능).
+ * 기본 타임아웃 = 600초(10분) (프로젝트 conf 에서 재정의 가능).
  */
 
 export interface PermRequest {
   v: 1;
   id: string;
-  lane: string;
+  sid: string;
   channel: string;
   tool: string;
   detail: string;
@@ -63,8 +63,13 @@ export async function gateRequestDecision(
     return { id: req.id, decision: "deny", reason: "채널 전송 오류 — fail-closed deny" };
   }
 
+  // waitForDecision() 이 reject(응답 파싱 오류 등)하면 fail-closed deny 로 흡수한다(NFR-004·SC-038).
+  // race 에 넘기기 *전에* .catch 를 붙여야 한다 — timeoutPromise 가 먼저 이겨도 이 Promise 가
+  // 나중에 reject 하면 catch 없이는 unhandled rejection 이 된다(선순위 결정과 무관하게 항상 안전).
+  const decisionPromise = waitForDecision().catch((): "deny" => "deny");
+
   try {
-    const decision = await Promise.race([waitForDecision(), timeoutPromise]);
+    const decision = await Promise.race([decisionPromise, timeoutPromise]);
     return { id: req.id, decision };
   } finally {
     // 결정 승리 경로에서도 타임아웃 타이머 clear — 미clear 시 결정 후 timeoutMs(기본 10분)만큼

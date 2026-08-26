@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
-import { lanePaths, expandTilde, normalizeUserPath } from "../../src/shared/paths.js";
+import {
+  projectPaths,
+  sessionPaths,
+  expandTilde,
+  normalizeUserPath,
+} from "../../src/shared/paths.js";
 
 describe("expandTilde", () => {
   it("'~' 를 홈 디렉터리로 확장한다", () => {
@@ -41,77 +46,69 @@ describe("normalizeUserPath", () => {
   });
 });
 
-// SC-025 일부: lanePaths 가 lane 파라미터로만 경로를 구성(하드코딩 금지)
+// v2 재작성(T-D11 처분 — 레인축 → 프로젝트·세션축, lanePaths 제거) — projectPaths/sessionPaths 가
+// proj/sid 파라미터만으로 경로를 구성하는지(하드코딩 금지) + 세션 간 교차 접근 차단을 검증한다.
 
-describe("lanePaths (SC-025 레인 경로 동적 구성)", () => {
-  it("base/proj/lane 파라미터로 경로를 구성한다", () => {
-    const paths = lanePaths("/tmp/adde-test", "myproj", "telegram");
+describe("projectPaths·sessionPaths (프로젝트·세션 경로 동적 구성)", () => {
+  it("base/proj 파라미터로 프로젝트 경로가 구성된다", () => {
+    const paths = projectPaths("/tmp/adde-test", "myproj");
+    expect(paths.root).toContain("myproj");
+    expect(paths.sessionsDir).toContain("myproj");
+    expect(paths.envFile).toContain("myproj");
+  });
+
+  it("base/proj/sid 파라미터로 세션 경로가 구성된다", () => {
+    const paths = sessionPaths("/tmp/adde-test", "myproj", "sess-1");
     expect(paths.queueDir).toContain("myproj");
-    expect(paths.queueDir).toContain("telegram");
-    expect(paths.processingDir).toContain("myproj");
-    expect(paths.processingDir).toContain("telegram");
-    expect(paths.outDir).toContain("myproj");
-    expect(paths.outDir).toContain("telegram");
-    expect(paths.stateDir).toContain("myproj");
-    expect(paths.stateDir).toContain("telegram");
+    expect(paths.queueDir).toContain("sess-1");
+    expect(paths.processingDir).toContain("sess-1");
+    expect(paths.recordFile).toContain("sess-1");
   });
 
-  it("레인 A 와 레인 B 의 경로가 다르다 — 교차 접근 방지", () => {
-    const pathsA = lanePaths("/tmp/adde-test", "proj", "lane-a");
-    const pathsB = lanePaths("/tmp/adde-test", "proj", "lane-b");
+  it("세션 A 와 세션 B 의 경로가 다르다 — 교차 접근 방지", () => {
+    const pathsA = sessionPaths("/tmp/adde-test", "proj", "sess-a");
+    const pathsB = sessionPaths("/tmp/adde-test", "proj", "sess-b");
     expect(pathsA.queueDir).not.toBe(pathsB.queueDir);
-    expect(pathsA.stateDir).not.toBe(pathsB.stateDir);
-    expect(pathsA.outDir).not.toBe(pathsB.outDir);
+    expect(pathsA.processingDir).not.toBe(pathsB.processingDir);
   });
 
-  it("레인 B 경로가 레인 A 경로 문자열에 포함되지 않는다 — 교차 접근 0건", () => {
-    const pathsA = lanePaths("/tmp/adde-test", "proj", "lane-a");
-    const pathsB = lanePaths("/tmp/adde-test", "proj", "lane-b");
-    // queueDir of A should not mention lane-b
-    expect(pathsA.queueDir).not.toContain("lane-b");
-    expect(pathsB.queueDir).not.toContain("lane-a");
+  it("세션 B 경로가 세션 A 경로 문자열에 포함되지 않는다 — 교차 접근 0건", () => {
+    const pathsA = sessionPaths("/tmp/adde-test", "proj", "sess-a");
+    const pathsB = sessionPaths("/tmp/adde-test", "proj", "sess-b");
+    expect(pathsA.queueDir).not.toContain("sess-b");
+    expect(pathsB.queueDir).not.toContain("sess-a");
   });
 
   it("base override 가 모든 경로에 적용된다", () => {
     const customBase = "/custom/base";
-    const paths = lanePaths(customBase, "proj", "telegram");
-    expect(paths.queueDir.startsWith(customBase)).toBe(true);
-    expect(paths.stateDir.startsWith(customBase)).toBe(true);
+    const paths = projectPaths(customBase, "proj");
+    expect(paths.root.startsWith(customBase)).toBe(true);
+    expect(paths.sessionsDir.startsWith(customBase)).toBe(true);
   });
 
-  it("lanesDir 이 존재한다 — conf 파일 스캔 경로", () => {
-    const paths = lanePaths("/tmp/adde-test", "proj", "telegram");
-    expect(paths.lanesDir).toBeDefined();
-    expect(typeof paths.lanesDir).toBe("string");
+  it("sessions.d 경로가 존재한다 — 세션 레코드 스캔 경로", () => {
+    const paths = projectPaths("/tmp/adde-test", "proj");
+    expect(paths.sessionsDir).toBeDefined();
+    expect(typeof paths.sessionsDir).toBe("string");
   });
 
-  it("sessionIdFile 이 stateDir 내에 위치한다", () => {
-    const paths = lanePaths("/tmp/adde-test", "proj", "telegram");
-    expect(paths.sessionIdFile.startsWith(paths.stateDir)).toBe(true);
-  });
-
-  it("transcriptLog 이 stateDir 내에 위치한다", () => {
-    const paths = lanePaths("/tmp/adde-test", "proj", "telegram");
-    expect(paths.transcriptLog.startsWith(paths.stateDir)).toBe(true);
-  });
-
-  it("envFile 이 stateDir 내에 위치한다", () => {
-    const paths = lanePaths("/tmp/adde-test", "proj", "telegram");
-    expect(paths.envFile.startsWith(paths.stateDir)).toBe(true);
+  it("recordFile 이 세션 sid 를 경로에 포함한다", () => {
+    const paths = sessionPaths("/tmp/adde-test", "proj", "sess-1");
+    expect(paths.recordFile).toContain("sess-1");
   });
 });
 
-describe("lanePaths 경로 탈출 차단", () => {
-  it("lane 에 디렉터리 탈출(..)이 있으면 throw", () => {
-    expect(() => lanePaths("/tmp/adde-test", "proj", "../../etc")).toThrow();
+describe("projectPaths·sessionPaths 경로 탈출 차단", () => {
+  it("sid 에 디렉터리 탈출(..)이 있으면 throw", () => {
+    expect(() => sessionPaths("/tmp/adde-test", "proj", "../../etc")).toThrow();
   });
   it("proj 에 디렉터리 탈출(..)이 있으면 throw", () => {
-    expect(() => lanePaths("/tmp/adde-test", "../../etc", "lane")).toThrow();
+    expect(() => projectPaths("/tmp/adde-test", "../../etc")).toThrow();
   });
-  it("경로 구분자가 든 lane 은 throw", () => {
-    expect(() => lanePaths("/tmp/adde-test", "proj", "a/b")).toThrow();
+  it("경로 구분자가 든 sid 는 throw", () => {
+    expect(() => sessionPaths("/tmp/adde-test", "proj", "a/b")).toThrow();
   });
   it("정상 식별자(영숫자·_·-)는 허용", () => {
-    expect(() => lanePaths("/tmp/adde-test", "proj_1", "telegram-claude")).not.toThrow();
+    expect(() => sessionPaths("/tmp/adde-test", "proj_1", "sess-1a")).not.toThrow();
   });
 });

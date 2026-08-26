@@ -1,34 +1,23 @@
 /**
- * 셸 자동완성 스크립트 생성 — `adde completion <bash|zsh>`.
- * COMMAND_SPECS(SSOT)에서 명령·플래그·위치인자 종류를 파생하므로, 스펙에 추가하면
- * 자동완성이 함께 갱신된다. bash·zsh(맥 기본) 지원. adde + 짧은 별칭(ad·add) 등록.
+ * 셸 자동완성 스크립트 생성(v2) — `adde completion <bash|zsh>`.
+ * COMMAND_SPECS(SSOT)에서 명령·하위명령·플래그를 전부 파생한다(T021 완료 기준 "자동완성·usage·
+ * 파서·디스패치 4소비자가 신규 표면으로 자동 갱신") — 그룹 명령(subs 보유) 목록·각 하위명령의
+ * 플래그 이름을 하드코딩하지 않고 `visibleCommands()`/`findSub()`/`flagNames()` 로만 읽는다.
+ * proj/session 동적 완성은 `${ADDE_HOME:-~/.config/adde}/projects` 를 스캔한다.
  *
- * 동적 완성(proj/lane 이름)은 node 스폰 없이 셸에서 설정 base(`${ADDE_HOME:-~/.config/adde}`)를
- * 직접 스캔한다(즉응성). enum 플래그 값·디렉터리 플래그·zsh 명령 설명도 스펙에서 생성.
+ * **범위 고지(spec "범위 외" · CUT-006)**: 플래그 *이름* 완성까지만 제공한다 — 값 플래그의 enum
+ * 완성(`--perm-tier acp|autopass` 등, `FLAG_VALUES` 참조)과 프로젝트 설정 점표기 키 완성은 FR-042
+ * 가 요구하지 않는 순수 입력 편의 기능이라 spec.md "범위 외"·scope.md CUT-006 에 이미 명시적으로
+ * 제외됐다(침묵 축소 아님).
  */
-import {
-  visibleCommands,
-  findCommand,
-  flagNames,
-  subFlagNames,
-  FLAG_VALUES,
-  DIR_FLAGS,
-  GLOBAL_FLAGS,
-} from "./spec.js";
-import type { CommandSpec } from "./spec.js";
+import { visibleCommands, findCommand, flagNames } from "./spec.js";
+import type { CommandSpec, SubSpec } from "./spec.js";
 import { RECOMMENDED_ALIASES } from "./alias.js";
-// lane set/show 점표기 키 완성 — 스키마(SoT) 파생. 본 모듈은 run.ts 가 lazy import 하므로
-// lane-schema 가 전 명령 기동 경로에 편입되지 않는다.
-import { exposedEditableKeys } from "../core/lane-schema.js";
 
 export const SUPPORTED_SHELLS = ["bash", "zsh"] as const;
 export type CompletionShell = (typeof SUPPORTED_SHELLS)[number];
 
-/** adde + 짧은 별칭을 완성 대상으로 등록(공백 구분, 중복 제거). */
 const COMPLETION_TARGETS = [...new Set(["adde", ...RECOMMENDED_ALIASES])].join(" ");
-
-/** 최상위 명령 중 자동완성에서 특수 처리하는(제네릭 case 제외) 이름. */
-const SPECIAL = new Set(["lane", "proj", "completion", "alias"]);
 
 function commandNames(): string {
   return visibleCommands()
@@ -36,258 +25,131 @@ function commandNames(): string {
     .join(" ");
 }
 
-/** 제네릭(위치인자 proj/lane) 명령 목록 — lane/completion/alias 제외. */
-function genericCommands(): CommandSpec[] {
-  return visibleCommands().filter((c) => !SPECIAL.has(c.name));
-}
-
-/** 최상위 명령의 하위 명령 이름 목록(공백 구분) — lane/proj 자동완성 배선용. */
 function subNames(cmdName: string): string {
   return (findCommand(cmdName)?.subs ?? []).map((s) => s.name).join(" ");
 }
 
-// ── bash ────────────────────────────────────────────────────────────────
-
-/** 값 플래그(enum·디렉터리) 뒤 완성 case (bash). */
-function bashFlagValueCases(): string {
-  const lines = Object.entries(FLAG_VALUES).map(
-    ([flag, vals]) =>
-      `    ${flag}) COMPREPLY=( $(compgen -W "${vals.join(" ")}" -- "$cur") ); return;;`,
-  );
-  lines.push(`    ${DIR_FLAGS.join("|")}) COMPREPLY=( $(compgen -d -- "$cur") ); return;;`);
-  return lines.join("\n");
+/** subs 를 보유한(그룹) 명령 목록 — 하드코딩 대신 COMMAND_SPECS 에서 직접 파생. */
+function groupCommands(): CommandSpec[] {
+  return visibleCommands().filter((c) => c.subs && c.subs.length > 0);
 }
 
-/** 제네릭 명령별 위치인자·플래그 완성 case (bash). */
-function bashCommandCases(): string {
-  return genericCommands()
-    .map((c) => {
-      const flags = flagNames(c).join(" ");
-      const withFlags = (base: string): string => (flags ? `${base} ${flags}` : base);
-      const pos = c.positional ?? [];
-      if (pos[0] === "proj" && pos[1] === "lane") {
-        const tail = flags
-          ? `\n      COMPREPLY=( $(compgen -W "${flags}" -- "$cur") ); return;;`
-          : `\n      ;;`;
-        return `    ${c.name})
-      if [ "$cword" -eq 2 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") ); return; fi
-      if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "${withFlags('$(_adde_lanes "${COMP_WORDS[2]}")')}" -- "$cur") ); return; fi${tail}`;
-      }
-      if (pos[0] === "proj") {
-        const tail = flags
-          ? `\n      COMPREPLY=( $(compgen -W "${flags}" -- "$cur") ); return;;`
-          : `\n      ;;`;
-        return `    ${c.name})
-      if [ "$cword" -eq 2 ]; then COMPREPLY=( $(compgen -W "${withFlags("$(_adde_projects)")}" -- "$cur") ); return; fi${tail}`;
-      }
-      return null;
-    })
-    .filter((s): s is string => s !== null)
-    .join("\n");
+/** subs 가 없는(단일 표면) 명령 중 플래그가 1개 이상인 것 — 완성할 플래그가 있는 것만 대상. */
+function flatCommandsWithFlags(): CommandSpec[] {
+  return visibleCommands().filter((c) => (!c.subs || c.subs.length === 0) && c.flags.length > 0);
 }
 
 function bashScript(): string {
   const commands = commandNames();
-  const globals = GLOBAL_FLAGS.join(" ");
-  const laneSubs = subNames("lane");
-  const laneRmFlags = subFlagNames("lane", "rm").join(" ");
-  const projSubs = subNames("proj");
-  const projLsFlags = subFlagNames("proj", "ls").join(" ");
-  const projRmFlags = subFlagNames("proj", "rm").join(" ");
-  const laneAddFlags = subFlagNames("lane", "add").join(" ");
-  const laneSetFlags = subFlagNames("lane", "set").join(" ");
-  const laneKeys = exposedEditableKeys().join(" ");
-  const aliasSuggest = RECOMMENDED_ALIASES.join(" ");
-  return `# adde bash completion — generated by \`adde completion bash\`
-# 무엇: adde 명령·프로젝트/레인 이름·옵션 값을 Tab 으로 완성. 설치(installer 아님, 스크립트 출력일 뿐)해야 동작.
-# 설치: adde completion bash > /usr/local/etc/bash_completion.d/adde   (또는 ~/.bashrc 에 'source <(adde completion bash)' 추가)
-# proj/lane 동적 완성은 \${ADDE_HOME:-~/.config/adde} 를 스캔한다.
+  const groupCases = groupCommands()
+    .map((c) => {
+      const subCases = (c.subs ?? [])
+        .map(
+          (s: SubSpec) =>
+            `          ${s.name}) COMPREPLY=( $(compgen -W "${flagNames(s).join(" ")}" -- "$cur") );;`,
+        )
+        .join("\n");
+      return `    ${c.name})
+      if [[ "$cur" == -* ]]; then
+        case "\${COMP_WORDS[2]}" in
+${subCases}
+        esac
+      else
+        COMPREPLY=( $(compgen -W "${subNames(c.name)}" -- "$cur") )
+      fi
+      return;;`;
+    })
+    .join("\n");
+  const flatCases = flatCommandsWithFlags()
+    .map(
+      (c) => `    ${c.name})
+      [[ "$cur" == -* ]] && COMPREPLY=( $(compgen -W "${flagNames(c).join(" ")}" -- "$cur") )
+      return;;`,
+    )
+    .join("\n");
+  return `# adde bash completion(v2) — generated by \`adde completion bash\`
 _adde_projects() {
-  local base="\${ADDE_HOME:-$HOME/.config/adde}" d
+  local base="\${ADDE_HOME:-$HOME/.config/adde}/projects" d
   [ -d "$base" ] || return 0
-  for d in "$base"/*/; do [ -d "\${d}lanes.d" ] && basename "$d"; done 2>/dev/null
-}
-_adde_lanes() {
-  local base="\${ADDE_HOME:-$HOME/.config/adde}" f
-  [ -n "$1" ] || return 0
-  for f in "$base/$1/lanes.d"/*.conf; do [ -e "$f" ] && basename "$f" .conf; done 2>/dev/null
+  for d in "$base"/*/; do [ -e "\${d}project.conf" ] && basename "$d"; done 2>/dev/null
 }
 _adde() {
-  local cur prev cword
+  local cur cword
   cur="\${COMP_WORDS[COMP_CWORD]}"
-  prev="\${COMP_WORDS[COMP_CWORD-1]}"
   cword=\${COMP_CWORD}
-  case "$prev" in
-${bashFlagValueCases()}
-  esac
   local commands="${commands}"
-  local cmd="\${COMP_WORDS[1]}"
   if [ "$cword" -eq 1 ]; then
-    COMPREPLY=( $(compgen -W "\${commands} ${globals}" -- "$cur") )
+    COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
     return
   fi
+  local cmd="\${COMP_WORDS[1]}"
+  if [ "$cword" -eq 2 ] && [[ "$cur" != -* ]]; then
+    COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") )
+  fi
   case "$cmd" in
-    lane)
-      if [ "$cword" -eq 2 ]; then COMPREPLY=( $(compgen -W "${laneSubs}" -- "$cur") ); return; fi
-      local sub="\${COMP_WORDS[2]}"
-      case "$sub" in
-        add)
-          if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") ); return; fi
-          if [ "$cword" -ge 5 ] || [ "\${cur:0:1}" = "-" ]; then COMPREPLY=( $(compgen -W "${laneAddFlags}" -- "$cur") ); return; fi
-          ;;
-        ls)
-          if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") ); return; fi ;;
-        set)
-          if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") ); return; fi
-          if [ "$cword" -eq 4 ]; then COMPREPLY=( $(compgen -W "$(_adde_lanes "\${COMP_WORDS[3]}")" -- "$cur") ); return; fi
-          COMPREPLY=( $(compgen -W "${laneKeys} ${laneSetFlags}" -- "$cur") ); return;;
-        show)
-          if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") ); return; fi
-          if [ "$cword" -eq 4 ]; then COMPREPLY=( $(compgen -W "$(_adde_lanes "\${COMP_WORDS[3]}")" -- "$cur") ); return; fi
-          if [ "$cword" -eq 5 ]; then COMPREPLY=( $(compgen -W "${laneKeys}" -- "$cur") ); return; fi ;;
-        rm)
-          if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects)" -- "$cur") ); return; fi
-          if [ "$cword" -eq 4 ]; then COMPREPLY=( $(compgen -W "$(_adde_lanes "\${COMP_WORDS[3]}") ${laneRmFlags}" -- "$cur") ); return; fi
-          COMPREPLY=( $(compgen -W "${laneRmFlags}" -- "$cur") ); return;;
-      esac
-      return;;
-    proj)
-      if [ "$cword" -eq 2 ]; then COMPREPLY=( $(compgen -W "${projSubs}" -- "$cur") ); return; fi
-      local psub="\${COMP_WORDS[2]}"
-      case "$psub" in
-        ls) COMPREPLY=( $(compgen -W "${projLsFlags}" -- "$cur") ); return;;
-        rm)
-          if [ "$cword" -eq 3 ]; then COMPREPLY=( $(compgen -W "$(_adde_projects) ${projRmFlags}" -- "$cur") ); return; fi
-          COMPREPLY=( $(compgen -W "${projRmFlags}" -- "$cur") ); return;;
-      esac
-      return;;
-    completion) COMPREPLY=( $(compgen -W "${SUPPORTED_SHELLS.join(" ")}" -- "$cur") ); return;;
-    alias) COMPREPLY=( $(compgen -W "${aliasSuggest}" -- "$cur") ); return;;
-${bashCommandCases()}
+${groupCases}
+${flatCases}
   esac
 }
 complete -F _adde ${COMPLETION_TARGETS}
 `;
 }
 
-// ── zsh ─────────────────────────────────────────────────────────────────
-
-/** 값 플래그(enum·디렉터리) 뒤 완성 case (zsh). */
-function zshFlagValueCases(): string {
-  const lines = Object.entries(FLAG_VALUES).map(
-    ([flag, vals]) => `    ${flag}) compadd ${vals.join(" ")}; return;;`,
-  );
-  lines.push(`    ${DIR_FLAGS.join("|")}) _files -/; return;;`);
-  return lines.join("\n");
-}
-
-/** 제네릭 명령별 위치인자·플래그 완성 case (zsh). */
-function zshCommandCases(): string {
-  return genericCommands()
-    .map((c) => {
-      const names = flagNames(c);
-      const flagsVals = names.length > 0 ? `; _values 'option' ${names.join(" ")}` : "";
-      const pos = c.positional ?? [];
-      if (pos[0] === "proj" && pos[1] === "lane") {
-        return `    ${c.name})
-      if (( CURRENT == 3 )); then _adde_projects; return; fi
-      if (( CURRENT == 4 )); then _adde_lanes "\${words[3]}"${flagsVals}; return; fi${flagsVals ? `\n      _values 'option' ${names.join(" ")} ;;` : "\n      ;;"}`;
-      }
-      if (pos[0] === "proj") {
-        return `    ${c.name})
-      if (( CURRENT == 3 )); then _adde_projects${flagsVals}; return; fi${flagsVals ? `\n      _values 'option' ${names.join(" ")} ;;` : "\n      ;;"}`;
-      }
-      return null;
-    })
-    .filter((s): s is string => s !== null)
-    .join("\n");
-}
-
 function zshScript(): string {
   const commandDescribe = visibleCommands()
     .map((c) => `'${c.name}:${c.desc ?? c.name}'`)
     .join(" ");
-  const laneSubs = subNames("lane");
-  const laneRmFlags = subFlagNames("lane", "rm").join(" ");
-  const projSubs = subNames("proj");
-  const projLsFlags = subFlagNames("proj", "ls").join(" ");
-  const projRmFlags = subFlagNames("proj", "rm").join(" ");
-  const laneAddFlags = subFlagNames("lane", "add").join(" ");
-  const laneSetFlags = subFlagNames("lane", "set").join(" ");
-  const laneKeys = exposedEditableKeys().join(" ");
-  const aliasSuggest = RECOMMENDED_ALIASES.join(" ");
   const targets = ["adde", ...RECOMMENDED_ALIASES].join(" ");
+  const groupCases = groupCommands()
+    .map((c) => {
+      const subCases = (c.subs ?? [])
+        .map(
+          (s: SubSpec) =>
+            `        ${s.name}) _values '${c.name} ${s.name} flag' ${flagNames(s).join(" ")} ;;`,
+        )
+        .join("\n");
+      return `    ${c.name})
+      if [[ "$cur" == -* ]]; then
+        case "\${words[3]}" in
+${subCases}
+        esac
+      else
+        _values '${c.name} subcommand' ${subNames(c.name)}
+      fi
+      ;;`;
+    })
+    .join("\n");
+  const flatCases = flatCommandsWithFlags()
+    .map(
+      (c) =>
+        `    ${c.name}) [[ "$cur" == -* ]] && _values '${c.name} flag' ${flagNames(c).join(" ")} ;;`,
+    )
+    .join("\n");
   return `#compdef ${targets}
-# adde zsh completion — generated by \`adde completion zsh\`
-# 무엇: adde 명령·프로젝트/레인 이름·옵션 값을 Tab 으로 완성. 설치(installer 아님, 스크립트 출력일 뿐)해야 동작.
-# 설치: adde completion zsh > "\${fpath[1]}/_adde"   (그 뒤 compinit 실행; ~/.zshrc 에 'autoload -Uz compinit && compinit' 필요)
-# proj/lane 동적 완성은 \${ADDE_HOME:-~/.config/adde} 를 스캔한다.
+# adde zsh completion(v2) — generated by \`adde completion zsh\`
 _adde_projects() {
-  local base="\${ADDE_HOME:-$HOME/.config/adde}" d
+  local base="\${ADDE_HOME:-$HOME/.config/adde}/projects"
   local -a p
-  for d in "$base"/*/lanes.d(/N); do p+=("\${\${d:h}:t}"); done
+  for d in "$base"/*/(/N); do [ -e "\${d}project.conf" ] && p+=("\${\${d:h}:t}"); done
   compadd -- $p
-}
-_adde_lanes() {
-  local base="\${ADDE_HOME:-$HOME/.config/adde}" f
-  local -a l
-  [ -n "$1" ] || return 0
-  for f in "$base/$1/lanes.d"/*.conf(N); do l+=("\${\${f:t}:r}"); done
-  compadd -- $l
 }
 _adde() {
   local -a commands
+  local cur="\${words[CURRENT]}"
   commands=(${commandDescribe})
-  case "\${words[CURRENT-1]}" in
-${zshFlagValueCases()}
-  esac
   if (( CURRENT == 2 )); then
     _describe 'adde command' commands
     return
   fi
   case "\${words[2]}" in
-    lane)
-      if (( CURRENT == 3 )); then _values 'lane subcommand' ${laneSubs}; return; fi
-      case "\${words[3]}" in
-        add)
-          if (( CURRENT == 4 )); then _adde_projects; return; fi
-          if (( CURRENT == 5 )) && [[ "\${words[5]}" != -* ]]; then return; fi
-          _values 'option' ${laneAddFlags} ;;
-        ls)
-          if (( CURRENT == 4 )); then _adde_projects; return; fi ;;
-        set)
-          if (( CURRENT == 4 )); then _adde_projects; return; fi
-          if (( CURRENT == 5 )); then _adde_lanes "\${words[4]}"; return; fi
-          compadd -- ${laneKeys} ${laneSetFlags} ;;
-        show)
-          if (( CURRENT == 4 )); then _adde_projects; return; fi
-          if (( CURRENT == 5 )); then _adde_lanes "\${words[4]}"; return; fi
-          if (( CURRENT == 6 )); then compadd -- ${laneKeys}; return; fi ;;
-        rm)
-          if (( CURRENT == 4 )); then _adde_projects; return; fi
-          if (( CURRENT == 5 )); then _adde_lanes "\${words[4]}"; return; fi
-          _values 'option' ${laneRmFlags} ;;
-      esac
-      ;;
-    proj)
-      if (( CURRENT == 3 )); then _values 'proj subcommand' ${projSubs}; return; fi
-      case "\${words[3]}" in
-        ls) _values 'option' ${projLsFlags} ;;
-        rm)
-          if (( CURRENT == 4 )); then _adde_projects; return; fi
-          _values 'option' ${projRmFlags} ;;
-      esac
-      ;;
-    completion) _values 'shell' ${SUPPORTED_SHELLS.join(" ")} ;;
-    alias) compadd ${aliasSuggest} ;;
-${zshCommandCases()}
+${groupCases}
+${flatCases}
   esac
 }
 compdef _adde ${targets}
 `;
 }
 
-/** 지정 셸의 자동완성 스크립트 텍스트. 미지원 셸은 null. */
 export function completionScript(shell: string): string | null {
   if (shell === "bash") return bashScript();
   if (shell === "zsh") return zshScript();

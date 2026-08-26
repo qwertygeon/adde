@@ -2,42 +2,40 @@ _English | [한국어](getting-started.ko.md)_
 
 # Getting started
 
-ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) from your markdown notes (or a chat channel like Telegram). This document covers everything from installation to starting your first lane.
+ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) from your markdown notes, accumulating every conversation as searchable, linked notes in a vault you own. This document covers install through your first project and session.
 
 ## Table of Contents
 
 - [Requirements](#requirements)
 - [Install](#install)
 - [Core concepts](#core-concepts)
-- [Lane configuration](#lane-configuration)
+- [Create a project](#create-a-project)
+- [Create a session](#create-a-session)
 - [Start / stop](#start--stop)
 - [Status and diagnostics](#status-and-diagnostics)
-- [Project-folder mapping](#project-folder-mapping)
 - [Uninstall](#uninstall)
 - [Next steps](#next-steps)
 
 ## Requirements
 
-- macOS (primary target)
-- Node.js LTS (>=22) — the daemon is launched via launchd, so `node` must be on PATH (`adde up` injects the PATH at launch time into the plist).
-- AI engine ACP adapter — `@agentclientprotocol/claude-agent-acp` is bundled with `adde` (no separate install needed).
-- **Claude authentication**: the engine drives Claude Code through the bundled adapter, so **Claude must be authenticated under the same user account** (e.g. logged in via Claude Code, or `ANTHROPIC_API_KEY` set). If unauthenticated, the engine handshake fails and the lane will not start — first confirm that Claude works on its own.
+- macOS (primary target — daemon control depends on launchd)
+- Node.js LTS (>=22) on PATH
+- AI engine ACP adapter (bundled with `adde`)
+- **Claude authentication**: the engine drives Claude Code through the bundled adapter, so Claude must be authenticated under the same user account (logged in via Claude Code, or `ANTHROPIC_API_KEY` set). Confirm Claude works on its own before troubleshooting ADDE.
 
 ## Install
-
-**Global npm install** (the main command is `adde`):
 
 ```bash
 npm i -g adde-acp
 ```
 
-The single entry point is `adde`. The short aliases (`ad`, `add`) are not installed by default; if you want them, opt in via `adde init` (the onboarding wizard) or `adde alias` — see the [command reference](commands.md#alias--install-short-aliases).
+The single entry point is `adde`. Short aliases (`ad`, `add`) are opt-in — via `adde init` or `adde alias` (see [command reference](commands.md#alias--install-short-aliases)).
 
-> **Permission error (EACCES)**: common on system/Homebrew Node (root-owned prefix). `sudo npm i -g` is not recommended (the package becomes root-owned, which breaks later updates). Use a version manager (nvm/fnm) or set a user prefix (`npm config set prefix ~/.local` and add `~/.local/bin` to PATH).
+> **Permission error (EACCES)**: use a version manager (nvm/fnm) or a user npm prefix instead of `sudo npm i -g` (root-owned installs break later updates).
 >
-> **Running from source (development/contributing)**: after `pnpm install && pnpm build`, run `node dist/cli/adde.js ...`. `pnpm run dev` is for a tsx foreground run; the daemon (`adde up`) requires a build.
+> **Running from source (development)**: `pnpm install && pnpm build`, then `node dist/cli/adde.js ...`. The daemon (`adde up`) requires a build — `pnpm run dev` is for a foreground tsx run only.
 
-After installing, run `adde doctor` once to check prerequisites (Node version, ACP adapter, configuration) so you can catch gaps that would otherwise only surface at lane-startup time.
+Run `adde doctor` once after installing:
 
 ```bash
 adde doctor        # global environment check, no project argument
@@ -46,119 +44,92 @@ adde doctor        # global environment check, no project argument
 ### Update
 
 ```bash
-npm i -g adde-acp@latest       # update to the latest version
-adde restart <proj>        # apply the new version to running lanes (restart required)
+npm i -g adde-acp@latest
+adde restart <proj>   # the daemon holds old code in memory until restarted
 ```
 
-`npm i -g adde-acp@latest` swaps the installed files, but **an already-running daemon still holds the old code in memory**, so you must restart it with `adde restart <proj>` for the new version to take effect. Pin a specific version with `npm i -g adde-acp@<x.y.z>`. (`adde status` and `adde doctor` print a one-line notice when a newer version is available on npm.)
+`adde status`/`adde doctor` print a one-line notice when a newer version is available.
 
 ## Core concepts
 
-- **Lane**: an independent vertical stack per `(channel source × backend × project folder)`. Input, approval, and output are all self-contained within the lane.
-- **Source**: the channel that receives instructions. `markdown` (note-file watching, e.g. Obsidian) or `telegram` (bot long-poll).
-- **Backend**: the AI-engine driving layer. Currently `acp` (Agent Client Protocol).
-- **Gate**: routes every permission request to channel approval. Defaults to deny on timeout (default 10 minutes) or error (fail-closed). Tune approval frequency with tiers (`acp` default / `autopass` opt-in), allowlist, denylist, and hard-deny — for concepts and recommended settings, see the [permissions guide](permissions.md).
+- **Project**: a top-level unit — a vault root (required) and optionally a working directory. Holds any number of sessions.
+- **Session**: one conversation. Has its own id, engine, and lifecycle state — `active` (engine resident) / `hibernated` (engine not resident, resumes on the next turn) / `detached` (resume failed or gave up self-recovery) / `archived` (superseded or explicitly ended).
+- **Binding**: the link between a channel address (e.g. a markdown note path) and a session. A Surface only knows the binding, never the session's internals.
+- **Vault**: the markdown storage root you specify — where every conversation accumulates as linked notes (turn/session/project). The only original data is the conversation event record inside it; notes, attachments-by-reference, and dedup results are all regenerable (`adde vault rebuild`).
+- **Engine**: the AI CLI driving layer, currently ACP-only (`claude-agent-acp`, registered as engine id `acp`).
+- **Gate**: routes every permission request to channel approval, fail-closed on timeout/error. See the [permissions guide](permissions.md).
 
-## Lane configuration
+Two independence axes run through the whole design: a **channel** (markdown; Telegram/Discord not implemented yet) never sees a session's internals, and an **engine** is driven only through its declared capabilities (`EngineCaps`) — the core never branches on which engine it is.
 
-A lane is **one file = one lane**. Write it in `~/.config/adde/<proj>/lanes.d/<lane>.conf`.
+## Create a project
 
-### Fastest start — `adde init`
+```bash
+adde project add myproj --vault ~/ObsidianVault --cwd /Users/me/work/my-project
+```
 
-The fastest way to create your first lane is the onboarding wizard:
+`--vault` is **required** — ADDE never invents a default storage location (this is deliberate: your conversation history is data you own, and where it lives is your choice, not a hidden default). `--cwd` is the folder the engine works in for this project (optional).
+
+For a guided walkthrough (including permission-tier choice), use the onboarding wizard instead:
 
 ```bash
 adde init [<proj>]
 ```
 
-It first runs the global `doctor` and shows the results → asks whether to install the short aliases → offers to set up shell tab-completion (prints the `adde completion <shell>` command for your shell) → prompts interactively for project/lane names and lane fields → creates the lane → prints the token-write and `adde up` start hints (TTY only). For a telegram lane the bot token is prompted last with **hidden input** (keystrokes not echoed) and written to `.env` (0600); leave it empty to set it later. Details: [command reference](commands.md#init--onboarding-wizard).
-
-### Configure via subcommands
-
-The `adde lane` subcommands create, list, and delete the conf file for you (direct editing also works).
+See the [command reference](commands.md#project--manage-projects) for the full `project add` option table (permission tier, allowlist/denylist/hard-deny, retention/backup, sync provider).
 
 ```bash
-# create a markdown (note) lane (markdown is the default source)
-adde lane add myproj md-claude --root /abs/Notes --inbox inbox.md
-
-# create a telegram lane (working folder, auto-allowed tools, reply target)
-adde lane add myproj tg-claude --source telegram --cwd /abs/project --allowlist Read,Grep --chat-id 12345
-
-# read the telegram bot token from stdin and write it to state/<lane>/.env (0600)
-printf '%s' "$BOT_TOKEN" | adde lane add myproj tg-claude --source telegram --token-stdin
-
-adde lane ls myproj                # list lanes
-adde lane show myproj tg-claude    # print conf
-adde lane rm myproj tg-claude      # delete conf
+adde project ls                    # list projects
+adde project show myproj           # print settings
+adde project set myproj perm_tier autopass --add-deny "Bash(sudo *)"
 ```
+
+## Create a session
 
 ```bash
-# interactive wizard — the default on a TTY when no field flags are given (the telegram token is prompted last, hidden)
-adde lane add myproj tg-claude
-adde lane add myproj tg-claude --interactive   # force the wizard; --no-interactive forces flags-only for scripts
+adde session new myproj --title "frontend work"
 ```
 
-On a TTY, `adde lane add <proj> <lane>` with **no field flags** launches the interactive wizard automatically; passing any field flag (or `--no-interactive`, or a non-TTY stdin) makes it non-interactive. The [command reference](commands.md#lane-add-options) table is authoritative for per-flag defaults and the full set of options (also available via `adde lane help`). An existing conf is not overwritten without `--force`. At creation time, a missing `cwd`, a missing markdown `root`, or a malformed token is reported as a warning (creation still proceeds).
+Each session gets its own conversation history, engine resume handle, and (for the markdown surface) an input note under `<vault>/adde/projects/myproj/sessions/<sid>/inbox.md` created automatically. You send instructions by editing that note — see the [markdown guide](markdown.md) for the full palette/compose/records layout.
 
-### conf keys (when editing directly)
-
-Common keys:
-
-```ini
-source=markdown         # markdown | telegram
-backend=acp
-engine=claude-agent-acp  # ACP engine launch profile
-perm_tier=acp
-acp_version=v1
-cwd=/abs/project/dir     # this lane's AI working folder (project-folder mapping)
-allowlist=Read,Grep      # optional: reduce approval frequency (gate stays on)
+```bash
+adde session ls myproj             # list sessions
+adde session show myproj <sid>     # session details
+adde session clear myproj <sid>    # succession — new session, old one archived (not deleted)
 ```
-
-Per-channel extra keys are **namespaced by source id** (`<source>.<field>`):
-
-- **markdown**: `markdown.root=<absolute path, e.g. Obsidian vault>`, `markdown.inbox=<relative to root>`, and optionally `markdown.approvals=` / `markdown.outbox=`. → [markdown guide](markdown.md).
-- **telegram**: `telegram.chat_id=<reply target>` (setting it also **auto-allows inbound from that chat**). The bot token goes not in the conf but in `~/.config/adde/<proj>/state/<lane>/.env` as `TELEGRAM_BOT_TOKEN=...` (never in arguments or logs). Inbound is processed only from allowed senders (`telegram.chat_id` ∪ `telegram.allow_from`); with none set, all inbound is denied (fail-closed) — authentication details: [telegram.md](telegram.md).
 
 ## Start / stop
 
 ```bash
-adde up <proj>     # start all lanes in lanes.d as background daemons (macOS launchd) — returns immediately after registration
-adde down <proj>   # stop the daemon (from any terminal)
-adde restart <proj># restart the daemon (down + up)
-adde --version
+adde up <proj>       # start the project's daemon (macOS launchd) — returns immediately after registration
+adde down <proj>     # stop the daemon (from any terminal)
+adde restart <proj>  # restart the daemon — required after a project-conf change
 ```
+
+One daemon process per project hosts every session. On boot, every session that was `active` auto-resumes using its stored engine resume handle.
 
 ## Status and diagnostics
 
 ```bash
-adde status <proj>            # show per-lane status (status value definitions: status section of the command reference)
-adde status                   # no argument: aggregate running lanes across all projects (--all: include stopped)
-adde doctor <proj>            # static check of environment/config (self-diagnosis before startup)
-adde logs <proj> <lane>       # recent lane activity (transcript)
-adde sessions <proj> <lane>   # engine session ledger list (resume/reset are channel commands)
+adde status <proj>            # per-session status table
+adde status                   # no argument: aggregate every project
+adde doctor <proj>            # static check of environment/config
+adde logs <proj> <sid>        # recent session activity (conversation event record)
 ```
 
-**Success check**: if the lane shows `running` under `adde status <proj>`, startup succeeded. If it shows `stopped`/`dead`/`stale`, or if `adde up` failed, move on to [troubleshooting](troubleshooting.md).
-
-If it won't start or doesn't respond, check with `adde doctor` first. For the full command set see the [command reference](commands.md); for remedies by symptom see [troubleshooting](troubleshooting.md).
-
-## Project-folder mapping
-
-Each lane's `cwd` is that lane's AI working directory. Assigning a different `cwd` per lane lets you **pair each channel/note with its own project folder** and run several at once. Keep several confs and one `adde up` starts them all.
+**Success check**: if a session shows `active` (or `hibernated` — expected once idle) under `adde status <proj>`, the daemon and that session are healthy. `detached` means it needs attention — see [troubleshooting](troubleshooting.md).
 
 ## Uninstall
 
 ```bash
-adde down <proj>       # 1) stop the daemon first — deregisters the launchd LaunchAgent
-npm uninstall -g adde-acp  # 2) remove the global package
+adde down <proj>              # 1) stop the daemon first — deregisters the launchd LaunchAgent
+npm uninstall -g adde-acp     # 2) remove the global package
 ```
 
-**Order matters**: if you remove the package without `adde down`, the registered launchd LaunchAgent lingers and, even after a reboot, keeps trying to restart the (now-gone) executable. If you have several projects, run `adde down <proj>` for each (check registration status with `adde doctor <proj>`). Config/state files (`~/.config/adde/`) remain, so to remove everything, delete that directory after confirming.
+Repeat `adde down <proj>` for each project before uninstalling (check with `adde doctor <proj>`), or a lingering launchd registration will keep trying to restart the now-missing executable. Config/settings (`~/.config/adde/`) remain after uninstall — delete that directory to remove everything. **Your vault (conversation history) is never touched by uninstall** — it's ordinary markdown files at the path you chose.
 
 ## Next steps
 
-- Note-based driving with markdown notes (e.g. Obsidian): [markdown.md](markdown.md)
-- Drive it with a Telegram bot: [telegram.md](telegram.md)
+- Drive it from markdown notes (e.g. Obsidian): [markdown.md](markdown.md)
 - Understand the permission gate and tiers: [permissions.md](permissions.md)
 - Full command set: [commands.md](commands.md)
 - Troubleshooting: [troubleshooting.md](troubleshooting.md)

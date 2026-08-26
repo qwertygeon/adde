@@ -30,3 +30,20 @@ export function maskSecrets(text: string): string {
     .replace(KV_SECRET_PATTERN, (_m, key: string, sep: string) => `${key}${sep}***`)
     .replace(SENSITIVE_PATH_PATTERN, "***");
 }
+
+/**
+ * 엔진(모델) 유래 자유 텍스트(tool 제목 등)를 체크박스/제어구문이 파싱되는 파일(승인 노트 등)이나
+ * 사람이 읽는 렌더 표면에 삽입하기 전에 살균한다. 개행·제어문자를 공백으로 접어
+ * 위조 체크박스 라인("- [x] allow" 등)을 삽입할 수 없게 하고, maskSecrets 로 시크릿 패턴을 마스킹한
+ * 뒤 길이 상한(기본 200)으로 자른다 — 과도한 페이로드로 렌더를 부풀리는 것도 함께 막는다.
+ */
+export function sanitizeEngineText(text: string, maxLen = 200): string {
+  // \p{Cc} = 유니코드 Control 카테고리(C0 제어문자·DEL·C1 제어문자 — 개행 포함) — 리터럴 제어문자를
+  // 정규식에 직접 쓰지 않아 no-control-regex 를 우회한다.
+  const collapsed = text
+    .replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const masked = maskSecrets(collapsed);
+  return masked.length > maxLen ? `${masked.slice(0, maxLen)}…` : masked;
+}

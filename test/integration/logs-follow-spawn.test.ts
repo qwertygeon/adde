@@ -6,84 +6,122 @@ import { spawn } from "node:child_process";
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { lanePaths } from "../../src/shared/paths.js";
+import { writeMinimalProjectConf } from "../helpers/v2-fixtures.js";
 import { waitFor } from "../helpers/wait.js";
 
-// NFR-105 — C-1(즉시 종료)·H-1(회전 경합 크래시)·N-3(abort 후 잔여 tick) 를 vitest 워커 내 함수
-// 직접 호출이 아니라, 빌드 산출물(dist)을 실제 별도 OS 프로세스로 spawn 해 생존·스트리밍·시그널
-// 종료를 관통하여 방어한다(SC-101·SC-102b·SC-105b·SC-106b·SC-111·SC-116). 선행 `pnpm build` 필요 —
-// dist 산출물이 없으면(개발 중 미빌드) 이 파일 전체를 스킵한다(5b EXECUTION 이 빌드 후 재실행 확정,
-// PROC-R15). 격리 tmp ADDE_HOME 사용 — 실 launchd·실 봇/엔진 미접촉.
+// GAP-032 — v0.2.x `test/integration/logs-follow-spawn.test.ts`(실 child_process spawn + SIGINT
+// 처리 회귀, backlog C-1·H-1·N-3 방어)가 T-D11(v0.2.x 81건 처분) 당시 v2 로 이관되지 않고 소실됐다.
+// v0.2.x 는 `transcript.log` 를 바이트 tail 하고 rename 세대 회전을 추적했지만(core/log-follow.ts),
+// v2 `logs <proj> <sid> -f` 는 이벤트 세대 파일(events-NNNN.jsonl)을 매 폴링마다 재렌더-증분 방식으로
+// 읽는다(record/render.ts followSessionLog) — 세대 회전은 파일 rename 이 아니라 새 세대 파일 추가로
+// 표현되며, 별도 분기 없이 흡수된다(같은 파일 주석 참조). 본 파일은 이 흡수가 실 프로세스 경계
+// (dist/cli/adde.js spawn)에서도 깨지지 않는지 관통 검증한다. PROC-R18 계열 — dist 미존재 시 스킵.
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const distEntry = path.join(repoRoot, "dist", "cli", "adde.js");
 const distAvailable = fs.existsSync(distEntry);
 
 if (!distAvailable) {
-  // 조용한 스킵 방지 — 이 스위트가 빠지면 실 프로세스 회귀 5건이 미실행인 채 green 이 된다.
-  // console.warn 은 vitest 수집 단계에서 노출되지 않아 stderr 에 직접 쓴다.
   process.stderr.write(
-    "[logs-follow-spawn] dist 미존재 — 실 프로세스 spawn 회귀 5건을 스킵합니다. `pnpm build` 후 재실행하세요.\n",
+    "[logs-follow-spawn] dist 미존재 — 실 프로세스 spawn 회귀(C-1·H-1·N-3)를 스킵합니다. `pnpm build` 후 재실행하세요.\n",
   );
 }
 
 let tmpBase: string;
+let vaultRoot: string;
 
 beforeEach(() => {
   tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-logs-follow-spawn-"));
+  vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), "adde-logs-follow-spawn-vault-"));
 });
 
 afterEach(() => {
   fs.rmSync(tmpBase, { recursive: true, force: true });
+  fs.rmSync(vaultRoot, { recursive: true, force: true });
 });
 
 type LogsFollowChild = ChildProcessByStdio<null, Readable, Readable>;
 
-function spawnLogsFollow(proj: string, lane: string): LogsFollowChild {
-  return spawn(process.execPath, [distEntry, "logs", proj, lane, "-f"], {
+function spawnLogsFollow(proj: string, sid: string): LogsFollowChild {
+  return spawn(process.execPath, [distEntry, "logs", proj, sid, "-f"], {
     env: { ...process.env, ADDE_HOME: tmpBase },
     stdio: ["ignore", "pipe", "pipe"],
-  });
+  }) as LogsFollowChild;
 }
 
-/** child 의 stdout 누적 버퍼 + exit 여부를 함께 추적하는 헬퍼(생존/종료 판정은 exit 이벤트로). */
+/** child 의 stdout 누적 버퍼 + exit 여부·코드·시그널을 함께 추적하는 헬퍼. */
 function trackChild(child: LogsFollowChild): {
   out: () => string;
   exited: () => boolean;
   exitCode: () => number | null;
+  signalCode: () => NodeJS.Signals | null;
 } {
   let out = "";
   let exited = false;
   let exitCode: number | null = null;
+  let signalCode: NodeJS.Signals | null = null;
   child.stdout.on("data", (d: Buffer) => {
     out += d.toString("utf8");
   });
-  child.once("exit", (code) => {
+  child.once("exit", (code, signal) => {
     exited = true;
     exitCode = code;
+    signalCode = signal;
   });
-  return { out: () => out, exited: () => exited, exitCode: () => exitCode };
+  return {
+    out: () => out,
+    exited: () => exited,
+    exitCode: () => exitCode,
+    signalCode: () => signalCode,
+  };
+}
+
+function eventsDirFor(proj: string, sid: string): string {
+  return path.join(vaultRoot, "adde", "projects", proj, ".adde", "sessions", sid);
+}
+
+/** 최소 유효 이벤트 라인(note 타입) — renderEventLine 이 message 를 그대로 방출한다. */
+function noteEvent(sid: string, seq: number, message: string): unknown {
+  return {
+    v: 1,
+    sid,
+    turn: 1,
+    seq,
+    ts: new Date(Date.now() + seq).toISOString(),
+    t: "note",
+    kind: "info",
+    message,
+  };
+}
+
+/** 세대 파일(events-NNNN.jsonl)에 이벤트를 append(파일 없으면 생성) — v2 세대 회전은 rename 이
+ * 아니라 신규 세대 파일 추가로 표현된다(record/events.ts). */
+function appendGen(proj: string, sid: string, gen: number, events: unknown[]): void {
+  const dir = eventsDirFor(proj, sid);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `events-${String(gen).padStart(4, "0")}.jsonl`);
+  const content = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
+  fs.appendFileSync(file, content);
 }
 
 describe.skipIf(!distAvailable)(
-  "실 프로세스 spawn — logs -f 생존·스트리밍·SIGINT 종료 (NFR-105)",
+  "실 프로세스 spawn — logs -f 생존·세대 회전·SIGINT 종료 (GAP-032, backlog C-1·H-1·N-3 승계)",
   () => {
-    it("스냅샷 출력 후 프로세스가 종료하지 않고 append 된 신규 라인을 stdout 으로 실시간 방출한다 (SC-101)", async () => {
-      const proj = "p101";
-      const lane = "l101";
-      const paths = lanePaths(tmpBase, proj, lane);
-      fs.mkdirSync(paths.stateDir, { recursive: true });
-      fs.writeFileSync(paths.transcriptLog, "line1\n");
+    it("스냅샷 출력 후 프로세스가 종료하지 않고 신규 이벤트를 stdout 으로 실시간 방출한다 (C-1)", async () => {
+      const proj = "p-c1";
+      const sid = "sess-c1";
+      writeMinimalProjectConf(tmpBase, proj, { vault: vaultRoot });
+      appendGen(proj, sid, 1, [noteEvent(sid, 1, "line1")]);
 
-      const child = spawnLogsFollow(proj, lane);
+      const child = spawnLogsFollow(proj, sid);
       const t = trackChild(child);
 
       await waitFor(() => t.out().includes("line1"), { timeoutMs: 5000 });
-      // 스냅샷 출력 직후에도 살아있어야 한다(C-1 회귀 방어).
+      // 스냅샷 출력 직후에도 살아있어야 한다(C-1 회귀 방어 — 즉시 종료 금지).
       await new Promise((r) => setTimeout(r, 300));
       expect(t.exited()).toBe(false);
 
-      fs.appendFileSync(paths.transcriptLog, "line2\n");
+      appendGen(proj, sid, 1, [noteEvent(sid, 2, "line2")]);
       await waitFor(() => t.out().includes("line2"), { timeoutMs: 5000 });
 
       child.kill("SIGINT");
@@ -92,37 +130,42 @@ describe.skipIf(!distAvailable)(
       expect(t.out()).toContain("line2");
     }, 15000);
 
-    it("파일 삭제 후 재생성(회전) read 경합에도 생존하며 신 활성 파일 라인을 방출한다 (SC-102b)", async () => {
-      const proj = "p102b";
-      const lane = "l102b";
-      const paths = lanePaths(tmpBase, proj, lane);
-      fs.mkdirSync(paths.stateDir, { recursive: true });
-      fs.writeFileSync(paths.transcriptLog, "line1\n");
+    it("세대 회전(신규 events-NNNN.jsonl 파일 추가) 경합에도 크래시 없이 신 세대 라인을 방출한다 (H-1)", async () => {
+      const proj = "p-h1";
+      const sid = "sess-h1";
+      writeMinimalProjectConf(tmpBase, proj, { vault: vaultRoot });
+      appendGen(proj, sid, 1, [noteEvent(sid, 1, "gen1-line")]);
 
-      const child = spawnLogsFollow(proj, lane);
+      const child = spawnLogsFollow(proj, sid);
       const t = trackChild(child);
 
-      await waitFor(() => t.out().includes("line1"), { timeoutMs: 5000 });
+      await waitFor(() => t.out().includes("gen1-line"), { timeoutMs: 5000 });
 
-      // 회전 경합 모사 — rename(원본→.1) 후 신 파일 생성(신규 inode).
-      fs.renameSync(paths.transcriptLog, `${paths.transcriptLog}.1`);
-      fs.writeFileSync(paths.transcriptLog, "gen2\n");
-
-      await waitFor(() => t.out().includes("gen2"), { timeoutMs: 5000 });
+      // 세대 회전 모사 — v2 는 rename 이 아니라 새 세대 파일 추가로 표현(EVENTS_GENERATION_MAX_BYTES
+      // 초과 시 record/events.ts appendEvent() 가 gen+1 로 전환하는 것과 동형).
+      appendGen(proj, sid, 2, [noteEvent(sid, 2, "gen2-line")]);
+      await waitFor(() => t.out().includes("gen2-line"), { timeoutMs: 5000 });
       expect(t.exited()).toBe(false); // 회전 경합 중 크래시 없음(H-1)
+
+      // 회전 후 이어서 append 되는 라인도 유실·중복 없이 계속 방출되는지 확인.
+      appendGen(proj, sid, 2, [noteEvent(sid, 3, "gen2-line-b")]);
+      await waitFor(() => t.out().includes("gen2-line-b"), { timeoutMs: 5000 });
 
       child.kill("SIGINT");
       await waitFor(() => t.exited(), { timeoutMs: 5000 });
+
+      const joined = t.out();
+      expect(joined.split("gen1-line").length - 1).toBe(1); // 중복 emit 없음
+      expect(joined.split("gen2-line-b").length - 1).toBe(1);
     }, 15000);
 
-    it("SIGINT 수신 시 hang·좀비 없이 정상 종료한다 (SC-105b)", async () => {
-      const proj = "p105b";
-      const lane = "l105b";
-      const paths = lanePaths(tmpBase, proj, lane);
-      fs.mkdirSync(paths.stateDir, { recursive: true });
-      fs.writeFileSync(paths.transcriptLog, "line1\n");
+    it("SIGINT 수신 시 hang 없이 유계 시간 내 종료한다 (N-3)", async () => {
+      const proj = "p-n3";
+      const sid = "sess-n3";
+      writeMinimalProjectConf(tmpBase, proj, { vault: vaultRoot });
+      appendGen(proj, sid, 1, [noteEvent(sid, 1, "line1")]);
 
-      const child = spawnLogsFollow(proj, lane);
+      const child = spawnLogsFollow(proj, sid);
       const t = trackChild(child);
 
       await waitFor(() => t.out().includes("line1"), { timeoutMs: 5000 });
@@ -134,62 +177,11 @@ describe.skipIf(!distAvailable)(
           setTimeout(() => reject(new Error("SIGINT 후 5s 내 종료하지 않음(hang)")), 5000),
         ),
       ]);
-      expect(t.exitCode()).toBe(0); // graceful exit(내부 abort→followFile resolve→return 0)
-    }, 15000);
-
-    it("copytruncate(동일 inode truncate→재성장) 모사에도 유실·중복 없이 추적한다 (SC-106b)", async () => {
-      const proj = "p106b";
-      const lane = "l106b";
-      const paths = lanePaths(tmpBase, proj, lane);
-      fs.mkdirSync(paths.stateDir, { recursive: true });
-      fs.writeFileSync(paths.transcriptLog, "line1\n");
-
-      const child = spawnLogsFollow(proj, lane);
-      const t = trackChild(child);
-
-      await waitFor(() => t.out().includes("line1"), { timeoutMs: 5000 });
-
-      // 실 copytruncate 는 truncate·재기록이 별개 syscall 로 시간차를 두고 일어난다(research.md
-      // 실측 — 120ms 분리 시 별도 이벤트로 관측됨). truncate·regrow 가 단일 코얼레싱 윈도우(sub-ms)에
-      // 몰리면 중간 상태(size<offset)를 못 보는 잔여 창은 008 GAP-002 승계로 인정된 한계이지 본
-      // SC 의 보장 대상이 아니므로, 실제 timing 을 반영해 둘 사이 간격을 둔다.
-      fs.truncateSync(paths.transcriptLog, 0);
-      await new Promise((r) => setTimeout(r, 150));
-      fs.appendFileSync(paths.transcriptLog, "after-trunc\n");
-
-      await waitFor(() => t.out().includes("after-trunc"), { timeoutMs: 5000 });
-      expect(t.exited()).toBe(false);
-      const occurrences = t.out().split("after-trunc").length - 1;
-      expect(occurrences).toBe(1); // 중복 없음
-
-      child.kill("SIGINT");
-      await waitFor(() => t.exited(), { timeoutMs: 5000 });
-    }, 15000);
-
-    it("세대 회전(rename, inode 변경) 후 유실·중복 없이 새 활성 파일 라인을 방출한다 (SC-111, 008 계약 무회귀)", async () => {
-      const proj = "p111";
-      const lane = "l111";
-      const paths = lanePaths(tmpBase, proj, lane);
-      fs.mkdirSync(paths.stateDir, { recursive: true });
-      fs.writeFileSync(paths.transcriptLog, "line1\n");
-
-      const child = spawnLogsFollow(proj, lane);
-      const t = trackChild(child);
-
-      await waitFor(() => t.out().includes("line1"), { timeoutMs: 5000 });
-
-      fs.renameSync(paths.transcriptLog, `${paths.transcriptLog}.1`);
-      fs.writeFileSync(paths.transcriptLog, "gen2-a\n");
-      await waitFor(() => t.out().includes("gen2-a"), { timeoutMs: 5000 });
-
-      fs.appendFileSync(paths.transcriptLog, "gen2-b\n");
-      await waitFor(() => t.out().includes("gen2-b"), { timeoutMs: 5000 });
-
-      child.kill("SIGINT");
-      await waitFor(() => t.exited(), { timeoutMs: 5000 });
-
-      expect(t.out().split("gen2-a").length - 1).toBe(1);
-      expect(t.out().split("gen2-b").length - 1).toBe(1);
+      // ops.ts runLogs() 의 --follow 경로는 --engine 경로와 동일하게 SIGINT 핸들러를 별도 등록하지
+      // 않고 Node 기본 동작에 위임한다(record/render.ts followSessionLog 주석) — 핸들러 미등록 상태의
+      // 기본 SIGINT 는 시그널로 종료되므로 exitCode 는 null, signalCode 는 "SIGINT" 로 관측된다.
+      expect(t.exitCode()).toBeNull();
+      expect(t.signalCode()).toBe("SIGINT");
     }, 15000);
   },
 );

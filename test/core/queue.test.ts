@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { enqueue, claimNext, scanProcessing } from "../../src/core/queue.js";
-import { lanePaths } from "../../src/shared/paths.js";
+import { sessionPaths } from "../../src/shared/paths.js";
 
 // fake fs quirk 재현: atomic rename 중간상태·.sync-conflict 출현
 // SC-002: atomic rename — tmp 파일이 queue/ 에 노출되지 않음
@@ -15,15 +15,13 @@ import { lanePaths } from "../../src/shared/paths.js";
 // 이전했다. 본 파일은 queue→processing 도메인만 다룬다(013 tasks.md D-02).
 
 let tmpBase: string;
-let paths: ReturnType<typeof lanePaths>;
+let paths: ReturnType<typeof sessionPaths>;
 
 beforeEach(() => {
   tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), "adde-test-"));
-  paths = lanePaths(tmpBase, "myproj", "test-lane");
+  paths = sessionPaths(tmpBase, "myproj", "sess-1");
   fs.mkdirSync(paths.queueDir, { recursive: true });
   fs.mkdirSync(paths.processingDir, { recursive: true });
-  fs.mkdirSync(paths.outDir, { recursive: true });
-  fs.mkdirSync(paths.stateDir, { recursive: true });
 });
 
 afterEach(() => {

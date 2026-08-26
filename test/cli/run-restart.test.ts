@@ -47,9 +47,9 @@ describe("adde restart — 실패 레인 표면화 (SC-014, 리포트 기반)", 
       v: 1,
       bootId: 1,
       bootedAt: "x",
-      lanes: [
-        { lane: "ok", status: "running" },
-        { lane: "bad", status: "error", error: "engine spawn ENOENT" },
+      sessions: [
+        { sid: "ok", status: "active" },
+        { sid: "bad", status: "detached", error: "engine spawn ENOENT" },
       ],
       running: 1,
     });
@@ -75,7 +75,7 @@ describe("adde restart — exit code (SC-015)", () => {
       v: 1,
       bootId: 1,
       bootedAt: "x",
-      lanes: [{ lane: "bad", status: "error", error: "boom" }],
+      sessions: [{ sid: "bad", status: "detached", error: "boom" }],
       running: 0,
     });
     const cap = captureStdout();
@@ -94,7 +94,7 @@ describe("adde restart — exit code (SC-015)", () => {
       v: 1,
       bootId: 1,
       bootedAt: "x",
-      lanes: [{ lane: "a", status: "running" }],
+      sessions: [{ sid: "a", status: "active" }],
       running: 1,
     });
     const cap = captureStdout();

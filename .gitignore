@@ -34,7 +34,12 @@ Thumbs.db
 .claude/*
 # 특정 문서만 공개하려면 상위 디렉터리부터 되살린 뒤 파일을 지정:
 # !.claude/docs/
+# .claude/docs/*
 # !.claude/docs/context.md
+# !.claude/docs/session-state/
+# .claude/docs/session-state/*
+# !.claude/docs/session-state/handoff.md
+# !.claude/docs/session-state/handoff-*.md
 
 # AI workspace (pipeline 실행 로그·기록 — SPEC_ROOT 하위)
 _ai-workspace/

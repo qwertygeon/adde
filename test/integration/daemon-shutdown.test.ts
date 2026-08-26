@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { closeChild } from "../../src/backend/acp/lifecycle.js";
+import { closeChild } from "../../src/engines/acp/lifecycle.js";
 
 // D-003: graceful shutdown 순서 — SC-011
 // fake source/backend spy 로 호출 순서 검증 + 5s SIGKILL(fake 타이머).

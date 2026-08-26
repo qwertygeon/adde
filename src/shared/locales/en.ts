@@ -10,28 +10,25 @@ Usage:
   {{primary}} [command]      main entry point ({{short}} available after 'adde alias')
 
 Commands:
-  init [<proj>]            guided setup (doctor + short alias + create a lane)
-  up <proj>                start all lanes of the project as a background daemon
-  down <proj>              stop the daemon (works from any terminal)
-  restart <proj>           restart the daemon (down + up)
-  status [<proj>] [--all] [--json]  lane status (all running projects if <proj> omitted, --all includes stopped)
-  doctor [<proj>] [--json]  static environment/config checks (state-independent)
-  logs <proj> <lane> [N] [-f|--follow]  last N lines of the lane transcript (default 50, engine stderr with --engine; -f/--follow to tail live)
-  sessions <proj> <lane> [--json]  list recorded engine sessions (resume via channel: /resume or resume checkbox)
-  lane add <proj> <lane>   create a lane conf
-  lane ls <proj>           list lanes
-  lane show <proj> <lane>  print a lane conf
-  lane rm <proj> <lane>    delete a lane conf (--purge also removes state/queue/out)
-  proj ls                  list registered projects (with lane + running counts)
-  proj rm <proj>           delete a project (all its lanes + state; asks to confirm)
-  completion <bash|zsh>    print a shell completion script (Tab-complete commands/projects/lanes; run 'adde completion --help' for setup)
-  alias [names...]         install short aliases (default ad, add) next to the adde binary
+  init [<proj>]                       guided setup (doctor + short alias + create a project)
+  up <proj> [--json]                  start all sessions of the project as a background daemon
+  down <proj> [--json]                stop the daemon (works from any terminal)
+  restart <proj> [--json]             restart the daemon (down + up)
+  status [<proj>] [--all] [--json]    session status (all running projects if <proj> omitted, --all includes stopped)
+  doctor [<proj>] [--json]            static environment/config checks (state-independent)
+  logs <proj> <session> [N] [-f|--follow] [--json]  last N lines of the session transcript (default 50, engine stderr with --engine; -f/--follow to tail live)
+  project <add|set|show|ls|rm>        manage projects (run 'adde project help' for options)
+  session <new|ls|show|clear|rm>      manage sessions (run 'adde session help' for options)
+  bind <add|rm|ls>                    manage channel bindings (run 'adde bind help' for options)
+  vault <rebuild>                     regenerate notes/dedup ledger from the event record
+  completion <bash|zsh>               print a shell completion script (Tab-complete commands/projects/sessions; run 'adde completion --help' for setup)
+  alias [names...]                    install short aliases (default ad, add) next to the adde binary
 
 Options:
   -v, --version            print version
   -h, --help               print help
 
-Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help\` for lane options.`,
+Run \`{{primary}} <command> --help\` for command-specific help; \`adde project help\` for project options.`,
     up: `Usage: adde up <proj> [--json]
 
   --json       machine-readable output (boot report: lane statuses + running count; null if inconclusive)`,
@@ -46,14 +43,14 @@ Run \`{{primary}} <command> --help\` for command-specific help; \`adde lane help
 
 Static environment/config checks (state-independent).
   --json       machine-readable output ({v, checks}; no summary line/update notice)`,
-    logs: `Usage: adde logs <proj> <lane> [N] [--engine] [--daemon] [-f|--follow] [--json]
+    logs: `Usage: adde logs <proj> <session> [N] [--engine] [--daemon] [-f|--follow] [--json]
 
-Prints the last N lines (default 50) of a lane's log.
-  (default)    the lane transcript (messages, decisions, notices)
+Prints the last N lines (default 50) of a session's log.
+  (default)    the session transcript (messages, decisions, notices)
   --engine     the engine's stderr capture (engine.log) — for engine crashes
-  --daemon     the launchd daemon log for <proj> (startup failures land here; <lane> optional)
+  --daemon     the launchd daemon log for <proj> (startup failures land here; <session> optional)
   -f, --follow live tail — keeps running and prints new lines as they're appended (Ctrl-C to stop)
-  --json       machine-readable output ({proj, lane, path, exists, lines}; takes priority over --follow — snapshot only, no live tail)`,
+  --json       machine-readable output ({proj, sid, path, exists, lines}; takes priority over --follow — snapshot only, no live tail)`,
     sessions: `Usage: adde sessions <proj> <lane> [--json]
 
 Lists the engine sessions recorded for a lane (number, first-prompt excerpt, last activity, id; current marked ◀).
@@ -86,6 +83,45 @@ Only works on a global install (needs a writable bin dir next to adde on PATH); 
     laneShow: "Usage: adde lane show <proj> <lane> [key] [--json] [--defaults]",
     laneRm: "Usage: adde lane rm <proj> <lane>",
     daemon: "Usage: adde __daemon <proj> (internal command)",
+    project: `Usage:
+  adde project add <proj> --vault <path> [options]   create a project (vault path required)
+  adde project set <proj> <key> <value>... [--unset <key>...]   edit project settings
+  adde project show <proj> [key] [--json] [--defaults]           show settings
+  adde project ls [--json]                                        list projects
+  adde project rm <proj> --force                                  delete a project (config root only; vault data is preserved)
+
+project add options:
+  --vault <path>                 markdown vault root (required)
+  --cwd <path>                   project working directory
+  --engine <id>                  default engine (default: acp)
+  --perm-tier <acp|autopass>     permission tier (default acp)
+  --allowlist <a,b,c>            auto-allowed tools
+  --denylist <entries,...>       tools that fall back to channel approval under autopass
+  --hard-deny <entries,...>      defense-in-depth: tools refused outright
+  --safe-defaults                seed hard-deny with the built-in danger list
+  --backup <path>                retention backup directory (opt-in)
+  --retention-days <n>           retention days (default 2)
+  --sync-provider <local|icloud> vault sync provider (default local)
+
+project set incremental list edits:
+  --add-allow <a,b,c> / --rm-allow <a,b,c>
+  --add-deny <a,b,c> / --rm-deny <a,b,c>
+  --add-hard-deny <a,b,c> / --rm-hard-deny <a,b,c>
+
+Editable keys (adde project set <proj> <key> <value>...):
+  cwd, engine, engine_args, perm_tier, allowlist, denylist, hard_deny, gate_timeout_sec, lang, file_mode, auto_restart, auto_resume, idle_hibernate, hibernate_after_min, max_active_engines, auto_relaunch, markdown.palette, markdown.records_cap, vault.backup, vault.retention_days, vault.sync_provider`,
+    session: `Usage:
+  adde session new <proj> [--engine <id>] [--title <t>] [--engine-args <args>] [--json]
+  adde session ls <proj> [--json]
+  adde session show <proj> <sid> [--json]
+  adde session clear <proj> <sid>            initialize (succession — creates a new session, old one archived)
+  adde session rm <proj> <sid> [--purge] [--force]`,
+    bind: `Usage:
+  adde bind add <proj> <sid> --surface <id> --address <addr>
+  adde bind rm <proj> <sid> --surface <id> --address <addr>
+  adde bind ls <proj> [--json]`,
+    vault: `Usage:
+  adde vault rebuild <proj> [--sid <sid>] [--json]   regenerate notes/dedup ledger from the event record`,
     lane: `Usage:
   adde lane add <proj> <lane> [options]   create a lane conf
   adde lane set <proj> <lane> [<key> <value> ...] [--unset <key> ...]  edit an existing lane conf in place (no args on a TTY: interactive wizard)

@@ -6,7 +6,7 @@
  */
 /* global process */
 import readline from "node:readline";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, appendFileSync } from "node:fs";
 
 // engineArgs 가 spawn argv 로 실제 전달되는지 검증하기 위해,
 // 지정 시(FAKE_ACP_ARGV_DUMP) 자신의 argv(바이너리·스크립트 경로 제외분)를 파일로 덤프한다.
@@ -57,6 +57,20 @@ rl.on("line", (line) => {
   }
   if (method === "session/load") {
     const sid = String(params?.sessionId ?? "");
+    // 재개 관통 witness — 지정 시(FAKE_ACP_SESSION_LOAD_LOG) 실제로 수신한 session/load 호출을
+    // JSONL 로 append 한다(GAP-033 — SC-006 의 재개 실행 자체를 상태 필드 불변 대신 이 채널로
+    // 직접 관측해 vacuous-pass 를 배제한다). 여러 자식 프로세스가 같은 파일에 동시 append 할 수
+    // 있으나 각 write 는 짧은 단일 라인이라 O_APPEND 로 충분히 안전하다.
+    if (process.env.FAKE_ACP_SESSION_LOAD_LOG) {
+      try {
+        appendFileSync(
+          process.env.FAKE_ACP_SESSION_LOAD_LOG,
+          JSON.stringify({ sessionId: sid, pid: process.pid }) + "\n",
+        );
+      } catch {
+        // best-effort — 덤프 실패가 핸드셰이크 응답 자체를 막지 않는다.
+      }
+    }
     if (sid.startsWith("known-")) {
       send({ jsonrpc: "2.0", id, result: {} });
     } else {

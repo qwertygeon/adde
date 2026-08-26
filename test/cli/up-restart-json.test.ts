@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // up/restart --json (FR-001·FR-002·FR-003) — 기존 BootReport 산출을 그대로 JSON 으로 stdout 에
-// 낸다(SC-002). 키 집합이 기존 산출(v/bootId/bootedAt/lanes/running)만 포함하는지도 검증한다(SC-003).
+// 낸다(SC-002). 키 집합이 기존 산출(v/bootId/bootedAt/sessions/running)만 포함하는지도 검증한다(SC-003).
 // launchd/diagnostics/boot-report 를 모킹해 결정적으로 판정 경로만 검증한다(up-restart-surface.test.ts 관행).
 
 const { loadDaemon, unloadDaemon, daemonRegState, collectStatus, clearHalt } = vi.hoisted(() => ({
@@ -28,7 +28,7 @@ function captureStdout(): { out: () => string; restore: () => void } {
   return { out: () => chunks.join(""), restore: () => spy.mockRestore() };
 }
 
-const ALLOWED_KEYS = new Set(["v", "bootId", "bootedAt", "lanes", "running"]);
+const ALLOWED_KEYS = new Set(["v", "bootId", "bootedAt", "sessions", "running"]);
 
 beforeEach(() => {
   // 공유 기본 모킹 — daemonRegState 는 미등록(신규 기동 경로)으로 고정.
@@ -45,18 +45,18 @@ describe("adde up --json — 전 레인 성공 (SC-002 Happy)", () => {
       v: 1,
       bootId: 1,
       bootedAt: "2026-01-01T00:00:00.000Z",
-      lanes: [
-        { lane: "a", status: "running" },
-        { lane: "b", status: "running" },
+      sessions: [
+        { sid: "a", status: "active" },
+        { sid: "b", status: "active" },
       ],
       running: 2,
     });
     const cap = captureStdout();
     const code = await run(["up", "demo", "--json"]);
     cap.restore();
-    const parsed = JSON.parse(cap.out()) as { running: number; lanes: unknown[] };
+    const parsed = JSON.parse(cap.out()) as { running: number; sessions: unknown[] };
     expect(parsed.running).toBe(2);
-    expect(parsed.lanes).toHaveLength(2);
+    expect(parsed.sessions).toHaveLength(2);
     expect(code).toBe(0);
   });
 });
@@ -67,17 +67,17 @@ describe("adde up --json — 실패 레인 존재 (SC-002 Error)", () => {
       v: 1,
       bootId: 1,
       bootedAt: "2026-01-01T00:00:00.000Z",
-      lanes: [
-        { lane: "ok", status: "running" },
-        { lane: "bad", status: "error", error: "engine spawn ENOENT" },
+      sessions: [
+        { sid: "ok", status: "active" },
+        { sid: "bad", status: "detached", error: "engine spawn ENOENT" },
       ],
       running: 1,
     });
     const cap = captureStdout();
     const code = await run(["up", "demo", "--json"]);
     cap.restore();
-    const parsed = JSON.parse(cap.out()) as { lanes: Array<{ lane: string; status: string }> };
-    expect(parsed.lanes.some((l) => l.lane === "bad" && l.status === "error")).toBe(true);
+    const parsed = JSON.parse(cap.out()) as { sessions: Array<{ sid: string; status: string }> };
+    expect(parsed.sessions.some((l) => l.sid === "bad" && l.status === "detached")).toBe(true);
     expect(code).toBe(1);
   });
 });
@@ -98,12 +98,12 @@ describe("adde up --json — inconclusive(리포트 부재, ADR-004) (SC-002 Edg
 });
 
 describe("adde up --json — 키 집합 = 기존 산출만 (SC-003 Happy)", () => {
-  it("JSON 최상위 키가 v/bootId/bootedAt/lanes/running 부분집합이고 신규 파생 필드가 없다", async () => {
+  it("JSON 최상위 키가 v/bootId/bootedAt/sessions/running 부분집합이고 신규 파생 필드가 없다", async () => {
     readBootReport.mockResolvedValueOnce(null).mockResolvedValue({
       v: 1,
       bootId: 1,
       bootedAt: "2026-01-01T00:00:00.000Z",
-      lanes: [{ lane: "a", status: "running" }],
+      sessions: [{ sid: "a", status: "active" }],
       running: 1,
     });
     const cap = captureStdout();

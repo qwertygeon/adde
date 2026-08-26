@@ -10,7 +10,7 @@ import type { PermRequest } from "../../src/gate/gate.js";
 const makePermRequest = (id = "req-001"): PermRequest => ({
   v: 1,
   id,
-  lane: "test-lane",
+  sid: "test-lane",
   channel: "telegram",
   tool: "Bash",
   detail: "rm -rf build/",

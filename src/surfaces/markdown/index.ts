@@ -69,6 +69,17 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
     );
   }
 
+  /**
+   * 상태 존에 실을 세션 경고 — 노트는 레코드의 파생물이라 여기서만 읽는다(별도 상태 없음).
+   * 생성 시점 안내성 경고(`engine-no-resume`)는 제외한다: 미해소 상태가 아니라 그 엔진의 항구적
+   * 성질이고 `session new` 가 이미 알렸으므로, 노트에 상주하면 해소할 수 없는 경고가 된다.
+   * `status` 는 레코드 경고 전체를 세므로 개수가 다를 수 있다(표는 레코드 뷰, 노트는 미해소 실패 뷰).
+   */
+  const INFORMATIONAL_WARNINGS = new Set(["engine-no-resume"]);
+  function warningsFor(sid: string): readonly string[] {
+    return (sm!.get(sid)?.warnings ?? []).filter((w) => !INFORMATIONAL_WARNINGS.has(w));
+  }
+
   async function ensureInboxSkeleton(sid: string): Promise<void> {
     await ensureVaultLayout(ctx.vaultRoot, ctx.proj, sid);
     const vp = vaultPaths(ctx.vaultRoot, ctx.proj, sid);
@@ -85,7 +96,7 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
     // 치유하면 사용자가 방금 체크한 전송이 읽히기 전에 지워진다. 치유는 액션이 없는 idle 상태에서만
     // 하고, 액션 소비 후의 정규화는 processSession 이 담당한다.
     if (content.length > 0 && parseInbox(content).actions.length > 0) return;
-    const healed = healLayout(lines, { paletteEnabled: true, caps });
+    const healed = healLayout(lines, { paletteEnabled: true, caps, warnings: warningsFor(sid) });
     ensureBlankSend(healed.lines);
     if (healed.changed || content.length === 0) {
       await atomicWrite(vp.inboxNote, healed.lines.join("\n") + "\n");
@@ -216,7 +227,11 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
       }
     }
 
-    const healed = healLayout(lines, { paletteEnabled: true, caps: capsFor(sid) });
+    const healed = healLayout(lines, {
+      paletteEnabled: true,
+      caps: capsFor(sid),
+      warnings: warningsFor(sid),
+    });
     ensureBlankSend(healed.lines);
     if (mutated || healed.changed) {
       await atomicWrite(vp.inboxNote, healed.lines.join("\n") + "\n");

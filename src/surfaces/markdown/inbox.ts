@@ -4,6 +4,7 @@
  * 렌더·전송 아카이브)는 제거되고 마커가 **턴 노트로의 링크**로 전이한다(ADR-014).
  */
 import type { EngineCaps } from "../../engines/types.js";
+import { sanitizeEngineText } from "../../shared/mask.js";
 
 /** 체크박스 라인: `- [ ]`/`- [x]` + 라벨. CRLF 저장 노트도 허용(`\r?$`). */
 const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)\r?$/;
@@ -22,12 +23,34 @@ function isSendLabel(label: string): boolean {
 
 export const COMPOSE_SENTINEL = "<!-- adde:compose -->";
 export const RECORDS_ANCHOR = "<!-- adde:records -->";
+/** 상태 존 경계 — 세션 경고를 표시하는 기계 소유 영역. 경고가 없으면 이 줄째로 존재하지 않는다. */
+export const STATUS_SENTINEL = "<!-- adde:status -->";
 
 export function matchComposeSentinel(line: string): boolean {
   return line.trim() === COMPOSE_SENTINEL;
 }
 export function matchRecordsAnchor(line: string): boolean {
   return line.trim() === RECORDS_ANCHOR;
+}
+export function matchStatusSentinel(line: string): boolean {
+  return line.trim() === STATUS_SENTINEL;
+}
+
+const STATUS_LINE_PREFIX = "> ⚠️ ";
+/** 상태 존의 경고 줄인가 — 치유가 이 줄을 초안으로 오인해 프롬프트에 실어 보내지 않도록 판별한다. */
+export function isStatusWarningLine(line: string): boolean {
+  return line.startsWith(STATUS_LINE_PREFIX);
+}
+
+/**
+ * 상태 존 렌더 — 세션 경고의 순수 파생물이라 별도 상태를 만들지 않는다(노트와 레코드가 어긋날 수 없다).
+ * 체크박스를 쓰지 않는 인용 줄이다: 체크박스는 액션으로 파싱되고, 사용자가 조작할 수 있다는 잘못된
+ * affordance 를 준다. 경고 본문에는 엔진 유래 텍스트가 섞일 수 있어(`resume-failed:` 등) 삽입 전
+ * 살균한다 — 개행을 접어 위조 체크박스·위조 종단 마커 줄을 만들 수 없게 한다(승인 노트와 동일 자세).
+ */
+export function renderStatusZone(warnings: readonly string[]): string[] {
+  if (warnings.length === 0) return [];
+  return [STATUS_SENTINEL, ...warnings.map((w) => `${STATUS_LINE_PREFIX}${sanitizeEngineText(w)}`)];
 }
 
 /** 팔레트 4종(archive·clear·compact·resume, 인자 없음, ADR-030). `caps.compact==="none"` 이거나
@@ -252,6 +275,8 @@ export interface HealLayoutOptions {
   paletteEnabled: boolean;
   caps: EngineCaps;
   newRecords?: string[];
+  /** 세션 레코드의 경고 — 상태 존으로 렌더된다. 비었거나 미지정이면 존을 만들지 않는다. */
+  warnings?: readonly string[];
 }
 
 export interface HealLayoutResult {
@@ -279,7 +304,7 @@ function findSendIndex(lines: string[]): number {
  * (존별 분류 후 전량 재구성 — 일부만 삭제돼도 초안·기존 기록을 유실 없이 보존, SC-024 Edge).
  */
 export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayoutResult {
-  const { paletteEnabled, caps, newRecords = [] } = opts;
+  const { paletteEnabled, caps, newRecords = [], warnings = [] } = opts;
   const parsed = parseInbox(lines.join("\n"));
 
   const composeIdx = parsed.composeIndex;
@@ -289,6 +314,9 @@ export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayout
 
   const draftLines = lines.slice(Math.min(draftStart, draftEnd), draftEnd).filter((line) => {
     if (matchComposeSentinel(line) || matchRecordsAnchor(line)) return false;
+    // 작성 경계가 없는 손상 노트에서는 초안 슬라이스가 0번째부터 시작해 상태 존까지 삼킨다 —
+    // 걸러내지 않으면 경고문이 다음 지시 본문으로 엔진에 전달된다.
+    if (matchStatusSentinel(line) || isStatusWarningLine(line)) return false;
     if (isTerminalMarker(line)) return false;
     if (paletteEnabled && isCanonicalPaletteLine(line, caps)) return false;
     return true;
@@ -300,6 +328,7 @@ export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayout
   const existingRecords = lines.filter((line) => isTerminalMarker(line));
 
   const rebuilt: string[] = [];
+  rebuilt.push(...renderStatusZone(warnings));
   if (paletteEnabled) rebuilt.push(...renderPalette(caps, true));
   rebuilt.push(
     COMPOSE_SENTINEL,
@@ -310,7 +339,12 @@ export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayout
     ...existingRecords,
   );
 
-  const changed = rebuilt.length !== lines.length || rebuilt.some((l, i) => l !== lines[i]);
+  // 판정 기준은 "쓰기가 파일 바이트를 바꾸는가" 다 — 호출자는 false 면 쓰기를 건너뛴다.
+  // 배열 원소 비교는 쓰지 않는다: 호출자가 넘기는 `lines` 는 개행으로 끝나는 파일을 split 한
+  // 결과라 말미에 빈 원소가 하나 붙는데 `rebuilt` 는 그것을 만들지 않아, 내용이 같아도 길이가
+  // 항상 어긋나 changed 가 무조건 true 가 된다(그 상태에서는 idle 노트가 poll 마다 재기록됐다).
+  // 직렬화 형태끼리 비교하면 말미 개행 유무와 무관하게 실제 바이트 변화만 잡힌다.
+  const changed = rebuilt.join("\n") + "\n" !== lines.join("\n");
   return { lines: rebuilt, changed };
 }
 

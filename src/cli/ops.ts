@@ -27,15 +27,22 @@ const STATUS_SPEC = findCommand("status")!;
 const DOCTOR_SPEC = findCommand("doctor")!;
 const LOGS_SPEC = findCommand("logs")!;
 
+/** 경고 셀 — 없으면 `-`, 있으면 건수. */
+function warnCell(warnings: string[]): string {
+  return warnings.length === 0 ? "-" : String(warnings.length);
+}
+
 function statusTable(rows: SessionStatusRow[]): string {
   if (rows.length === 0) return "(세션 없음)";
+  // WARN 은 건수만 — 경고 본문을 실으면 표가 넓어지고 줄바꿈으로 정렬이 깨진다. 상세는 session show.
   return table(
-    ["SID", "STATUS", "ENGINE", "PRESENT", "TITLE", "LAST_ACTIVITY"],
+    ["SID", "STATUS", "ENGINE", "PRESENT", "WARN", "TITLE", "LAST_ACTIVITY"],
     rows.map((r) => [
       r.sid,
       r.status,
       r.engine,
       r.enginePresent ? "yes" : "no",
+      warnCell(r.warnings),
       r.title ?? "-",
       r.lastActivityAt,
     ]),
@@ -45,13 +52,14 @@ function statusTable(rows: SessionStatusRow[]): string {
 function statusTableAggregate(rows: AggregatedSessionStatusRow[]): string {
   if (rows.length === 0) return "(등록된 세션 없음)";
   return table(
-    ["PROJECT", "SID", "STATUS", "ENGINE", "PRESENT", "LAST_ACTIVITY"],
+    ["PROJECT", "SID", "STATUS", "ENGINE", "PRESENT", "WARN", "LAST_ACTIVITY"],
     rows.map((r) => [
       r.proj,
       r.sid,
       r.status,
       r.engine,
       r.enginePresent ? "yes" : "no",
+      warnCell(r.warnings),
       r.lastActivityAt,
     ]),
   );
@@ -245,8 +253,19 @@ export async function runLogs(rest: readonly string[], parsed?: ParseResult): Pr
       );
       return EXIT.OK;
     }
-    if (lines === null || lines.length === 0) {
-      process.stdout.write(`(엔진 로그 없음: ${path})\n`);
+    // 부재와 빈 내용을 구분한다 — 진단 명령이 정반대 두 상태를 같은 문구로 덮으면, 정상 동작
+    // (어댑터가 stderr 를 남기지 않음)이 배선 실패로 오진단된다. readTail 은 부재 시 null,
+    // 빈 파일 시 빈 배열을 준다.
+    if (lines === null) {
+      process.stdout.write(
+        `(엔진 로그 없음 — 이 세션의 엔진이 아직 기동하지 않았습니다: ${path})\n`,
+      );
+      return EXIT.OK;
+    }
+    if (lines.length === 0) {
+      process.stdout.write(
+        `(엔진 로그가 비어 있습니다 — 엔진이 진단 출력을 남기지 않았습니다: ${path})\n`,
+      );
       return EXIT.OK;
     }
     process.stdout.write(lines.join("\n") + "\n");

@@ -73,6 +73,17 @@ See the [command reference](commands.md#project--manage-projects) for the full e
 ```
 
 1. Write your message on the blank line(s) between `<!-- adde:compose -->` and the `- [ ] 📤 send` checkbox. Text above `<!-- adde:compose -->` (the palette area) is never treated as message content.
+
+> **Status zone.** When a session has an unresolved warning — a note that could not be saved, a resume that failed — ADDE inserts a `<!-- adde:status -->` block above the palette:
+>
+> ```markdown
+> <!-- adde:status -->
+>
+> > ⚠️ turn 6 note save failed: EACCES: permission denied …
+> ```
+>
+> The block is owned by ADDE and derived from the session record: it appears only while the warning stands and disappears on its own once the condition clears (a later turn saves successfully, a resume succeeds). Editing or deleting it has no effect — the next sweep rebuilds it from the record. Anything else you type above the palette is discarded the same way, so keep your own text below `<!-- adde:compose -->`.
+
 2. Check the box: `- [x] 📤 send`.
 3. ADDE detects it and delivers the message. That line moves through two stages:
    ```markdown

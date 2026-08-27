@@ -37,6 +37,8 @@ export interface SessionStatusRow {
   lastActivityAt: string;
   /** 데몬이 상주 중이고 이 세션이 active 인가(엔진 프로세스 상주 여부의 근사, FR-031). */
   enginePresent: boolean;
+  /** 세션 레코드의 경고 — 저장 실패·재개 실패 등. `status` 가 유무를, `session show` 가 본문을 보인다. */
+  warnings: string[];
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -74,6 +76,7 @@ export async function collectStatus(
     title: r.title,
     lastActivityAt: r.lastActivityAt,
     enginePresent: daemonAlive && r.status === "active",
+    warnings: r.warnings,
   }));
 }
 

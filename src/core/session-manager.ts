@@ -222,6 +222,12 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
         lastActivityAt: r.lastActivityAt,
       })),
     });
+    // 투영이 성공했으므로 이전 저장 실패는 해소됐다 — 남겨 두면 다음 실패를 가린다. 성공 경로에
+    // 제거를 두어 별도 정리 명령 없이 자동으로 사라지게 한다.
+    if (rec.warnings.some((w) => w.startsWith("storage-failed:"))) {
+      rec.warnings = rec.warnings.filter((w) => !w.startsWith("storage-failed:"));
+      await persist(rec);
+    }
   }
 
   function driverFor(engineId: string): EngineDriverDescriptor {
@@ -258,6 +264,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
           }
         : {}),
       onSessionError: (reason: string) => onTurnFailure(sid, reason),
+      onStorageFailure: (reason: string) => noteStorageFailure(sid, reason),
       retentionPolicy: policy(),
       refreshNotes: (turn) => refreshNotes(sid, turn),
     });
@@ -337,6 +344,29 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
     const rt = runtimes.get(sid);
     if (rt) rt.runtimeError = reason;
     await deps.onSessionError?.(sid, reason).catch(() => {});
+  }
+
+  /**
+   * 경고를 접두 종류별로 1건만 유지하며 추가한다 — 같은 종류의 실패가 반복될 때 무한 누적되면
+   * 노트·`status` 가 같은 문구로 가득 차고 최신 사유를 읽기 어렵다(데몬 재기동마다 1건씩 늘던 경로).
+   */
+  function addWarning(current: readonly string[], msg: string): string[] {
+    const kind = msg.split(":")[0];
+    return [...current.filter((w) => w.split(":")[0] !== kind), msg];
+  }
+
+  /**
+   * 노트 저장(투영) 실패를 세션 레코드 경고로 남긴다. 레코드는 **설정 루트**에 있어 vault 권한·
+   * 마운트 실패와 독립적이다 — 저장이 실패한 그 위치에 경고를 쓰려 하면 같은 이유로 실패한다.
+   * 같은 사유의 중복 누적은 막고(마지막 1건 유지) 실패 사실은 재기동 후에도 남는다.
+   */
+  async function noteStorageFailure(sid: string, reason: string): Promise<void> {
+    const rec = records.get(sid);
+    if (!rec) return;
+    const msg = `storage-failed: ${reason}`;
+    rec.warnings = [...rec.warnings.filter((w) => !w.startsWith("storage-failed:")), msg];
+    await persist(rec);
+    await deps.onSessionError?.(sid, msg).catch(() => {});
   }
 
   function activeSameCwd(): number {
@@ -484,6 +514,12 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
           throw err;
         }
         rt.engineSession = engineSession;
+        // 기동에 성공했으므로 이전 재개 실패는 해소됐다 — 남겨 두면 노트·status 에 낡은 실패가
+        // 영구히 표시된다(저장 실패와 같은 "성공이 실패를 지운다" 자세).
+        if (rec.warnings.some((w) => w.startsWith("resume-failed:"))) {
+          rec.warnings = rec.warnings.filter((w) => !w.startsWith("resume-failed:"));
+          await persist(rec);
+        }
         rt.watcher.arm();
         engineSession.onExit((info) => {
           rt.watcher.onCrash(info);
@@ -601,7 +637,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
         } catch (err) {
           const reason = errMsg(err);
           rec.status = "detached";
-          rec.warnings = [...rec.warnings, `resume-failed: ${reason}`];
+          rec.warnings = addWarning(rec.warnings, `resume-failed: ${reason}`);
           await persist(rec);
           await recordStore
             .appendEvent(rec.sid, {
@@ -685,7 +721,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
     if (!rt || !rec) return;
     rt.engineSession = null;
     rec.status = "detached";
-    rec.warnings = [...rec.warnings, reason];
+    rec.warnings = addWarning(rec.warnings, reason);
     await persist(rec);
     await recordStore
       .appendEvent(sid, {

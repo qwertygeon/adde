@@ -117,8 +117,14 @@ export function createSessionWatcher(deps: SessionWatcherDeps): SessionWatcher {
   }
 
   function onCrash(info: { code: number | null; signal: NodeJS.Signals | null }): void {
+    // 분류 기준은 종료코드가 아니라 disarm 여부다 — 유휴 내림·초기화·데몬 종료는 disarm 을 거치고,
+    // armed 상태의 종료는 코드가 0 이어도 예기치 않은 것이다. 이 구분 없이 전부 "crash" 로 적으면
+    // 정상 운영 로그가 크래시 경고로 채워져 실제 오류가 묻힌다.
+    const intended = state === "disarmed";
     console.warn(
-      `[session-watcher] sid=${deps.sid} crash detected (code=${info.code} signal=${info.signal})`,
+      intended
+        ? `[session-watcher] sid=${deps.sid} engine exited as intended (code=${info.code} signal=${info.signal})`
+        : `[session-watcher] sid=${deps.sid} crash detected (code=${info.code} signal=${info.signal})`,
     );
     deps.denyPending();
     setHealthy(false);

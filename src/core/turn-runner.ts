@@ -60,6 +60,12 @@ export interface TurnRunnerDeps {
   onTurnDelivered?: (msg: { text: string; turnRef: TurnRef }) => Promise<void>;
   /** 세션 오류 알림(FR-014) — 기록·선투영 실패로 턴이 중단될 때. */
   onSessionError?: (reason: string) => Promise<void>;
+  /**
+   * 턴 종료 후 노트 저장(투영)이 실패했을 때의 알림. 턴 자체는 이미 성공했고 무손실 이벤트 기록도
+   * 온전하므로 세션 오류(`onSessionError`)와 구분한다 — 저장 실패만 별도로 표면화하기 위한 채널이다.
+   * 저장 실패를 로그로만 남기면 사용자는 대화가 저장된 것으로 오인한다.
+   */
+  onStorageFailure?: (reason: string) => Promise<void>;
   retentionPolicy?: RetentionPolicy;
   /** 턴 종료 후 세션·프로젝트 노트 갱신(design.md 턴 흐름 8단계) — session-manager 가
    * `project(ctx, {turn, retention, sessionMeta, projectSessions})` 로 배선한다(L1→L3 의존 회피). */
@@ -375,9 +381,12 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       await projectTurn(recordCtx(deps, turn, turnStartIso), turn, "final", deps.retentionPolicy);
       if (deps.refreshNotes) await deps.refreshNotes(turn);
     } catch (err) {
+      // 턴은 이미 완결됐으므로 중단하지 않는다. 다만 조용히 넘기지 않는다 — 저장 실패를 흡수하면
+      // 노트가 stale 해진 사실이 어디에도 드러나지 않아 사용자가 저장됐다고 오인한다.
       console.error(
         `turn-runner: 종료 후 투영 실패(sid=${deps.sid}, turn=${turn}): ${errMsg(err)}`,
       );
+      await deps.onStorageFailure?.(`턴 ${turn} 노트 저장 실패: ${errMsg(err)}`).catch(() => {});
     }
 
     if (deps.onTurnDelivered) {

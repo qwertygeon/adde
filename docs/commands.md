@@ -100,8 +100,9 @@ adde status [<proj>] [--all] [--json]
 | `detached`   | Resume failed, or the engine gave up self-recovery after repeated crashes — reason recorded                              |
 | `archived`   | Preserved, no longer active (created by `session clear`'s succession or `session rm` without `--purge`)                  |
 
-- **With `<proj>`**: table `SID · STATUS · ENGINE · PRESENT · TITLE · LAST_ACTIVITY`.
-- **Without `<proj>`**: aggregates every registered project, table `PROJECT · SID · STATUS · ENGINE · PRESENT · LAST_ACTIVITY`.
+- **With `<proj>`**: table `SID · STATUS · ENGINE · PRESENT · WARN · TITLE · LAST_ACTIVITY`.
+- **Without `<proj>`**: aggregates every registered project, table `PROJECT · SID · STATUS · ENGINE · PRESENT · WARN · LAST_ACTIVITY`.
+- **`WARN`**: number of warnings recorded on the session (`-` when none) — storage failures, resume failures, and the like. The text itself is not shown here; read it with `session show <proj> <session>`.
 - **`--all`**: include `archived` sessions (omitted by default).
 - **`--json`**: `{ "v": 1, "sessions": [...], "halt": ... }` — `halt` carries the crash-loop self-halt record (`HaltRecord | null` for a single `<proj>` view, or a per-project map for the aggregated view). See [crash safety & log rotation](troubleshooting.md#crash-safety--log-rotation).
 - If a session is `detached`, or the daemon has self-halted after a crash loop, a warning with remedy guidance is printed to stderr and `status` exits non-zero.

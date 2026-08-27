@@ -100,8 +100,9 @@ adde status [<proj>] [--all] [--json]
 | `detached`   | 재개 실패, 또는 반복 크래시 후 엔진 자가 재기동 포기 — 사유 기록됨                                |
 | `archived`   | 보존 종료, 더 이상 활성 아님(`session clear` 의 승계 또는 `--purge` 없는 `session rm` 로 생성)    |
 
-- **`<proj>` 지정 시**: `SID · STATUS · ENGINE · PRESENT · TITLE · LAST_ACTIVITY` 표.
-- **`<proj>` 생략 시**: 등록된 전 프로젝트 집계, `PROJECT · SID · STATUS · ENGINE · PRESENT · LAST_ACTIVITY` 표.
+- **`<proj>` 지정 시**: `SID · STATUS · ENGINE · PRESENT · WARN · TITLE · LAST_ACTIVITY` 표.
+- **`<proj>` 생략 시**: 등록된 전 프로젝트 집계, `PROJECT · SID · STATUS · ENGINE · PRESENT · WARN · LAST_ACTIVITY` 표.
+- **`WARN`**: 해당 세션에 기록된 경고 건수(없으면 `-`) — 저장 실패·재개 실패 등. 본문은 표에 싣지 않으며 `session show <proj> <session>` 으로 확인한다.
 - **`--all`**: `archived` 세션도 포함(기본은 제외).
 - **`--json`**: `{ "v": 1, "sessions": [...], "halt": ... }` — `halt` 는 크래시루프 자가 정지 기록(단일 `<proj>` 뷰는 `HaltRecord | null`, 집계 뷰는 프로젝트별 맵). [크래시 안전성·로그 회전](troubleshooting.ko.md#크래시-안전성--로그-회전) 참조.
 - `detached` 세션이 있거나 데몬이 크래시루프로 자가 정지했으면 stderr 에 경고+대응 안내가 출력되고 `status` 는 0이 아닌 코드로 종료합니다.

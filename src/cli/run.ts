@@ -62,6 +62,8 @@ async function surfaceStartResult(proj: string, baseline: number, json = false):
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
     return failed.length > 0 ? EXIT.FAIL : EXIT.OK;
   }
+  // 부팅 안내(자동 허용 티어 배너 등)는 요약보다 먼저 — 요약만 보고 넘기는 경우를 줄인다.
+  for (const notice of report.notices ?? []) process.stderr.write(`${notice}\n`);
   if (failed.length > 0) {
     process.stderr.write(
       t("run.upFailed", {

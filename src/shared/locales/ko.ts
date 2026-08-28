@@ -617,9 +617,9 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
     autopassDenyEmpty: "denylist 가 비어 있어 모든 권한 요청이 확인 없이 통과됩니다",
     autopassBanner: {
       situation:
-        "이 레인은 자동 허용 모드(perm_tier=autopass)로 기동했습니다 — {{denyDesc}}. 그 외 도구(파일 쓰기·Bash 실행 포함)는 자동 허용됩니다",
+        "이 프로젝트는 자동 허용 모드(perm_tier=autopass)로 기동했습니다 — {{denyDesc}}. 그 외 도구(파일 쓰기·Bash 실행 포함)는 자동 허용됩니다",
       action:
-        "확인이 필요한 도구는 lanes.d/{{lane}}.conf 의 denylist 에 추가하세요. 자동 허용 내역은 adde logs {{proj}} {{lane}} 으로 확인할 수 있습니다.",
+        "확인이 필요한 도구는 adde project set {{proj}} --add-deny <도구> 로 추가하세요. 자동 허용 내역은 adde logs {{proj}} <세션> 으로 확인할 수 있습니다.",
     },
     upStarted: "{{proj}}: {{count}}개 레인 기동",
     upSkipped: "{{count}}개 이미 실행 중(스킵)",
@@ -748,7 +748,7 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
       runtimeWriteFail: "[supervisor] lane={{lane}} runtime.json 기록 실패(보조): {{error}}",
       runtimeRemoveFail: "[supervisor] lane={{lane}} runtime.json 제거 실패(보조): {{error}}",
       securePermsFail:
-        "[supervisor] lane={{lane}} 상태 디렉터리 권한 잠금 실패(보조 — 파일이 타 사용자에 노출될 수 있음): {{error}}",
+        "[supervisor] proj={{proj}} 내부 디렉터리 권한 잠금 실패(파일이 타 사용자에 노출될 수 있음): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} 기동 실패: {{reason}}",
       laneCleanupFail: "[supervisor] lane={{lane}} 기동 실패 정리(엔진 종료) 실패(보조): {{error}}",
     },

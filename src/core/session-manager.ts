@@ -104,6 +104,13 @@ export interface SessionManager {
   removeBinding(sid: string, binding: { surface: string; address: string }): Promise<void>;
   resolvePermissionDecision(sid: string, reqId: string, decision: "allow" | "deny"): void;
   denyPending(sid: string): Promise<void>;
+  /**
+   * 사용자에게 보여야 하는 실패를 세션 경고로 올린다 — 접두 `kind` 당 최신 1건만 남는다.
+   * Surface(L4)·조립부가 레코드를 직접 만지지 않고 이 경로로만 경고를 올린다(의존 방향 L4→L3).
+   */
+  noteFailure(sid: string, kind: string, reason: string): Promise<void>;
+  /** 같은 접두의 경고를 해소(제거)한다 — 성공 경로가 실패 흔적을 지운다. */
+  clearFailure(sid: string, kind: string): Promise<void>;
   shutdown(): Promise<void>;
   /** 세션의 엔진 caps 조회(L4 Surface 가 코어 엔진 무지를 지키며 조건부 렌더에 쓴다, A-P007). */
   capsOf(sid: string): import("../engines/types.js").EngineCaps | undefined;
@@ -125,7 +132,6 @@ interface Runtime {
   turnRunner: TurnRunner;
   watcher: SessionWatcher;
   pendingPermissions: Map<string, (d: "allow" | "deny") => void>;
-  runtimeError: string | null;
 }
 
 function newSidGen(): string {
@@ -222,10 +228,11 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
         lastActivityAt: r.lastActivityAt,
       })),
     });
-    // 투영이 성공했으므로 이전 저장 실패는 해소됐다 — 남겨 두면 다음 실패를 가린다. 성공 경로에
-    // 제거를 두어 별도 정리 명령 없이 자동으로 사라지게 한다.
-    if (rec.warnings.some((w) => w.startsWith("storage-failed:"))) {
-      rec.warnings = rec.warnings.filter((w) => !w.startsWith("storage-failed:"));
+    // 턴이 완결·저장됐으므로 이전 턴 중단·저장 실패는 해소됐다 — 남겨 두면 다음 실패를 가린다.
+    // 성공 경로에 제거를 두어 별도 정리 명령 없이 자동으로 사라지게 한다.
+    const resolvedPrefixes = ["storage-failed:", "turn-failed:", "runner-failed:"];
+    if (rec.warnings.some((w) => resolvedPrefixes.some((p) => w.startsWith(p)))) {
+      rec.warnings = rec.warnings.filter((w) => !resolvedPrefixes.some((p) => w.startsWith(p)));
       await persist(rec);
     }
   }
@@ -265,6 +272,7 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
         : {}),
       onSessionError: (reason: string) => onTurnFailure(sid, reason),
       onStorageFailure: (reason: string) => noteStorageFailure(sid, reason),
+      onQuarantine: (reason: string) => noteFailure(sid, "quarantined", reason),
       retentionPolicy: policy(),
       refreshNotes: (turn) => refreshNotes(sid, turn),
     });
@@ -286,7 +294,6 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
       turnRunner: tr,
       watcher,
       pendingPermissions: new Map(),
-      runtimeError: null,
     };
     runtimes.set(sid, rt);
     return rt;
@@ -302,7 +309,12 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
   function armRunner(sid: string): void {
     const rt = ensureRuntime(sid);
     void rt.turnRunner.start().catch((err: unknown) => {
+      // 런너가 없으면 지시가 큐에 적재된 채 소비되지 않는다 — 로그만 남기면 사용자에겐 무응답으로만
+      // 보이므로 경고 채널에 올린다(다음 턴 완결 시 해소).
       console.error(`session-manager: TurnRunner 기동 실패(sid=${sid}): ${errMsg(err)}`);
+      void noteFailure(sid, "runner-failed", errMsg(err)).catch((e: unknown) => {
+        console.error(`session-manager: 기동 실패 경고 기록 실패(sid=${sid}): ${errMsg(e)}`);
+      });
     });
   }
 
@@ -340,9 +352,13 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
     return { decision: response.decision, ...(response.reason ? { reason: response.reason } : {}) };
   }
 
+  /**
+   * 턴이 중단됐다는 사실을 사용자 대면 경로에 남긴다. 이전 구현은 in-memory 필드에만 써서 읽는 곳이
+   * 없었고(죽은 필드) 종단이 launchd 로그였다 — 사용자에게는 "보낸 지시에 응답이 영원히 오지 않는"
+   * 것으로만 보였다. 저장 실패 경고와 같은 채널(레코드 경고 → 상태 존 + status WARN)을 쓴다.
+   */
   async function onTurnFailure(sid: string, reason: string): Promise<void> {
-    const rt = runtimes.get(sid);
-    if (rt) rt.runtimeError = reason;
+    await noteFailure(sid, "turn-failed", reason);
     await deps.onSessionError?.(sid, reason).catch(() => {});
   }
 
@@ -356,17 +372,31 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
   }
 
   /**
-   * 노트 저장(투영) 실패를 세션 레코드 경고로 남긴다. 레코드는 **설정 루트**에 있어 vault 권한·
-   * 마운트 실패와 독립적이다 — 저장이 실패한 그 위치에 경고를 쓰려 하면 같은 이유로 실패한다.
-   * 같은 사유의 중복 누적은 막고(마지막 1건 유지) 실패 사실은 재기동 후에도 남는다.
+   * 실패를 세션 레코드 경고로 남긴다. 레코드는 **설정 루트**에 있어 vault 권한·마운트 실패와
+   * 독립적이다 — 저장이 실패한 그 위치에 경고를 쓰려 하면 같은 이유로 실패한다. 같은 접두의 중복
+   * 누적은 막고(마지막 1건 유지) 실패 사실은 재기동 후에도 남는다.
    */
-  async function noteStorageFailure(sid: string, reason: string): Promise<void> {
+  async function noteFailure(sid: string, kind: string, reason: string): Promise<void> {
     const rec = records.get(sid);
     if (!rec) return;
-    const msg = `storage-failed: ${reason}`;
-    rec.warnings = [...rec.warnings.filter((w) => !w.startsWith("storage-failed:")), msg];
+    rec.warnings = addWarning(rec.warnings, `${kind}: ${reason}`);
     await persist(rec);
-    await deps.onSessionError?.(sid, msg).catch(() => {});
+  }
+
+  /** 접두가 같은 경고를 제거한다. 대상이 없으면 쓰기도 하지 않는다(무의미 재기록 회피). */
+  async function clearFailure(sid: string, kind: string): Promise<void> {
+    const rec = records.get(sid);
+    if (!rec) return;
+    const prefix = `${kind}:`;
+    if (!rec.warnings.some((w) => w === kind || w.startsWith(prefix))) return;
+    rec.warnings = rec.warnings.filter((w) => w !== kind && !w.startsWith(prefix));
+    await persist(rec);
+  }
+
+  /** 노트 저장(투영) 실패 — 경고 채널에 올리고 조립부 알림도 함께 발화한다. */
+  async function noteStorageFailure(sid: string, reason: string): Promise<void> {
+    await noteFailure(sid, "storage-failed", reason);
+    await deps.onSessionError?.(sid, `storage-failed: ${reason}`).catch(() => {});
   }
 
   function activeSameCwd(): number {
@@ -503,8 +533,11 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
                 : {}),
             },
             onWarn: (msg) => {
-              rec.warnings = [...rec.warnings.filter((w) => w !== msg), msg];
-              void persist(rec);
+              // 권한 설정 차이 등 비차단 경고 — 접두 종류별 1건 유지 규약을 따르고(같은 종류의 다른
+              // 문구가 누적되던 경로) 영속 실패를 조용히 삼키지 않는다.
+              void noteFailure(sid, "perm-diff", msg).catch((err: unknown) => {
+                console.error(`session-manager: 경고 영속 실패(sid=${sid}): ${errMsg(err)}`);
+              });
             },
           });
         } catch (err) {
@@ -697,6 +730,14 @@ export function createSessionManager(deps: SessionManagerDeps): SessionManagerWi
       const rt = runtimes.get(sid);
       if (!rt) return;
       for (const [, resolver] of rt.pendingPermissions) resolver("deny");
+    },
+
+    noteFailure(sid: string, kind: string, reason: string): Promise<void> {
+      return noteFailure(sid, kind, reason);
+    },
+
+    clearFailure(sid: string, kind: string): Promise<void> {
+      return clearFailure(sid, kind);
     },
 
     async shutdown(): Promise<void> {

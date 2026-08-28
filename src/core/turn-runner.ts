@@ -61,6 +61,11 @@ export interface TurnRunnerDeps {
   /** 세션 오류 알림(FR-014) — 기록·선투영 실패로 턴이 중단될 때. */
   onSessionError?: (reason: string) => Promise<void>;
   /**
+   * 손상 메시지 격리 알림 — 격리는 사용자가 보낸 지시가 처리되지 않고 사라지는 경로이므로
+   * 턴 중단(`onSessionError`)과 구분해 표면화한다(재시도로 해소되지 않는 종국 상태).
+   */
+  onQuarantine?: (reason: string) => Promise<void>;
+  /**
    * 턴 종료 후 노트 저장(투영)이 실패했을 때의 알림. 턴 자체는 이미 성공했고 무손실 이벤트 기록도
    * 온전하므로 세션 오류(`onSessionError`)와 구분한다 — 저장 실패만 별도로 표면화하기 위한 채널이다.
    * 저장 실패를 로그로만 남기면 사용자는 대화가 저장된 것으로 오인한다.
@@ -71,6 +76,13 @@ export interface TurnRunnerDeps {
    * `project(ctx, {turn, retention, sessionMeta, projectSessions})` 로 배선한다(L1→L3 의존 회피). */
   refreshNotes?: (turn: number) => Promise<void>;
 }
+
+/** 자동 결정의 기록 사유 — 노트·`logs` 에서 사람이 읽는 문구. */
+const PERMISSION_VIA_REASON: Record<"hard_deny" | "allowlist" | "autopass", string> = {
+  hard_deny: "하드 차단 목록",
+  allowlist: "자동 허용(허용 목록)",
+  autopass: "자동 허용(autopass 티어)",
+};
 
 function recordCtx(deps: TurnRunnerDeps, turn?: number, turnStartIso?: string): RecordCtx {
   return {
@@ -166,11 +178,94 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       reqId: event.reqId,
       decision: result.decision,
       reason: result.reason ?? "",
+      via: "channel",
     });
     // 결정이 이벤트에 기록된 것을 확인한 뒤에만 승인 파일 삭제(ADR-016) — append 실패 시 여기 도달 안 함.
     if (deps.onDecisionRecorded) {
       await deps.onDecisionRecorded(event.reqId).catch(() => {});
     }
+  }
+
+  /**
+   * 드라이버가 정책만으로 결정한 권한을 기록한다 — 승인 대기·엔진 응답 없이 요청·결정 쌍만 남긴다.
+   * 기록 형태를 채널 승인 경로와 같게 두어 투영기·재생성·`logs` 가 분기 없이 소비한다.
+   */
+  async function recordResolvedPermission(
+    ctx: RecordCtx,
+    turn: number,
+    event: Extract<EngineEvent, { t: "permission_resolved" }>,
+  ): Promise<void> {
+    await appendEvent(ctx, {
+      v: 1,
+      sid: deps.sid,
+      turn,
+      seq: nextSeq(),
+      ts: new Date().toISOString(),
+      t: "permission",
+      reqId: event.reqId,
+      tool: event.tool,
+      input: event.input,
+    });
+    await appendEvent(ctx, {
+      v: 1,
+      sid: deps.sid,
+      turn,
+      seq: nextSeq(),
+      ts: new Date().toISOString(),
+      t: "permission_decision",
+      reqId: event.reqId,
+      decision: event.decision,
+      reason: PERMISSION_VIA_REASON[event.via],
+      via: event.via,
+    });
+  }
+
+  /**
+   * 턴 중단을 세 경로에 남긴다 — (1) 이벤트 기록에 `error` 를 남겨 무손실 기록·`logs`·재생성에서
+   * 드러나게 하고 (2) 이미 `처리 중` 으로 선투영된 턴 노트를 `오류` 로 종결하며 (3) 세션 오류
+   * 통지(레코드 경고 채널)를 발화한다. (1)(2)는 기록 불가 자체가 중단 사유일 수 있어 실패를 흡수하되
+   * 로그로 남긴다 — 최후 방어선은 (3)이고 그 경로만 설정 루트(vault 실패와 독립)에 쓴다.
+   * 이 턴은 processing 에 남아 재시도 대상이며, 재시도가 완결되면 노트는 다시 갱신된다(오류 이력은
+   * 이벤트에 남으므로 그 턴 노트는 이후에도 중단 이력을 함께 보여준다).
+   */
+  async function abortTurn(
+    turn: number,
+    turnStartIso: string,
+    reason: string,
+    opts: { notePreProjected: boolean },
+  ): Promise<void> {
+    const ctx = recordCtx(deps, turn, turnStartIso);
+    let recorded = false;
+    try {
+      await appendEvent(ctx, {
+        v: 1,
+        sid: deps.sid,
+        turn,
+        seq: nextSeq(),
+        ts: new Date().toISOString(),
+        t: "error",
+        message: `턴 중단: ${reason}`,
+        fatal: true,
+      });
+      recorded = true;
+    } catch (err) {
+      console.error(
+        `turn-runner: 중단 사유 기록 실패(sid=${deps.sid}, turn=${turn}): ${errMsg(err)}`,
+      );
+    }
+    // 오류 이벤트가 기록된 뒤에만 재투영한다 — 이벤트 없이 final 로 투영하면 `완료` 로 렌더돼
+    // 중단이 성공으로 보인다(투영기는 이벤트에서만 상태를 파생한다).
+    if (opts.notePreProjected && recorded) {
+      try {
+        await projectTurn(ctx, turn, "final", deps.retentionPolicy);
+      } catch (err) {
+        console.error(
+          `turn-runner: 중단 턴 노트 종결 실패(sid=${deps.sid}, turn=${turn}): ${errMsg(err)}`,
+        );
+      }
+    }
+    await deps.onSessionError?.(reason).catch(() => {});
+    running = "idle";
   }
 
   /** 한 턴(claim 된 envelope)을 처리 — 신규/이어받기 공용. */
@@ -206,16 +301,19 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         });
       }
     } catch (err) {
-      await deps.onSessionError?.(errMsg(err)).catch(() => {});
-      running = "idle";
+      // 선투영 이전이라 종결할 턴 노트가 아직 없다 — 경고 채널이 유일한 표면이다.
+      await abortTurn(turn, turnStartIso, `턴 시작 기록 실패: ${errMsg(err)}`, {
+        notePreProjected: false,
+      });
       return; // 기록 실패 — 턴 중단(FR-014). 큐/processing 은 그대로 남아 재시도 가능.
     }
 
     try {
       await projectTurn(ctxBase, turn, "running", deps.retentionPolicy);
     } catch (err) {
-      await deps.onSessionError?.(errMsg(err)).catch(() => {});
-      running = "idle";
+      await abortTurn(turn, turnStartIso, `턴 노트 선생성 실패: ${errMsg(err)}`, {
+        notePreProjected: false,
+      });
       return; // 선투영 실패 — 턴 중단(SC-050). 마커는 접수 단계에 머무른다(Surface 소관).
     }
 
@@ -237,8 +335,9 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     try {
       engineSession = await deps.admit();
     } catch (err) {
-      await deps.onSessionError?.(errMsg(err)).catch(() => {});
-      running = "idle";
+      await abortTurn(turn, turnStartIso, `엔진 투입 실패: ${errMsg(err)}`, {
+        notePreProjected: true,
+      });
       return;
     }
 
@@ -323,6 +422,9 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
           case "permission":
             await handlePermission(ctx, turn, engineSession, event);
             break;
+          case "permission_resolved":
+            await recordResolvedPermission(ctx, turn, event);
+            break;
           case "usage":
             await appendEvent(ctx, {
               v: 1,
@@ -352,8 +454,9 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         }
       }
     } catch (err) {
-      await deps.onSessionError?.(errMsg(err)).catch(() => {});
-      running = "idle";
+      await abortTurn(turn, turnStartIso, `응답 기록 실패: ${errMsg(err)}`, {
+        notePreProjected: true,
+      });
       return; // 이벤트 append 실패(fail-closed) — 턴 미완료로 남긴다(재처리 대상).
     }
 
@@ -370,8 +473,9 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         ...(dupOf ? { dup: { of: dupOf } } : {}),
       });
     } catch (err) {
-      await deps.onSessionError?.(errMsg(err)).catch(() => {});
-      running = "idle";
+      await abortTurn(turn, turnStartIso, `턴 종료 기록 실패: ${errMsg(err)}`, {
+        notePreProjected: true,
+      });
       return;
     }
 
@@ -395,10 +499,21 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     running = "idle";
   }
 
+  /** 격리 사실을 사용자 대면 경로로 올린다 — 실패해도 처리 흐름은 막지 않는다(보조 통지). */
+  async function notifyQuarantine(id: string, reason: unknown): Promise<void> {
+    await deps
+      .onQuarantine?.(`손상 메시지 격리(${id}): ${errMsg(reason)}`)
+      .catch((err: unknown) => {
+        console.error(`turn-runner: 격리 통지 실패(sid=${deps.sid}): ${errMsg(err)}`);
+      });
+  }
+
   async function drainOnce(): Promise<void> {
     if (stopped) return;
     await ensureCounters();
-    const claimed = await claimNext(deps.sessionPaths);
+    const claimed = await claimNext(deps.sessionPaths, {
+      onQuarantine: (id, reason) => void notifyQuarantine(id, reason),
+    });
     if (!claimed) return;
     const { id, envelope } = claimed;
     const { turn, isNew } = await resolveTurnForEnvelope(id);
@@ -424,6 +539,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
         envelope = parseEnvelope(await readFile(processingFilePath(deps.sessionPaths, id), "utf8"));
       } catch (err) {
         await quarantineCorrupt(deps.sessionPaths, id, err);
+        await notifyQuarantine(id, err);
         continue;
       }
       const { turn, isNew } = await resolveTurnForEnvelope(id);

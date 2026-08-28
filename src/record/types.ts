@@ -37,6 +37,12 @@ export interface TurnRef {
  */
 export type SessionEventStatus = "active" | "hibernated" | "detached" | "archived" | "error";
 
+/**
+ * 권한 결정이 어느 경로에서 났는가 — 자동 결정(하드 차단·자동 허용)도 기록하기 위해 도입.
+ * 세 등급 전부를 기록하지 않으면 정책 오설정을 진단할 근거가 남지 않는다(투명성).
+ */
+export type PermissionVia = "channel" | "hard_deny" | "allowlist" | "autopass";
+
 /** 대화 이벤트 기록(events-NNNN.jsonl) 1줄의 판별 유니온(design.md §데이터 모델). */
 export type AddeEvent = {
   v: 1;
@@ -54,7 +60,14 @@ export type AddeEvent = {
   | { t: "tool_call"; id: string; name: string; input: unknown | BlobRef }
   | { t: "tool_result"; id: string; output: unknown | BlobRef; isError?: boolean }
   | { t: "permission"; reqId: string; tool: string; input: unknown }
-  | { t: "permission_decision"; reqId: string; decision: "allow" | "deny"; reason: string }
+  | {
+      t: "permission_decision";
+      reqId: string;
+      decision: "allow" | "deny";
+      reason: string;
+      /** 결정 경로 — 미기재는 채널 승인 경로(구 기록 호환). 스키마 버전 불변의 가산 필드. */
+      via?: PermissionVia;
+    }
   | { t: "usage"; input: number; output: number; costUsd?: number }
   | { t: "state"; status: SessionEventStatus; reason: string }
   | { t: "note"; kind: "warning" | "info"; message: string }

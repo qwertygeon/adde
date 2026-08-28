@@ -171,7 +171,7 @@ export interface InboxAction {
   segmentStart?: number;
   id?: string;
   stamp?: string;
-  controlKind?: "clear" | "compact" | "resume" | "sessions";
+  controlKind?: "clear" | "compact" | "resume";
   controlArg?: string;
 }
 
@@ -254,9 +254,12 @@ export function parseInbox(content: string): InboxParse {
     const rm = /^resume(?:\s+(\S+))?$/i.exec(labelBody(label));
     if (rm) {
       if (checked) {
+        // 인자 없는 `resume` 는 팔레트가 렌더하는 형태다(팔레트 4종은 모두 인자 없음) — 엔진 재개로
+        // 해석한다. 이전 구현은 인자 없는 경우를 세션 목록 요청으로 매핑했으나 그 종류를 처리하는
+        // 곳이 없어, 사용자가 팔레트의 재개를 체크하면 체크만 풀리고 아무 일도 일어나지 않았다.
         const action: InboxAction = {
           kind: "control",
-          controlKind: rm[1] ? "resume" : "sessions",
+          controlKind: "resume",
           text: "",
           lineIndex: i,
         };

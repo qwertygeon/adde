@@ -47,6 +47,18 @@ export type EngineEvent =
   | { t: "tool_call"; id: string; name: string; input: unknown }
   | { t: "tool_result"; id: string; output: unknown; isError?: boolean }
   | { t: "permission"; reqId: string; tool: string; input: unknown }
+  /**
+   * 드라이버가 정책만으로 이미 결정한 권한 요청 — 채널 승인을 거치지 않으므로 코어는 대기 없이
+   * 기록만 한다. 이 이벤트가 없으면 하드 차단·자동 허용이 코어에 전혀 보이지 않아 기록이 남지 않는다.
+   */
+  | {
+      t: "permission_resolved";
+      reqId: string;
+      tool: string;
+      input: unknown;
+      decision: "allow" | "deny";
+      via: "hard_deny" | "allowlist" | "autopass";
+    }
   | { t: "usage"; input: number; output: number; costUsd?: number }
   | { t: "error"; message: string; fatal: boolean };
 

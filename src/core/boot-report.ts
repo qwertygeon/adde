@@ -21,6 +21,11 @@ export interface BootReport {
   sessions: BootReportSession[];
   /** status==="active" 세션 수. */
   running: number;
+  /**
+   * 부팅 시점에만 의미가 있는 안내(현재 소비자: 자동 허용 티어 기동 배너). 해소 대상이 아닌
+   * 상태 공지라 세션 경고(미해소 실패 뷰)에 넣지 않고 여기에 싣는다.
+   */
+  notices?: string[];
 }
 
 export async function readBootReport(base: string, proj: string): Promise<BootReport | null> {
@@ -48,6 +53,7 @@ export async function writeBootReport(
   proj: string,
   sessions: SessionStatusRow[],
   now?: () => number,
+  notices?: readonly string[],
 ): Promise<number> {
   const prev = await readBootReport(base, proj);
   const bootId = (prev?.bootId ?? 0) + 1;
@@ -62,6 +68,7 @@ export async function writeBootReport(
     bootedAt: new Date(now?.() ?? Date.now()).toISOString(),
     sessions: reportSessions,
     running: reportSessions.filter((s) => s.status === "active").length,
+    ...(notices && notices.length > 0 ? { notices: notices.map((n) => maskSecrets(n)) } : {}),
   };
   await atomicWrite(daemonBootReportPath(base, proj), JSON.stringify(report));
   return bootId;

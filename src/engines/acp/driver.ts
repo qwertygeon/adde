@@ -21,6 +21,8 @@ import { withTimeout, killChild, closeChild } from "./lifecycle.js";
 import { comparePerm } from "./perm-diff.js";
 import type { AddePolicy, EngineEffective } from "./perm-diff.js";
 import { maskSecrets, sanitizeEngineText } from "../../shared/mask.js";
+import { formatWarnNote } from "../../shared/notify.js";
+import { tFor } from "../../shared/i18n.js";
 import { matchesDenylist } from "../../shared/deny-match.js";
 import { DEFAULT_LOG_MAX_BYTES, DEFAULT_LOG_KEEP } from "../../shared/log-rotate.js";
 import type {
@@ -280,17 +282,27 @@ export const acpDriver: EngineDriverDescriptor = {
               });
             }
           } else if (kind === "current_mode_update") {
-            const mode = update["mode"];
-            if (mode && typeof mode === "object") {
-              const m = mode as Record<string, unknown>;
-              const effective: EngineEffective = {};
-              if (typeof m["permissionMode"] === "string")
-                effective.permissionMode = m["permissionMode"];
-              if (typeof m["bypassPermissions"] === "boolean") {
-                effective.bypassPermissions = m["bypassPermissions"];
-              }
+            // ACP 스키마의 필드는 `currentModeId`(모드 id 문자열, SDK schema/zod.gen 실측)다.
+            // 이전 구현은 `mode.permissionMode` 를 읽어 항상 undefined 였고, 그 결과 설정 차이
+            // 비교가 한 번도 돌지 않았다(경고 발화 0). 모드 id 집합은 엔진이 정의하므로
+            // (SessionModeId = string) 값을 그대로 실효 권한 모드로 해석한다.
+            const modeId = update["currentModeId"];
+            if (typeof modeId === "string") {
+              const effective: EngineEffective = { permissionMode: modeId };
               const result = comparePerm(policy, effective);
-              if (result.diff && result.warn && ctx.onWarn) ctx.onWarn(result.warn.message);
+              if (result.diff && result.warn && ctx.onWarn) {
+                // 정책 차이는 "상황 + 조치" 2요소로 전달한다 — 차이만 알리고 무엇을 하라는지 없으면
+                // 사용자는 게이트가 무력화될 수 있다는 사실만 받고 대응할 수 없다.
+                const tl = tFor(ctx.lang);
+                ctx.onWarn(
+                  result.warn.reason === "정책차이"
+                    ? formatWarnNote(
+                        { situation: result.warn.message, action: tl("acp.bypassAction") },
+                        tl,
+                      )
+                    : result.warn.message,
+                );
+              }
             }
           }
           // available_commands_update·session_info_update 는 이벤트 기록 대상이 아니다(글로서리 §이벤트 —
@@ -306,28 +318,50 @@ export const acpDriver: EngineDriverDescriptor = {
           const rawToolName = resolveToolName(toolNames, toolCall);
           const rawInput = toolCall["rawInput"];
           const decision = resolvePermDecision(policy, rawToolName, rawInput);
+          const reqId = `${p.sessionId.slice(0, 12)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+          // 도구 표시 문자열은 모델 생성 자유 텍스트 — 개행 뒤 "- [x] allow" 류 삽입으로 승인 노트의
+          // 체크박스 파싱을 위조할 수 있다(간접 프롬프트 인젝션 경계). sanitizeEngineText 가 maskSecrets 를 포함한다.
+          const toolLabel = sanitizeEngineText(
+            rawToolName ? `${rawToolName} · ${toolTitle}` : toolTitle,
+          );
+          const inputLabel = maskSecrets(JSON.stringify(rawInput ?? {}));
 
           if (decision.kind === "hard_deny") {
+            // 차단 동작은 그대로 두고 기록만 추가한다 — 정책이 막았다는 사실이 어디에도 없으면
+            // 모델의 "권한이 없다" 응답만 남아 정책 오설정을 진단할 수 없다.
+            currentQueue?.push({
+              t: "permission_resolved",
+              reqId,
+              tool: toolLabel,
+              input: inputLabel,
+              decision: "deny",
+              via: "hard_deny",
+            });
             return { outcome: { outcome: "cancelled" } };
           }
           if (decision.kind === "auto") {
             const allowOption = p.options.find(
               (o) => o.kind === "allow_once" || o.kind === "allow_always",
             );
-            if (allowOption)
+            if (allowOption) {
+              currentQueue?.push({
+                t: "permission_resolved",
+                reqId,
+                tool: toolLabel,
+                input: inputLabel,
+                decision: "allow",
+                via: decision.via,
+              });
               return { outcome: { outcome: "selected", optionId: allowOption.optionId } };
+            }
           }
 
           if (!currentQueue) return { outcome: { outcome: "cancelled" } };
-          const reqId = `${p.sessionId.slice(0, 12)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
           currentQueue.push({
             t: "permission",
             reqId,
-            // 개행·제어문자를 살균 — toolTitle 은 모델이 생성하는 자유 텍스트라 개행 뒤
-            // "- [x] allow" 류 삽입으로 승인 노트의 체크박스 파싱을 위조할 수 있다(간접 프롬프트
-            // 인젝션 경계). sanitizeEngineText 가 maskSecrets 를 포함한다.
-            tool: sanitizeEngineText(rawToolName ? `${rawToolName} · ${toolTitle}` : toolTitle),
-            input: maskSecrets(JSON.stringify(rawInput ?? {})),
+            tool: toolLabel,
+            input: inputLabel,
           });
           const decisionPromise = new Promise<"allow" | "deny">((resolve) => {
             pendingPermissions.set(reqId, resolve);

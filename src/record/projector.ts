@@ -11,7 +11,7 @@ import { sanitizeEngineText } from "../shared/mask.js";
 import { readEvents } from "./events.js";
 import { isArchivedTurn } from "./retention.js";
 import type { RetentionPolicy } from "./retention.js";
-import type { AddeEvent, RecordCtx } from "./types.js";
+import type { AddeEvent, PermissionVia, RecordCtx } from "./types.js";
 
 /** 턴 노트 파일명 — `NNNN <turnStartTs>.md`(flat, ADR-017). 이벤트에서만 파생(결정론, FR-015·FR-016). */
 export function turnNoteName(turn: number, turnStartIso: string): string {
@@ -64,6 +64,7 @@ interface TurnAccumulator {
     input: unknown;
     decision?: string;
     reason?: string;
+    via?: PermissionVia;
   }>;
   usage: { input: number; output: number; costUsd: number } | null;
   errors: string[];
@@ -119,6 +120,7 @@ function foldEvent(acc: TurnAccumulator, e: AddeEvent): void {
       if (p) {
         p.decision = e.decision;
         p.reason = e.reason;
+        if (e.via !== undefined) p.via = e.via;
       }
       break;
     }
@@ -176,14 +178,28 @@ function jsonPreview(v: unknown): string {
   return preview(s, 200);
 }
 
+/**
+ * 권한 요청·결정 블록. 자동 허용은 **기록은 전량 남기고 여기서만 요약**한다 — 이벤트 기록은
+ * 재생성 불가한 원본이라 소음을 이유로 빼면 감사 근거가 사라지지만, 노트는 파생물이므로 접어 두면
+ * 읽기 흐름을 지키면서 필요할 때 펼쳐 볼 수 있다. 하드 차단은 접지 않는다(사용자가 인지해야 하는 차단).
+ */
 function renderPermissionBlock(acc: TurnAccumulator): string {
   if (acc.permissions.length === 0) return "";
-  const lines = acc.permissions.map(
-    // 엔진 유래 tool 텍스트 살균 — 턴 노트 마크다운 구조 보호, 이미 살균된 값 재적용도 무해.
-    (p) =>
-      `- ${sanitizeEngineText(p.tool)} → **${p.decision ?? "대기"}**${p.reason ? ` (${p.reason})` : ""}`,
-  );
-  return `## 권한 요청·결정\n\n${lines.join("\n")}\n`;
+  // 엔진 유래 tool 텍스트 살균 — 턴 노트 마크다운 구조 보호, 이미 살균된 값 재적용도 무해.
+  const line = (p: TurnAccumulator["permissions"][number]): string =>
+    `- ${sanitizeEngineText(p.tool)} → **${p.decision ?? "대기"}**${p.reason ? ` (${p.reason})` : ""}`;
+  const autoAllowed = acc.permissions.filter((p) => p.via === "allowlist" || p.via === "autopass");
+  const shown = acc.permissions.filter((p) => !autoAllowed.includes(p));
+  const parts: string[] = [];
+  if (shown.length > 0) parts.push(shown.map(line).join("\n"));
+  if (autoAllowed.length > 0) {
+    parts.push(
+      `<details>\n<summary>자동 허용 ${autoAllowed.length}건</summary>\n\n${autoAllowed
+        .map(line)
+        .join("\n")}\n\n</details>`,
+    );
+  }
+  return `## 권한 요청·결정\n\n${parts.join("\n\n")}\n`;
 }
 
 /** 턴 노트 렌더(phase 별) — `isArchivedTurn` 이면 쓰지 않는다(이관분 재생성 금지, ADR-023b). */

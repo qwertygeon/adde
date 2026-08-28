@@ -17,6 +17,9 @@ import { SURFACE_REGISTRY } from "../surfaces/index.js";
 import type { Surface } from "../surfaces/types.js";
 import { forceFinalizeApproval } from "../surfaces/markdown/index.js";
 import { errMsg } from "../shared/errors.js";
+import { formatWarnNote } from "../shared/notify.js";
+import { tFor, t } from "../shared/i18n.js";
+import { applyProjectFileMode } from "../shared/file-mode.js";
 
 export interface SessionStatusRow {
   sid: string;
@@ -26,6 +29,8 @@ export interface SessionStatusRow {
 export interface SupervisorUpResult {
   message: string;
   sessions: SessionStatusRow[];
+  /** 부팅 시점 안내(자동 허용 티어 배너 등) — 부팅 리포트에 실려 `up`/`restart` 출력에 나타난다. */
+  notices: string[];
 }
 
 interface Assembly {
@@ -42,6 +47,26 @@ async function loadConf(base: string, proj: string): Promise<ProjectConf> {
   return parseProjectConf(await readFile(projectConf, "utf8"));
 }
 
+/**
+ * 자동 허용 티어 기동 배너 — 어떤 거부 목록 위에서 자동 승인이 도는지 기동 시점에 알린다(no-silent).
+ * 이 신호가 없으면 권한 정책이 의도대로 걸렸는지 확인할 능동 지점이 없고 수동 조회만 남는다.
+ */
+function autopassBanner(conf: ProjectConf, proj: string): string | null {
+  if (conf.perm_tier !== "autopass") return null;
+  const tl = tFor(conf.lang);
+  const denyDesc =
+    conf.denylist.length > 0
+      ? tl("supervisor.autopassDenySome", { tools: conf.denylist.join(", ") })
+      : tl("supervisor.autopassDenyEmpty");
+  return formatWarnNote(
+    {
+      situation: tl("supervisor.autopassBanner.situation", { denyDesc }),
+      action: tl("supervisor.autopassBanner.action", { proj }),
+    },
+    tl,
+  );
+}
+
 /** 프로젝트 부팅 — 이미 조립되어 있으면(중복 기동) 그대로 반환(멱등). */
 export async function supervisorUp(proj: string): Promise<SupervisorUpResult> {
   if (assemblies.has(proj)) {
@@ -49,6 +74,7 @@ export async function supervisorUp(proj: string): Promise<SupervisorUpResult> {
     return {
       message: `이미 기동 중입니다: ${proj}`,
       sessions: a.sessionManager.list().map((r) => ({ sid: r.sid, status: r.status })),
+      notices: [],
     };
   }
 
@@ -61,6 +87,15 @@ export async function supervisorUp(proj: string): Promise<SupervisorUpResult> {
   }
 
   const conf = await loadConf(base, proj);
+
+  // 기동 시점 권한 재적용 — 생성 이후 만들어진 디렉터리나 다른 머신에서 복제된 설정도 선언대로
+  // 잠근다. 실패는 기동을 막지 않되(가용성) 조용히 넘기지 않는다 — 부팅 안내로 사용자에게 올린다.
+  const notices: string[] = [];
+  await applyProjectFileMode(base, proj, conf.file_mode).catch((err: unknown) => {
+    const line = t("log.supervisor.securePermsFail", { proj, error: errMsg(err) });
+    console.warn(line);
+    notices.push(line);
+  });
 
   const sessionManager = createSessionManager({
     base,
@@ -131,7 +166,9 @@ export async function supervisorUp(proj: string): Promise<SupervisorUpResult> {
 
   const sessions = sessionManager.list().map((r) => ({ sid: r.sid, status: r.status }));
   const message = `부팅 완료: 재개 ${bootReport.resumed.length}개, detached ${bootReport.detached.length}개, 생략 ${bootReport.skipped.length}개.`;
-  return { message, sessions };
+  const banner = autopassBanner(conf, proj);
+  if (banner) notices.push(banner);
+  return { message, sessions, notices };
 }
 
 export async function supervisorDown(proj: string): Promise<{ message: string }> {

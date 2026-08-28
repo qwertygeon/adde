@@ -23,6 +23,21 @@ const rl = readline.createInterface({ input: process.stdin });
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 let initialized = false;
 let seq = 0;
+// 클라이언트(ADDE) 로 보낸 요청의 응답 대기 — 권한 요청 왕복(옵트인)에 쓴다.
+const pendingClientCalls = new Map();
+let clientCallId = 10_000;
+
+/**
+ * 클라이언트에 요청을 보내고 응답을 기다린다 — 에이전트→클라이언트 방향 호출
+ * (session/request_permission 등)의 실경로 재현.
+ */
+function callClient(method, params) {
+  const id = ++clientCallId;
+  return new Promise((resolve) => {
+    pendingClientCalls.set(id, resolve);
+    send({ jsonrpc: "2.0", id, method, params });
+  });
+}
 
 rl.on("line", (line) => {
   let msg;
@@ -32,6 +47,13 @@ rl.on("line", (line) => {
     return;
   }
   const { id, method, params } = msg;
+  // 클라이언트가 보낸 응답(method 없음 + id 있음) — 대기 중인 요청을 깨운다.
+  if (method === undefined && id !== undefined && pendingClientCalls.has(id)) {
+    const resolve = pendingClientCalls.get(id);
+    pendingClientCalls.delete(id);
+    resolve(msg.result ?? msg.error ?? null);
+    return;
+  }
   if (id === undefined || method === undefined) return; // 알림은 무시
 
   if (method === "initialize") {
@@ -79,15 +101,56 @@ rl.on("line", (line) => {
     return;
   }
   if (method === "session/prompt") {
+    const sessionId = params?.sessionId ?? "fake";
     // 응답 청크 알림 → end_turn: 구독자(injector)가 살아있으면 "pong" 이 누적된다.
     send({
       jsonrpc: "2.0",
       method: "session/update",
       params: {
-        sessionId: params?.sessionId ?? "fake",
+        sessionId,
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "pong" } },
       },
     });
+    // 옵트인: 엔진 실효 권한 모드 변경 알림 — ADDE 정책과의 차이 표기 경로 재현.
+    if (process.env.FAKE_ACP_MODE_UPDATE) {
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: "current_mode_update",
+            currentModeId: process.env.FAKE_ACP_MODE_UPDATE,
+          },
+        },
+      });
+    }
+    // 옵트인: 권한 요청 왕복 — 도구명을 지정하면 그 도구로 승인을 요청하고 결과를 덤프한다.
+    if (process.env.FAKE_ACP_PERM_TOOL) {
+      callClient("session/request_permission", {
+        sessionId,
+        toolCall: {
+          toolCallId: `tc-${++seq}`,
+          title: `${process.env.FAKE_ACP_PERM_TOOL} 실행`,
+          rawInput: { command: process.env.FAKE_ACP_PERM_INPUT ?? "echo hi" },
+          _meta: { claudeCode: { toolName: process.env.FAKE_ACP_PERM_TOOL } },
+        },
+        options: [
+          { optionId: "allow-once", name: "Allow", kind: "allow_once" },
+          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+        ],
+      }).then((outcome) => {
+        if (process.env.FAKE_ACP_PERM_OUTCOME_DUMP) {
+          try {
+            appendFileSync(process.env.FAKE_ACP_PERM_OUTCOME_DUMP, JSON.stringify(outcome) + "\n");
+          } catch {
+            // best-effort — 덤프 실패가 턴 종료를 막지 않는다.
+          }
+        }
+        send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+      });
+      return;
+    }
     send({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
     return;
   }

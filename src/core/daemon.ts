@@ -28,10 +28,11 @@ export async function runDaemonForeground(proj: string): Promise<number> {
   if (halt) return EXIT.OK;
 
   const result = await supervisorUp(proj);
-  await writeBootReport(defaultBase(), proj, result.sessions).catch((err: unknown) =>
-    process.stderr.write(`[boot-report] write failed: ${errMsg(err)}\n`),
+  await writeBootReport(defaultBase(), proj, result.sessions, undefined, result.notices).catch(
+    (err: unknown) => process.stderr.write(`[boot-report] write failed: ${errMsg(err)}\n`),
   );
   process.stdout.write(`${result.message}\n`);
+  for (const notice of result.notices) process.stderr.write(`${notice}\n`);
 
   const detached = result.sessions.filter((s) => s.status === "detached");
   for (const s of detached) {

@@ -25,12 +25,15 @@ export async function atomicWrite(
 }
 
 /**
- * 레인 상태·출력·큐 디렉터리를 권한 모드대로 잠근다.
+ * 내부 상태·큐 디렉터리를 권한 모드대로 잠근다.
  * private=0700(소유자 전용 — 다중 사용자 호스트에서 타 로컬 유저의 대화/응답 열람 차단),
  * shared=no-op(기존 기본 권한 유지 — 열람 허용을 옵트인한 경우). 부재 디렉터리는 먼저 생성한다.
  * chmod 실패는 흡수하지 않고 전파한다(권한이 의도대로 적용됐는지는 보안 신호 — 호출부가 로그/판단).
  */
-export async function secureLaneDirs(dirs: string[], mode: "private" | "shared"): Promise<void> {
+export async function securePrivateDirs(
+  dirs: readonly string[],
+  mode: "private" | "shared",
+): Promise<void> {
   if (mode !== "private") return;
   for (const dir of dirs) {
     await mkdir(dir, { recursive: true });

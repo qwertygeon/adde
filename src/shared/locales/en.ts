@@ -628,9 +628,9 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       "the denylist is empty, so every permission request passes without confirmation",
     autopassBanner: {
       situation:
-        "this lane started in auto-allow mode (perm_tier=autopass) — {{denyDesc}}. All other tools (including file writes and Bash) are auto-allowed",
+        "this project started in auto-allow mode (perm_tier=autopass) — {{denyDesc}}. All other tools (including file writes and Bash) are auto-allowed",
       action:
-        "Add tools that need confirmation to the denylist in lanes.d/{{lane}}.conf. Auto-allowed calls can be reviewed with adde logs {{proj}} {{lane}}.",
+        "Add tools that need confirmation with adde project set {{proj}} --add-deny <tool>. Auto-allowed calls can be reviewed with adde logs {{proj}} <session>.",
     },
     upStarted: "{{proj}}: {{count}} lane(s) started",
     upSkipped: "{{count}} already running (skipped)",
@@ -766,7 +766,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       runtimeRemoveFail:
         "[supervisor] lane={{lane}} runtime.json removal failed (auxiliary): {{error}}",
       securePermsFail:
-        "[supervisor] lane={{lane}} state directory permission lock failed (auxiliary — files may be world-readable): {{error}}",
+        "[supervisor] proj={{proj}} internal directory permission lock failed (files may be world-readable): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} start failed: {{reason}}",
       laneCleanupFail:
         "[supervisor] lane={{lane}} failed-start cleanup (engine close) failed (auxiliary): {{error}}",

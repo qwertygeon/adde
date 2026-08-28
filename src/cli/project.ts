@@ -20,6 +20,7 @@ import type { ProjectConf } from "../shared/conf.js";
 import { PROJECT_KEY_DESCRIPTORS, applyEdits } from "../shared/project-schema.js";
 import type { KeyEdit } from "../shared/project-schema.js";
 import { DEFAULT_AUTOPASS_DENYLIST } from "../shared/deny-match.js";
+import { applyProjectFileMode } from "../shared/file-mode.js";
 import { ENGINE_IDS } from "../engines/index.js";
 import { findSub } from "./spec.js";
 import { parseCommand } from "./parse.js";
@@ -80,6 +81,15 @@ async function handleAdd(p: ParseResult): Promise<number> {
     seededDefaultDenylist = true;
   }
 
+  // 위험 명령 하드 차단 시드 — 내장 위험 목록과 명시 지정분의 합집합(방어 심화, 중복 제거).
+  const explicitHardDeny = csv(
+    typeof p.flags["hard-deny"] === "string" ? p.flags["hard-deny"] : undefined,
+  );
+  const hardDeny =
+    p.flags["safe-defaults"] === true
+      ? [...new Set([...DEFAULT_AUTOPASS_DENYLIST, ...explicitHardDeny])]
+      : explicitHardDeny;
+
   const conf: ProjectConf = {
     v: 1,
     warnings: [],
@@ -89,7 +99,7 @@ async function handleAdd(p: ParseResult): Promise<number> {
     acp_version: "v1",
     allowlist: csv(typeof p.flags["allowlist"] === "string" ? p.flags["allowlist"] : undefined),
     denylist,
-    hard_deny: csv(typeof p.flags["hard-deny"] === "string" ? p.flags["hard-deny"] : undefined),
+    hard_deny: hardDeny,
     auto_restart: true,
     auto_resume: true,
     idle_hibernate: true,
@@ -117,10 +127,23 @@ async function handleAdd(p: ParseResult): Promise<number> {
 
   await mkdir(pp.root, { recursive: true });
   await atomicWrite(pp.projectConf, serializeProjectConf(conf));
+  // 내부 디렉터리 권한을 conf 선언대로 적용한다(기본 `private`=0700) — 큐·처리 중 봉투에는 프롬프트
+  // 본문이 들어가므로 다중 사용자 호스트에서 타 로컬 유저 열람 대상이 되지 않게 한다.
+  // 실패해도 생성 자체는 되돌리지 않되(반쯤 만들어진 프로젝트 회피) 사실은 알린다.
+  await applyProjectFileMode(base, proj, conf.file_mode).catch((err: unknown) => {
+    process.stderr.write(
+      `내부 디렉터리 권한 잠금 실패(파일이 타 사용자에 노출될 수 있음): ${errMsg(err)}\n`,
+    );
+  });
   process.stdout.write(`프로젝트 "${proj}" 생성됨(vault=${conf.vault}).\n`);
   if (seededDefaultDenylist) {
     process.stdout.write(
       `autopass 티어에 거부 목록이 지정되지 않아 내장 기본 거부 목록 ${denylist.length}건을 시드했습니다.\n`,
+    );
+  }
+  if (p.flags["safe-defaults"] === true) {
+    process.stdout.write(
+      `내장 위험 목록을 하드 차단(hard_deny) ${hardDeny.length}건으로 시드했습니다.\n`,
     );
   }
   return EXIT.OK;

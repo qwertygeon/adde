@@ -260,3 +260,50 @@ describe("구 변수 무시 (SC-015 Edge)", () => {
     expect(errs.err()).toContain("ADDE_UP_POLL_MS"); // run.pollMsDeprecated 이관 힌트
   });
 });
+
+describe("부팅 안내(notices) 표면화", () => {
+  it("리포트의 안내 항목이 stderr 로 표시된다(자동 허용 티어 배너 등)", async () => {
+    let call = 0;
+    readBootReport.mockImplementation(async () => {
+      call++;
+      if (call <= 2) return null;
+      return {
+        v: 1,
+        bootId: 1,
+        bootedAt: "x",
+        sessions: [{ sid: "a", status: "active" }],
+        running: 1,
+        notices: ["[ADDE 경고] 자동 허용 모드로 기동했습니다\n  ↳ 조치: denylist 를 확인하세요."],
+      };
+    });
+    const cap = captureStdout();
+    const errs = captureStderr();
+    const code = await run(["up", "demo"]);
+    cap.restore();
+    errs.restore();
+    expect(code).toBe(0);
+    expect(errs.err()).toContain("자동 허용 모드로 기동했습니다");
+  });
+
+  it("안내가 없는 리포트에서는 추가 출력이 없다", async () => {
+    let call = 0;
+    readBootReport.mockImplementation(async () => {
+      call++;
+      if (call <= 2) return null;
+      return {
+        v: 1,
+        bootId: 1,
+        bootedAt: "x",
+        sessions: [{ sid: "a", status: "active" }],
+        running: 1,
+      };
+    });
+    const cap = captureStdout();
+    const errs = captureStderr();
+    const code = await run(["up", "demo"]);
+    cap.restore();
+    errs.restore();
+    expect(code).toBe(0);
+    expect(errs.err()).not.toContain("ADDE 경고");
+  });
+});

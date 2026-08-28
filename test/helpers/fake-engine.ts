@@ -22,6 +22,14 @@ export type FakeEngineEvent =
   | { t: "tool_call"; id: string; name: string; input: unknown }
   | { t: "tool_result"; id: string; output: unknown }
   | { t: "permission"; reqId: string; tool: string; input: unknown }
+  | {
+      t: "permission_resolved";
+      reqId: string;
+      tool: string;
+      input: unknown;
+      decision: "allow" | "deny";
+      via: "hard_deny" | "allowlist" | "autopass";
+    }
   | { t: "usage"; input: number; output: number }
   | { t: "turn_end"; stopReason: string };
 
@@ -50,6 +58,15 @@ export interface FakeEngineControl {
   crash(engineRef: string, info?: { code: number | null; signal: NodeJS.Signals | null }): void;
   /** 다음 send() 의 권한 요청을 타임아웃(응답 없음)으로 만든다 — respondPermission 이 도달하지 않음. */
   hangNextPermission(): void;
+  /**
+   * 다음 send() 가 **정책만으로 이미 결정된** 권한(하드 차단·자동 허용)을 흘리도록 예약한다 —
+   * 드라이버가 채널 승인을 거치지 않고 결정하는 경로의 재현(승인 대기 없음).
+   */
+  queueResolvedPermission(spec: {
+    tool: string;
+    decision: "allow" | "deny";
+    via: "hard_deny" | "allowlist" | "autopass";
+  }): void;
   /** send() 호출 중 턴 종료 전에 추가로 도착한 prompt 큐를 재현 — TurnRunner 의 single-flight 처리 검증용. */
   queueExtraPromptBeforeTurnEnd(text: string): void;
   /**
@@ -89,6 +106,11 @@ export function makeFakeEngineDriver(
   let openCalls = 0;
   let lastCtx: FakeOpenCtx | undefined;
   const extraQueue: string[] = [];
+  const resolvedPermQueue: Array<{
+    tool: string;
+    decision: "allow" | "deny";
+    via: "hard_deny" | "allowlist" | "autopass";
+  }> = [];
   let pendingHold: { promise: Promise<void>; release: () => void } | undefined;
 
   const open = vi.fn(async (ctx: FakeOpenCtx): Promise<FakeEngineSession> => {
@@ -107,6 +129,17 @@ export function makeFakeEngineDriver(
       async *send(input) {
         if (!alive.get(engineRef)) throw new Error(`[fake-engine:${id}] send after close/crash`);
         yield { t: "text", role: "assistant", delta: `echo:${input.text}` };
+        while (resolvedPermQueue.length > 0) {
+          const spec = resolvedPermQueue.shift()!;
+          yield {
+            t: "permission_resolved",
+            reqId: `auto-${engineRef}-${++seq}`,
+            tool: spec.tool,
+            input: { cmd: "echo hi" },
+            decision: spec.decision,
+            via: spec.via,
+          };
+        }
         if (caps.permission !== "none") {
           const reqId = `perm-${engineRef}-${++seq}`;
           yield { t: "permission", reqId, tool: "Bash", input: { cmd: "echo hi" } };
@@ -160,6 +193,9 @@ export function makeFakeEngineDriver(
       },
       hangNextPermission() {
         hangNextPerm = true;
+      },
+      queueResolvedPermission(spec) {
+        resolvedPermQueue.push(spec);
       },
       queueExtraPromptBeforeTurnEnd(text) {
         extraQueue.push(text);

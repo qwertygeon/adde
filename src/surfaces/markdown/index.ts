@@ -8,6 +8,7 @@ import { readdir, readFile, rename, unlink } from "node:fs/promises";
 import { vaultPaths } from "../../shared/paths.js";
 import { ensureVaultLayout, isConflictFile } from "../../record/vault-paths.js";
 import { atomicWrite } from "../../shared/fs-atomic.js";
+import { errMsg } from "../../shared/errors.js";
 import { loadResumeIndex } from "../../record/events.js";
 import type { Envelope } from "../../shared/envelope.js";
 import {
@@ -80,6 +81,22 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
     return (sm!.get(sid)?.warnings ?? []).filter((w) => !INFORMATIONAL_WARNINGS.has(w));
   }
 
+  /**
+   * 세션 경고 등록·해소 — 레코드는 SessionManager 가 단일 writer 이므로 그 경로로만 올린다(L4→L3).
+   * 경고 영속 자체가 실패하면 표면화 수단이 남지 않으므로 로그로 남긴다(더 상위 채널이 없다).
+   */
+  async function noteFailure(sid: string, kind: string, reason: string): Promise<void> {
+    await sm!.noteFailure(sid, kind, reason).catch((err: unknown) => {
+      console.error(`markdown surface: 경고 기록 실패(sid=${sid}, kind=${kind}): ${errMsg(err)}`);
+    });
+  }
+
+  async function clearFailure(sid: string, kind: string): Promise<void> {
+    await sm!.clearFailure(sid, kind).catch((err: unknown) => {
+      console.error(`markdown surface: 경고 해소 실패(sid=${sid}, kind=${kind}): ${errMsg(err)}`);
+    });
+  }
+
   async function ensureInboxSkeleton(sid: string): Promise<void> {
     await ensureVaultLayout(ctx.vaultRoot, ctx.proj, sid);
     const vp = vaultPaths(ctx.vaultRoot, ctx.proj, sid);
@@ -150,11 +167,13 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
         try {
           await router!.dispatch(bindingFor(sid), env);
         } catch (err) {
-          console.error(
-            `markdown surface: dispatch 실패(sid=${sid}): ${err instanceof Error ? err.message : String(err)}`,
-          );
+          // 마커를 기록하지 않고 넘기면 같은 tick 말미의 치유가 send 줄을 미체크로 되돌리므로,
+          // 사용자에게는 "체크가 저절로 풀린" 것으로만 보인다 — 적재 실패를 경고로 올린다.
+          console.error(`markdown surface: dispatch 실패(sid=${sid}): ${errMsg(err)}`);
+          await noteFailure(sid, "enqueue-failed", `지시 적재 실패: ${errMsg(err)}`);
           continue; // 본문 유지·마커 미기록(SC-049 Error) — 재시도 가능.
         }
+        await clearFailure(sid, "enqueue-failed");
         lines[action.lineIndex] = sendingLine(envelopeId, stamp);
         mutated = true;
       } else if (action.kind === "empty") {
@@ -183,34 +202,49 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
           mutated = true;
         }
       } else if (action.kind === "control") {
+        // 팔레트 항목은 성공·실패 모두 미체크로 복원되므로(healLayout) 노트 결과만으로는 구분되지
+        // 않는다 — 실패를 경고로 올려 "눌렀는데 아무 일도 없다" 를 없앤다.
         if (action.controlKind === "clear") {
           try {
             const { next } = await sm!.clear(sid);
             const newVp = vaultPaths(ctx.vaultRoot, ctx.proj, next);
             await ensureVaultLayout(ctx.vaultRoot, ctx.proj, next);
-            await rename(vp.inboxNote, newVp.inboxNote).catch(() => {});
+            // 세션 교체는 이미 성공했으므로 노트 이름 변경 실패는 **부분 실패**다(새 sid 와 노트가
+            // 어긋난 상태) — 새 세션 쪽에 경고를 남긴다. 사용자가 보게 되는 노트가 그쪽이다.
+            try {
+              await rename(vp.inboxNote, newVp.inboxNote);
+            } catch (renameErr) {
+              console.error(
+                `markdown surface: clear 노트 이동 실패(sid=${sid}): ${errMsg(renameErr)}`,
+              );
+              await noteFailure(
+                next,
+                "palette-failed",
+                `세션은 교체됐으나 이전 입력 노트 이동 실패: ${errMsg(renameErr)}`,
+              );
+            }
             await sm!.registerBinding(next, bindingFor(next));
+            await clearFailure(sid, "palette-failed");
           } catch (err) {
-            console.error(
-              `markdown surface: clear 실패(sid=${sid}): ${err instanceof Error ? err.message : String(err)}`,
-            );
+            console.error(`markdown surface: clear 실패(sid=${sid}): ${errMsg(err)}`);
+            await noteFailure(sid, "palette-failed", `세션 교체 실패: ${errMsg(err)}`);
           }
         } else if (action.controlKind === "compact") {
           try {
             const engineSession = await sm!.admit(sid);
             await engineSession.compact?.();
+            await clearFailure(sid, "palette-failed");
           } catch (err) {
-            console.error(
-              `markdown surface: compact 실패(sid=${sid}): ${err instanceof Error ? err.message : String(err)}`,
-            );
+            console.error(`markdown surface: compact 실패(sid=${sid}): ${errMsg(err)}`);
+            await noteFailure(sid, "palette-failed", `대화 압축 실패: ${errMsg(err)}`);
           }
         } else if (action.controlKind === "resume") {
           try {
             await sm!.admit(sid);
+            await clearFailure(sid, "palette-failed");
           } catch (err) {
-            console.error(
-              `markdown surface: resume 실패(sid=${sid}): ${err instanceof Error ? err.message : String(err)}`,
-            );
+            console.error(`markdown surface: resume 실패(sid=${sid}): ${errMsg(err)}`);
+            await noteFailure(sid, "palette-failed", `엔진 재개 실패: ${errMsg(err)}`);
           }
         }
         mutated = true; // 팔레트 항목은 항상 미체크 복원 대상(healLayout 이 처리).
@@ -261,22 +295,36 @@ export function createMarkdownSurface(ctx: SurfaceContext): Surface {
     }
   }
 
+  /**
+   * 한 tick — 단계·세션 단위로 격리한다. 이전 구현은 폴 전체를 하나의 try 로 감싸 앞 세션의 노트
+   * 쓰기 예외가 뒤 세션의 전송 적재·승인 소비를 건너뛰게 했다. 실패가 지속적(권한·마운트)이면 뒤
+   * 세션은 영구히 처리되지 않고, 원인 세션과 피해 세션이 달라 추적이 사실상 불가능하다.
+   */
   async function pollOnce(): Promise<void> {
     if (stopped) return;
     try {
       // CLI 프로세스가 만든 신규 세션 레코드를 흡수한다 — 데몬은 부팅 시 로드한 레코드만 보므로,
       // 이 호출 없이는 기동 중 생성된 세션이 재기동 전까지 인지되지 않는다(additive-only).
       await sm!.refresh();
+    } catch (err) {
+      console.error(`markdown surface: 세션 레코드 흡수 실패: ${errMsg(err)}`);
+    }
+    try {
       await handleProjectNoteTriggers(ctx.vaultRoot, ctx.proj, sm!);
-      for (const sid of knownSids()) {
+    } catch (err) {
+      console.error(`markdown surface: 프로젝트 노트 처리 실패: ${errMsg(err)}`);
+    }
+    for (const sid of knownSids()) {
+      if (stopped) return;
+      try {
         await ensureInboxSkeleton(sid);
         await processSession(sid);
         await processApprovals(sid);
+        await clearFailure(sid, "note-failed");
+      } catch (err) {
+        console.error(`markdown surface: 세션 처리 실패(sid=${sid}): ${errMsg(err)}`);
+        await noteFailure(sid, "note-failed", `입력 노트 처리 실패: ${errMsg(err)}`);
       }
-    } catch (err) {
-      console.error(
-        `markdown surface: poll 오류: ${err instanceof Error ? err.message : String(err)}`,
-      );
     }
   }
 

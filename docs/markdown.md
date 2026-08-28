@@ -158,6 +158,8 @@ The frontmatter `status` field is fixed vocabulary (`처리 중` while the turn 
 
 If message processing itself fails before a turn note can be created, the failure and remediation guidance surface in the session note's warnings section instead (the message is preserved and reprocessed on restart — nothing is silently dropped).
 
+If the turn made any permission requests, a `## 권한 요청·결정` (Permission requests & decisions) section lists each one with its outcome. Requests decided via channel approval or a hard-deny block are listed directly; requests auto-allowed under `allowlist`/`autopass` are folded into a collapsed `자동 허용 N건` (N auto-allowed) block so routine auto-allows don't clutter the note — every decision is still recorded in full in the underlying event record regardless of how the note folds it.
+
 ## 4. Permission approval (approval notes)
 
 When the engine calls a tool that needs permission, a dedicated note is created in `approvals/` (one request = one file):

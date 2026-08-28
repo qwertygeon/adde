@@ -35,9 +35,14 @@ export async function enqueue(paths: SessionPaths, envelope: Envelope): Promise<
   await atomicWrite(join(paths.queueDir, queueFileName(envelope)), serializeEnvelope(envelope));
 }
 
-/** queue 에서 다음 envelope 을 꺼내 processing 으로 이동. 큐가 비어 있으면 null. */
+/**
+ * queue 에서 다음 envelope 을 꺼내 processing 으로 이동. 큐가 비어 있으면 null.
+ * `onQuarantine` 은 손상 메시지를 격리했을 때 호출된다 — 격리는 조용한 지시 소실이라 호출자가
+ * 사용자 대면 표면화를 할 수 있어야 한다(미지정 시 기존처럼 로그만).
+ */
 export async function claimNext(
   paths: SessionPaths,
+  opts?: { onQuarantine?: (id: string, reason: unknown) => void },
 ): Promise<{ id: string; envelope: Envelope } | null> {
   await mkdir(paths.queueDir, { recursive: true });
   await mkdir(paths.processingDir, { recursive: true });
@@ -70,6 +75,7 @@ export async function claimNext(
       envelope = parseEnvelope(await readFile(dst, "utf8"));
     } catch (parseErr) {
       await quarantineCorrupt(paths, id, parseErr);
+      opts?.onQuarantine?.(id, parseErr);
       continue;
     }
 

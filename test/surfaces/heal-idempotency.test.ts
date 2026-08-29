@@ -33,12 +33,19 @@ describe("healLayout 변경 판정의 안정성", () => {
 
   it("Happy: 실제 사용 형태(작성 중 초안 + 기록 존 마커)의 노트도 재치유에서 changed=false", async () => {
     const inbox = await import("../../src/surfaces/markdown/inbox.js");
-    // 실기기 vault 에서 관측된 형태 — 팔레트 4줄 · 초안 1줄 · send · 기록 존 마커 2줄.
+    // 006 이관(D002 baseline 마이그레이션) — 팔레트가 존 센티널(PALETTE_SENTINEL) + 그룹 머리글
+    // 구조로 바뀐다(design.md §6 ADR-006). 구 평면 4줄 픽스처는 이제 canonical 형태가 아니라서
+    // healLayout 이 changed=true 를 내 이 테스트의 전제(안정 상태에서의 재치유 무변경)를 깬다 —
+    // 신규 canonical 형태로 갱신한다(`stop` 항목 신설도 반영).
     const content =
       [
+        "<!-- adde:palette -->",
+        "**records**",
         "- [ ] 🗄️ archive",
-        "- [ ] 🧹 clear",
+        "**session**",
         "- [ ] 🗜️ compact",
+        "- [ ] 🧹 clear",
+        "- [ ] ⏹️ stop",
         "- [ ] ♻️ resume",
         "<!-- adde:compose -->",
         "작성 중 초안",

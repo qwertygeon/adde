@@ -5,9 +5,11 @@ import {
   makeSessionManagerDeps,
   makeRecordCtx,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 import { makeFakeRecordStore } from "../helpers/fake-record-store.js";
+import { makeSessionRecordFixture } from "../helpers/session-record-fixture.js";
 
 // SC-035 (NFR-001): 세션 간 상태 비침해 — A 의 초기화·삭제·기록 실패가 B 의 큐·기록·노트·설정을
 // 어느 것도 변경하지 않는다. design.md §인터페이스 계약 기반 deps 구성은 session-model.test.ts
@@ -38,9 +40,9 @@ describe("SC-035: 세션 간 상태 비침해", () => {
     const { sessionStore, sessionManagerMod } = await loadModules();
     const fakeDriver = makeFakeEngineDriver("acp", FAKE_CAPS_PRESETS.fullNative);
     const { calls } = makeFakeRecordStore({ failAppendEventForSid: "WILL_BE_A" });
-    const sm = sessionManagerMod.createSessionManager(
-      makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }) as never,
-    );
+    const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
+    const sm = sessionManagerMod.createSessionManager(deps);
+    bindSessionManager(deps, sm);
 
     const a = await sm.create({ engine: "acp" });
     const b = await sm.create({ engine: "acp" });
@@ -48,9 +50,9 @@ describe("SC-035: 세션 간 상태 비침해", () => {
     // 신규 인스턴스는 in-memory records 가 비어 있어(GAP-022 동형) load() 로 디스크의 기존 레코드를
     // 반드시 적재해야 admit()/clear()/remove() 가 A·B 를 인식한다.
     const { store: record2 } = makeFakeRecordStore({ failAppendEventForSid: a.sid });
-    const sm2 = sessionManagerMod.createSessionManager(
-      makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }) as never,
-    );
+    const deps2 = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
+    const sm2 = sessionManagerMod.createSessionManager(deps2);
+    bindSessionManager(deps2, sm2);
     await sm2.load();
 
     const beforeB = (await sessionStore.loadSessions(roots.base, PROJ)).find(
@@ -89,21 +91,7 @@ describe("SC-035: 세션 간 상태 비침해", () => {
 
   it("Error: A 의 세션 레코드가 손상돼도 B 로드는 영향받지 않는다", async () => {
     const { sessionStore } = await loadModules();
-    const now = new Date().toISOString();
-    const b = {
-      v: 1 as const,
-      sid: sessionStore.newSid(),
-      engine: "acp",
-      engineRef: null,
-      status: "active" as const,
-      title: null,
-      createdAt: now,
-      lastActivityAt: now,
-      successorOf: null,
-      engineArgs: [],
-      warnings: [],
-      bindings: [],
-    };
+    const b = makeSessionRecordFixture(sessionStore.newSid());
     await sessionStore.saveSession(roots.base, PROJ, b);
     const fs = await import("node:fs");
     const path = await import("node:path");

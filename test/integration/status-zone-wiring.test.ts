@@ -5,6 +5,7 @@ import {
   cleanupV2TmpRoots,
   makeSessionManagerDeps,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 import { waitFor } from "../helpers/wait.js";
@@ -33,7 +34,8 @@ async function makeHarness() {
   ]);
   const fakeDriver = makeFakeEngineDriver("acp", FAKE_CAPS_PRESETS.fullNative);
   const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
-  const sm = smMod.createSessionManager(deps as never);
+  const sm = smMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   const router = routerMod.createRouter({ base: roots.base, proj: PROJ, sessionManager: sm });
   const surface = surfaceMod.createMarkdownSurface({
     base: roots.base,
@@ -87,6 +89,7 @@ describe("상태 존 배선(레코드 경고 → 입력 노트)", () => {
       });
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 30_000);
 });

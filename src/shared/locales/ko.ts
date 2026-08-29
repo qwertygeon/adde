@@ -19,11 +19,12 @@ export const ko = {
   doctor [<proj>] [--json]            환경·설정 정적 점검(상태 비의존)
   logs <proj> <session> [N] [-f|--follow] [--json]  세션 transcript 최근 N줄(기본 50, --engine 시 엔진 stderr; -f/--follow 로 실시간 추적)
   project <add|set|show|ls|rm>        프로젝트 관리('adde project help' 로 옵션 확인)
-  session <new|ls|show|clear|rm>      세션 관리('adde session help' 로 옵션 확인)
+  session <new|ls|show|clear|stop|resume|rm>  세션 관리('adde session help' 로 옵션 확인)
   bind <add|rm|ls>                    채널 바인딩 관리('adde bind help' 로 옵션 확인)
   vault <rebuild>                     이벤트 기록에서 노트·dedup 원장 재생성
   completion <bash|zsh>    셸 자동완성 스크립트 출력(명령·프로젝트/세션 Tab 완성; 설정은 'adde completion --help')
   alias [names...]         짧은 별칭 설치(기본 ad, add) — adde 실행 파일 옆에
+  factory-reset            모든 프로젝트·세션을 지워 설치 직후 상태로 초기화(복구 불가, 대화형 전용)
 
 옵션:
   -v, --version            버전 출력
@@ -110,19 +111,34 @@ project set 목록 증분 편집:
   --add-hard-deny <a,b,c> / --rm-hard-deny <a,b,c>
 
 편집 가능 키(adde project set <proj> <key> <value>...):
-  cwd, engine, engine_args, perm_tier, allowlist, denylist, hard_deny, gate_timeout_sec, lang, file_mode, auto_restart, auto_resume, idle_hibernate, hibernate_after_min, max_active_engines, auto_relaunch, markdown.palette, markdown.records_cap, vault.backup, vault.retention_days, vault.sync_provider`,
+  cwd, engine, engine_args, perm_tier, allowlist, denylist, hard_deny, gate_timeout_sec, lang, file_mode, auto_restart, auto_resume, idle_hibernate, hibernate_after_min, idle_stop, stop_after_min, max_active_engines, auto_relaunch, markdown.palette, markdown.records_cap, markdown.notices_cap, vault.backup, vault.retention_days, vault.sync_provider
+  (idle_stop: 무활동 자동 중지, 기본 켬 · stop_after_min: 자동 중지 임계(분), 기본 60 · markdown.notices_cap: 입력 노트 안내 존 최신 유지 건수, 기본 10, 0=무제한)`,
     session: `사용법:
   adde session new <proj> [--engine <id>] [--title <t>] [--engine-args <args>] [--json]
-  adde session ls <proj> [--json]            레코드 뷰(데몬 무관) — 엔진 상주 여부는 adde status
+  adde session ls <proj> [--json]            레코드 뷰(데몬 무관, 최근 활동 순 정렬) — 엔진 상주 여부는 adde status
   adde session show <proj> <sid> [--json]
-  adde session clear <proj> <sid>            초기화(승계 — 새 세션 생성, 기존 세션은 archived)
-  adde session rm <proj> <sid> [--purge] [--force]`,
+  adde session clear <proj> <sid>            현재 세션 중지 + 새 세션 생성(승계 — 두 노트 모두 보존)
+  adde session stop <proj> <sid> [--json]    세션 감시 중지(잔여 작업이 있으면 완료 후 중지로 예약)
+  adde session resume <proj> [<sid>] [--json]  중지·떨어짐 세션 재개(sid 생략 시 대상 건수만 안내)
+  adde session rm <proj> <sid> [--purge]     대화형: 완전 제거/일반 제거/취소 3분기(--purge=확인 없는 비대화 완전 제거)`,
     bind: `사용법:
   adde bind add <proj> <sid> --surface <id> --address <addr>
   adde bind rm <proj> <sid> --surface <id> --address <addr>
   adde bind ls <proj> [--json]`,
     vault: `사용법:
   adde vault rebuild <proj> [--sid <sid>] [--json]   이벤트 기록에서 노트·dedup 원장 재생성`,
+    factoryReset: `사용법: adde factory-reset
+
+모든 프로젝트와 세션을 지워 adde 를 처음 설치 상태로 되돌립니다.
+  - 삭제 대상: 모든 프로젝트의 설정 루트 항목 + 각 프로젝트 vault 의 ADDE 서브트리(노트·이벤트·blob·dedup 원장).
+  - 보존 대상: vault 루트 자체와 그 ADDE 네임스페이스 밖의 모든 파일 · v0.2.x(구버전) 데이터는 건드리지 않습니다.
+  - 대화형 터미널에서만 실행됩니다 — 비대화 환경에서는 거부합니다(fail-closed).
+  - 먼저 인벤토리(프로젝트·세션 수, 삭제될 노트 경로)를 보여준 뒤, 예/아니오가 아니라 고정 확인 문구를
+    정확히(대소문자 포함) 타이핑해야 진행됩니다 — 불일치 시 재시도 없이 즉시 취소됩니다.
+  - 어떤 프로젝트 설정도 더 이상 가리키지 않는 vault ADDE 프로젝트 디렉터리(stray)는 별도로 열거·확인하며
+    기본적으로 삭제하지 않습니다 — 어떤 vault 설정도 가리키지 않는 잔존물은 애초에 발견 대상이 아닙니다.
+  - 저장 배치 변경 이전에 생성된 세션의 이전 위치 본문까지 완전히 지우는 유일한 경로입니다 — 일반
+    \`session rm\` 은 legacy 구간 세션의 그 본문에 닿지 못합니다('adde session help' 참조).`,
     lane: `사용법:
   adde lane add <proj> <lane> [옵션]   레인 conf 생성
   adde lane set <proj> <lane> [<key> <value> ...] [--unset <key> ...]  기존 레인 conf 를 제자리 편집 (TTY 에서 인자 없이 실행 시 대화형 위저드)
@@ -830,5 +846,11 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
     block: "[ADDE 차단] {{situation}}\n  ↳ 조치: {{action}}",
     exception: "[ADDE 오류] {{situation}}\n  ↳ 조치: {{action}}",
     warn: "[ADDE 경고] {{situation}}\n  ↳ 조치: {{action}}",
+  },
+  notice: {
+    notYetReflected:
+      "요청이 아직 노트에 반영되기 전이라 처리되지 않았습니다 — 항목이 다시 표시됩니다. 그래도 취소·해소하려면 표시된 뒤 다시 지워 주세요.",
+    successionNoteFailed:
+      "이전 세션({{oldSid}})의 노트 갱신이 실패했습니다 — 자동으로 재시도됩니다. 계속 실패하면 이전 세션의 노트 파일을 직접 확인하세요.",
   },
 } satisfies typeof en;

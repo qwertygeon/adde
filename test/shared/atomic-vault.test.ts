@@ -26,6 +26,21 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
+// tmp 선점(SEC-006) 재현 — 다음 tmp 이름을 예측하려면 `randomBytes` 접미를 고정해야 한다
+// (pid+카운터는 예측 가능하나 랜덤 접미는 그 자체가 방어 대상). `vi.resetModules()` 로 fs-atomic.js
+// 를 매번 새로 불러와 모듈 내부 `tmpCallCounter` 를 0 부터 재현 가능하게 만든다.
+const cryptoCtl = vi.hoisted(() => ({ fixedHex: null as string | null }));
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomBytes: (n: number) => {
+      if (cryptoCtl.fixedHex) return Buffer.from(cryptoCtl.fixedHex, "hex");
+      return actual.randomBytes(n);
+    },
+  };
+});
+
 let roots: V2TmpRoots;
 
 beforeEach(() => {
@@ -35,6 +50,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanupV2TmpRoots(roots);
   renameCtl.failWith = null;
+  cryptoCtl.fixedHex = null;
 });
 
 describe("SC-041: 원자 쓰기와 동기화 충돌 파일 무시", () => {
@@ -73,5 +89,33 @@ describe("SC-041: 원자 쓰기와 동기화 충돌 파일 무시", () => {
     };
     await expect(atomicMod.atomicWrite(target, "x")).rejects.toMatchObject({ code: "EXDEV" });
     expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it("Edge(SEC-006: tmp 선점): 다음에 쓸 tmp 경로가 심볼릭 링크로 미리 점거돼 있으면 atomicWrite 가 EEXIST 로 실패하고 그 링크 대상을 오염시키지 않는다", async () => {
+    // randomBytes 접미를 고정해 tmpPathFor 가 실제로 만들 이름을 예측한 뒤, 그 자리에 공격자
+    // 소유 파일을 가리키는 심볼릭 링크를 미리 심어 atomicWrite 자체를 관통시킨다(Node raw wx 계약
+    // 재확인이 아니라 production 코드 경로 자체를 검증).
+    vi.resetModules();
+    cryptoCtl.fixedHex = "aabbccddeeff";
+    const atomicMod = await import("../../src/shared/fs-atomic.js");
+    const dir = path.join(roots.vaultRoot, "preempt-dir");
+    fs.mkdirSync(dir, { recursive: true });
+    const target = path.join(dir, "note4.md");
+    const attackerTarget = path.join(dir, "attacker-owned.txt");
+    fs.writeFileSync(attackerTarget, "attacker content");
+    // fs-atomic.ts 를 방금 새로 불러왔으므로 모듈 내부 tmpCallCounter 는 0부터 시작한다 —
+    // tmpPathFor 의 이름 패턴(`.${basename}.${pid}.${counter}.${rand}.tmp`)과 정확히 일치시킨다.
+    const predictedTmp = path.join(dir, `.note4.md.${process.pid}.0.aabbccddeeff.tmp`);
+    fs.symlinkSync(attackerTarget, predictedTmp);
+    await expect(atomicMod.atomicWrite(target, "victim content")).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+    expect(fs.existsSync(target)).toBe(false); // rename 이 일어나지 않았다.
+    expect(fs.readFileSync(attackerTarget, "utf8")).toBe("attacker content"); // 링크 대상 미오염.
+
+    // 회귀 가드 — 선점이 없는 정상 호출(카운터가 이미 소비된 이름을 다시 쓰지 않는다)은 그대로
+    // 성공한다.
+    await atomicMod.atomicWrite(target, "victim content 2");
+    expect(fs.readFileSync(target, "utf8")).toBe("victim content 2");
   });
 });

@@ -8,6 +8,7 @@ import {
   makeSessionManagerDeps,
   makeRecordCtx,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 import { waitFor } from "../helpers/wait.js";
@@ -48,15 +49,19 @@ describe("SEC-002 회귀: 일간 보관 이관 스윕이 실제로 배선된다"
       {
         conf: { "vault.backup": backupDir, "vault.retention_days": 1 },
         scheduler: {
-          setInterval: (fn: () => void) => {
-            sweepFn = fn;
+          // 006(FR-022) 이후 createSessionManager 가 setInterval 을 2회 등록한다(유휴+보관 스윕
+          // 60s · control 드레인 2s) — ms 로 구분해 스윕 콜백만 캡처한다(둘 다 잡으면 마지막 호출인
+          // control 드레인이 sweepFn 을 덮어써 이 테스트가 엉뚱한 콜백을 트리거하게 된다).
+          setInterval: (fn: () => void, ms: number) => {
+            if (ms === 60_000) sweepFn = fn;
             return 1;
           },
           clearInterval: () => {},
         },
       },
     );
-    const sm = createSessionManager(deps as never);
+    const sm = createSessionManager(deps);
+    bindSessionManager(deps, sm);
     const created = await sm.create({ engine: "acp" });
     const sid = created.sid;
 
@@ -98,15 +103,19 @@ describe("SEC-002 회귀: 일간 보관 이관 스윕이 실제로 배선된다"
       { acp: fakeDriver.descriptor },
       {
         scheduler: {
-          setInterval: (fn: () => void) => {
-            sweepFn = fn;
+          // 006(FR-022) 이후 createSessionManager 가 setInterval 을 2회 등록한다(유휴+보관 스윕
+          // 60s · control 드레인 2s) — ms 로 구분해 스윕 콜백만 캡처한다(둘 다 잡으면 마지막 호출인
+          // control 드레인이 sweepFn 을 덮어써 이 테스트가 엉뚱한 콜백을 트리거하게 된다).
+          setInterval: (fn: () => void, ms: number) => {
+            if (ms === 60_000) sweepFn = fn;
             return 1;
           },
           clearInterval: () => {},
         },
       },
     );
-    const sm = createSessionManager(deps as never);
+    const sm = createSessionManager(deps);
+    bindSessionManager(deps, sm);
     const created = await sm.create({ engine: "acp" });
     const vp = vaultPaths(roots.vaultRoot, PROJ, created.sid);
     fs.mkdirSync(vp.turnsDir, { recursive: true });
@@ -143,15 +152,19 @@ describe("회귀: 스윕이 실행 시점에 보관 위치 겹침을 재검증�
       {
         conf: { "vault.backup": overlapping, "vault.retention_days": 1 },
         scheduler: {
-          setInterval: (fn: () => void) => {
-            sweepFn = fn;
+          // 006(FR-022) 이후 createSessionManager 가 setInterval 을 2회 등록한다(유휴+보관 스윕
+          // 60s · control 드레인 2s) — ms 로 구분해 스윕 콜백만 캡처한다(둘 다 잡으면 마지막 호출인
+          // control 드레인이 sweepFn 을 덮어써 이 테스트가 엉뚱한 콜백을 트리거하게 된다).
+          setInterval: (fn: () => void, ms: number) => {
+            if (ms === 60_000) sweepFn = fn;
             return 1;
           },
           clearInterval: () => {},
         },
       },
     );
-    const sm = createSessionManager(deps as never);
+    const sm = createSessionManager(deps);
+    bindSessionManager(deps, sm);
     const created = await sm.create({ engine: "acp" });
     const sid = created.sid;
 

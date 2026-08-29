@@ -5,7 +5,7 @@ _English | [한국어](troubleshooting.ko.md)_
 Diagnosis and remedies by symptom. Three commands narrow down most issues first:
 
 - `adde doctor [<proj>]` — static check of environment/config (works even before startup).
-- `adde status <proj>` — whether a session is active / hibernated / detached / archived.
+- `adde status <proj>` — whether a session is active / hibernated / stopped / detached.
 - `adde logs <proj> <sid>` — recent session activity (conversation event record); add `--engine` for the engine's own diagnostic output, or `--daemon` for the daemon-level log.
 
 ## Table of Contents
@@ -17,6 +17,7 @@ Diagnosis and remedies by symptom. Three commands narrow down most issues first:
 - [Crash safety & log rotation](#crash-safety--log-rotation)
 - [Recovery after reboot / orphan cleanup](#recovery-after-reboot--orphan-cleanup)
 - [No response after sending a message](#no-response-after-sending-a-message)
+- [A session stopped on its own](#a-session-stopped-on-its-own)
 - [Failure notice after session control (clear/compact/resume)](#failure-notice-after-session-control-clearcompactresume)
 - [Permissions](#permissions)
 - [Telegram/Discord](#telegramdiscord)
@@ -37,25 +38,29 @@ Diagnosis and remedies by symptom. Three commands narrow down most issues first:
 
 Run `adde doctor <proj>` first.
 
-| Symptom                                       | Cause                                                                                         | Remedy                                                                                              |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `doctor` FAILs the ACP adapter / engine check | Engine driver not installed/registered                                                        | Retry after `pnpm install`; check `adde doctor` global "engines" line                               |
-| Node version FAIL                             | Node < 22                                                                                     | Upgrade to Node 22+                                                                                 |
-| No project exists                             | No project created yet                                                                        | `adde project add <proj> --vault <path>` (or `adde init`)                                           |
-| `project.conf` FAIL                           | Config file unreadable                                                                        | Check `~/.config/adde/projects/<proj>/project.conf` exists and is readable                          |
-| vault WARN                                    | Vault path doesn't exist yet                                                                  | It's created on first use — this is informational, not blocking                                     |
-| `doctor` launchd registration mismatch WARN   | plist existence vs launchctl registration mismatch                                            | `adde down <proj>` then `adde up <proj>`                                                            |
-| `doctor` daemon entry-file WARN               | Trying to daemonize from a dev checkout without a build                                       | `pnpm build`, then `node dist/cli/adde.js up <proj>` (or a global install)                          |
-| `doctor` legacy-collision FAIL                | A v0.2.x project happened to be named `projects` — collides with v2's reserved container name | See [v0.2.x data present](#v02x-data-present) — v0.2.x data is untouched either way                 |
-| Startup fails on engine handshake no-response | Engine stalls with no response                                                                | Confirm the engine binary/auth, then `adde restart <proj>`; check `adde logs <proj> <sid> --engine` |
+| Symptom                                                                                            | Cause                                                                                         | Remedy                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `doctor` FAILs the ACP adapter / engine check                                                      | Engine driver not installed/registered                                                        | Retry after `pnpm install`; check `adde doctor` global "engines" line                                                                                                                                                                                                                                                  |
+| Node version FAIL                                                                                  | Node < 22                                                                                     | Upgrade to Node 22+                                                                                                                                                                                                                                                                                                    |
+| No project exists                                                                                  | No project created yet                                                                        | `adde project add <proj> --vault <path>` (or `adde init`)                                                                                                                                                                                                                                                              |
+| `project.conf` FAIL                                                                                | Config file unreadable                                                                        | Check `~/.config/adde/projects/<proj>/project.conf` exists and is readable                                                                                                                                                                                                                                             |
+| Every command for one project fails with a settings error naming `vault`, `vault.backup`, or `cwd` | That key holds a relative path — path settings are read as absolute (`~/` is expanded)        | Edit the key to an absolute path in `~/.config/adde/projects/<proj>/project.conf` by hand — `project set` cannot help here because it has to read the same file first. If a literal `~` folder holds notes from an earlier version, point `vault` at that folder's absolute path or move the notes to the new location |
+| vault WARN                                                                                         | Vault path doesn't exist yet                                                                  | It's created on first use — this is informational, not blocking                                                                                                                                                                                                                                                        |
+| `doctor` launchd registration mismatch WARN                                                        | plist existence vs launchctl registration mismatch                                            | `adde down <proj>` then `adde up <proj>`                                                                                                                                                                                                                                                                               |
+| `doctor` daemon entry-file WARN                                                                    | Trying to daemonize from a dev checkout without a build                                       | `pnpm build`, then `node dist/cli/adde.js up <proj>` (or a global install)                                                                                                                                                                                                                                             |
+| `doctor` legacy-collision FAIL                                                                     | A v0.2.x project happened to be named `projects` — collides with v2's reserved container name | See [v0.2.x data present](#v02x-data-present) — v0.2.x data is untouched either way                                                                                                                                                                                                                                    |
+| Startup fails on engine handshake no-response                                                      | Engine stalls with no response                                                                | Confirm the engine binary/auth, then `adde restart <proj>`; check `adde logs <proj> <sid> --engine`                                                                                                                                                                                                                    |
 
 ## Session shows as detached
 
 `adde status` reports `detached` when a session's engine resume failed at boot, or when repeated engine crashes exhausted self-recovery (see below). Unlike `hibernated` (intentionally idle, resumes transparently), `detached` needs your attention.
 
+A detached session is not watched, so its own input note is rewritten into a banner with the failure reason and its checkboxes are removed. Resume it from the terminal, or from **another** active session's note.
+
 ```bash
-adde logs <proj> <sid> --engine   # see the recorded failure reason
-adde restart <proj>                # or, from the channel, check the resume palette marker
+adde logs <proj> <sid> --engine       # see the recorded failure reason
+adde session resume <proj> <sid>      # bring it back
+adde restart <proj>                    # or restart the daemon
 ```
 
 ## Engine crash & self-recovery
@@ -64,7 +69,7 @@ If a session's **engine** process (not the daemon) crashes after the handshake, 
 
 If every attempt fails, ADDE marks the session `detached` and sends a one-time channel notice. Any permission approval still pending at crash time is denied immediately (fail-closed) rather than left to time out.
 
-- **Recovering after a give-up**: `adde restart <proj>`, or the channel's `♻️ resume` palette marker.
+- **Recovering after a give-up**: `adde session resume <proj> <sid>`, `adde restart <proj>`, or check `♻️ resume` in **another, active** session's note and pick it from the list (a detached session's own note is no longer watched, so its checkboxes do nothing).
 - **Turning self-recovery off**: `adde project set <proj> auto_relaunch false`, then `adde restart <proj>`. With it off, ADDE still detects the crash, denies pending approvals, and sends a one-time notice, but marks the session `detached` immediately instead of retrying.
 - Intentional restarts (`adde restart`, `clear`, `resume`) are unaffected — self-recovery only reacts to _unexpected_ engine exits.
 
@@ -83,9 +88,27 @@ The section above covers a session's **engine** process. The **daemon** process 
 
 ## No response after sending a message
 
-1. Confirm `adde status <proj>` shows the session as `active` (or `hibernated` — it resumes transparently on the next turn).
+1. Confirm `adde status <proj>` shows the session as `active` (or `hibernated` — it resumes transparently on the next turn). **If it shows `stopped` or `detached`, that is the answer**: nothing reads that session's note, so a checked send box will sit there forever. Resume it first (see below).
 2. Check whether the message was received/processed with `adde logs <proj> <sid>`.
 3. Responses arrive **all at once at turn end** (no streaming during progress) — wait a moment for a long-running turn.
+
+## A session stopped on its own
+
+A `stopped` session is a normal resting state, not a failure. Sessions are stopped automatically once they have been inactive for `stop_after_min` (default 60) minutes, and the reason is written into the banner that replaces the input note.
+
+```bash
+adde session resume <proj> <sid>           # bring it back from the terminal
+adde project set <proj> idle_stop false     # stop stopping them; then adde restart <proj>
+adde project set <proj> stop_after_min 240  # or just move the threshold
+```
+
+| Symptom                                                     | Cause                                                                                         | Remedy                                                                                              |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| The input note lost its palette and send box                | The session is stopped (or was removed with the record-only option) — nothing polls that note | Resume it and the normal layout comes back with your draft intact                                   |
+| `session stop` said "scheduled" instead of stopping         | A turn was still running, or the queue wasn't empty                                           | Nothing to do — it stops on its own once the work drains, and a notice confirms it                  |
+| `session stop`/`resume` refuses and mentions restarting     | The daemon took the request but its outcome could not be observed                             | `adde restart <proj>`, then retry — the command refuses rather than reporting a no-op as success    |
+| The resume picker's options come back after you delete them | The first cancellation attempt landed before the options were committed                       | Delete them once more; a notice tells you the cancellation hasn't been applied yet                  |
+| Sessions stop sooner than expected after a hibernate        | Both thresholds count from **last activity**, not from when it hibernated                     | Raise `stop_after_min`, or set it above `hibernate_after_min` if you want a hibernated grace period |
 
 ## Failure notice after session control (clear/compact/resume)
 
@@ -112,11 +135,14 @@ Not implemented in this release — see [telegram.md](telegram.md). Binding crea
 | Symptom                                              | Check                                                                                                                                                                                            |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Checked but not sent                                 | The send box is checked (`[x]`), body between `<!-- adde:compose -->` and the send box is not empty                                                                                              |
-| Session doesn't respond                              | Whether the vault path exists · `adde status <proj>` shows the session `active`/`hibernated` (not `detached`)                                                                                    |
+| Session doesn't respond                              | Whether the vault path exists · `adde status <proj>` shows the session `active`/`hibernated` (not `stopped`/`detached` — those are not watched at all)                                           |
 | Turn note not visible                                | Check `turns/` under the session's vault folder, and whether the turn has actually ended                                                                                                         |
 | Turn note not where expected                         | If retention is enabled (`vault.backup`), a note older than `vault.retention_days` moved to `<backup>/<turn-start-date>/...` — see [markdown guide](markdown.md#vault-lightness-retention--sync) |
 | Project creation refused ("backup overlaps ...")     | `vault.backup` overlaps the vault or ADDE's config root — point it elsewhere                                                                                                                     |
 | Project creation refused (unsupported sync provider) | `vault.sync_provider` must be `local` or `icloud`                                                                                                                                                |
+| A notice reappears after you delete the line         | Only for the resume picker, and only on the first attempt within a couple of seconds of it appearing — a notice says the cancellation hasn't landed yet; delete it once more                     |
+| Notices disappear before you read them               | The zone keeps the newest 10 by default and says how many it pruned — raise `markdown.notices_cap`, or set it to `0` for no cap                                                                  |
+| Same text in two sessions isn't deduplicated         | Expected since this release: duplicate detection is per session, so each session keeps its own copy                                                                                              |
 
 Detailed setup: [Markdown guide](markdown.md).
 

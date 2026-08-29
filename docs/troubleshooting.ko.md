@@ -5,7 +5,7 @@ _[English](troubleshooting.md) | 한국어_
 증상별 진단·대응. 세 명령이 대부분의 문제를 먼저 좁혀줍니다:
 
 - `adde doctor [<proj>]` — 환경·설정 정적 점검(기동 전에도 동작).
-- `adde status <proj>` — 세션이 active/hibernated/detached/archived 인지.
+- `adde status <proj>` — 세션이 active/hibernated/stopped/detached 인지.
 - `adde logs <proj> <sid>` — 최근 세션 활동(대화 이벤트 기록); 엔진 자체 진단 출력은 `--engine`, 데몬 수준 로그는 `--daemon`.
 
 ## 목차
@@ -17,6 +17,7 @@ _[English](troubleshooting.md) | 한국어_
 - [크래시 안전성·로그 회전](#크래시-안전성로그-회전)
 - [재부팅 후 복구/orphan 정리](#재부팅-후-복구orphan-정리)
 - [메시지 전송 후 응답 없음](#메시지-전송-후-응답-없음)
+- [세션이 알아서 중지됨](#세션이-알아서-중지됨)
 - [세션 제어(clear/compact/resume) 실패 통지](#세션-제어clearcompactresume-실패-통지)
 - [권한](#권한)
 - [Telegram/Discord](#telegramdiscord)
@@ -37,25 +38,29 @@ _[English](troubleshooting.md) | 한국어_
 
 먼저 `adde doctor <proj>` 를 실행하세요.
 
-| 증상                                      | 원인                                                                  | 대응                                                                                     |
-| ----------------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `doctor` 가 ACP 어댑터/엔진 점검에서 FAIL | 엔진 드라이버 미설치/미등록                                           | `pnpm install` 후 재시도; `adde doctor` 전역 "engines" 줄 확인                           |
-| Node 버전 FAIL                            | Node < 22                                                             | Node 22+ 로 업그레이드                                                                   |
-| 프로젝트가 없음                           | 아직 프로젝트를 만들지 않음                                           | `adde project add <proj> --vault <path>`(또는 `adde init`)                               |
-| `project.conf` FAIL                       | 설정 파일 읽기 불가                                                   | `~/.config/adde/projects/<proj>/project.conf` 존재·읽기 가능 여부 확인                   |
-| vault WARN                                | vault 경로가 아직 없음                                                | 최초 사용 시 생성됩니다 — 정보성이며 차단 아님                                           |
-| `doctor` launchd 등록 불일치 WARN         | plist 존재 vs launchctl 등록 불일치                                   | `adde down <proj>` 후 `adde up <proj>`                                                   |
-| `doctor` 데몬 진입 파일 WARN              | 빌드 없이 dev 체크아웃에서 데몬화 시도                                | `pnpm build` 후 `node dist/cli/adde.js up <proj>`(또는 전역 설치)                        |
-| `doctor` legacy-collision FAIL            | v0.2.x 프로젝트 이름이 하필 `projects` — v2 예약 컨테이너 이름과 충돌 | [v0.2.x 데이터 존재](#v02x-데이터-존재) 참조 — 어느 경우든 v0.2.x 데이터는 변경되지 않음 |
-| 엔진 핸드셰이크 무응답으로 기동 실패      | 엔진이 응답 없이 멈춤                                                 | 엔진 바이너리/인증 확인 후 `adde restart <proj>`; `adde logs <proj> <sid> --engine` 확인 |
+| 증상                                                                                | 원인                                                                         | 대응                                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `doctor` 가 ACP 어댑터/엔진 점검에서 FAIL                                           | 엔진 드라이버 미설치/미등록                                                  | `pnpm install` 후 재시도; `adde doctor` 전역 "engines" 줄 확인                                                                                                                                                                                                                  |
+| Node 버전 FAIL                                                                      | Node < 22                                                                    | Node 22+ 로 업그레이드                                                                                                                                                                                                                                                          |
+| 프로젝트가 없음                                                                     | 아직 프로젝트를 만들지 않음                                                  | `adde project add <proj> --vault <path>`(또는 `adde init`)                                                                                                                                                                                                                      |
+| `project.conf` FAIL                                                                 | 설정 파일 읽기 불가                                                          | `~/.config/adde/projects/<proj>/project.conf` 존재·읽기 가능 여부 확인                                                                                                                                                                                                          |
+| 한 프로젝트의 모든 명령이 `vault`·`vault.backup`·`cwd` 를 지목하는 설정 오류로 실패 | 그 키에 상대경로가 들어 있음 — 경로 설정은 절대경로로 읽습니다(`~/` 는 확장) | `~/.config/adde/projects/<proj>/project.conf` 를 직접 열어 절대경로로 고치세요 — `project set` 도 같은 파일을 먼저 읽어야 하므로 이 상황에서는 쓸 수 없습니다. 이전 버전의 노트가 리터럴 `~` 폴더에 있으면 `vault` 를 그 폴더의 절대경로로 지정하거나 노트를 새 위치로 옮기세요 |
+| vault WARN                                                                          | vault 경로가 아직 없음                                                       | 최초 사용 시 생성됩니다 — 정보성이며 차단 아님                                                                                                                                                                                                                                  |
+| `doctor` launchd 등록 불일치 WARN                                                   | plist 존재 vs launchctl 등록 불일치                                          | `adde down <proj>` 후 `adde up <proj>`                                                                                                                                                                                                                                          |
+| `doctor` 데몬 진입 파일 WARN                                                        | 빌드 없이 dev 체크아웃에서 데몬화 시도                                       | `pnpm build` 후 `node dist/cli/adde.js up <proj>`(또는 전역 설치)                                                                                                                                                                                                               |
+| `doctor` legacy-collision FAIL                                                      | v0.2.x 프로젝트 이름이 하필 `projects` — v2 예약 컨테이너 이름과 충돌        | [v0.2.x 데이터 존재](#v02x-데이터-존재) 참조 — 어느 경우든 v0.2.x 데이터는 변경되지 않음                                                                                                                                                                                        |
+| 엔진 핸드셰이크 무응답으로 기동 실패                                                | 엔진이 응답 없이 멈춤                                                        | 엔진 바이너리/인증 확인 후 `adde restart <proj>`; `adde logs <proj> <sid> --engine` 확인                                                                                                                                                                                        |
 
 ## 세션이 detached 로 표시됨
 
 `adde status` 는 부팅 시 세션의 엔진 재개가 실패했거나, 반복 크래시로 자가 회복이 소진됐을 때(아래 참조) `detached` 를 보고합니다. (의도적 유휴 상태이며 투명하게 재개되는) `hibernated` 와 달리 `detached` 는 조치가 필요합니다.
 
+떨어진 세션은 감시되지 않으므로 자기 입력 노트가 실패 사유를 담은 안내형 배너로 교체되고 체크박스는 제거됩니다. 터미널에서 재개하거나 **다른** 활성 세션의 노트에서 재개하세요.
+
 ```bash
-adde logs <proj> <sid> --engine   # 기록된 실패 사유 확인
-adde restart <proj>                # 또는 채널의 resume 팔레트 마커 체크
+adde logs <proj> <sid> --engine       # 기록된 실패 사유 확인
+adde session resume <proj> <sid>      # 되살리기
+adde restart <proj>                    # 또는 데몬 재기동
 ```
 
 ## 엔진 크래시·자가 회복
@@ -64,7 +69,7 @@ adde restart <proj>                # 또는 채널의 resume 팔레트 마커 �
 
 모든 시도가 실패하면 ADDE 는 세션을 `detached` 로 표시하고 채널에 1회 통지합니다. 크래시 시점에 대기 중이던 권한 승인은 시간초과까지 기다리지 않고 즉시 거부됩니다(fail-closed).
 
-- **포기 후 복구**: `adde restart <proj>`, 또는 채널의 `♻️ resume` 팔레트 마커.
+- **포기 후 복구**: `adde session resume <proj> <sid>`, `adde restart <proj>`, 또는 **다른 활성** 세션의 노트에서 `♻️ resume` 를 체크해 목록에서 고르기(떨어진 세션 자신의 노트는 감시되지 않으므로 그 체크박스는 아무 동작도 하지 않습니다).
 - **자가 회복 끄기**: `adde project set <proj> auto_relaunch false` 후 `adde restart <proj>`. 끄면 ADDE 는 여전히 크래시를 감지하고 대기 승인을 거부하며 1회 통지하지만, 재시도 대신 즉시 세션을 `detached` 로 표시합니다.
 - 의도적 재시작(`adde restart`, `clear`, `resume`)은 영향받지 않습니다 — 자가 회복은 _예기치 않은_ 엔진 종료에만 반응합니다.
 
@@ -83,9 +88,27 @@ adde restart <proj>                # 또는 채널의 resume 팔레트 마커 �
 
 ## 메시지 전송 후 응답 없음
 
-1. `adde status <proj>` 에서 세션이 `active`(또는 `hibernated` — 다음 턴에서 투명하게 재개됨)인지 확인.
+1. `adde status <proj>` 에서 세션이 `active`(또는 `hibernated` — 다음 턴에서 투명하게 재개됨)인지 확인. **`stopped`·`detached` 로 보이면 그게 답입니다** — 그 세션의 노트를 아무도 읽지 않으므로 체크한 send 박스는 영원히 그 자리에 남습니다. 먼저 재개하세요(아래 참조).
 2. `adde logs <proj> <sid>` 로 메시지가 수신·처리됐는지 확인.
 3. 응답은 **턴이 끝날 때 한 번에** 옵니다(진행 중 스트리밍 없음) — 긴 턴은 잠시 기다리세요.
+
+## 세션이 알아서 중지됨
+
+`stopped` 는 실패가 아니라 정상적인 휴지 상태입니다. 세션은 `stop_after_min`(기본 60)분간 무활동이면 자동으로 중지되며, 그 사유가 입력 노트를 대체하는 배너에 적힙니다.
+
+```bash
+adde session resume <proj> <sid>           # 터미널에서 되살리기
+adde project set <proj> idle_stop false     # 자동 중지 끄기(이후 adde restart <proj>)
+adde project set <proj> stop_after_min 240  # 또는 임계만 조정
+```
+
+| 증상                                              | 원인                                                                  | 대응                                                                                         |
+| ------------------------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| 입력 노트에서 팔레트·send 박스가 사라짐           | 세션이 중지됨(또는 일반 제거로 사라짐) — 그 노트를 아무도 폴하지 않음 | 재개하면 정상 레이아웃이 초안과 함께 복구됩니다                                              |
+| `session stop` 이 중지 대신 "예약" 이라고 함      | 진행 중인 턴이 있거나 큐가 비어 있지 않음                             | 할 일 없음 — 잔여 작업이 소진되면 스스로 중지되고 완료 안내가 남습니다                       |
+| `session stop`/`resume` 이 재기동을 안내하며 거부 | 데몬이 요청은 가져갔는데 결과를 관측할 수 없음                        | `adde restart <proj>` 후 재시도 — 무동작을 성공으로 보고하는 대신 거부합니다                 |
+| 재개 선택 목록의 옵션을 지웠는데 되살아남         | 옵션 렌더가 확정되기 전에 첫 취소 시도가 들어감                       | 한 번 더 지우세요 — "취소가 아직 반영되지 않았다" 는 안내가 함께 뜹니다                      |
+| 유휴 후 예상보다 빨리 중지됨                      | 두 임계 모두 유휴로 내려간 시점이 아니라 **마지막 활동** 기준         | `stop_after_min` 을 올리거나, 유휴 유예를 두고 싶으면 `hibernate_after_min` 보다 크게 두세요 |
 
 ## 세션 제어(clear/compact/resume) 실패 통지
 
@@ -109,14 +132,17 @@ adde restart <proj>                # 또는 채널의 resume 팔레트 마커 �
 
 ## 마크다운 전용
 
-| 증상                                            | 확인                                                                                                                                                                                        |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 체크했는데 전송 안 됨                           | send 박스가 체크(`[x]`)됐는지, `<!-- adde:compose -->` 와 send 박스 사이 본문이 비어있지 않은지                                                                                             |
-| 세션이 응답하지 않음                            | vault 경로가 존재하는지 · `adde status <proj>` 에서 세션이 `active`/`hibernated`(`detached` 아님)인지                                                                                       |
-| 턴 노트가 안 보임                               | 세션 vault 폴더의 `turns/` 확인, 턴이 실제로 끝났는지                                                                                                                                       |
-| 턴 노트가 기대한 위치에 없음                    | 보관 이관이 켜져 있으면(`vault.backup`) `vault.retention_days` 보다 오래된 노트가 `<backup>/<턴시작날짜>/...` 로 이동 — [마크다운 가이드](markdown.ko.md#vault-경량화-보관-이관동기화) 참조 |
-| 프로젝트 생성 거부("backup overlaps ...")       | `vault.backup` 이 vault 나 ADDE 설정 루트와 겹침 — 다른 곳을 지정                                                                                                                           |
-| 프로젝트 생성 거부(지원하지 않는 sync provider) | `vault.sync_provider` 는 `local` 또는 `icloud` 여야 함                                                                                                                                      |
+| 증상                                             | 확인                                                                                                                                                                                        |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 체크했는데 전송 안 됨                            | send 박스가 체크(`[x]`)됐는지, `<!-- adde:compose -->` 와 send 박스 사이 본문이 비어있지 않은지                                                                                             |
+| 세션이 응답하지 않음                             | vault 경로가 존재하는지 · `adde status <proj>` 에서 세션이 `active`/`hibernated` 인지(`stopped`·`detached` 는 아예 감시되지 않음)                                                           |
+| 턴 노트가 안 보임                                | 세션 vault 폴더의 `turns/` 확인, 턴이 실제로 끝났는지                                                                                                                                       |
+| 턴 노트가 기대한 위치에 없음                     | 보관 이관이 켜져 있으면(`vault.backup`) `vault.retention_days` 보다 오래된 노트가 `<backup>/<턴시작날짜>/...` 로 이동 — [마크다운 가이드](markdown.ko.md#vault-경량화-보관-이관동기화) 참조 |
+| 프로젝트 생성 거부("backup overlaps ...")        | `vault.backup` 이 vault 나 ADDE 설정 루트와 겹침 — 다른 곳을 지정                                                                                                                           |
+| 프로젝트 생성 거부(지원하지 않는 sync provider)  | `vault.sync_provider` 는 `local` 또는 `icloud` 여야 함                                                                                                                                      |
+| 안내 줄을 지웠는데 다시 나타남                   | 재개 선택 목록에서만, 그것도 렌더 직후 수 초 안의 첫 시도에서만 발생 — "취소가 아직 반영되지 않았다" 안내가 뜨니 한 번 더 지우세요                                                          |
+| 안내를 읽기 전에 사라짐                          | 안내 존은 기본 최신 10건만 유지하며 몇 건을 제거했는지 알려 줍니다 — `markdown.notices_cap` 을 올리거나 `0`(무제한)으로 두세요                                                              |
+| 같은 텍스트를 두 세션에 보냈는데 중복 판정 안 됨 | 본 릴리스부터 의도된 동작 — 중복 판정은 세션 단위이므로 세션마다 자기 사본을 보유합니다                                                                                                     |
 
 상세 설정: [마크다운 가이드](markdown.ko.md).
 

@@ -73,6 +73,7 @@ describe("명령 체계 — v2 세션 축 표면(FR-030) 보존", () => {
       "completion",
       "alias",
       "__daemon",
+      "factory-reset", // 006(FR-030) — 공장 초기화 최상위 명령 신설(A-P005 예외 승계).
     ]);
     const actual = new Set(COMMAND_SPECS.map((c) => c.name));
     expect(actual).toEqual(expected);

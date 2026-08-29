@@ -64,7 +64,9 @@ describe("SC-018: 본문 중복이 링크와 판정 기록으로 대체된다", 
       f.endsWith("dedup.jsonl"),
     );
     expect(ledgerFiles.length).toBe(1);
-    expect(fs.readFileSync(ledgerFiles[0]!, "utf8").trim().split("\n").length).toBe(1);
+    // 006 이관(D001 baseline 마이그레이션) — 원장이 v2 완전 인덱스로 승격되어 최초 발생도
+    // `first` 라인으로 기록한다(ADR-004). 이전엔 중복(`dup`)만 1줄이었으나 이제 최초 1 + 중복 1 = 2줄.
+    expect(fs.readFileSync(ledgerFiles[0]!, "utf8").trim().split("\n").length).toBe(2);
 
     const collected: unknown[] = [];
     for await (const e of events.readEvents(ctx)) collected.push(e);

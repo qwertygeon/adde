@@ -9,6 +9,7 @@ import { CRASH_LOOP_MAX_SHORT_LIVED } from "../../src/core/crash-loop.js";
 import { writeMinimalProjectConf } from "../helpers/v2-fixtures.js";
 import { newSid, saveSession } from "../../src/core/session-store.js";
 import { waitFor } from "../helpers/wait.js";
+import { makeSessionRecordFixture } from "../helpers/session-record-fixture.js";
 
 // 대기 상한 note: 본 파일은 실 node 프로세스를 spawn 해 dist 산출물을 적재하므로, 병렬 스위트의
 // CPU·디스크 경합에서 기동이 수 초 이상 밀린다. 상한이 촘촘하면 계약 위반이 아닌 경합으로 실패한다
@@ -65,24 +66,14 @@ describe.skipIf(!distAvailable)(
       const proj = "spawnproj1";
       const vaultDir = path.join(tmpBase, "vault-spawnproj1");
       writeMinimalProjectConf(tmpBase, proj, { vault: vaultDir });
-      const now = new Date().toISOString();
       const badSid = newSid();
       // 미등록 엔진 id — admit() 의 driverFor() 가 즉시 throw 해 resumeAllOnBoot() 가 이 세션을
       // detached 로 표시한다(재개 실패는 새 세션 폴백 없이 detached 확정, ADR-009).
-      await saveSession(tmpBase, proj, {
-        v: 1,
-        sid: badSid,
-        engine: "doesnotexist",
-        engineRef: null,
-        status: "active",
-        title: null,
-        createdAt: now,
-        lastActivityAt: now,
-        successorOf: null,
-        engineArgs: [],
-        warnings: [],
-        bindings: [],
-      });
+      await saveSession(
+        tmpBase,
+        proj,
+        makeSessionRecordFixture(badSid, { engine: "doesnotexist" }),
+      );
 
       // GAP-034 — 데몬은 세션 활성 여부와 무관하게 상주한다(core/daemon.ts runDaemonForeground,
       // v1 의 "레인 0개면 즉시 종료" 정책 폐기 — design.md §528 "포그라운드 상주·시그널 종료" 계약).

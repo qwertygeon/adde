@@ -4,6 +4,7 @@ import {
   cleanupV2TmpRoots,
   makeSessionManagerDeps,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 import { makeFakeRecordStore } from "../helpers/fake-record-store.js";
@@ -30,9 +31,9 @@ async function makeSM() {
   ]);
   const fakeDriver = makeFakeEngineDriver("acp", FAKE_CAPS_PRESETS.fullNative);
   const { store: record } = makeFakeRecordStore();
-  const sm = sessionManagerMod.createSessionManager(
-    makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }, { record }) as never,
-  );
+  const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }, { record });
+  const sm = sessionManagerMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   return { sm, sessionStore, sessionManagerMod, fakeDriver, record };
 }
 
@@ -48,11 +49,9 @@ async function makeFreshSMWithLoad(
   fakeDriver: Awaited<ReturnType<typeof makeSM>>["fakeDriver"],
   record: Awaited<ReturnType<typeof makeSM>>["record"],
 ) {
-  const sm2 = sessionManagerMod.createSessionManager(
-    makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }, { record }) as never,
-  ) as unknown as { load(): Promise<void> } & Awaited<
-    ReturnType<typeof sessionManagerMod.createSessionManager>
-  >;
+  const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }, { record });
+  const sm2 = sessionManagerMod.createSessionManager(deps);
+  bindSessionManager(deps, sm2);
   await sm2.load();
   return sm2;
 }

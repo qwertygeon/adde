@@ -177,6 +177,8 @@ function buildChecks(): UsageCheck[] {
           ...subFlagNames("session", "ls"),
           ...subFlagNames("session", "show"),
           ...subFlagNames("session", "clear"),
+          ...subFlagNames("session", "stop"),
+          ...subFlagNames("session", "resume"),
           ...subFlagNames("session", "rm"),
         ]),
       ],
@@ -192,6 +194,8 @@ function buildChecks(): UsageCheck[] {
       ],
     },
     { usageKey: "usage.vault", declaredFlags: [...new Set(subFlagNames("vault", "rebuild"))] },
+    // 인자·플래그 0개 명령(SC-075) — (a) 미적용, (b) 는 전역 플래그로만 판정.
+    { usageKey: "usage.factoryReset", declaredFlags: cmdFlags("factory-reset") },
   ];
 }
 

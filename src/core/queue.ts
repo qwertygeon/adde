@@ -124,3 +124,22 @@ export function processingFilePath(paths: SessionPaths, id: string): string {
 export async function clearProcessing(paths: SessionPaths, id: string): Promise<void> {
   await unlink(processingFilePath(paths, id)).catch(() => {});
 }
+
+/** 잔여 작업 수(queue + processing 의 `.msg` 파일 합계) — 중지 요청의 잔여 판정 재료.
+ * 두 디렉터리 모두 부재면 0(신규·미사용 세션과 동치). */
+export async function pendingWork(paths: SessionPaths): Promise<number> {
+  const [queued, processing] = await Promise.all([
+    readdir(paths.queueDir).catch((err: unknown) => {
+      if (errCode(err) === "ENOENT") return [] as string[];
+      throw err;
+    }),
+    readdir(paths.processingDir).catch((err: unknown) => {
+      if (errCode(err) === "ENOENT") return [] as string[];
+      throw err;
+    }),
+  ]);
+  return (
+    queued.filter((f) => f.endsWith(".msg")).length +
+    processing.filter((f) => f.endsWith(".msg")).length
+  );
+}

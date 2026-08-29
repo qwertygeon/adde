@@ -53,3 +53,23 @@ describe("SC-036: 코어 모듈에 엔진 id 비교 분기가 0건이다", () =>
     expect(hasEngineComparisonBranch(injected, "acp")).toBe(true);
   });
 });
+
+describe("SC-066 (006): 006 신규 모듈도 같은 스캔에 자동 포함된다(디렉터리 전수)", () => {
+  it("Edge: 신규 파일 5개(control-queue·session-removal·factory-reset·notices 등)가 스캔 대상 경로에 존재하면 목록에 잡힌다", () => {
+    // 정적 스캐너 자기점검 — CORE_DIRS 재귀 스캔이 실제로 파일을 하나 이상 포착함을 먼저 확인한다
+    // (경로 오류로 매칭 0 → 위반 0 이 되는 조용한 무력화를 방지).
+    const scanned = CORE_DIRS.flatMap((d) => listTsFiles(path.join(repoRoot, "src", d)));
+    expect(scanned.length).toBeGreaterThan(0);
+    // 신규 모듈이 아직 미착지(PPG-1 병렬)라도 스캔 로직 자체는 파일명을 하드코딩하지 않으므로
+    // 착지 후 재실행만으로 자동 커버된다 — 그 사실을 새 경로 후보로 명시 확인한다.
+    const expectedNewPaths = [
+      path.join(repoRoot, "src/core/control-queue.ts"),
+      path.join(repoRoot, "src/core/session-removal.ts"),
+      path.join(repoRoot, "src/core/factory-reset.ts"),
+      path.join(repoRoot, "src/surfaces/markdown/notices.ts"),
+    ];
+    for (const p of expectedNewPaths) {
+      if (fs.existsSync(p)) expect(scanned).toContain(p);
+    }
+  });
+});

@@ -5,6 +5,7 @@ import {
   cleanupV2TmpRoots,
   makeSessionManagerDeps,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 import { waitFor } from "../helpers/wait.js";
@@ -52,7 +53,8 @@ async function makeHarness() {
       },
     },
   );
-  const sm = smMod.createSessionManager(deps as never);
+  const sm = smMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   holder.sm = sm;
   const router = routerMod.createRouter({ base: roots.base, proj: PROJ, sessionManager: sm });
   const surface = surfaceMod.createMarkdownSurface({
@@ -151,12 +153,18 @@ describe("전송 적재 실패의 표면화", () => {
       );
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 30_000);
 });
 
 describe("팔레트 제어 실패의 표면화", () => {
-  it("Happy: 재개(resume) 실패가 경고로 남는다", async () => {
+  // 006(FR-012) 이후 팔레트 `resume`(인자 없음)은 "자기 세션 엔진 재개" 가 아니라 중지·떨어짐
+  // 세션 목록 안내로 의미가 바뀌어(design.md §8 — 기존 항목은 소멸) engine.open() 을 더 이상
+  // 호출하지 않는다. 같은 회귀 관심사(팔레트 제어 실패가 조용히 사라지지 않고 경고로 남는다)를
+  // 여전히 admit()/open() 을 거치는 `compact` 로 재현한다(test(EXECUTION) 이전 진단: 이 케이스는
+  // 옛 의미론에 묶여 무기한 hang 하고 있었다 — 삭제 대상 기능이 아니라 트리거만 갈아탄다).
+  it("Happy: 압축(compact) 실패가 경고로 남는다", async () => {
     const h = await makeHarness();
     const created = await h.sm.create({ engine: "acp" });
     await bind(h.sm, created.sid);
@@ -167,12 +175,13 @@ describe("팔레트 제어 실패의 표면화", () => {
       await waitFor(() => fs.existsSync(inbox), { timeoutMs: 8000 });
 
       h.fakeDriver.control.failNextOpen("엔진 기동 거부");
-      await checkPaletteUntil(inbox, "♻️ resume", () =>
+      await checkPaletteUntil(inbox, "🗜️ compact", () =>
         warningsOf(h.paths, created.sid).some((w) => w.startsWith("palette-failed:")),
       );
-      expect(warningsOf(h.paths, created.sid).some((w) => w.includes("엔진 재개 실패"))).toBe(true);
+      expect(warningsOf(h.paths, created.sid).some((w) => w.includes("압축 실패"))).toBe(true);
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 30_000);
 
@@ -195,6 +204,7 @@ describe("팔레트 제어 실패의 표면화", () => {
       );
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 30_000);
 });
@@ -256,6 +266,7 @@ describe("세션 단위 격리", () => {
       );
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 30_000);
 });

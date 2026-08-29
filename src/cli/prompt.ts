@@ -50,6 +50,38 @@ export async function askYesNo(ask: Ask, question: string, defaultYes: boolean):
   }
 }
 
+/**
+ * 다분기 선택 프롬프트(신설, CV-6) — 라벨·판정을 **같은 배열**에서 파생해 라벨↔판정 불일치를
+ * 프리미티브 한 곳으로 차단한다(예: 세션 제거 3분기 — 완전 제거/일반 제거/취소). 숫자 선택(1-기반)
+ * 또는 `value` 문자열 정확 일치를 허용하고, 그 외 무효 입력은 유효 응답이 올 때까지 재질의한다
+ * (`askYesNo`·`askEnum` 과 동일 관례 — 오타가 조용히 취소로 처리되는 것을 방지).
+ */
+export async function askChoice<T extends string>(
+  ask: Ask,
+  question: string,
+  options: ReadonlyArray<{ value: T; label: string }>,
+): Promise<T> {
+  const labelList = options.map((o, i) => `${i + 1}) ${o.label}`).join(" / ");
+  for (;;) {
+    const raw = (await ask(`${question} [${labelList}]`, "")).trim();
+    const byIndex = /^\d+$/.test(raw) ? options[Number(raw) - 1] : undefined;
+    const byValue = options.find((o) => o.value === raw);
+    const picked = byIndex ?? byValue;
+    if (picked) return picked.value;
+  }
+}
+
+/**
+ * 파괴적 조작 확인 문구 타이핑(신설, FR-020·FR-030) — 프롬프트가 기대 문구를 **그대로 노출**하고
+ * 정확 일치(대소문자·공백 포함)만 통과시킨다. 불일치·빈 입력은 재질의하지 않고 즉시 실패(false)를
+ * 반환한다 — 예/아니오 재확인이 아니라 "정확히 그 문구를 아는가" 를 1회로 판정하는 것이 목적이라,
+ * 재시도를 허용하면 타이핑 요구 자체의 의미(오타 방지)가 흐려진다.
+ */
+export async function askPhrase(ask: Ask, question: string, phrase: string): Promise<boolean> {
+  const raw = await ask(`${question} (문구 그대로 입력: "${phrase}")`, "");
+  return raw === phrase;
+}
+
 export interface Prompter {
   ask: Ask;
   /** 경로 입력용 질의 — 이 호출 동안만 Tab 디렉터리/파일 완성을 켠다(cwd/root/inbox 등). */

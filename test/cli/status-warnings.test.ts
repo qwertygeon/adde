@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { makeSessionRecordFixture } from "../helpers/session-record-fixture.js";
 
 // 세션 경고는 지금까지 `session show` 에서만 보였다 — 사용자가 그 명령을 실행할 이유를 모르면
 // 저장 실패·재개 실패가 기록만 되고 전달되지 않는다. `status` 표에 경고 유무를 실어 발견성을
@@ -31,21 +32,11 @@ afterEach(() => {
 
 async function writeRecord(sid: string, warnings: string[]): Promise<void> {
   const store = await import("../../src/core/session-store.js");
-  const now = new Date().toISOString();
-  await store.saveSession(process.env["ADDE_HOME"]!, PROJ, {
-    v: 1,
-    sid,
-    engine: "acp",
-    engineRef: null,
-    status: "hibernated",
-    title: null,
-    createdAt: now,
-    lastActivityAt: now,
-    successorOf: null,
-    engineArgs: [],
-    warnings,
-    bindings: [],
-  });
+  await store.saveSession(
+    process.env["ADDE_HOME"]!,
+    PROJ,
+    makeSessionRecordFixture(sid, { status: "hibernated", warnings }),
+  );
 }
 
 async function captureStatus(args: string[]): Promise<string> {

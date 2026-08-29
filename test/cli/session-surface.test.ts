@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeV2TmpRoots, cleanupV2TmpRoots, type V2TmpRoots } from "../helpers/v2-fixtures.js";
+import { makeSessionRecordFixture } from "../helpers/session-record-fixture.js";
 
 // SC-031 (FR-031): 상태·진단 출력에 세션 상태와 엔진 상주 여부·최근 활동 시각이 포함된다.
 // 실측(src/core/diagnostics.ts): `collectStatus(proj, opts?)` — proj 가 첫 위치 인자이고 base 는
@@ -19,35 +20,16 @@ afterEach(() => {
 
 async function seedSessions() {
   const sessionStore = await import("../../src/core/session-store.js");
-  const now = new Date().toISOString();
-  await sessionStore.saveSession(roots.base, PROJ, {
-    v: 1,
-    sid: "resident-1",
-    engine: "acp",
-    engineRef: "ref-1",
-    status: "active",
-    title: null,
-    createdAt: now,
-    lastActivityAt: now,
-    successorOf: null,
-    engineArgs: [],
-    warnings: [],
-    bindings: [],
-  });
-  await sessionStore.saveSession(roots.base, PROJ, {
-    v: 1,
-    sid: "hibernated-1",
-    engine: "acp",
-    engineRef: "ref-2",
-    status: "hibernated",
-    title: null,
-    createdAt: now,
-    lastActivityAt: now,
-    successorOf: null,
-    engineArgs: [],
-    warnings: [],
-    bindings: [],
-  });
+  await sessionStore.saveSession(
+    roots.base,
+    PROJ,
+    makeSessionRecordFixture("resident-1", { engineRef: "ref-1", status: "active" }),
+  );
+  await sessionStore.saveSession(
+    roots.base,
+    PROJ,
+    makeSessionRecordFixture("hibernated-1", { engineRef: "ref-2", status: "hibernated" }),
+  );
 }
 
 describe("SC-031: 상태·진단 출력에 세션 상태·엔진 상주 여부가 포함된다", () => {

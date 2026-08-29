@@ -1,5 +1,5 @@
 /**
- * `adde project <add|set|show|ls|rm>` — 프로젝트 생성·설정 조회/편집·목록·삭제(FR-028·FR-041·FR-042).
+ * `adde project <add|set|show|ls|rm>` — 프로젝트 생성·설정 조회/편집·목록·삭제.
  */
 import { access, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -15,6 +15,8 @@ import {
   serializeProjectConf,
   validateProjectConf,
   ProjectConfParseError,
+  DEFAULT_STOP_AFTER_MIN,
+  DEFAULT_NOTICES_CAP,
 } from "../shared/conf.js";
 import type { ProjectConf } from "../shared/conf.js";
 import { PROJECT_KEY_DESCRIPTORS, applyEdits } from "../shared/project-schema.js";
@@ -104,9 +106,12 @@ async function handleAdd(p: ParseResult): Promise<number> {
     auto_resume: true,
     idle_hibernate: true,
     hibernate_after_min: 30,
+    idle_stop: true,
+    stop_after_min: DEFAULT_STOP_AFTER_MIN,
     max_active_engines: 3,
     auto_relaunch: true,
     "markdown.palette": true,
+    "markdown.notices_cap": DEFAULT_NOTICES_CAP,
     "vault.retention_days":
       typeof p.flags["retention-days"] === "string"
         ? Number.parseInt(p.flags["retention-days"], 10) || 2

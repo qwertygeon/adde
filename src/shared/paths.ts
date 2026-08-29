@@ -1,8 +1,8 @@
 /**
  * 프로젝트·세션 경로 동적 구성(v2 — 레인축 폐기). 식별자 하드코딩 금지 — 전부 파라미터.
- * 세션 A 가 세션 B 의 경로에 접근하지 않도록 파라미터 기반 격리(NFR-001).
+ * 세션 A 가 세션 B 의 경로에 접근하지 않도록 파라미터 기반 격리.
  *
- * 조립 축은 (project, session) 2단이며, 설정 루트(base)와 저장소 루트(vault)를 분리한다(FR-029):
+ * 조립 축은 (project, session) 2단이며, 설정 루트(base)와 저장소 루트(vault)를 분리한다:
  *   - 설정 루트: `<base>/projects/<proj>/` — project.conf·sessions.d·.env·runtime(큐·엔진 상주 상태)
  *   - 저장소 루트: `<vault>/adde/projects/<proj>/` — 이벤트 기록·노트·첨부·중복 판정 기록
  */
@@ -187,10 +187,12 @@ export interface VaultPaths {
   turnsDir: string;
   /** `<vault>/adde/projects/<proj>/.adde/sessions/<sid>` — 이벤트 세대·요약 sidecar */
   eventsDir: string;
-  /** `<vault>/adde/projects/<proj>/.adde/blobs` — 내용 주소 저장(프로젝트 스코프) */
-  blobsDir: string;
-  /** `<vault>/adde/projects/<proj>/.adde/ledger/dedup.jsonl` — 중복 판정 기록(프로젝트 스코프) */
-  dedupFile: string;
+  /** `<vault>/adde/projects/<proj>/.adde/blobs` — legacy 내용 주소 저장(프로젝트 스코프, 배치 변경
+   * 이전 세션 데이터 — 무이관, 읽지도 쓰지도 않는다. NFR-013). */
+  legacyBlobsDir: string;
+  /** `<vault>/adde/projects/<proj>/.adde/ledger/dedup.jsonl` — legacy 중복 판정 기록(프로젝트 스코프,
+   * 완전 제거 시 해당 sid 라인만 필터 대상 — FR-029). */
+  legacyDedupFile: string;
 }
 
 export function vaultPaths(vaultRoot: string, proj: string, sid?: string): VaultPaths {
@@ -210,8 +212,22 @@ export function vaultPaths(vaultRoot: string, proj: string, sid?: string): Vault
     approvalsDir: join(sessionDir, "approvals"),
     turnsDir: join(sessionDir, "turns"),
     eventsDir: sid !== undefined ? join(eventsSessionsRoot, sid) : eventsSessionsRoot,
-    blobsDir: join(addeDir, "blobs"),
-    dedupFile: join(addeDir, "ledger", "dedup.jsonl"),
+    legacyBlobsDir: join(addeDir, "blobs"),
+    legacyDedupFile: join(addeDir, "ledger", "dedup.jsonl"),
+  };
+}
+
+/** 세션 소유 저장 배치(신규, FR-026·FR-027) — sid 필수 전용 함수라 sid 없는 호출이 타입 수준에서
+ * 불가능하다(프로젝트 스코프 폴백을 구조적으로 차단). `.adde/sessions/<sid>/{blobs,dedup.jsonl}`. */
+export function sessionVaultPaths(
+  vaultRoot: string,
+  proj: string,
+  sid: string,
+): { blobsDir: string; dedupFile: string } {
+  const vp = vaultPaths(vaultRoot, proj, sid);
+  return {
+    blobsDir: join(vp.eventsDir, "blobs"),
+    dedupFile: join(vp.eventsDir, "dedup.jsonl"),
   };
 }
 

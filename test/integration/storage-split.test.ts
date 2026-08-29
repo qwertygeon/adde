@@ -7,6 +7,7 @@ import {
   makeRecordCtx,
   type V2TmpRoots,
 } from "../helpers/v2-fixtures.js";
+import { makeSessionRecordFixture } from "../helpers/session-record-fixture.js";
 
 // SC-029 (FR-029): 설정 루트에는 설정·시크릿·런타임 상태만, 저장소 루트에는 이벤트 기록·노트·
 // 첨부·중복판정 기록만 존재한다.
@@ -27,22 +28,9 @@ describe("SC-029: 설정·시크릿과 대화 데이터의 저장 위치가 분�
   it("Happy: 턴 1건 처리 후 설정 루트·저장소 루트 파일이 각자 허용 집합만 포함한다", async () => {
     const events = await import("../../src/record/events.js");
     const sessionStore = await import("../../src/core/session-store.js");
-
     const now = new Date().toISOString();
-    await sessionStore.saveSession(roots.base, PROJ, {
-      v: 1,
-      sid: SID,
-      engine: "acp",
-      engineRef: null,
-      status: "active",
-      title: null,
-      createdAt: now,
-      lastActivityAt: now,
-      successorOf: null,
-      engineArgs: [],
-      warnings: [],
-      bindings: [],
-    });
+
+    await sessionStore.saveSession(roots.base, PROJ, makeSessionRecordFixture(SID));
 
     await events.appendEvent(
       makeRecordCtx(roots, PROJ, SID) as never,

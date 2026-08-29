@@ -7,10 +7,11 @@ import { atomicWrite } from "../shared/fs-atomic.js";
 import { maskSecrets } from "../shared/mask.js";
 import { daemonBootReportPath } from "../shared/paths.js";
 import type { SessionStatusRow } from "./supervisor.js";
+import type { SessionStatus } from "./session-store.js";
 
 export interface BootReportSession {
   sid: string;
-  status: "active" | "hibernated" | "detached" | "archived";
+  status: SessionStatus;
   error?: string;
 }
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
+import { homedir } from "node:os";
 import {
   makeV2TmpRoots,
   cleanupV2TmpRoots,
@@ -39,5 +40,34 @@ describe("SC-028: 저장소 루트 미지정 시 프로젝트 생성이 거부�
     // 여기서는 파싱만으로 아무 디스크 변화가 없음을 확인한다.
     expect(listFilesRecursive(roots.base)).toEqual(before);
     void fs.existsSync;
+  });
+
+  it("Edge(SEC-005: 경로 형식): 틸드 없는 순수 상대경로 vault 는 파싱 오류로 거부된다", async () => {
+    // resolveConfPathField(conf.ts) — 상대경로를 그대로 두면 파괴적 단계(factory-reset 등)가
+    // 프로세스 cwd 기준으로 잘못 해석해 의도하지 않은 위치를 지울 위험이 있다(보안 검토 SEC-005).
+    const conf = await import("../../src/shared/conf.js");
+    expect(() => conf.parseProjectConf("v=1\nvault=relative/path/vault\n")).toThrow(/절대경로/);
+  });
+
+  it("Edge(SEC-005: 경로 형식): '~/...' 틸드 vault 는 홈 기준 절대경로로 확장되어 파싱을 통과한다", async () => {
+    const conf = await import("../../src/shared/conf.js");
+    const result = conf.parseProjectConf("v=1\nvault=~/my-vault\n");
+    expect(result.vault).toBe(`${homedir()}/my-vault`);
+  });
+
+  it("Happy(SEC-005: 경로 형식, 회귀 가드): 절대경로 vault 는 그대로 통과한다", async () => {
+    const conf = await import("../../src/shared/conf.js");
+    const result = conf.parseProjectConf("v=1\nvault=/abs/path/vault\n");
+    expect(result.vault).toBe("/abs/path/vault");
+  });
+
+  it("Edge(SEC-005: 경로 형식): cwd·vault.backup 도 동일하게 상대경로가 거부된다", async () => {
+    const conf = await import("../../src/shared/conf.js");
+    expect(() => conf.parseProjectConf("v=1\nvault=/abs/vault\ncwd=relative/cwd\n")).toThrow(
+      /절대경로/,
+    );
+    expect(() =>
+      conf.parseProjectConf("v=1\nvault=/abs/vault\nvault.backup=relative/backup\n"),
+    ).toThrow(/절대경로/);
   });
 });

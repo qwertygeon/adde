@@ -5,6 +5,7 @@ import {
   makeSessionManagerDeps,
   makeRecordCtx,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 import { makeFakeRecordStore } from "../helpers/fake-record-store.js";
@@ -31,18 +32,18 @@ async function makeSM(autoRelaunch: boolean) {
   ]);
   const fakeDriver = makeFakeEngineDriver("acp", FAKE_CAPS_PRESETS.fullNative);
   const { store: record, calls } = makeFakeRecordStore();
-  const sm = sessionManagerMod.createSessionManager(
-    makeSessionManagerDeps(
-      roots,
-      PROJ,
-      { acp: fakeDriver.descriptor },
-      {
-        conf: { auto_relaunch: autoRelaunch },
-        // GAP-019 해소분 배선 — record 미전달 시 calls.appendEvent 인터셉션이 무효화된다.
-        record,
-      },
-    ) as never,
+  const deps = makeSessionManagerDeps(
+    roots,
+    PROJ,
+    { acp: fakeDriver.descriptor },
+    {
+      conf: { auto_relaunch: autoRelaunch },
+      // GAP-019 해소분 배선 — record 미전달 시 calls.appendEvent 인터셉션이 무효화된다.
+      record,
+    },
   );
+  const sm = sessionManagerMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   return { sm, sessionStore, fakeDriver, record, calls };
 }
 

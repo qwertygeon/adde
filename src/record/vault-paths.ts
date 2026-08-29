@@ -1,13 +1,16 @@
 /**
- * vault 레이아웃 보장 + 동기화 충돌 파일 판정(FR-029·NFR-007). 보관 이관(retention.ts) 의 대상
+ * vault 레이아웃 보장 + 동기화 충돌 파일 판정. 보관 이관(retention.ts) 의 대상
  * 화이트리스트(`sessions/<sid>/turns/*.md` 만)는 이 모듈이 제공하는 `vaultPaths`(shared/paths.ts)
  * 계약으로 고정된다 — retention.ts 는 오직 `turnsDir` 안의 파일만 이동한다.
  */
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
-import { vaultPaths } from "../shared/paths.js";
+import { sessionVaultPaths, vaultPaths } from "../shared/paths.js";
 
-/** vault 서브트리(프로젝트·세션·이벤트·blob·dedup 디렉터리)를 보장한다(mkdir -p 동형). */
+/**
+ * vault 서브트리(프로젝트·세션·이벤트·blob·dedup 디렉터리)를 보장한다(mkdir -p 동형).
+ * 세션 스코프 호출에서는 `sessionVaultPaths()` 의 두 경로(blob·dedup) 부모만 만들고, **legacy
+ * 디렉터리(`legacyBlobsDir`·`legacyDedupFile`)는 더 이상 생성하지 않는다**(무이관·무생성 — NFR-013).
+ */
 export async function ensureVaultLayout(
   vaultRoot: string,
   proj: string,
@@ -15,9 +18,9 @@ export async function ensureVaultLayout(
 ): Promise<void> {
   const vp = vaultPaths(vaultRoot, proj, sid);
   await mkdir(vp.projectDir, { recursive: true });
-  await mkdir(vp.blobsDir, { recursive: true });
-  await mkdir(dirname(vp.dedupFile), { recursive: true });
   if (sid !== undefined) {
+    const sp = sessionVaultPaths(vaultRoot, proj, sid);
+    await mkdir(sp.blobsDir, { recursive: true });
     await mkdir(vp.sessionDir, { recursive: true });
     await mkdir(vp.approvalsDir, { recursive: true });
     await mkdir(vp.turnsDir, { recursive: true });

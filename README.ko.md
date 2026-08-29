@@ -48,6 +48,8 @@ adde init             # 가이드 설정 (환경 점검 + 짧은 별칭 + 첫 �
 - **엔진 독립**: 엔진은 레지스트리(`ENGINE_REGISTRY`) 뒤에서 선언된 `EngineCaps` 능력 집합을 통해서만 구동됩니다 — 코어는 어떤 엔진인지로 절대 분기하지 않습니다. 현재 엔진 1종(`acp`, `claude-agent-acp` 구동)이 등록되어 있습니다.
 - **채널 독립**: `Surface`(채널 어댑터)는 채널 주소와 세션의 바인딩만 알 뿐 세션 내부를 절대 모릅니다. 현재 `markdown` 만 구현되어 있고 `telegram`/`discord` 는 등록만 됨(stub).
 - **무손실 기록, 재생성 가능한 노트**: 모든 턴의 모든 이벤트가 절대 삭제·덮어쓰지 않는 대화 이벤트 기록에 append 됩니다(크래시 안전, 크기 대신 세대 분할). 노트(턴/세션/프로젝트)는 그 기록의 순수 파생물이라 — 삭제·손상돼도 `adde vault rebuild` 가 정확히 재생성합니다.
+- **다 쓴 세션은 감시에서 빠진다**: 세션을 **중지**(`stopped`)할 수 있습니다 — 직접, 노트 팔레트에서, 또는 무활동 1시간 후 자동으로 — 그 다음부터는 입력 노트·승인 디렉터리를 어떤 주기로도 읽지 않습니다. 되살릴 때는 활성 세션 노트에서 목록으로 고르거나 `adde session resume` 을 씁니다. 그 세션이 했던 모든 것은 vault 에 그대로 남습니다.
+- **세션 소유 저장**: 세션마다 자기 이벤트 기록·첨부 저장소·중복 판정 원장을 소유하므로, 세션을 완전히 지우는 일이 참조 계산이 아니라 디렉터리 삭제로 완결되고 — 다른 세션이 아직 가리키는 본문을 지우는 일이 구조적으로 불가능합니다.
 - **fail-closed 권한**: 모든 권한 요청을 채널 승인으로 라우팅하고, 타임아웃·오류 시 기본 deny. 프로젝트별 옵트인 `autopass` 티어(denylist 도구만 확인, 그 외 자동 허용·전량 기록)와, 티어 무관 즉시 거부하는 **하드-거부**(`--safe-defaults` 로 sudo·rm -rf·자격증명 읽기 등 방어심화 기본 차단)도 제공합니다.
 - **i18n(en/ko)**: CLI 출력·채널 메시지가 영어/한국어를 지원합니다. 로케일 자동 감지(`ADDE_LANG` > 시스템 로케일 `LC_ALL`/`LC_MESSAGES`/`LANG` > 기본 en) + 프로젝트별 채널 언어(`project set <proj> lang <en|ko>`). 상세는 [명령 레퍼런스](docs/commands.ko.md)의 "언어(로케일)".
 
@@ -58,13 +60,14 @@ adde init [<proj>]                     # 가이드 설정 (doctor + 짧은 별�
 adde up <proj> [--json]                # 프로젝트의 모든 세션을 백그라운드 데몬으로 기동 (macOS launchd)
 adde down <proj> [--json]              # 데몬 종료 — 어느 터미널에서든 동작
 adde restart <proj> [--json]           # 데몬 재기동 (down + up)
-adde status [<proj>] [--all] [--json]  # 세션 상태 (<proj> 생략 시 전 프로젝트, --all 은 archived 포함)
+adde status [<proj>] [--all] [--json]  # 세션 상태 (<proj> 생략 시 전 프로젝트, --all 은 stopped·detached 포함)
 adde doctor [<proj>] [--json]          # 환경·설정 정적 점검
 adde logs <proj> <session> [N] [--engine] [-f]  # 세션 이벤트 로그(--engine 시 엔진 진단 로그)
 adde project <add|set|show|ls|rm>      # 프로젝트 관리(vault 경로·권한 티어·보관 이관 등)
-adde session <new|ls|show|clear|rm>    # 세션 관리(대화 단위)
+adde session <new|ls|show|clear|stop|resume|rm>  # 세션 관리(대화 단위)
 adde bind <add|rm|ls>                  # 채널↔세션 바인딩 관리
 adde vault <rebuild>                   # 이벤트 기록에서 노트/중복 판정 원장 재생성
+adde factory-reset                     # 모든 프로젝트·세션 제거(복구 불가, 대화형 전용)
 adde alias [names...]                  # 짧은 별칭(ad·add) 설치 — adde 실행 파일 옆에
 adde completion <bash|zsh>             # 셸 자동완성 스크립트 출력
 ```
@@ -82,7 +85,7 @@ adde completion <bash|zsh>             # 셸 자동완성 스크립트 출력
 ## 상태 / 로드맵
 
 - [x] v0.2.x: `markdown | telegram → claude(ACP)` 레인 기반 수직 슬라이스
-- [x] v2 코어: 프로젝트/세션/바인딩 모델, 무손실 기록 저장소, `EngineDriver`/`Surface` 레지스트리, 마크다운 채널(3존 노트 레이아웃), 자동 재개/유휴 내림, 자가 회복
+- [x] v2 코어: 프로젝트/세션/바인딩 모델, 무손실 기록 저장소, `EngineDriver`/`Surface` 레지스트리, 마크다운 채널(그룹 팔레트·경고/안내 존), 자동 재개/유휴 내림/중지, 자가 회복
 - [ ] Telegram/Discord 채널 구현(현재 stub) · 추가 엔진 드라이버 · 비-ACP CLI 스크래핑(보류)
 
 ## 라이선스 / 보안 / 메타

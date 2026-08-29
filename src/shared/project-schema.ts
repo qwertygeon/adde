@@ -1,7 +1,7 @@
 /**
  * 프로젝트 설정 편집 표면 스키마(SoT, ADR-028) — 현행 `core/lane-schema.ts` 의 서술자 구조를
  * 개명 이식. `project set/--unset`·증분 `--add-*`/`--rm-*`·`project show [--defaults]` 가 전부 이
- * 파생을 소비한다. 편집은 `applyEdits` 로 전건 검증 후에만 적용(FR-042·SC-058·SC-059).
+ * 파생을 소비한다. 편집은 `applyEdits` 로 전건 검증 후에만 적용.
  */
 import type { ProjectConf } from "./conf.js";
 
@@ -146,6 +146,24 @@ export const PROJECT_KEY_DESCRIPTORS: readonly ProjectKeyDescriptor[] = [
     default: 30,
   },
   {
+    key: "idle_stop",
+    type: "bool",
+    editable: true,
+    identity: false,
+    required: false,
+    exposed: true,
+    default: true,
+  },
+  {
+    key: "stop_after_min",
+    type: "int",
+    editable: true,
+    identity: false,
+    required: false,
+    exposed: true,
+    default: 60,
+  },
+  {
     key: "max_active_engines",
     type: "int",
     editable: true,
@@ -179,6 +197,15 @@ export const PROJECT_KEY_DESCRIPTORS: readonly ProjectKeyDescriptor[] = [
     identity: false,
     required: false,
     exposed: true,
+  },
+  {
+    key: "markdown.notices_cap",
+    type: "int",
+    editable: true,
+    identity: false,
+    required: false,
+    exposed: true,
+    default: 10,
   },
   {
     key: "vault.backup",

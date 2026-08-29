@@ -5,6 +5,7 @@ import {
   makeSessionManagerDeps,
   listFilesRecursive,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import {
   makeFakeEngineDriver,
@@ -29,9 +30,9 @@ async function makeSM(caps: FakeEngineCaps) {
     import("../../src/core/session-manager.js"),
   ]);
   const fakeDriver = makeFakeEngineDriver("acp", caps);
-  const sm = sessionManagerMod.createSessionManager(
-    makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }) as never,
-  );
+  const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
+  const sm = sessionManagerMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   return { sm, fakeDriver };
 }
 

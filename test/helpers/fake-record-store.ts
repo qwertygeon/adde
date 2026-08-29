@@ -30,8 +30,10 @@ export function makeFakeRecordStore(
     readEvents: vi.fn(async function* (_sid: string) {
       // 기본 빈 스트림 — 재개 인덱스 등 소비측이 개별 테스트에서 override 한다.
     }),
-    putBlob: vi.fn(async (data: Buffer | string) => ({
-      blob: `sha256:fake-${String(data).length}`,
+    // 006(F5) — RecordStore.putBlob 시그니처가 (data) → (sid, data) 로 바뀐다(design.md §인터페이스
+    // 계약 RecordStore — 프로덕션 소비처 0건, DI 더블만 갱신 대상).
+    putBlob: vi.fn(async (sid: string, data: Buffer | string) => ({
+      blob: `sha256:fake-${sid}-${String(data).length}`,
       bytes: Buffer.byteLength(String(data)),
     })),
     projectTurn: vi.fn(async (sid: string, turn: number, phase: string) => {
@@ -40,7 +42,12 @@ export function makeFakeRecordStore(
     project: vi.fn(async (opts2?: unknown) => {
       calls.project.push(opts2);
     }),
-    rebuild: vi.fn(async () => ({ moved: [], skipped: [] })),
+    rebuild: vi.fn(async () => ({
+      sids: [],
+      turnsRendered: 0,
+      dedupEntries: 0,
+      corruptedLinesSkipped: 0,
+    })),
   };
   return { store, calls };
 }

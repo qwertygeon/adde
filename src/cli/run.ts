@@ -272,6 +272,10 @@ export const DISPATCH: Record<string, { run: CommandHandler; parse: boolean }> =
   project: { run: async (rest) => (await import("./project.js")).runProject(rest), parse: false },
   session: { run: async (rest) => (await import("./session.js")).runSession(rest), parse: false },
   bind: { run: async (rest) => (await import("./bind.js")).runBind(rest), parse: false },
+  "factory-reset": {
+    run: async (rest) => (await import("./factory-reset.js")).runFactoryReset(rest),
+    parse: false,
+  },
   vault: { run: async (rest) => (await import("./vault.js")).runVault(rest), parse: false },
   __daemon: { run: handleDaemon, parse: false },
   status: {
@@ -303,7 +307,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   }
   const spec = findCommand(first);
 
-  // (A0) v0.2.x 제거 명령(FR-030·SC-044) — 조용한 실패 대신 "제거됨 + 대체 명령" 안내 후 exit 2.
+  // (A0) v0.2.x 제거 명령 — 조용한 실패 대신 "제거됨 + 대체 명령" 안내 후 exit 2.
   const removedReplacement = REMOVED_COMMANDS[first];
   if (removedReplacement !== undefined) {
     process.stderr.write(

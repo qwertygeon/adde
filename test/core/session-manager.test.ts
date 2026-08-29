@@ -4,6 +4,7 @@ import {
   cleanupV2TmpRoots,
   makeSessionManagerDeps,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 
@@ -25,9 +26,9 @@ async function makeSessionManager() {
     import("../../src/core/session-manager.js"),
   ]);
   const fakeDriver = makeFakeEngineDriver("acp", FAKE_CAPS_PRESETS.fullNative);
-  const sm = sessionManagerMod.createSessionManager(
-    makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }) as never,
-  );
+  const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
+  const sm = sessionManagerMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   return { sm, sessionStore };
 }
 
@@ -53,9 +54,9 @@ describe("SC-005: 같은 경로의 활성 세션 수가 생성 시점에 표기�
     ]);
     const fakeDriver = makeFakeEngineDriver("acp", FAKE_CAPS_PRESETS.fullNative);
     void sessionStore;
-    const sm = sessionManagerMod.createSessionManager(
-      makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }) as never,
-    );
+    const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
+    const sm = sessionManagerMod.createSessionManager(deps);
+    bindSessionManager(deps, sm);
     await expect(sm.create({ engine: "does-not-exist" })).rejects.toThrow();
   });
 });

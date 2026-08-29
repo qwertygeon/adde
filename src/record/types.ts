@@ -35,7 +35,8 @@ export interface TurnRef {
  * 턴 처리 중 회복 가능한 일시적 "오류" 표시를 이벤트 스트림·진단 표면에서만 구분한다
  * (SessionRecord.status 자체는 4상태로 고정 — session-store.ts 참조).
  */
-export type SessionEventStatus = "active" | "hibernated" | "detached" | "archived" | "error";
+export type SessionEventStatus =
+  "active" | "hibernated" | "stopped" | "detached" | "archived" | "error";
 
 /**
  * 권한 결정이 어느 경로에서 났는가 — 자동 결정(하드 차단·자동 허용)도 기록하기 위해 도입.

@@ -5,6 +5,7 @@ import {
   cleanupV2TmpRoots,
   makeSessionManagerDeps,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 
@@ -28,9 +29,9 @@ afterEach(() => {
 async function makeSM() {
   const sessionManagerMod = await import("../../src/core/session-manager.js");
   const fakeDriver = makeFakeEngineDriver("acp", FAKE_CAPS_PRESETS.fullNative);
-  const sm = sessionManagerMod.createSessionManager(
-    makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }) as never,
-  );
+  const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
+  const sm = sessionManagerMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   return sm;
 }
 

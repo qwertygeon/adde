@@ -1,6 +1,6 @@
 /**
- * CLI 명령·플래그 스펙(SSOT, v2) — 레인 명령군 제거, project/session/bind/vault 표면으로 교체
- * (FR-030). 파서(parse.ts)·자동완성(completion.ts)·usage(locales)·디스패치(run.ts)가 공유한다.
+ * CLI 명령·플래그 스펙(SSOT, v2) — 레인 명령군 제거, project/session/bind/vault 표면으로 교체.
+ * 파서(parse.ts)·자동완성(completion.ts)·usage(locales)·디스패치(run.ts)가 공유한다.
  */
 
 /** 위치 인자 종류 — 자동완성 동적 후보(proj/session 이름 스캔)를 결정한다. */
@@ -79,7 +79,11 @@ const SESSION_SUBS: readonly SubSpec[] = [
   { name: "ls", aliases: ["list"], flags: [{ name: "--json" }], positional: ["proj"] },
   { name: "show", flags: [{ name: "--json" }], positional: ["proj", "session"] },
   { name: "clear", flags: [], positional: ["proj", "session"] },
-  { name: "rm", aliases: ["remove"], flags: [{ name: "--purge" }, { name: "--force" }], positional: ["proj", "session"] }, // prettier-ignore
+  { name: "stop", flags: [{ name: "--json" }], positional: ["proj", "session"] },
+  // session 은 선택(생략 시 대상 열거·목록 안내, FR-021).
+  { name: "resume", flags: [{ name: "--json" }], positional: ["proj", "session"] },
+  // `--force` 제거 — 확인 없는 완전 제거는 `--purge` 전용.
+  { name: "rm", aliases: ["remove"], flags: [{ name: "--purge" }], positional: ["proj", "session"] }, // prettier-ignore
 ];
 
 const BIND_SUBS: readonly SubSpec[] = [
@@ -102,15 +106,17 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: "doctor", args: "[<proj>]", flags: [{ name: "--json" }], positional: ["proj"], desc: "environment checks", usageKey: "usage.doctor" }, // prettier-ignore
   { name: "logs", args: "<proj> <session> [N]", flags: [{ name: "--engine" }, { name: "--daemon" }, { name: "--follow", short: "-f" }, { name: "--json" }], positional: ["proj", "session"], desc: "session event log", usageKey: "usage.logs" }, // prettier-ignore
   { name: "project", args: "<add|set|show|ls|rm>", flags: [], subs: PROJECT_SUBS, desc: "manage projects", usageKey: "usage.project" }, // prettier-ignore
-  { name: "session", args: "<new|ls|show|clear|rm>", flags: [], subs: SESSION_SUBS, desc: "manage sessions", usageKey: "usage.session" }, // prettier-ignore
+  { name: "session", args: "<new|ls|show|clear|stop|resume|rm>", flags: [], subs: SESSION_SUBS, desc: "manage sessions", usageKey: "usage.session" }, // prettier-ignore
   { name: "bind", args: "<add|rm|ls>", flags: [], subs: BIND_SUBS, desc: "manage channel bindings", usageKey: "usage.bind" }, // prettier-ignore
   { name: "vault", args: "<rebuild>", flags: [], subs: VAULT_SUBS, desc: "vault maintenance", usageKey: "usage.vault" }, // prettier-ignore
   { name: "completion", args: "<bash|zsh>", flags: [], desc: "shell completion", usageKey: "usage.completion" }, // prettier-ignore
   { name: "alias", args: "[names...]", flags: [], desc: "install short aliases", usageKey: "usage.alias" }, // prettier-ignore
+  // 명령 전용 — 노트·팔레트 진입점 없음. 인자·플래그 0개(대화형 확인만).
+  { name: "factory-reset", args: "", flags: [], desc: "wipe all projects and sessions (factory reset)", usageKey: "usage.factoryReset" }, // prettier-ignore
   { name: "__daemon", args: "<proj>", flags: [], usageKey: "usage.daemon", hidden: true },
 ] as const;
 
-/** v0.2.x 제거 명령 → 안내(대체 명령) — 실행 시 "제거됨" 안내 + exit 2(SC-044). */
+/** v0.2.x 제거 명령 → 안내(대체 명령) — 실행 시 "제거됨" 안내 + exit 2. */
 export const REMOVED_COMMANDS: Record<string, string> = {
   lane: "project / session / bind",
   sessions: "session ls",

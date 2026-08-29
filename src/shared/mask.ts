@@ -37,13 +37,21 @@ export function maskSecrets(text: string): string {
  * 위조 체크박스 라인("- [x] allow" 등)을 삽입할 수 없게 하고, maskSecrets 로 시크릿 패턴을 마스킹한
  * 뒤 길이 상한(기본 200)으로 자른다 — 과도한 페이로드로 렌더를 부풀리는 것도 함께 막는다.
  */
-export function sanitizeEngineText(text: string, maxLen = 200): string {
+/**
+ * 제어문자(개행·CR·ESC 등)를 공백으로 접고 연속 공백을 하나로 줄인다 — 외부 유래 문자열이 렌더·파싱
+ * 표면에 **줄을 위조**하는 것을 막는 공통 초크포인트. 마스킹·길이 상한과 분리해 두어, 경로처럼
+ * 마스킹·절단하면 사용자가 대상을 오판하는 표시값(파괴 동의 화면 등)에도 그대로 쓸 수 있다.
+ */
+export function foldControlChars(text: string): string {
   // \p{Cc} = 유니코드 Control 카테고리(C0 제어문자·DEL·C1 제어문자 — 개행 포함) — 리터럴 제어문자를
   // 정규식에 직접 쓰지 않아 no-control-regex 를 우회한다.
-  const collapsed = text
+  return text
     .replace(/\p{Cc}+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const masked = maskSecrets(collapsed);
+}
+
+export function sanitizeEngineText(text: string, maxLen = 200): string {
+  const masked = maskSecrets(foldControlChars(text));
   return masked.length > maxLen ? `${masked.slice(0, maxLen)}…` : masked;
 }

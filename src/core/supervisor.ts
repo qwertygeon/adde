@@ -10,12 +10,14 @@ import type { ProjectConf } from "../shared/conf.js";
 import { detectLegacyLayout, detectProjectsNameCollision } from "./legacy-guard.js";
 import { createSessionManager } from "./session-manager.js";
 import type { SessionManagerWithLoad } from "./session-manager.js";
+import type { SessionStatus } from "./session-store.js";
 import { createRouter } from "./router.js";
 import type { RouterWithIndex } from "./router.js";
 import { ENGINE_REGISTRY } from "../engines/index.js";
 import { SURFACE_REGISTRY } from "../surfaces/index.js";
 import type { Surface } from "../surfaces/types.js";
 import { forceFinalizeApproval } from "../surfaces/markdown/index.js";
+import { markdownSessionHooks } from "./markdown-hooks.js";
 import { errMsg } from "../shared/errors.js";
 import { formatWarnNote } from "../shared/notify.js";
 import { tFor, t } from "../shared/i18n.js";
@@ -23,7 +25,7 @@ import { applyProjectFileMode } from "../shared/file-mode.js";
 
 export interface SessionStatusRow {
   sid: string;
-  status: "active" | "hibernated" | "detached" | "archived";
+  status: SessionStatus;
 }
 
 export interface SupervisorUpResult {
@@ -136,6 +138,11 @@ export async function supervisorUp(proj: string): Promise<SupervisorUpResult> {
     onStateChange: async (sid, status, reason) => {
       console.warn(`session ${sid} → ${status} (${reason})`);
     },
+    // 중지·재개 노트 훅 + 잔여 작업 probe — markdown surface(L4) 배선(`markdown-hooks.ts` 공유,
+    // CLI 단독 조립과 동일 로직). 다른 surface(telegram 등)로 확장 시 바인딩의 surface 종류로
+    // 분기해야 하나, 현재 구현 surface 는 markdown 뿐이다(A-P007 과 무관 — 표면 종류 분기이지
+    // 엔진 분기가 아니다).
+    ...markdownSessionHooks({ vaultRoot: conf.vault, proj, sm: () => sessionManager }),
   });
   await sessionManager.load();
 
@@ -185,7 +192,7 @@ export async function supervisorDown(proj: string): Promise<{ message: string }>
 }
 
 /** gate 배선부(session-manager)가 타임아웃으로 deny 를 확정한 뒤 승인 파일도 종단 표기하도록
- * 호출하는 보조(ADR-016) — 현재 배선에서는 gateRequestDecision 자체가 fail-closed 를 보장하고,
+ * 호출하는 보조 — 현재 배선에서는 gateRequestDecision 자체가 fail-closed 를 보장하고,
  * 파일 종단은 onDecisionRecorded 경로로 수렴하므로 본 함수는 예외적 강제 정리에만 쓰인다. */
 export async function forceFinalizePending(
   proj: string,

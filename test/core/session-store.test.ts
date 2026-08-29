@@ -46,14 +46,25 @@ function fixtureRecord(
     engineArgs: [],
     warnings: [],
     bindings: [],
+    // 006 이관(D001) — 신설 필드 기본값(session-store.ts validateSessionRecord 실측과 동일 형태).
+    // 저장 시 누락돼도 로드 시 이 기본값으로 채워지므로, 왕복 동등성 비교를 위해 fixture 에도 둔다.
+    rev: 0,
+    stopReason: null,
+    stoppedAt: null,
+    stopPending: null,
+    stopNotePending: false,
+    notices: [],
     ...overrides,
   };
 }
 
 describe("SC-003: 4가지 세션 상태가 구분되어 조회된다", () => {
-  it("Happy: active·hibernated·detached·archived 4개 세션이 각자 상태로 로드된다", async () => {
+  it("Happy: active·hibernated·stopped·detached 4개 세션이 각자 상태로 로드된다", async () => {
+    // 006 이관(D001 baseline 마이그레이션) — `archived` 는 도메인 상태 집합에서 빠지고 `stopped` 로
+    // 대체됐다(ADR-001). archived→stopped 정규화 자체의 전용 검증(바이트 불변 포함)은
+    // test/core/session-store-status.test.ts(SC-002)가 담당한다.
     const mod = await loadSessionStore();
-    const statuses = ["active", "hibernated", "detached", "archived"] as const;
+    const statuses = ["active", "hibernated", "stopped", "detached"] as const;
     for (const status of statuses) {
       await mod.saveSession(roots.base, PROJ, fixtureRecord(mod, { status }));
     }
@@ -62,12 +73,12 @@ describe("SC-003: 4가지 세션 상태가 구분되어 조회된다", () => {
     expect(new Set(loaded.map((s) => s.status))).toEqual(new Set(statuses));
   });
 
-  it("Edge: archived 세션도 목록에 포함되어 읽기 전용으로 조회 가능하다", async () => {
+  it("Edge: stopped 세션도 목록에 포함되어 읽기 전용으로 조회 가능하다", async () => {
     const mod = await loadSessionStore();
-    const rec = fixtureRecord(mod, { status: "archived", successorOf: null });
+    const rec = fixtureRecord(mod, { status: "stopped", successorOf: null });
     await mod.saveSession(roots.base, PROJ, rec);
     const loaded = await mod.loadSessions(roots.base, PROJ);
-    expect(loaded.find((s) => s.sid === rec.sid)?.status).toBe("archived");
+    expect(loaded.find((s) => s.sid === rec.sid)?.status).toBe("stopped");
   });
 
   it("Error: 손상된 세션 레코드 1건이 나머지 로드를 막지 않는다(격리 — 실측: 손상분은 목록에서 제외되고 로그로만 표면화)", async () => {

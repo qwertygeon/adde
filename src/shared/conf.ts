@@ -5,10 +5,17 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { normalizeUserPath, projectPaths } from "./paths.js";
+import { isAbsolute } from "node:path";
+import { expandTilde, normalizeUserPath, projectPaths } from "./paths.js";
 import { assertBackupNotOverlapping } from "../record/retention.js";
 
 export const ACP_VERSION = "v1";
+
+/** 자동 중지 임계(분) 기본값 — `stop_after_min`. 파서와 소비처가 같은 상수를 읽어
+ * 기본값이 갈리지 않게 한다(design.md §12). */
+export const DEFAULT_STOP_AFTER_MIN = 60;
+/** 안내 존 상한 기본값 — `markdown.notices_cap`. `0`=무제한. */
+export const DEFAULT_NOTICES_CAP = 10;
 
 /** `perm_tier` 허용값(project-schema.ts 의 enumValues 와 동형 — 파서 자체는 순수하게 두고
  * 경로 상호참조 검증(validateProjectConf)에서 강제한다). */
@@ -17,7 +24,7 @@ export const PERM_TIERS = ["acp", "autopass"] as const;
 /** project.conf 파싱·직렬화 결과(design.md §데이터 모델 표와 1:1). */
 export interface ProjectConf {
   v: 1;
-  /** 마크다운 저장소 루트(절대경로) — 필수. 파싱 단계에서 부재는 오류(FR-028). */
+  /** 마크다운 저장소 루트(절대경로) — 필수. 파싱 단계에서 부재는 오류. */
   vault: string;
   /** 프로젝트 실행 경로. 미지정 시 소비측이 `process.cwd()` 로 해석(파서는 미지정을 undefined 로 보존). */
   cwd?: string;
@@ -36,25 +43,31 @@ export interface ProjectConf {
   file_mode?: string;
   /** 무인 자동 재기동(launchd KeepAlive) — 기본 on. */
   auto_restart: boolean;
-  /** 데몬(재)기동 시 `active` 세션 자동 재개 — 기본 on(FR-006·FR-011). */
+  /** 데몬(재)기동 시 `active` 세션 자동 재개 — 기본 on. */
   auto_resume: boolean;
-  /** 유휴 세션 자동 내림 — 기본 on(FR-009·FR-011). */
+  /** 유휴 세션 자동 내림 — 기본 on. */
   idle_hibernate: boolean;
-  /** 유휴 내림 임계(분) — 기본 30(FR-009). */
+  /** 유휴 내림 임계(분) — 기본 30. */
   hibernate_after_min: number;
-  /** 동시 상주 엔진 상한 — 기본 3(FR-010). */
+  /** 무활동 자동 중지 — 기본 켬. */
+  idle_stop: boolean;
+  /** 중지 임계(분, 마지막 활동 이후 경과) — 기본 60. */
+  stop_after_min: number;
+  /** 동시 상주 엔진 상한 — 기본 3. */
   max_active_engines: number;
-  /** 엔진 예기치 않은 종료 시 자가 재기동 — 기본 on(FR-044). */
+  /** 엔진 예기치 않은 종료 시 자가 재기동 — 기본 on. */
   auto_relaunch: boolean;
-  /** 입력 노트 팔레트 표시 — 기본 on(FR-024·FR-038). */
+  /** 입력 노트 팔레트 표시 — 기본 on. */
   "markdown.palette": boolean;
-  /** 기록 존 자동 상한(옵트인 정수) — 미지정 시 끔(FR-039). */
+  /** 기록 존 자동 상한(옵트인 정수) — 미지정 시 끔. */
   "markdown.records_cap"?: number;
-  /** 보관 위치(옵트인 경로) — 미지정 시 보관 이관 비활성(FR-033·NFR-009). */
+  /** 안내 존 최신 N건 유지 상한 — 기본 10, `0`=무제한. */
+  "markdown.notices_cap": number;
+  /** 보관 위치(옵트인 경로) — 미지정 시 보관 이관 비활성. */
   "vault.backup"?: string;
-  /** 보관 일수 — 기본 2(FR-033). */
+  /** 보관 일수 — 기본 2. */
   "vault.retention_days": number;
-  /** 동기화 제공자 id(`local`|`icloud`) — 기본 local(FR-035). */
+  /** 동기화 제공자 id(`local`|`icloud`) — 기본 local. */
   "vault.sync_provider": string;
   /** 무효 값 폴백·미지원 키 감지 등 파싱 중 경고(SC-011 Edge·SC-043 Error — 침묵 처리 금지). 없으면 빈 배열. */
   warnings: string[];
@@ -95,6 +108,17 @@ function parsePositiveInt(raw: string | undefined): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+/**
+ * 0 이상 정수만 채택(무효/음수/비정수는 무시 → 소비측 기본값 폴백). `markdown.notices_cap` 전용
+ * 예외 파서 — 이 키만 `0`(무제한)을 유효값으로 받는다(ADR-008·A-P005 ⑤ 예외 1건 한정). 다른 정수
+ * 키는 계속 `parsePositiveInt` 관행을 따른다 — 확대하려면 별도 결정이 필요하다.
+ */
+function parseNonNegativeInt(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.length === 0) return undefined;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 && String(n) === raw.trim() ? n : undefined;
+}
+
 /** `<base>/projects/<proj>/project.conf` 최상위 키 SoT — 미지 키 감지(SC-043 Error)에 쓰인다. */
 const KNOWN_TOP_LEVEL_KEYS = new Set([
   "v",
@@ -114,10 +138,13 @@ const KNOWN_TOP_LEVEL_KEYS = new Set([
   "auto_resume",
   "idle_hibernate",
   "hibernate_after_min",
+  "idle_stop",
+  "stop_after_min",
   "max_active_engines",
   "auto_relaunch",
   "markdown.palette",
   "markdown.records_cap",
+  "markdown.notices_cap",
   "vault.backup",
   "vault.retention_days",
   "vault.sync_provider",
@@ -129,6 +156,19 @@ function warnIfInvalidPositiveInt(warnings: string[], key: string, raw: string |
   if (raw === undefined || raw.length === 0) return;
   if (parsePositiveInt(raw) === undefined) {
     warnings.push(`"${key}"=${raw} 는 유효한 양의 정수가 아니어서 기본값으로 폴백했습니다.`);
+  }
+}
+
+/** `parseNonNegativeInt` 판정 버전(값이 제공됐고 거부된 경우에만 경고) — `markdown.notices_cap`
+ * 전용(FR-014·SC-035, 조용한 치환 금지). */
+function warnIfInvalidNonNegativeInt(
+  warnings: string[],
+  key: string,
+  raw: string | undefined,
+): void {
+  if (raw === undefined || raw.length === 0) return;
+  if (parseNonNegativeInt(raw) === undefined) {
+    warnings.push(`"${key}"=${raw} 는 유효한 0 이상 정수가 아니어서 기본값으로 폴백했습니다.`);
   }
 }
 
@@ -145,6 +185,25 @@ function parseOnOffDefaultOn(raw: string | undefined): boolean {
 
 export class ProjectConfParseError extends Error {
   override name = "ProjectConfParseError";
+}
+
+/**
+ * conf 의 경로류 필드(`vault`·`vault.backup`·`cwd`) 공통 정규화 — `~` 를 셸 밖에서 직접
+ * 확장한 뒤(Node 는 확장하지 않는다) 절대경로를 강제한다(보안 검토 SEC-005). 상대경로·미확장
+ * 틸드가 그대로 남으면 파괴적 삭제 단계(factory-reset 등)가 그 경로를 **프로세스 cwd 기준**으로
+ * 잘못 해석해 의도하지 않은 위치를 지울 위험이 있다 — 파싱 단계에서 거부해 그 위험을 원천
+ * 차단한다. `~/...` 는 홈 기준 절대경로로 조용히 확장되므로(기존 사용자 conf 와 호환) 실제로
+ * 거부되는 것은 틸드 없는 순수 상대경로뿐이다.
+ */
+function resolveConfPathField(key: string, raw: string): string {
+  const expanded = normalizeUserPath(expandTilde(raw));
+  if (!isAbsolute(expanded)) {
+    throw new ProjectConfParseError(
+      `project.conf: ${key} 는 절대경로여야 합니다("${raw}") — 상대경로는 실행 위치에 따라 ` +
+        `달라져 위험합니다(\`~/...\` 는 허용 — 자동으로 절대경로로 확장됩니다).`,
+    );
+  }
+  return expanded;
 }
 
 /**
@@ -174,14 +233,16 @@ export function parseProjectConf(text: string): ProjectConf {
     }
   }
   warnIfInvalidPositiveInt(warnings, "hibernate_after_min", kv["hibernate_after_min"]);
+  warnIfInvalidPositiveInt(warnings, "stop_after_min", kv["stop_after_min"]);
   warnIfInvalidPositiveInt(warnings, "max_active_engines", kv["max_active_engines"]);
   warnIfInvalidPositiveInt(warnings, "gate_timeout_sec", kv["gate_timeout_sec"]);
   warnIfInvalidPositiveInt(warnings, "vault.retention_days", kv["vault.retention_days"]);
   warnIfInvalidPositiveInt(warnings, "markdown.records_cap", kv["markdown.records_cap"]);
+  warnIfInvalidNonNegativeInt(warnings, "markdown.notices_cap", kv["markdown.notices_cap"]);
 
   const result: ProjectConf = {
     v: 1,
-    vault: normalizeUserPath(vaultRaw),
+    vault: resolveConfPathField("vault", vaultRaw),
     engine: kv["engine"] ?? "",
     perm_tier: kv["perm_tier"] ?? "acp",
     acp_version: kv["acp_version"] ?? ACP_VERSION,
@@ -192,22 +253,27 @@ export function parseProjectConf(text: string): ProjectConf {
     auto_resume: parseBoolDefaultOn(kv["auto_resume"]),
     idle_hibernate: parseBoolDefaultOn(kv["idle_hibernate"]),
     hibernate_after_min: parsePositiveInt(kv["hibernate_after_min"]) ?? 30,
+    idle_stop: parseBoolDefaultOn(kv["idle_stop"]),
+    stop_after_min: parsePositiveInt(kv["stop_after_min"]) ?? DEFAULT_STOP_AFTER_MIN,
     max_active_engines: parsePositiveInt(kv["max_active_engines"]) ?? 3,
     auto_relaunch: parseBoolDefaultOn(kv["auto_relaunch"]),
     "markdown.palette": parseOnOffDefaultOn(kv["markdown.palette"]),
+    "markdown.notices_cap": parseNonNegativeInt(kv["markdown.notices_cap"]) ?? DEFAULT_NOTICES_CAP,
     "vault.retention_days": parsePositiveInt(kv["vault.retention_days"]) ?? 2,
     "vault.sync_provider": kv["vault.sync_provider"] ?? "local",
     warnings,
   };
 
   for (const key of OPTIONAL_KEYS) {
-    setIfPresent(result, key, kv[key], (v) => (key === "cwd" ? normalizeUserPath(v) : v));
+    setIfPresent(result, key, kv[key], (v) => (key === "cwd" ? resolveConfPathField("cwd", v) : v));
   }
   const gateTimeoutSec = parsePositiveInt(kv["gate_timeout_sec"]);
   if (gateTimeoutSec !== undefined) result.gate_timeout_sec = gateTimeoutSec;
   const recordsCap = parsePositiveInt(kv["markdown.records_cap"]);
   if (recordsCap !== undefined) result["markdown.records_cap"] = recordsCap;
-  setIfPresent(result, "vault.backup", kv["vault.backup"], (v) => normalizeUserPath(v));
+  setIfPresent(result, "vault.backup", kv["vault.backup"], (v) =>
+    resolveConfPathField("vault.backup", v),
+  );
 
   return result;
 }
@@ -237,11 +303,19 @@ export function serializeProjectConf(conf: ProjectConf): string {
   if (conf.idle_hibernate === false) lines.push(`idle_hibernate=false`);
   if (conf.hibernate_after_min !== 30)
     lines.push(`hibernate_after_min=${conf.hibernate_after_min}`);
+  if (conf.idle_stop === false) lines.push(`idle_stop=false`);
+  if (conf.stop_after_min !== DEFAULT_STOP_AFTER_MIN) {
+    lines.push(`stop_after_min=${conf.stop_after_min}`);
+  }
   if (conf.max_active_engines !== 3) lines.push(`max_active_engines=${conf.max_active_engines}`);
   if (conf.auto_relaunch === false) lines.push(`auto_relaunch=false`);
   if (conf["markdown.palette"] === false) lines.push(`markdown.palette=off`);
   if (conf["markdown.records_cap"] !== undefined) {
     lines.push(`markdown.records_cap=${conf["markdown.records_cap"]}`);
+  }
+  // 0(무제한)도 출력한다 — falsy 를 부재로 취급하면 무제한 설정이 직렬화에서 소실된다.
+  if (conf["markdown.notices_cap"] !== DEFAULT_NOTICES_CAP) {
+    lines.push(`markdown.notices_cap=${conf["markdown.notices_cap"]}`);
   }
   if (conf["vault.backup"] !== undefined && conf["vault.backup"].length > 0) {
     lines.push(`vault.backup=${conf["vault.backup"]}`);

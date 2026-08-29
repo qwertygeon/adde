@@ -18,11 +18,12 @@ Commands:
   doctor [<proj>] [--json]            static environment/config checks (state-independent)
   logs <proj> <session> [N] [-f|--follow] [--json]  last N lines of the session transcript (default 50, engine stderr with --engine; -f/--follow to tail live)
   project <add|set|show|ls|rm>        manage projects (run 'adde project help' for options)
-  session <new|ls|show|clear|rm>      manage sessions (run 'adde session help' for options)
+  session <new|ls|show|clear|stop|resume|rm>  manage sessions (run 'adde session help' for options)
   bind <add|rm|ls>                    manage channel bindings (run 'adde bind help' for options)
   vault <rebuild>                     regenerate notes/dedup ledger from the event record
   completion <bash|zsh>               print a shell completion script (Tab-complete commands/projects/sessions; run 'adde completion --help' for setup)
   alias [names...]                    install short aliases (default ad, add) next to the adde binary
+  factory-reset                       wipe ALL projects and sessions — reset to a fresh install (irreversible, interactive-only)
 
 Options:
   -v, --version            print version
@@ -109,19 +110,35 @@ project set incremental list edits:
   --add-hard-deny <a,b,c> / --rm-hard-deny <a,b,c>
 
 Editable keys (adde project set <proj> <key> <value>...):
-  cwd, engine, engine_args, perm_tier, allowlist, denylist, hard_deny, gate_timeout_sec, lang, file_mode, auto_restart, auto_resume, idle_hibernate, hibernate_after_min, max_active_engines, auto_relaunch, markdown.palette, markdown.records_cap, vault.backup, vault.retention_days, vault.sync_provider`,
+  cwd, engine, engine_args, perm_tier, allowlist, denylist, hard_deny, gate_timeout_sec, lang, file_mode, auto_restart, auto_resume, idle_hibernate, hibernate_after_min, idle_stop, stop_after_min, max_active_engines, auto_relaunch, markdown.palette, markdown.records_cap, markdown.notices_cap, vault.backup, vault.retention_days, vault.sync_provider
+  (idle_stop: auto-stop inactive sessions, default on; stop_after_min: minutes of inactivity before auto-stop, default 60; markdown.notices_cap: max notices kept in the input note before pruning, default 10, 0 = unlimited)`,
     session: `Usage:
   adde session new <proj> [--engine <id>] [--title <t>] [--engine-args <args>] [--json]
-  adde session ls <proj> [--json]            record view (daemon-independent) — for live engine presence use adde status
+  adde session ls <proj> [--json]            record view (daemon-independent, sorted by last activity) — for live engine presence use adde status
   adde session show <proj> <sid> [--json]
-  adde session clear <proj> <sid>            initialize (succession — creates a new session, old one archived)
-  adde session rm <proj> <sid> [--purge] [--force]`,
+  adde session clear <proj> <sid>            stop the current session and create a new one (succession — both notes are kept)
+  adde session stop <proj> <sid> [--json]    stop watching a session (scheduled if it has pending work)
+  adde session resume <proj> [<sid>] [--json]  resume a stopped/detached session (omit <sid> to just see how many are eligible)
+  adde session rm <proj> <sid> [--purge]     interactive: full removal / record-only removal / cancel (--purge = non-interactive full removal, no confirmation)`,
     bind: `Usage:
   adde bind add <proj> <sid> --surface <id> --address <addr>
   adde bind rm <proj> <sid> --surface <id> --address <addr>
   adde bind ls <proj> [--json]`,
     vault: `Usage:
   adde vault rebuild <proj> [--sid <sid>] [--json]   regenerate notes/dedup ledger from the event record`,
+    factoryReset: `Usage: adde factory-reset
+
+Wipes ALL projects and sessions — resets adde to a fresh-install state.
+  - Deletes: every project's config root entries + its vault ADDE subtree (notes, events, blobs, dedup ledgers).
+  - Preserves: the vault root itself and anything outside its ADDE namespace; pre-v2 (v0.2.x) data is left untouched.
+  - Requires an interactive terminal — refuses in non-interactive shells (fail-closed).
+  - Shows an inventory (project/session counts, note paths to be deleted) first, then requires typing a fixed
+    confirmation phrase exactly (no yes/no shortcut) — case-sensitive, no retry on mismatch.
+  - Stray vault ADDE project directories no longer referenced by any project config are listed and confirmed
+    separately (not deleted by default); directories outside every known vault are not discoverable and are
+    never touched.
+  - A full guarantee against leftover content from before a storage-layout change is only possible via this
+    command — a plain \`session rm\` on an old-layout session cannot reach that content (see 'adde session help').`,
     lane: `Usage:
   adde lane add <proj> <lane> [options]   create a lane conf
   adde lane set <proj> <lane> [<key> <value> ...] [--unset <key> ...]  edit an existing lane conf in place (no args on a TTY: interactive wizard)
@@ -854,5 +871,16 @@ Note: editing --file-mode only updates the conf value; existing directory permis
     block: "[ADDE blocked] {{situation}}\n  ↳ action: {{action}}",
     exception: "[ADDE error] {{situation}}\n  ↳ action: {{action}}",
     warn: "[ADDE warning] {{situation}}\n  ↳ action: {{action}}",
+  },
+  notice: {
+    // 안내 존 항목이 노트에 아직 렌더되기 전에 사용자가 지워도(crash-consistency — 렌더 확정 전
+    // 부재는 취소/읽음으로 보지 않는다) 침묵 없이 알린다: 항목은 되살아나지만 다시 지우면
+    // 의도대로 처리된다.
+    notYetReflected:
+      "This action hadn't been written to the note yet, so it wasn't recognized — the item will reappear. To cancel/dismiss it, delete it again once it's shown.",
+    // clear() 로 중지된 이전 세션의 노트 배너 쓰기가 실패했을 때 — old 는 폴 대상 제외라 경고가
+    // 보일 계기가 없으므로 승계된 새 세션(이 경고가 뜨는 세션) 쪽에 낸다.
+    successionNoteFailed:
+      "The note update for the previous session ({{oldSid}}) failed — it will retry automatically. If it keeps failing, check that session's note file directly.",
   },
 };

@@ -10,6 +10,7 @@ import type { ProjectConf } from "../shared/conf.js";
 import { createSessionManager } from "../core/session-manager.js";
 import type { SessionManagerWithLoad } from "../core/session-manager.js";
 import { ENGINE_REGISTRY } from "../engines/index.js";
+import { markdownSessionHooks } from "../core/markdown-hooks.js";
 
 export async function loadProjectConfOrThrow(base: string, proj: string): Promise<ProjectConf> {
   const { projectConf } = projectPaths(base, proj);
@@ -20,9 +21,14 @@ export async function loadProjectConfOrThrow(base: string, proj: string): Promis
 export async function withSessionManager<T>(
   proj: string,
   fn: (sm: SessionManagerWithLoad, conf: ProjectConf) => Promise<T>,
+  baseOverride?: string,
 ): Promise<T> {
-  const base = defaultBase();
+  const base = baseOverride ?? defaultBase();
   const conf = await loadProjectConfOrThrow(base, proj);
+  // 노트 훅 3종이 필수 의존으로 승격됨(rework2 §단일 소유자) — 데몬 미기동 CLI 직접 적용 경로도
+  // `supervisor.ts` 와 동일하게 markdown surface 배선을 갖춰야 한다. 이전에는 이 경로가 훅을
+  // 아예 주입하지 않아(옵셔널이라 조용히 통과) CLI 단독 stop·resume·clear 가 노트 배너·스켈레톤을
+  // 전혀 갱신하지 않는 잠재 결함이 있었다(필수화가 표면화한 실제 조립 공백, 이번에 같이 닫는다).
   const sm = createSessionManager({
     base,
     proj,
@@ -39,6 +45,7 @@ export async function withSessionManager<T>(
     askPermission: async () => {
       throw new Error("cli: 데몬 미기동 상태에서 권한 요청이 발생했습니다(버그).");
     },
+    ...markdownSessionHooks({ vaultRoot: conf.vault, proj, sm: () => sm }),
   });
   await sm.load();
   try {

@@ -44,23 +44,39 @@ Creating a session (`adde session new <proj>`) creates its vault folder and inpu
   turns/                # one file per turn — the AI's responses live here
 ```
 
+`<sid>` is the session id. New sessions get a human-pickable one — `YYMMDD-N` (creation date in local time plus that day's sequence number, e.g. `260828-2`), or `YYMMDD-N-<slug>` when you gave the session a title. Ids assigned earlier keep their old form; nothing is renamed.
+
 Nothing to hand-configure — the vault path and layout are fixed by ADDE (`project add --vault` sets the root once per project). Per-session settings that do affect the markdown surface are edited on the **project**, since the gate and channel behavior are shared across a project's sessions:
 
 ```bash
 adde project set myproj markdown.palette false        # hide the resident marker palette
 adde project set myproj markdown.records_cap 30        # auto-fold the records zone past 30 entries
+adde project set myproj markdown.notices_cap 30        # keep 30 notices before pruning (0 = unlimited)
+adde project set myproj stop_after_min 180             # auto-stop after 3h of inactivity (idle_stop, on by default)
 ```
 
 See the [command reference](commands.md#project--manage-projects) for the full editable-key list.
 
 ## 2. Sending instructions (inbox)
 
-`inbox.md` is organized into three zones: a resident **marker palette** + your writing area at the top, a `<!-- adde:compose -->` boundary marking where your message starts, and a **records zone** at the bottom holding a compact, newest-first send history:
+`inbox.md` is organized into zones, all of them **above** the `<!-- adde:compose -->` boundary that marks where your message starts, plus a **records zone** at the bottom holding a compact, newest-first send history:
 
 ```markdown
+<!-- adde:status -->                      ← warning zone (only while a warning stands)
+
+<!-- adde:notices -->                     ← notice zone (only while there are notices)
+
+- [ ] 📣 The conversation was compacted. <!-- n:k3f8a2b1 -->
+
+<!-- adde:palette -->
+
+**records**
+
 - [ ] 🗄️ archive
-- [ ] 🧹 clear
+      **session**
 - [ ] 🗜️ compact
+- [ ] 🧹 clear
+- [ ] ⏹️ stop
 - [ ] ♻️ resume
 
 <!-- adde:compose -->
@@ -72,17 +88,16 @@ See the [command reference](commands.md#project--manage-projects) for the full e
 <!-- adde:records -->
 ```
 
-1. Write your message on the blank line(s) between `<!-- adde:compose -->` and the `- [ ] 📤 send` checkbox. Text above `<!-- adde:compose -->` (the palette area) is never treated as message content.
+1. Write your message on the blank line(s) between `<!-- adde:compose -->` and the `- [ ] 📤 send` checkbox. Everything above `<!-- adde:compose -->` — the warning, notice, and palette zones — is owned by ADDE and is never treated as message content.
 
-> **Status zone.** When a session has an unresolved warning — a note that could not be saved, a resume that failed — ADDE inserts a `<!-- adde:status -->` block above the palette:
+> **Warning zone vs. notice zone.** The two look similar and do different jobs; the split is deliberate.
 >
-> ```markdown
-> <!-- adde:status -->
+> | Zone                    | Holds                                                                                                                                                                | Goes away when                                                                                                                                    |
+> | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | `<!-- adde:status -->`  | **Unresolved failures** — a note that couldn't be saved, a resume that failed, a stopped-note rewrite that failed                                                    | The condition clears on its own (a later turn saves, a resume succeeds). Editing or deleting the block has no effect — the next sweep rebuilds it |
+> | `<!-- adde:notices -->` | **Things you just need to read once** — a session stopped and why, a stop was scheduled, a compaction succeeded, a succession link, a truncated list, pruned notices | You read it: check the box, or simply delete the line                                                                                             |
 >
-> > ⚠️ turn 6 note save failed: EACCES: permission denied …
-> ```
->
-> The block is owned by ADDE and derived from the session record: it appears only while the warning stands and disappears on its own once the condition clears (a later turn saves successfully, a resume succeeds). Editing or deleting it has no effect — the next sweep rebuilds it from the record. Anything else you type above the palette is discarded the same way, so keep your own text below `<!-- adde:compose -->`.
+> A failure never arrives as a notice, and a notice never lingers as a warning.
 
 2. Check the box: `- [x] 📤 send`.
 3. ADDE detects it and delivers the message. That line moves through two stages:
@@ -96,18 +111,93 @@ After a send, ADDE restores a fresh empty `- [ ] 📤 send` right after the comp
 
 > **The trigger is a checkbox whose label is exactly `send`** (a leading emoji is allowed). A checkbox with other words mixed in is treated as ordinary message body, not a trigger.
 
+### The notice zone
+
+Each notice is a checkbox line ending in an ADDE marker (`<!-- n:… -->`). It is a projection of the session record, so it survives note repairs and daemon restarts — deleting the whole zone by hand does not lose anything that hasn't been read.
+
+- **Reading a notice consumes it**: check the box, or delete the line. Either way it is removed on the next action pass and does not come back.
+- **The zone is capped** at the newest 10 entries by default; older ones are pruned and a notice tells you how many were dropped. Change it per project with `markdown.notices_cap`, and set it to **`0` for no cap at all**:
+
+  ```bash
+  adde project set myproj markdown.notices_cap 30
+  adde project set myproj markdown.notices_cap 0     # unlimited
+  ```
+
+- **A list that is waiting for your answer** (currently only the resume picker) is not an ordinary notice: it is exempt from both the cap and read-consumption. It disappears only when you pick an option or cancel it.
+- Text that comes from the engine (a resume failure reason, for instance) is sanitized before it is inserted — newlines and control characters are folded so it cannot forge a checkbox or a zone marker, and secrets are masked.
+
 ### The marker palette (session control)
 
-Four control markers sit permanently at the top, always unchecked and ready — set `markdown.palette=false` (project-level) to hide this block:
+The control markers sit permanently above the compose boundary, always unchecked and ready, **grouped by function** with a plain bold heading per group — set `markdown.palette=false` (project-level) to hide the whole block:
 
 ```markdown
-- [ ] 🗄️ archive ← on check, fold completed send markers in the records zone into a summary line
-- [ ] 🧹 clear ← on check, start a new session (succession — the old one becomes archived, see adde session clear)
-- [ ] 🗜️ compact ← on check, run the engine's own compact command (rendered only if the engine declares compact support)
-- [ ] ♻️ resume ← on check, retry resuming a detached/hibernated session
+<!-- adde:palette -->
+
+**records**
+
+- [ ] 🗄️ archive ← fold completed send markers in the records zone into a summary line
+      **session**
+- [ ] 🗜️ compact ← run the engine's own compact command (rendered only if the engine declares compact support)
+- [ ] 🧹 clear ← stop this session and start a new one (succession, see adde session clear)
+- [ ] ⏹️ stop ← stop this session and nothing else
+- [ ] ♻️ resume ← resume a different, already-stopped session
 ```
 
-Checking a marker runs it once and it is restored to unchecked in place — a resident control, not a one-shot message. See the [command reference](commands.md#session-control-markdown-palette) for the CLI-equivalent actions.
+The group headings are ordinary bold lines rather than checkboxes, so they are never parsed as an action and never swept into your message body. New markers are added to the group they belong to, so the list stays readable as it grows. Checking a marker runs it once and it is restored to unchecked in place — a resident control, not a one-shot message. See the [command reference](commands.md#session-control-markdown-palette) for the CLI-equivalent actions.
+
+#### `stop` — ending the watch
+
+`⏹️ stop` stops this session and does nothing else: the engine goes down and **this note stops being watched entirely** — neither it nor the approval directory is read on any cycle. If a turn is still running or the queue isn't empty, the stop is scheduled and a notice says so; a second notice confirms it once the remaining work drains.
+
+Sessions you leave alone are stopped for you after `stop_after_min` (default 60) minutes of inactivity. That is on by default; `adde project set <proj> idle_stop false` opts out. Hibernation still comes first and is unchanged — a hibernated session is still watched and resumes transparently on your next instruction.
+
+#### A stopped session's note
+
+When a session stops, its input note is rewritten **once** into a banner:
+
+```markdown
+<!-- adde:stopped -->
+
+> ⏹️ This session is stopped and is **not being watched** — checkboxes in this note are not processed.
+> Reason: inactive
+> To resume: check `♻️ resume` in an active session's input note, or run `adde session resume <proj> <sid>`
+
+<!-- adde:compose -->
+
+(your draft is preserved here)
+
+<!-- adde:records -->
+```
+
+- **Every checkbox is gone**, the `records` group included, and so is the send box. Nothing polls this note, so a checkbox left behind could never be consumed — leaving one would be a control that silently does nothing.
+- **Your draft text and the records zone are kept as they were.** Resuming restores the normal layout once, draft intact.
+- The banner always lists **both** ways back, because there may be no active session whose note you could check a box in.
+- A session that fell off (`detached` — a resume failed) gets the same treatment, with the failure reason in the banner.
+- A session removed with the record-only option gets a similar banner saying it is gone from the listings while the conversation stays in the vault.
+
+#### `resume` — bringing a stopped session back
+
+`♻️ resume` no longer means "retry resuming _this_ session's engine"; **that palette entry is gone.** A hibernated session resumes on its own with your next instruction and a detached one is handled from another session's list, so nothing is stranded — but if you were used to checking `resume` to poke your own session, this is where it went. You now run it from an **active** session's note, in either of two forms:
+
+```markdown
+- [x] ♻️ resume ← show me the stopped sessions and let me pick
+- [x] ♻️ resume 260828-2 ← resume that one directly (exact id match)
+```
+
+Checking the bare `resume` makes the notice zone render the picker on the next cycle:
+
+```markdown
+<!-- adde:notices -->
+
+- [ ] ▶️ 260828-3 · refactor queue · last activity 2026-08-28T04:10:00Z · stopped <!-- n:… r:260828-3 -->
+- [ ] ▶️ 260827-1 · (untitled) · last activity 2026-08-27T22:02:00Z · detached (resume failed: …) <!-- n:… r:260827-1 -->
+
+> ℹ️ Showing the 10 most recent — for the full list run `adde session ls <proj>`
+```
+
+Check one option and that session is resumed, then the whole list disappears. With nothing eligible you get a short notice instead of an empty list; an unknown or malformed id gets its own notice. Only an option the picker itself issued is accepted — a line you write by hand, or one that a pasted text managed to forge, is treated as "nothing picked" and the list is simply redrawn.
+
+> **Cancelling the picker has a known rough edge.** You cancel by deleting the option lines. If you delete them within a couple of seconds of them first appearing, that **first attempt may not register** and the options come back — you'll get a notice saying the cancellation hasn't been applied yet. Delete them once more and the cancellation goes through. (Deleting only some of the lines is treated as an accidental edit and the list is redrawn, not cancelled.)
 
 ### The records zone (history)
 
@@ -154,7 +244,7 @@ analyze the cause of the build error
 입력 토큰 1234 · 출력 토큰 567
 ```
 
-The frontmatter `status` field is fixed vocabulary (`처리 중` while the turn is running, `완료` on success, `오류` if the turn failed) regardless of your `lang` setting — only channel-facing notices (permission prompts, warnings) follow `lang`. If the message body exactly duplicates an earlier turn, the note links to that earlier turn instead of repeating the text (a dedup ledger records the match — the event record itself always keeps the full original, dedup only affects note rendering).
+The frontmatter `status` field is fixed vocabulary (`처리 중` while the turn is running, `완료` on success, `오류` if the turn failed) regardless of your `lang` setting — only channel-facing notices (permission prompts, warnings) follow `lang`. If the message body exactly duplicates an earlier turn **of the same session**, the note links to that earlier turn instead of repeating the text (a per-session dedup ledger records the match — the event record itself always keeps the full original, dedup only affects note rendering). Duplicate detection does not reach across sessions: the same text sent in another session is written out in full there, with no link back. Attachments and oversized tool output are stored the same way — per session, so identical content held by two sessions exists twice.
 
 If message processing itself fails before a turn note can be created, the failure and remediation guidance surface in the session note's warnings section instead (the message is preserved and reprocessed on restart — nothing is silently dropped).
 
@@ -197,7 +287,7 @@ Each session is independent — its own input note, approvals, and turn history 
 ```bash
 adde session new work --title frontend
 adde session new work --title backend
-adde status work    # both sessions, independently active/hibernated
+adde status work    # both sessions, independently active/hibernated/stopped
 ```
 
 For genuinely separate projects (different vault or `cwd`), create separate projects instead:
@@ -238,7 +328,7 @@ Everything ADDE writes to the vault is subject to whatever sync you've configure
 | Turn note (`turns/<...>.md`)         | Full input and AI response — code snippets, file paths, analysis                  |
 | Session/project note                 | Turn previews, status, warnings                                                   |
 
-**What never leaves the config root** (not vault-synced): the conversation event record's _raw_ form lives in the vault's hidden `.adde/` subtree (needed for `vault rebuild`), but engine diagnostic logs, the message queue, and runtime state stay in `~/.config/adde/` only. Secrets are masked (`****`) before anything is written to the event record or notes — masking targets known secret patterns, so a project where the **code, paths, or commands themselves** are sensitive can still expose them through note contents.
+**What never leaves the config root** (not vault-synced): the conversation event record's _raw_ form lives in the vault's hidden `.adde/sessions/<sid>/` subtree, together with that session's attachment store and dedup ledger (needed for `vault rebuild`), but engine diagnostic logs, the message queue, and runtime state stay in `~/.config/adde/` only. Secrets are masked (`****`) before anything is written to the event record or notes — masking targets known secret patterns, so a project where the **code, paths, or commands themselves** are sensitive can still expose them through note contents.
 
 **Recommended placement**: put a sensitive project's vault subtree in a sync-excluded folder or a separate local vault; don't point a personal project at a team-shared vault (approval/turn notes are visible to the whole team).
 

@@ -4,6 +4,7 @@ import {
   cleanupV2TmpRoots,
   makeSessionManagerDeps,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 import { makeFakeRecordStore } from "../helpers/fake-record-store.js";
@@ -31,23 +32,23 @@ async function makeSM(opts: { maxActiveEngines?: number; hibernateAfterMin?: num
   const fakeDriver = makeFakeEngineDriver("acp", FAKE_CAPS_PRESETS.fullNative);
   const { store: record, calls } = makeFakeRecordStore();
   const clock = makeFakeClock();
-  const sm = sessionManagerMod.createSessionManager(
-    makeSessionManagerDeps(
-      roots,
-      PROJ,
-      { acp: fakeDriver.descriptor },
-      {
-        clock: { now: () => clock.nowMs() },
-        conf: {
-          hibernate_after_min: opts.hibernateAfterMin ?? 30,
-          max_active_engines: opts.maxActiveEngines ?? 3,
-        },
-        // GAP-019 해소분 배선 — SessionManagerDeps.record(DI) 로 fake RecordStore 를 주입해야
-        // calls.appendEvent 등 인터셉션이 실제로 동작한다(record 만 만들고 미전달 시 무효).
-        record,
+  const deps = makeSessionManagerDeps(
+    roots,
+    PROJ,
+    { acp: fakeDriver.descriptor },
+    {
+      clock: { now: () => clock.nowMs() },
+      conf: {
+        hibernate_after_min: opts.hibernateAfterMin ?? 30,
+        max_active_engines: opts.maxActiveEngines ?? 3,
       },
-    ) as never,
+      // GAP-019 해소분 배선 — SessionManagerDeps.record(DI) 로 fake RecordStore 를 주입해야
+      // calls.appendEvent 등 인터셉션이 실제로 동작한다(record 만 만들고 미전달 시 무효).
+      record,
+    },
   );
+  const sm = sessionManagerMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   return { sm, sessionStore, fakeDriver, record, calls, clock };
 }
 

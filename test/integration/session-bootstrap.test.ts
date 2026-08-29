@@ -6,9 +6,11 @@ import {
   cleanupV2TmpRoots,
   makeSessionManagerDeps,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 import { waitFor } from "../helpers/wait.js";
+import { makeSessionRecordFixture } from "../helpers/session-record-fixture.js";
 
 // 신규 세션 부트스트랩 관통 — Surface 를 **실제로 기동**해 "세션 레코드만 존재 → 입력 노트 생성 →
 // 지시 적재" 를 검증한다. 기존 markdown 스위트는 순수 함수(sendingLine·parseInbox 등)만 단언해
@@ -57,7 +59,8 @@ async function makeHarness(): Promise<Harness> {
       },
     },
   );
-  const sm = smMod.createSessionManager(deps as never);
+  const sm = smMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   smHolder.sm = sm;
   const router = routerMod.createRouter({ base: roots.base, proj: PROJ, sessionManager: sm });
   const surface = surfaceMod.createMarkdownSurface({
@@ -79,27 +82,20 @@ async function makeHarness(): Promise<Harness> {
 /** 별 프로세스(CLI)가 세션 레코드를 쓴 상태를 만든다 — 데몬은 이 레코드를 로드하지 않은 상태다. */
 async function writeRecordOutOfBand(
   sid: string,
-  opts: { status?: "active" | "hibernated" | "archived"; markdownBinding?: boolean } = {},
+  opts: { status?: "active" | "hibernated" | "stopped"; markdownBinding?: boolean } = {},
 ): Promise<void> {
   const store = await import("../../src/core/session-store.js");
-  const now = new Date().toISOString();
   const withBinding = opts.markdownBinding !== false;
-  await store.saveSession(roots.base, PROJ, {
-    v: 1,
-    sid,
-    engine: "acp",
-    engineRef: null,
-    status: opts.status ?? "active",
-    title: null,
-    createdAt: now,
-    lastActivityAt: now,
-    successorOf: null,
-    engineArgs: [],
-    warnings: [],
-    bindings: withBinding
-      ? [{ surface: "markdown", address: `sessions/${sid}/inbox.md`, sid }]
-      : [],
-  });
+  await store.saveSession(
+    roots.base,
+    PROJ,
+    makeSessionRecordFixture(sid, {
+      status: opts.status ?? "active",
+      bindings: withBinding
+        ? [{ surface: "markdown", address: `sessions/${sid}/inbox.md`, sid }]
+        : [],
+    }),
+  );
 }
 
 describe("SC-1: 레코드만 존재하는 신규 세션이 입력 노트를 받는다", () => {
@@ -118,6 +114,7 @@ describe("SC-1: 레코드만 존재하는 신규 세션이 입력 노트를 받�
       expect(content).toMatch(/send/); // 전송 트리거
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 15000);
 });
@@ -151,6 +148,7 @@ describe("SC-2: 생성된 입력 노트의 지시가 재기동 없이 적재된�
       });
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 15000);
 });
@@ -176,9 +174,9 @@ describe("SC-3: refresh 가 기존 세션의 in-memory 상태를 덮어쓰지 �
 });
 
 describe("SC-4: 씨딩 대상은 markdown 바인딩 보유 세션으로 한정된다", () => {
-  it("Edge: 바인딩 없는(승계로 archived 된) 세션의 잔존 vault 디렉터리는 재씨딩되지 않는다", async () => {
+  it("Edge: 바인딩 없는(승계로 stopped 된) 세션의 잔존 vault 디렉터리는 재씨딩되지 않는다", async () => {
     const h = await makeHarness();
-    await writeRecordOutOfBand("sess-arch", { status: "archived", markdownBinding: false });
+    await writeRecordOutOfBand("sess-arch", { status: "stopped", markdownBinding: false });
     // 과거 사용 흔적으로 vault 디렉터리만 남아 있는 상태를 만든다.
     fs.mkdirSync(path.dirname(h.inboxPath("sess-arch")), { recursive: true });
 
@@ -191,6 +189,7 @@ describe("SC-4: 씨딩 대상은 markdown 바인딩 보유 세션으로 한정�
       expect(fs.existsSync(h.inboxPath("sess-arch"))).toBe(false);
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 15000);
 });
@@ -210,6 +209,7 @@ describe("SC-5: 기동 시점에 hibernated 인 세션도 지시를 받을 수 �
       expect(h.sm.turnRunner("sess-hib"), "hibernated 세션에 TurnRunner 가 없다").toBeDefined();
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 15000);
 });
@@ -252,6 +252,7 @@ describe("SC-6: 턴 0회 세션은 재개 핸들을 남기지 않는다", () => 
       expect(after?.engineRef, "첫 턴 완결 후에도 재개 핸들이 없다").not.toBeNull();
     } finally {
       await h.surface.stop();
+      await h.sm.shutdown();
     }
   }, 20000);
 });

@@ -6,6 +6,7 @@ import {
   makeSessionManagerDeps,
   makeRecordCtx,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import { makeFakeEngineDriver, FAKE_CAPS_PRESETS } from "../helpers/fake-engine.js";
 import { waitFor } from "../helpers/wait.js";
@@ -44,7 +45,8 @@ async function makeSM() {
       },
     },
   );
-  const sm = smMod.createSessionManager(deps as never);
+  const sm = smMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   holder.sm = sm;
   return { sm, paths: pathsMod, fakeDriver };
 }

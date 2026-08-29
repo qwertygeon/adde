@@ -1,10 +1,12 @@
 /**
- * markdown Surface(L4) — 3존 입력 노트 순수 파싱(FR-024·FR-036·FR-038·FR-039). 현행
+ * markdown Surface(L4) — 3존 입력 노트 순수 파싱. 현행
  * `src-adapters/markdown.ts` 의 순수 함수(파싱·마커·팔레트)를 이식하되, 출력 소유(v1 의 out 노트
- * 렌더·전송 아카이브)는 제거되고 마커가 **턴 노트로의 링크**로 전이한다(ADR-014).
+ * 렌더·전송 아카이브)는 제거되고 마커가 **턴 노트로의 링크**로 전이한다.
  */
 import type { EngineCaps } from "../../engines/types.js";
 import { sanitizeEngineText } from "../../shared/mask.js";
+import { isNoticeContentLine, renderNoticeZone } from "./notices.js";
+import type { NoticeEntry } from "../../core/session-store.js";
 
 /** 체크박스 라인: `- [ ]`/`- [x]` + 라벨. CRLF 저장 노트도 허용(`\r?$`). */
 const CHECKBOX = /^\s*-\s*\[([ xX])\]\s+(.*)\r?$/;
@@ -25,6 +27,12 @@ export const COMPOSE_SENTINEL = "<!-- adde:compose -->";
 export const RECORDS_ANCHOR = "<!-- adde:records -->";
 /** 상태 존 경계 — 세션 경고를 표시하는 기계 소유 영역. 경고가 없으면 이 줄째로 존재하지 않는다. */
 export const STATUS_SENTINEL = "<!-- adde:status -->";
+/** 안내 존 경계(신규, FR-013) — 안내가 없으면 이 줄째로 존재하지 않는다(상태 존과 동형). */
+export const NOTICES_SENTINEL = "<!-- adde:notices -->";
+/** 팔레트 존 경계(신규, ADR-006) — 그룹 머리글을 기계 소유 영역 안에 둬 판정을 위치 기반으로 만든다. */
+export const PALETTE_SENTINEL = "<!-- adde:palette -->";
+/** 중지·떨어짐·제거됨 노트 경계(신규, ADR-009) — `renderStoppedNote` 가 쓰는 3용도 공용 마커. */
+export const STOPPED_SENTINEL = "<!-- adde:stopped -->";
 
 export function matchComposeSentinel(line: string): boolean {
   return line.trim() === COMPOSE_SENTINEL;
@@ -34,6 +42,49 @@ export function matchRecordsAnchor(line: string): boolean {
 }
 export function matchStatusSentinel(line: string): boolean {
   return line.trim() === STATUS_SENTINEL;
+}
+export function matchNoticesSentinel(line: string): boolean {
+  return line.trim() === NOTICES_SENTINEL;
+}
+export function matchPaletteSentinel(line: string): boolean {
+  return line.trim() === PALETTE_SENTINEL;
+}
+export function matchStoppedSentinel(line: string): boolean {
+  return line.trim() === STOPPED_SENTINEL;
+}
+
+/**
+ * 안내 존의 실제 줄 범위(`[start, end)` — start=센티널 줄, end=다음 기지 존 경계 또는 EOF).
+ * 존재하지 않으면 null. **위치**로 판정한다 — 라벨 내부 개행 breakout 으로 만들어진 위조
+ * 체크박스 줄은 `isNoticeContentLine` 같은 패턴 매칭과 일치하지 않을 수 있으므로(위조 줄은 정식
+ * 렌더 형태를 따르지 않는다), 패턴이 아니라 범위 안에 있다는 사실 자체로 걸러야 안전하다.
+ * `parseInbox`(액션 인식 배제)·`healLayout`(초안 슬라이스 배제) 가 이 함수를 공유해 같은 경계를
+ * 쓴다(보안 검토 SEC-008 — 종전엔 두 곳이 서로 다른 기준을 썼다).
+ */
+export function noticeZoneRange(lines: readonly string[]): { start: number; end: number } | null {
+  const start = lines.findIndex((l) => matchNoticesSentinel(l));
+  if (start === -1) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (
+      matchPaletteSentinel(l) ||
+      matchComposeSentinel(l) ||
+      matchStatusSentinel(l) ||
+      matchRecordsAnchor(l) ||
+      matchStoppedSentinel(l)
+    ) {
+      end = i;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+/** 팔레트 그룹 머리글(체크박스 아닌 줄) — 액션으로 파싱되지 않고 초안으로도 취급되지 않는다. */
+export function isPaletteGroupHeader(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed === "**records**" || trimmed === "**session**";
 }
 
 const STATUS_LINE_PREFIX = "> ⚠️ ";
@@ -53,17 +104,22 @@ export function renderStatusZone(warnings: readonly string[]): string[] {
   return [STATUS_SENTINEL, ...warnings.map((w) => `${STATUS_LINE_PREFIX}${sanitizeEngineText(w)}`)];
 }
 
-/** 팔레트 4종(archive·clear·compact·resume, 인자 없음, ADR-030). `caps.compact==="none"` 이거나
- * `enabled=false`(markdown.palette=off) 이면 전체/해당 항목을 렌더하지 않는다. */
+/**
+ * 팔레트 — 기능 카테고리 그룹으로 구조화: **기록 그룹**(archive) / **세션 그룹**
+ * (compact·clear·stop·resume). `caps.compact==="none"` 이면 compact 만 제거하고 그룹은 유지하며,
+ * `enabled=false`(markdown.palette=off) 이면 존 전체를 렌더하지 않는다. 그룹 머리글은 체크박스가
+ * 아닌 줄이라 액션으로 파싱되지 않는다. `resume` 은 중지·떨어짐 세션 재개로 의미가
+ * 바뀌었다 — 기존 "자기 세션 엔진 재개" 항목은 소멸했다(FR-024 문서 반영 대상).
+ */
 export function renderPalette(caps: EngineCaps, enabled: boolean): string[] {
   if (!enabled) return [];
-  const lines = ["- [ ] 🗄️ archive", "- [ ] 🧹 clear"];
+  const lines = [PALETTE_SENTINEL, "**records**", "- [ ] 🗄️ archive", "**session**"];
   if (caps.compact !== "none") lines.push("- [ ] 🗜️ compact");
-  lines.push("- [ ] ♻️ resume");
+  lines.push("- [ ] 🧹 clear", "- [ ] ⏹️ stop", "- [ ] ♻️ resume");
   return lines;
 }
 
-/** 기록 존 2단계 마커 1단계 — 전송 접수(FR-036). */
+/** 기록 존 2단계 마커 1단계 — 전송 접수. */
 export function sendingLine(envelopeId: string, stamp: string): string {
   return `- [x] ⏳ sending ${envelopeId} ${stamp}`;
 }
@@ -171,7 +227,7 @@ export interface InboxAction {
   segmentStart?: number;
   id?: string;
   stamp?: string;
-  controlKind?: "clear" | "compact" | "resume";
+  controlKind?: "clear" | "compact" | "resume" | "stop";
   controlArg?: string;
 }
 
@@ -191,10 +247,15 @@ export function parseInbox(content: string): InboxParse {
   let segmentStart = 0;
   let composeIndex: number | null = null;
   let recordsIndex: number | null = null;
+  // 안내 존 줄은 위치만으로 배제한다(SEC-008) — 위조 체크박스(라벨 개행 breakout)가 팔레트·send
+  // 액션으로 오인되는 것을 막는다. 안내 존은 렌더 순서상 언제나 compose/records 보다 앞에 오므로
+  // 정상 노트에서는 이 배제가 아무 영향이 없다.
+  const noticeRange = noticeZoneRange(lines);
 
   const segment = (end: number): string => lines.slice(segmentStart, end).join("\n").trim();
 
   for (let i = 0; i < lines.length; i++) {
+    if (noticeRange && i >= noticeRange.start && i < noticeRange.end) continue;
     if (matchComposeSentinel(lines[i]!)) {
       if (composeIndex === null) composeIndex = i;
       segmentStart = i + 1;
@@ -246,7 +307,7 @@ export function parseInbox(content: string): InboxParse {
       segmentStart = i + 1;
       continue;
     }
-    if (core === "clear" || core === "compact") {
+    if (core === "clear" || core === "compact" || core === "stop") {
       if (checked) actions.push({ kind: "control", controlKind: core, text: "", lineIndex: i });
       segmentStart = i + 1;
       continue;
@@ -280,6 +341,8 @@ export interface HealLayoutOptions {
   newRecords?: string[];
   /** 세션 레코드의 경고 — 상태 존으로 렌더된다. 비었거나 미지정이면 존을 만들지 않는다. */
   warnings?: readonly string[];
+  /** 세션 레코드의 안내 — 안내 존으로 렌더된다(신규, FR-013). 비었거나 미지정이면 존을 만들지 않는다. */
+  notices?: readonly NoticeEntry[];
 }
 
 export interface HealLayoutResult {
@@ -307,19 +370,28 @@ function findSendIndex(lines: string[]): number {
  * (존별 분류 후 전량 재구성 — 일부만 삭제돼도 초안·기존 기록을 유실 없이 보존, SC-024 Edge).
  */
 export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayoutResult {
-  const { paletteEnabled, caps, newRecords = [], warnings = [] } = opts;
+  const { paletteEnabled, caps, newRecords = [], warnings = [], notices = [] } = opts;
   const parsed = parseInbox(lines.join("\n"));
 
   const composeIdx = parsed.composeIndex;
   const draftStart = composeIdx !== null ? composeIdx + 1 : 0;
   const sendIdx = findSendIndex(lines);
   const draftEnd = sendIdx === -1 ? lines.length : sendIdx;
+  const noticeRange = noticeZoneRange(lines);
+  const sliceStart = Math.min(draftStart, draftEnd);
 
-  const draftLines = lines.slice(Math.min(draftStart, draftEnd), draftEnd).filter((line) => {
+  const draftLines = lines.slice(sliceStart, draftEnd).filter((line, i) => {
+    const idx = sliceStart + i;
+    // 안내 존 범위는 위치로도 배제한다(SEC-008) — 라벨 개행 breakout 으로 만든 위조 줄은
+    // 아래 패턴 매칭(`isNoticeContentLine`)과 일치하지 않아도 이 범위 안에 있다는 사실만으로
+    // 걸린다(패턴 매칭과 이중 방어).
+    if (noticeRange && idx >= noticeRange.start && idx < noticeRange.end) return false;
     if (matchComposeSentinel(line) || matchRecordsAnchor(line)) return false;
-    // 작성 경계가 없는 손상 노트에서는 초안 슬라이스가 0번째부터 시작해 상태 존까지 삼킨다 —
-    // 걸러내지 않으면 경고문이 다음 지시 본문으로 엔진에 전달된다.
+    // 작성 경계가 없는 손상 노트에서는 초안 슬라이스가 0번째부터 시작해 상태·안내·팔레트 존까지
+    // 삼킨다 — 걸러내지 않으면 그 내용이 다음 지시 본문으로 엔진에 전달된다.
     if (matchStatusSentinel(line) || isStatusWarningLine(line)) return false;
+    if (matchNoticesSentinel(line) || isNoticeContentLine(line)) return false;
+    if (matchPaletteSentinel(line) || isPaletteGroupHeader(line)) return false;
     if (isTerminalMarker(line)) return false;
     if (paletteEnabled && isCanonicalPaletteLine(line, caps)) return false;
     return true;
@@ -330,8 +402,10 @@ export function healLayout(lines: string[], opts: HealLayoutOptions): HealLayout
 
   const existingRecords = lines.filter((line) => isTerminalMarker(line));
 
+  // 존 순서(ASM-010 확정): 경고 존 → 안내 존 → 팔레트 존 → 작성 경계 → send → 기록 존.
   const rebuilt: string[] = [];
   rebuilt.push(...renderStatusZone(warnings));
+  rebuilt.push(...renderNoticeZone(notices));
   if (paletteEnabled) rebuilt.push(...renderPalette(caps, true));
   rebuilt.push(
     COMPOSE_SENTINEL,
@@ -361,4 +435,86 @@ export function ensureBlankSend(lines: string[]): boolean {
   while (lines.length > 0 && lines[0] === "") lines.shift();
   lines.splice(0, 0, "", blankSendLine());
   return true;
+}
+
+/** 팔레트 액션 체크박스(그룹·caps 무관) — `renderStoppedNote` 는 `caps` 를 받지 않으므로 정확한
+ * 그룹 구성 대신 라벨 패턴으로 배제한다(손상 노트에서만 의미 있는 방어적 필터). */
+const PALETTE_ACTION_LINE =
+  /^\s*-\s*\[[ xX]\]\s+(?:🗄️\s*archive|🗜️\s*compact|🧹\s*clear|⏹️\s*stop|♻️\s*resume(?:\s+\S+)?)\s*\r?$/;
+
+/** 중지·떨어짐·제거됨 노트의 고정 배너 3용도 — `extras` 는 승계 등 세션 레코드만 아는 부가 안내. */
+function stoppedBannerLines(info: {
+  kind: "stopped" | "detached" | "removed";
+  reason: string;
+  extras?: string[];
+}): string[] {
+  const lines: string[] = [STOPPED_SENTINEL];
+  if (info.kind === "removed") {
+    lines.push(
+      "> 🗑️ 이 세션은 목록에서 제거되었습니다 — 대화 기록·노트는 보존되며 재생성 명령이 필요하지 않습니다.",
+    );
+  } else if (info.kind === "detached") {
+    lines.push(
+      "> ⚠️ 이 세션은 재개에 실패해 **감시되지 않습니다** — 이 노트의 체크박스는 처리되지 않습니다.",
+    );
+  } else {
+    lines.push(
+      "> ⏹️ 이 세션은 중지되어 **감시되지 않습니다** — 이 노트의 체크박스는 처리되지 않습니다.",
+    );
+  }
+  if (info.reason.length > 0) lines.push(`> 사유: ${sanitizeEngineText(info.reason)}`);
+  if (info.kind !== "removed") {
+    lines.push(
+      "> 재개: 활성 세션 입력 노트의 팔레트에서 `♻️ resume` 체크 · 터미널에서 `adde session resume <proj> <sid>`",
+    );
+  }
+  for (const extra of info.extras ?? []) lines.push(`> ${sanitizeEngineText(extra)}`);
+  return lines;
+}
+
+/**
+ * 중지·떨어짐·제거됨 입력 노트 순수 렌더러(ADR-009 — 단일 렌더러 3용도 재사용, FR-018·FR-019·FR-020).
+ * 팔레트·전송·안내·경고 체크박스가 **하나도 없다**(기록 그룹 포함) — 감시되지 않는 노트에 남은
+ * 체크박스는 영구히 소비되지 않는다. 과거 초안·기록 존은 보존한다. 재개 시 `healLayout` 이 정상
+ * 스켈레톤을 1회 복구한다(`renderStoppedNote` 는 그 반대 방향 — 되돌리기가 아니라 진입만 담당).
+ */
+export function renderStoppedNote(
+  lines: readonly string[],
+  info: { kind: "stopped" | "detached" | "removed"; reason: string; extras?: string[] },
+): string[] {
+  const parsed = parseInbox(lines.join("\n"));
+  const composeIdx = parsed.composeIndex;
+  const recordsIdx = parsed.recordsIndex;
+  const draftStart = composeIdx !== null ? composeIdx + 1 : 0;
+  const draftEnd = recordsIdx !== null ? recordsIdx : lines.length;
+
+  const draft = lines.slice(Math.min(draftStart, draftEnd), draftEnd).filter((line) => {
+    if (
+      matchComposeSentinel(line) ||
+      matchRecordsAnchor(line) ||
+      matchStatusSentinel(line) ||
+      matchNoticesSentinel(line) ||
+      matchPaletteSentinel(line) ||
+      matchStoppedSentinel(line)
+    )
+      return false;
+    if (isStatusWarningLine(line) || isNoticeContentLine(line) || isPaletteGroupHeader(line))
+      return false;
+    if (isTerminalMarker(line) || PALETTE_ACTION_LINE.test(line)) return false;
+    const cb = CHECKBOX.exec(line);
+    if (cb && isSendLabel(cb[2]!.trim())) return false; // 빈 send 체크박스는 제거.
+    return true;
+  });
+  while (draft.length > 0 && draft[0]!.trim() === "") draft.shift();
+  while (draft.length > 0 && draft[draft.length - 1]!.trim() === "") draft.pop();
+
+  const existingRecords = lines.filter((line) => isTerminalMarker(line));
+
+  return [
+    ...stoppedBannerLines(info),
+    COMPOSE_SENTINEL,
+    ...draft,
+    RECORDS_ANCHOR,
+    ...existingRecords,
+  ];
 }

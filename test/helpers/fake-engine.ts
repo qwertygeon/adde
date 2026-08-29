@@ -70,6 +70,12 @@ export interface FakeEngineControl {
   /** send() 호출 중 턴 종료 전에 추가로 도착한 prompt 큐를 재현 — TurnRunner 의 single-flight 처리 검증용. */
   queueExtraPromptBeforeTurnEnd(text: string): void;
   /**
+   * 006(D017) — 다음 `compact()` 호출을 강제 실패시킨다(1회 발동 후 자동 해제). SC-060 Error(압축
+   * 실패는 기존 경고 존 경로)와 SC-060 Happy(압축 성공 안내 신설)를 한 더블로 재현하기 위한 quirk —
+   * 행복경로만 흉내내는 no-op 더블은 실패 분기 회귀를 통과시킨다(infra.md §4 [MUST]).
+   */
+  failNextCompact(reason?: string): void;
+  /**
    * 다음 send() 를 turn_end 직전에서 수동 release() 까지 정지시킨다(세션 간 병렬·세션 내 직렬
    * 관측 — SC-002). release() 호출 전까지 해당 세션의 턴은 "진행 중"으로 관측된다.
    */
@@ -105,6 +111,7 @@ export function makeFakeEngineDriver(
   >();
   let openCalls = 0;
   let lastCtx: FakeOpenCtx | undefined;
+  let failNextCompactReason: string | undefined;
   const extraQueue: string[] = [];
   const resolvedPermQueue: Array<{
     tool: string;
@@ -166,7 +173,17 @@ export function makeFakeEngineDriver(
       async respondPermission() {
         // fail-closed 검증 대상은 게이트 쪽 — 더블은 단순 수신만 확인한다.
       },
-      ...(caps.compact !== "none" ? { compact: async () => {} } : {}),
+      ...(caps.compact !== "none"
+        ? {
+            compact: async () => {
+              if (failNextCompactReason !== undefined) {
+                const reason = failNextCompactReason;
+                failNextCompactReason = undefined;
+                throw new Error(`[fake-engine:${id}] compact failed: ${reason}`);
+              }
+            },
+          }
+        : {}),
       async close() {
         alive.set(engineRef, false);
         exitCbs.delete(engineRef);
@@ -199,6 +216,9 @@ export function makeFakeEngineDriver(
       },
       queueExtraPromptBeforeTurnEnd(text) {
         extraQueue.push(text);
+      },
+      failNextCompact(reason = "compact rejected") {
+        failNextCompactReason = reason;
       },
       holdNextTurn() {
         let release!: () => void;

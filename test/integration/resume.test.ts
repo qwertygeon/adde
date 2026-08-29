@@ -4,6 +4,7 @@ import {
   cleanupV2TmpRoots,
   makeSessionManagerDeps,
   type V2TmpRoots,
+  bindSessionManager,
 } from "../helpers/v2-fixtures.js";
 import {
   makeFakeEngineDriver,
@@ -28,9 +29,9 @@ async function makeSM(driverCaps: FakeEngineCaps) {
     import("../../src/core/session-manager.js"),
   ]);
   const fakeDriver = makeFakeEngineDriver("acp", driverCaps);
-  const sm = sessionManagerMod.createSessionManager(
-    makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }) as never,
-  );
+  const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
+  const sm = sessionManagerMod.createSessionManager(deps);
+  bindSessionManager(deps, sm);
   return { sm, sessionStore, sessionManagerMod, fakeDriver };
 }
 
@@ -47,9 +48,9 @@ async function makeFreshSMWithLoad(
   fakeDriver: ReturnType<typeof makeFakeEngineDriver>,
 ) {
   const mod = sessionManagerMod as typeof import("../../src/core/session-manager.js");
-  const sm2 = mod.createSessionManager(
-    makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor }) as never,
-  ) as unknown as { load(): Promise<void> } & Awaited<ReturnType<typeof mod.createSessionManager>>;
+  const deps = makeSessionManagerDeps(roots, PROJ, { acp: fakeDriver.descriptor });
+  const sm2 = mod.createSessionManager(deps);
+  bindSessionManager(deps, sm2);
   await sm2.load();
   return sm2;
 }

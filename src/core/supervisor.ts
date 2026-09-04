@@ -167,9 +167,9 @@ export async function supervisorUp(proj: string): Promise<SupervisorUpResult> {
     }
   });
   await surface.start(router);
+  assemblies.set(proj, { conf, sessionManager, router, surface });
 
   const bootReport = await sessionManager.resumeAllOnBoot();
-  assemblies.set(proj, { conf, sessionManager, router, surface });
 
   const sessions = sessionManager.list().map((r) => ({ sid: r.sid, status: r.status }));
   const message = `부팅 완료: 재개 ${bootReport.resumed.length}개, detached ${bootReport.detached.length}개, 생략 ${bootReport.skipped.length}개.`;

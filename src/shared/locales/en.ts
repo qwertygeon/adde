@@ -208,9 +208,9 @@ Note: editing --file-mode only updates the conf value; existing directory permis
   },
   run: {
     laneStartFailed: {
-      situation: 'lane "{{lane}}" failed to start: {{error}}',
+      situation: 'session "{{sid}}" failed to start: {{error}}',
       action:
-        "Check the environment/config with adde doctor {{proj}}, and inspect engine output with adde logs {{proj}} {{lane}} --engine.",
+        "Check the environment/config with adde doctor {{proj}}, and inspect engine output with adde logs {{proj}} {{sid}} --engine.",
     },
     unknownCause: "unknown cause",
     noLanes: {
@@ -218,7 +218,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       action:
         "Create a lane first: adde lane add {{proj}} <lane> --source markdown (or telegram). See adde lane help for options.",
     },
-    signalShutdown: "[adde] received {{sig}} — shutting down lanes...",
+    signalShutdown: "[adde] received {{sig}} — shutting down sessions...",
     shutdownError: {
       situation: "error during shutdown: {{error}}",
       action: "Manually check/stop leftover engine processes (ps | grep claude-agent-acp).",
@@ -250,20 +250,28 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       noLanesRegistered: "no lanes — none registered (adde lane add <proj> <lane>).",
       noRunning:
         "no running lanes — use `adde status --all` to include stopped, or `adde status <proj>` for a project.",
-      deadWarnAggregate:
-        "warning: lane(s) {{lanes}} terminated abnormally (dead).\n  ↳ action: clean up with adde down <proj>, then restart with adde up <proj>.",
-      staleWarnAggregate:
-        "warning: lane(s) {{lanes}} not responding (stale — heartbeat lost).\n  ↳ action: diagnose with adde logs <proj> <lane> --engine, then restart with adde down/up <proj>.",
-      deadWarnSingle:
-        "warning: lane(s) {{lanes}} terminated abnormally (dead).\n  ↳ action: clean up state with adde down {{proj}}, then restart with adde up {{proj}}.",
-      staleWarnSingle:
-        "warning: lane(s) {{lanes}} not responding (stale — process alive but heartbeat lost).\n  ↳ action: possible hang. Diagnose with adde logs {{proj}} <lane> --engine, then restart with adde down/up {{proj}}.",
+      daemonLine: "daemon {{proj}}: {{state}}",
+      daemonState: {
+        running: "running",
+        stale: "not responding",
+        dead: "terminated abnormally",
+        stopped: "not started",
+        unreadable: "undeterminable",
+      },
+      daemonDead:
+        "warning: the {{proj}} daemon terminated abnormally.\n  ↳ action: clean up state with adde down {{proj}}, then restart with adde up {{proj}}.",
+      daemonStale:
+        "warning: the {{proj}} daemon is not responding (process alive but periodic refresh stopped).\n  ↳ action: diagnose with adde logs {{proj}} --daemon, then restart with adde restart {{proj}}.",
+      daemonUnreadable:
+        "warning: cannot determine the {{proj}} daemon state ({{reason}}).\n  ↳ action: clean up with adde down {{proj}}, then adde up {{proj}} to recreate the state record.",
       errorWarnAggregate:
         "error: lane(s) failed to start: {{lanes}}.\n  ↳ action: inspect the daemon log (adde logs <proj> --daemon) or engine log (adde logs <proj> <lane> --engine), then adde restart <proj>.",
       errorWarnSingle:
         "error: lane(s) failed to start: {{lanes}}.\n  ↳ action: inspect the daemon log (adde logs {{proj}} --daemon) or engine log (adde logs {{proj}} <lane> --engine), then adde restart {{proj}}.",
       haltWarn:
         "[adde] {{proj}} self-halted after repeated crash-loop restarts.\n  ↳ action: fix the underlying cause, then adde restart {{proj}}.",
+      haltUnreadable:
+        "warning: cannot determine the {{proj}} crash-loop halt record ({{reason}}).\n  ↳ action: clean up with adde down {{proj}}, then adde up {{proj}} to recreate the state record.",
     },
     doctor: {
       hint: "    ↳ action: {{hint}}",
@@ -771,22 +779,23 @@ Note: editing --file-mode only updates the conf value; existing directory permis
       noConf: "[supervisor] {{proj}}: no conf in lanes.d",
       legacyKeys:
         "[supervisor] lane={{lane}} legacy flat adapter keys ignored: {{keys}} — conf format changed to namespaced keys (markdown.*/telegram.*). Recreate the lane or rename the keys.",
-      heartbeatFail: "[supervisor] lane={{lane}} heartbeat touch failed (auxiliary): {{error}}",
       ledgerFail: "[supervisor] lane={{lane}} session ledger update failed (auxiliary): {{error}}",
       deadCleanupFail:
         "[supervisor] lane={{lane}} dead runtime.json cleanup failed (auxiliary): {{error}}",
       channelWarnFail:
         "[supervisor] lane={{lane}} channel warning delivery failed (auxiliary): {{error}}",
       injectorStartFail: "[supervisor] lane={{lane}} injector start error: {{error}}",
-      runtimeWriteFail:
-        "[supervisor] lane={{lane}} runtime.json write failed (auxiliary): {{error}}",
-      runtimeRemoveFail:
-        "[supervisor] lane={{lane}} runtime.json removal failed (auxiliary): {{error}}",
       securePermsFail:
         "[supervisor] proj={{proj}} internal directory permission lock failed (files may be world-readable): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} start failed: {{reason}}",
       laneCleanupFail:
         "[supervisor] lane={{lane}} failed-start cleanup (engine close) failed (auxiliary): {{error}}",
+    },
+    liveness: {
+      writeFail: "[liveness] proj={{proj}} liveness record write failed (auxiliary): {{error}}",
+      refreshFail:
+        "[liveness] proj={{proj}} liveness periodic refresh failed (auxiliary): {{error}}",
+      removeFail: "[liveness] proj={{proj}} liveness record removal failed (auxiliary): {{error}}",
     },
     queue: {
       quarantineFail: "[queue] corrupt message quarantine failed id={{id}}: {{code}}",

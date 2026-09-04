@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { loadSessions } from "./session-store.js";
 import type { SessionRecord } from "./session-store.js";
 import { readRuntime, livenessOf } from "./runtime-state.js";
+import type { Liveness } from "./runtime-state.js";
 import {
   defaultBase,
   projectPaths,
@@ -21,6 +22,7 @@ import { ENGINE_IDS, ENGINE_REGISTRY } from "../engines/index.js";
 import { SURFACE_IDS, SURFACE_REGISTRY } from "../surfaces/index.js";
 import { detectLegacyLayout, detectProjectsNameCollision } from "./legacy-guard.js";
 import type { HaltRecord } from "./crash-loop.js";
+import { errCode } from "../shared/errors.js";
 import { readRetentionLastRun } from "../record/retention.js";
 
 export interface DiagBaseOptions {
@@ -58,16 +60,8 @@ export async function collectStatus(
   const base = opts.base ?? defaultBase();
   const records = await loadSessions(base, proj);
   const pp = projectPaths(base, proj);
-  const runtimeInfo = await readRuntime(pp);
-  let mtimeMs: number | undefined;
-  if (runtimeInfo) {
-    try {
-      mtimeMs = (await stat(pp.runtimeJson)).mtimeMs;
-    } catch {
-      mtimeMs = undefined;
-    }
-  }
-  const daemonAlive = livenessOf(runtimeInfo, { mtimeMs }) === "running";
+  const read = await readRuntime(pp);
+  const daemonAlive = livenessOf(read) === "running";
   return records.map((r) => ({
     sid: r.sid,
     status: r.status,
@@ -80,6 +74,50 @@ export async function collectStatus(
   }));
 }
 
+export interface DaemonStatus {
+  proj: string;
+  liveness: Liveness;
+  /** ok 일 때만. 생존 확인 외 용도 금지(ADR-012). */
+  pid: number | null;
+  /** ADR-011 정규화 통과분만. */
+  startedAt: string | null;
+  /** mtimeMs → ISO. ok 일 때만. */
+  heartbeatAt: string | null;
+  /** unreadable 일 때만. */
+  reason: string | null;
+}
+
+const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}T[\d:.]+(Z|[+-]\d{2}:\d{2})$/;
+
+function normalizeStartedAt(raw: unknown): string | null {
+  return typeof raw === "string" && raw.length <= 64 && ISO_8601_RE.test(raw) ? raw : null;
+}
+
+/** 데몬 라이브니스 상태를 수집한다(additive — FR-006·FR-008·FR-011·FR-012). */
+export async function collectDaemonStatus(
+  proj: string,
+  opts: DiagBaseOptions = {},
+): Promise<DaemonStatus> {
+  const base = opts.base ?? defaultBase();
+  const pp = projectPaths(base, proj);
+  const read = await readRuntime(pp);
+  const liveness = livenessOf(read);
+  if (read.kind === "ok") {
+    return {
+      proj,
+      liveness,
+      pid: read.info.pid,
+      startedAt: normalizeStartedAt(read.info.startedAt),
+      heartbeatAt: new Date(read.mtimeMs).toISOString(),
+      reason: null,
+    };
+  }
+  if (read.kind === "unreadable") {
+    return { proj, liveness, pid: null, startedAt: null, heartbeatAt: null, reason: read.reason };
+  }
+  return { proj, liveness, pid: null, startedAt: null, heartbeatAt: null, reason: null };
+}
+
 /** `<base>/projects/*` 중 `project.conf` 를 가진 디렉터리를 프로젝트로 열거한다. */
 export async function listRegisteredProjects(opts: DiagBaseOptions = {}): Promise<string[]> {
   const base = opts.base ?? defaultBase();
@@ -88,8 +126,12 @@ export async function listRegisteredProjects(opts: DiagBaseOptions = {}): Promis
   try {
     const entries = await readdir(projectsRoot, { withFileTypes: true });
     names = entries.filter((e) => e.isDirectory() && isSafeSegment(e.name)).map((e) => e.name);
-  } catch {
-    return [];
+  } catch (err) {
+    // 부재(ENOENT, 최초 설치 등 정상 상태)만 빈 목록으로 접는다. 권한 오류 등 그 밖의 errno 를
+    // 흡수하면 열거 자체가 실패했는데도 "등록된 프로젝트 없음"으로 위장되어 US-003(장애를 놓치지
+    // 않는다)이 깨진다 — 호출측이 전파받아 표면화·실패 종료코드로 올린다.
+    if (errCode(err) === "ENOENT") return [];
+    throw err;
   }
   const projs: string[] = [];
   for (const name of names) {
@@ -113,12 +155,24 @@ export async function collectAllStatus(
   return rows;
 }
 
-export async function readHalt(base: string, proj: string): Promise<HaltRecord | null> {
+/** 판독 계약 — 부재/정상/판독 불가(+사유)를 판별 유니온으로 분리한다(runtime-state.ts 의
+ * `RuntimeRead` 와 동형). 읽기·파싱 실패를 "기록 없음"으로 접으면 크래시루프 자가정지가
+ * 존재하는데도 못 읽는 상황이 무음으로 정상 취급된다. */
+export type HaltRead =
+  { kind: "absent" } | { kind: "ok"; record: HaltRecord } | { kind: "unreadable"; reason: string };
+
+export async function readHalt(base: string, proj: string): Promise<HaltRead> {
+  let text: string;
   try {
-    const text = await readFile(daemonHaltPath(base, proj), "utf8");
-    return JSON.parse(text) as HaltRecord;
+    text = await readFile(daemonHaltPath(base, proj), "utf8");
+  } catch (err) {
+    if (errCode(err) === "ENOENT") return { kind: "absent" };
+    return { kind: "unreadable", reason: errCode(err) ?? "read-error" };
+  }
+  try {
+    return { kind: "ok", record: JSON.parse(text) as HaltRecord };
   } catch {
-    return null;
+    return { kind: "unreadable", reason: "malformed" };
   }
 }
 
@@ -199,12 +253,19 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
   if (proj === undefined) return checks;
 
   const halt = await readHalt(base, proj);
-  if (halt) {
+  if (halt.kind === "ok") {
     checks.push({
       name: `halt(${proj})`,
       level: "FAIL",
-      detail: `크래시루프 자가 정지(연속 ${halt.consecutiveShortLived}회): ${halt.reason}`,
+      detail: `크래시루프 자가 정지(연속 ${halt.record.consecutiveShortLived}회): ${halt.record.reason}`,
       hint: `adde up ${proj} 또는 adde restart ${proj} 로 초기화됩니다.`,
+    });
+  } else if (halt.kind === "unreadable") {
+    checks.push({
+      name: `halt(${proj})`,
+      level: "FAIL",
+      detail: `크래시루프 자가 정지 기록을 판정할 수 없습니다(${halt.reason})`,
+      hint: `adde down ${proj} 로 정리한 뒤 adde up ${proj} 로 재기동하면 상태 기록이 다시 생성됩니다.`,
     });
   }
 

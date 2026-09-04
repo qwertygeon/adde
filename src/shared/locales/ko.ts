@@ -208,9 +208,9 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
   },
   run: {
     laneStartFailed: {
-      situation: '레인 "{{lane}}" 기동 실패: {{error}}',
+      situation: '세션 "{{sid}}" 기동 실패: {{error}}',
       action:
-        "adde doctor {{proj}} 로 환경·설정을 점검하고, adde logs {{proj}} {{lane}} --engine 으로 엔진 출력을 확인하세요.",
+        "adde doctor {{proj}} 로 환경·설정을 점검하고, adde logs {{proj}} {{sid}} --engine 으로 엔진 출력을 확인하세요.",
     },
     unknownCause: "원인 미상",
     noLanes: {
@@ -218,7 +218,7 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
       action:
         "adde lane add {{proj}} <lane> --source markdown (또는 telegram) 으로 레인을 먼저 만드세요. 옵션은 adde lane help.",
     },
-    signalShutdown: "[adde] {{sig}} 수신 — 레인 종료 중...",
+    signalShutdown: "[adde] {{sig}} 수신 — 세션 종료 중...",
     shutdownError: {
       situation: "종료 처리 중 오류: {{error}}",
       action: "잔존 엔진 프로세스를 수동 확인/종료하세요(ps | grep claude-agent-acp).",
@@ -250,20 +250,28 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
       noLanesRegistered: "레인 없음 — 등록된 레인이 없습니다 (adde lane add <proj> <lane>).",
       noRunning:
         "실행 중인 레인 없음 — 정지 포함 전체는 `adde status --all`, 특정 프로젝트는 `adde status <proj>`.",
-      deadWarnAggregate:
-        "경고: {{lanes}} 레인이 비정상 종료(dead)했습니다.\n  ↳ 조치: adde down <proj> 로 정리한 뒤 adde up <proj> 로 재기동하세요.",
-      staleWarnAggregate:
-        "경고: {{lanes}} 레인이 응답 없음(stale — 하트비트 끊김).\n  ↳ 조치: adde logs <proj> <lane> --engine 으로 진단 후 adde down/up <proj> 로 재기동하세요.",
-      deadWarnSingle:
-        "경고: {{lanes}} 레인이 비정상 종료(dead)했습니다.\n  ↳ 조치: adde down {{proj}} 로 상태를 정리한 뒤 adde up {{proj}} 로 재기동하세요.",
-      staleWarnSingle:
-        "경고: {{lanes}} 레인이 응답 없음(stale — 프로세스는 살아있으나 하트비트 끊김).\n  ↳ 조치: 행(hang) 가능성. adde logs {{proj}} <lane> --engine 으로 진단 후 adde down/up {{proj}} 로 재기동하세요.",
+      daemonLine: "데몬 {{proj}}: {{state}}",
+      daemonState: {
+        running: "상주 중",
+        stale: "응답 없음",
+        dead: "비정상 종료",
+        stopped: "미기동",
+        unreadable: "판정 불가",
+      },
+      daemonDead:
+        "경고: {{proj}} 데몬이 비정상 종료했습니다.\n  ↳ 조치: adde down {{proj}} 로 상태를 정리한 뒤 adde up {{proj}} 로 재기동하세요.",
+      daemonStale:
+        "경고: {{proj}} 데몬이 응답 없음(프로세스는 살아있으나 주기 갱신이 끊김).\n  ↳ 조치: adde logs {{proj}} --daemon 으로 진단한 뒤 adde restart {{proj}} 로 재기동하세요.",
+      daemonUnreadable:
+        "경고: {{proj}} 데몬 상태를 판정할 수 없습니다({{reason}}).\n  ↳ 조치: adde down {{proj}} 로 정리한 뒤 adde up {{proj}} 로 재기동하면 상태 기록이 다시 생성됩니다.",
       errorWarnAggregate:
         "오류: 기동 실패 레인: {{lanes}}.\n  ↳ 조치: 데몬 로그(adde logs <proj> --daemon) 또는 엔진 로그(adde logs <proj> <lane> --engine) 확인 후 adde restart <proj>.",
       errorWarnSingle:
         "오류: 기동 실패 레인: {{lanes}}.\n  ↳ 조치: 데몬 로그(adde logs {{proj}} --daemon) 또는 엔진 로그(adde logs {{proj}} <lane> --engine) 확인 후 adde restart {{proj}}.",
       haltWarn:
         "[adde] {{proj}} 가 반복된 크래시루프 재기동 후 자가 정지했습니다.\n  ↳ 조치: 원인을 수정한 뒤 adde restart {{proj}}.",
+      haltUnreadable:
+        "경고: {{proj}} 크래시루프 자가 정지 기록을 판정할 수 없습니다({{reason}}).\n  ↳ 조치: adde down {{proj}} 로 정리한 뒤 adde up {{proj}} 로 재기동하면 상태 기록이 다시 생성됩니다.",
     },
     doctor: {
       hint: "    ↳ 조치: {{hint}}",
@@ -756,17 +764,19 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
       noConf: "[supervisor] {{proj}}: lanes.d 에 conf 없음",
       legacyKeys:
         "[supervisor] lane={{lane}} 구 평면 어댑터 키 무시: {{keys}} — conf 포맷이 네임스페이스 키(markdown.*/telegram.*)로 변경됨. 레인 재생성 또는 키 이름 변경 필요.",
-      heartbeatFail: "[supervisor] lane={{lane}} 하트비트 touch 실패(보조): {{error}}",
       ledgerFail: "[supervisor] lane={{lane}} 세션 장부 갱신 실패(보조): {{error}}",
       deadCleanupFail: "[supervisor] lane={{lane}} dead runtime.json 정리 실패(보조): {{error}}",
       channelWarnFail: "[supervisor] lane={{lane}} 채널 경고 전송 실패(보조): {{error}}",
       injectorStartFail: "[supervisor] lane={{lane}} injector 기동 오류: {{error}}",
-      runtimeWriteFail: "[supervisor] lane={{lane}} runtime.json 기록 실패(보조): {{error}}",
-      runtimeRemoveFail: "[supervisor] lane={{lane}} runtime.json 제거 실패(보조): {{error}}",
       securePermsFail:
         "[supervisor] proj={{proj}} 내부 디렉터리 권한 잠금 실패(파일이 타 사용자에 노출될 수 있음): {{error}}",
       laneStartFail: "[supervisor] lane={{lane}} 기동 실패: {{reason}}",
       laneCleanupFail: "[supervisor] lane={{lane}} 기동 실패 정리(엔진 종료) 실패(보조): {{error}}",
+    },
+    liveness: {
+      writeFail: "[liveness] proj={{proj}} 라이브니스 기록 실패(보조): {{error}}",
+      refreshFail: "[liveness] proj={{proj}} 라이브니스 주기 갱신 실패(보조): {{error}}",
+      removeFail: "[liveness] proj={{proj}} 라이브니스 기록 제거 실패(보조): {{error}}",
     },
     queue: {
       quarantineFail: "[queue] 손상 메시지 격리 실패 id={{id}}: {{code}}",

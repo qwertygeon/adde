@@ -82,6 +82,7 @@ Starts/stops/restarts **one daemon process per project** (not per session) as a 
 - **Crash-only auto-restart**: launchd restarts the daemon on a crash, throttled to at most once every 60 seconds, and always relaunches it after a macOS reboot/logout (`RunAtLoad`). A deliberate stop (`adde down`) or a deterministic boot failure exits cleanly and is not auto-retried. Editable with the project's `auto_restart` key (`adde project set <proj> auto_restart false`); see [crash safety](troubleshooting.md#crash-safety--log-rotation).
 - **`restart`** performs `down` then `up` and, since the daemon holds the current code in memory, is how you apply both a new `adde` version and a `project set` conf change.
 - **Startup result**: after registering, `up`/`restart` wait for the daemon to record a boot report and print a summary (`N running · M failed`) — a session that failed to start is listed with its reason and the command exits non-zero. The wait window can be extended on slow machines via the `ADDE_UP_WAIT_MS` env var (milliseconds, default `8000`; only a **positive** integer is honored — non-numeric, zero, or negative values fall back to the default silently).
+- **Liveness refresh interval**: while resident, the daemon refreshes its liveness record every `ADDE_HEARTBEAT_INTERVAL_MS` (milliseconds, default `60000`; only a **positive** integer is honored — non-numeric, zero, or negative values fall back to the default). A record that hasn't refreshed for 3x that interval (default 180s) is reported as `stale` by `status` (see below).
 - **Startup notices**: non-blocking, not-meant-to-be-resolved notices about the boot itself (currently: an `autopass`-tier banner naming the effective denylist) print to stderr right before the summary line. They're also carried in the boot report's `notices` field, so `--json` output includes them (additive field — schema version unchanged).
 - **`--json`**: prints the boot outcome instead of the plain-text summary (schema documented in [`status`](#status--session-status) below — `up`/`restart` report the same per-session shape).
 - **macOS only** — see [macOS-only features](#macos-only-features).
@@ -110,14 +111,15 @@ adde status [<proj>] [--all] [--json]
 - **Without `<proj>`**: aggregates every registered project, table `PROJECT · SID · STATUS · ENGINE · PRESENT · WARN · LAST_ACTIVITY`.
 - **`WARN`**: number of warnings recorded on the session (`-` when none) — storage failures, resume failures, a failed stopped-note rewrite, and the like. The text itself is not shown here; read it with `session show <proj> <session>`.
 - **`--all`**: in the aggregated view, include `stopped` and `detached` sessions as well (only `active`/`hibernated` are listed by default).
-- **`--json`**: `{ "v": 1, "sessions": [...], "halt": ... }` — `halt` carries the crash-loop self-halt record (`HaltRecord | null` for a single `<proj>` view, or a per-project map for the aggregated view). See [crash safety & log rotation](troubleshooting.md#crash-safety--log-rotation).
-- If a session is `detached`, or the daemon has self-halted after a crash loop, a warning with remedy guidance is printed to stderr and `status` exits non-zero.
+- **Daemon status line**: below the table, one line per project (`daemon <proj>: <state>`) reports the daemon's actual liveness — `running`, `not responding` (process alive but periodic refresh stopped), `terminated abnormally` (process gone but the liveness record wasn't cleaned up), `not started` (never started, or shut down cleanly — distinct from a session's own `stopped` status), or `undeterminable` (the liveness record exists but can't be parsed, so the state can't be determined). A session's `PRESENT` column reflects this same signal (only shown as present while the daemon is `running` and that session is active) instead of a fixed value. `not responding`/`terminated abnormally`/`undeterminable` and a recorded crash-loop self-halt are shown with remedy guidance (which command to run next).
+- **`--json`**: `{ "v": 1, "sessions": [...], "halt": ..., "daemon": ..., "haltUnreadable": ... }` — additive fields, schema version unchanged. `sessions` reflects the full underlying set (not the `--all` display filter). `halt` keeps its original shape (`HaltRecord | null` for a single `<proj>` view, or a per-project map for the aggregated view — see [crash safety & log rotation](troubleshooting.md#crash-safety--log-rotation)); `haltUnreadable` additively reports when a self-halt record exists but can't be read (`string | null` for a single view, a per-project map of only the affected projects for the aggregated view). `daemon` reports the same five-state liveness described above, per project.
+- A warning with remedy guidance is printed to stderr and `status` exits non-zero when any of the following holds, evaluated over **every registered project regardless of `<proj>`/`--all` filtering**: a session is `detached`, a crash-loop self-halt is recorded, the daemon is `not responding` or `terminated abnormally`, or a liveness/self-halt record exists but is unreadable (its state can't be determined). A daemon that's simply `not started` is not, by itself, a failure.
 - Read-only.
 
 ```bash
 adde status myproj            # per-session table for one project
 adde status --all             # every project, including stopped/detached sessions
-adde status myproj --json     # machine-readable {v, sessions, halt}
+adde status myproj --json     # machine-readable {v, sessions, halt, daemon, haltUnreadable}
 ```
 
 ## doctor — environment check
@@ -133,6 +135,7 @@ Static checks independent of runtime state, each reported `PASS` / `WARN` / `FAI
 - **Crash-loop self-halt** (`FAIL`, with `<proj>`): if the project's daemon has self-halted, reported with a pointer to `adde up`/`adde restart` to clear it.
 - With `<proj>`: launchd registration cross-check (plist vs. `launchctl`) · `project.conf` readability · configured engine validity · vault path existence (vault is created on first use if missing — `WARN`, not `FAIL`).
 - **`--json`**: `{ "v": 1, "checks": [...] }`. Suppresses the summary line and the update notice.
+- **Text mode** ends with a summary line totaling the checks by grade (`PASS`/`WARN`/`FAIL`/`INFO`).
 - Exit code: `FAIL` present → 1, otherwise 0.
 
 ```bash
@@ -401,7 +404,7 @@ adde completion bash > "$(brew --prefix)/etc/bash_completion.d/adde"
 
 - **0**: success (including `--help`/`--version`).
 - **2**: the call itself was malformed — unsupported flag, bad/missing flag value, missing required argument.
-- **1**: everything else that isn't success — an operational failure, unsupported command/subcommand, a `detached` session or crash-loop halt reported by `status`, a `FAIL` check from `doctor`.
+- **1**: everything else that isn't success — an operational failure, unsupported command/subcommand, a `FAIL` check from `doctor`, or a `status` failure condition: a `detached` session, a recorded crash-loop self-halt, a daemon that's `not responding`/`terminated abnormally`, or a liveness/self-halt record that's unreadable (state can't be determined) — evaluated across every registered project regardless of display filtering; a daemon that's simply `not started` does not by itself fail.
 
 ## Language (locale)
 

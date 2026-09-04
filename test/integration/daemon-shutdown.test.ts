@@ -145,8 +145,12 @@ describe("SIGTERM_source_stop_backend_close_순서_후_종료 (SC-011)", () => {
       }),
     };
 
-    // 순서 계약 직접 검증 — supervisor 의 LaneHandle.stop() 패턴 재현
-    // (supervisor.ts:273: source.stop → backend.close(lane) → removeRuntime)
+    // 순서 계약 직접 검증 — supervisor 의 LaneHandle.stop() 패턴 재현.
+    // 기록 제거 위치 정정(007-daemon-liveness-restore) — removeRuntime(구 runtime-state 직접
+    // 호출)은 supervisor.ts 조립부가 아니라 core/daemon.ts 의 정상 종료 경로(시그널 핸들러 →
+    // supervisorDown 완료 후 liveness.stop()/removeLivenessRecord())에서만 호출된다(FR-004 —
+    // supervisorDown 은 크래시 가드 정리 경로에서도 공유되므로 그 안에 기록 제거를 넣지 않는다).
+    // (source.stop → backend.close(lane) 순서 자체는 이 정정과 무관하게 유지된다.)
     await fakeSource.stop();
     await fakeBackend.close("test-lane");
 

@@ -19,7 +19,7 @@ ADDE 는 마크다운 노트로 AI CLI 엔진(Claude Code 등)을 구동하는 �
 ## 요구사항
 
 - macOS(1차 타깃 — 데몬 제어가 launchd 에 의존)
-- PATH 에 Node.js LTS(>=22)
+- PATH 에 Node.js `>=24.15.0`(`>=22` 에서 상향 — 스토리지 계층이 `node:sqlite` 모듈에 링크된 SQLite 버전을 검증하며, 이 검증을 신뢰하려면 Node 가 이 하한 이상을 링크한 빌드여야 한다)
 - AI 엔진 ACP 어댑터(`adde` 에 번들됨)
 - **Claude 인증**: 엔진이 번들 어댑터를 통해 Claude Code 를 구동하므로 같은 사용자 계정에서 Claude 가 인증돼 있어야 합니다(Claude Code 로그인 또는 `ANTHROPIC_API_KEY` 설정). ADDE 문제를 진단하기 전 Claude 자체가 단독으로 동작하는지 먼저 확인하세요.
 

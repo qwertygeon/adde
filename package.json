@@ -22,7 +22,7 @@
   ],
   "packageManager": "pnpm@11.9.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=24.15.0"
   },
   "bin": {
     "adde": "dist/cli/adde.js"
@@ -32,7 +32,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "gates": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run i18n:check && pnpm run usage:check && pnpm run build && pnpm run test",
+    "gates": "pnpm run typecheck && pnpm run lint && pnpm run format:check && pnpm run i18n:check && pnpm run usage:check && pnpm run licenses:check && pnpm run sql:check && pnpm run build && pnpm run test",
     "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "prepack": "pnpm run build",
     "dev": "tsx src/cli/adde.ts",
@@ -43,6 +43,8 @@
     "format:check": "prettier --check .",
     "i18n:check": "tsx scripts/check-i18n.ts",
     "usage:check": "tsx scripts/check-usage-drift.ts",
+    "licenses:check": "tsx scripts/check-licenses.ts",
+    "sql:check": "tsx scripts/check-storage-sql.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

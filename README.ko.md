@@ -78,7 +78,7 @@ adde completion <bash|zsh>             # 셸 자동완성 스크립트 출력
 
 - 설치: **npm 전역 설치** `npm i -g adde-acp`. 업데이트는 `npm i -g adde-acp@latest` 후 `adde restart <proj>`(`status`/`doctor` 가 새 버전을 안내). 개발·기여는 소스 빌드(`pnpm install && pnpm build`). 상세·권한(EACCES) 안내: [시작하기](docs/getting-started.ko.md#설치).
 - 짧은 별칭 `ad`·`add` 는 자동 설치되지 않습니다 — `adde init` 또는 `adde alias` 로 옵트인 설치합니다(전역 명령명 충돌 회피).
-- TypeScript + Node.js LTS (>=22)
+- TypeScript + Node.js `>=24.15.0`(`node:sqlite` 모듈의 링크된 SQLite 버전 검증에 필요)
 - **AI 엔진 ACP 어댑터 필수**(예: `@agentclientprotocol/claude-agent-acp`) — `adde doctor` 가 사전 점검합니다.
 - macOS 1차 타깃 — `adde up`/`down`/`restart` 는 macOS launchd LaunchAgent 기반. 재부팅·로그아웃 후 자동 복구 및 세션 자동 재개. Linux/WSL은 현재 지원 범위 밖.
 

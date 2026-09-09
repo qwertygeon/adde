@@ -78,7 +78,7 @@ For core concepts see [Getting started](docs/getting-started.md#core-concepts); 
 
 - Install: **global npm install** `npm i -g adde-acp`. Update with `npm i -g adde-acp@latest` then `adde restart <proj>` (`status`/`doctor` notify you of a new version). For development/contribution, build from source (`pnpm install && pnpm build`). Details and permission (EACCES) notes: [Getting started](docs/getting-started.md#install).
 - The short aliases `ad`/`add` are **not** installed automatically — opt in via `adde init` or `adde alias` (avoids clashing with common global command names).
-- TypeScript + Node.js LTS (>=22)
+- TypeScript + Node.js `>=24.15.0` (required for the `node:sqlite` module's linked SQLite version check)
 - **An AI engine ACP adapter is required** (e.g. `@agentclientprotocol/claude-agent-acp`) — `adde doctor` checks for it up front.
 - macOS is the primary target — `adde up`/`down`/`restart` are built on macOS launchd LaunchAgents, with auto-recovery after reboot/logout and automatic session resume. Linux/WSL are out of scope for now.
 

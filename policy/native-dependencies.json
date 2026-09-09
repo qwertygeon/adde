@@ -1,0 +1,93 @@
+{
+  "v": 1,
+  "entries": [
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+      "versionRange": "0.3.198",
+      "kind": "ships_prebuilt",
+      "targets": [{ "os": "darwin", "cpu": "arm64" }],
+      "nodeFloor": ">=18.0.0",
+      "nodeFloorSource": "부모 패키지 @anthropic-ai/claude-agent-sdk 의 engines.node — 플랫폼 패키지 자체는 engines 미선언(Node-API 미사용 독립 실행 바이너리)",
+      "optional": true,
+      "reviewedAt": "2026-09-08",
+      "reviewedResolvedVersion": "0.3.198"
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-darwin-x64",
+      "versionRange": "0.3.198",
+      "kind": "ships_prebuilt",
+      "targets": [{ "os": "darwin", "cpu": "x64" }],
+      "nodeFloor": ">=18.0.0",
+      "nodeFloorSource": "부모 패키지 @anthropic-ai/claude-agent-sdk 의 engines.node — 플랫폼 패키지 자체는 engines 미선언(Node-API 미사용 독립 실행 바이너리)",
+      "optional": true,
+      "reviewedAt": "2026-09-08",
+      "reviewedResolvedVersion": "0.3.198"
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-linux-x64",
+      "versionRange": "0.3.198",
+      "kind": "ships_prebuilt",
+      "targets": [{ "os": "linux", "cpu": "x64" }],
+      "nodeFloor": ">=18.0.0",
+      "nodeFloorSource": "부모 패키지 @anthropic-ai/claude-agent-sdk 의 engines.node — 플랫폼 패키지 자체는 engines 미선언(Node-API 미사용 독립 실행 바이너리)",
+      "optional": true,
+      "reviewedAt": "2026-09-08",
+      "reviewedResolvedVersion": "0.3.198"
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-linux-arm64",
+      "versionRange": "0.3.198",
+      "kind": "ships_prebuilt",
+      "targets": [{ "os": "linux", "cpu": "arm64" }],
+      "nodeFloor": ">=18.0.0",
+      "nodeFloorSource": "부모 패키지 @anthropic-ai/claude-agent-sdk 의 engines.node — 플랫폼 패키지 자체는 engines 미선언(Node-API 미사용 독립 실행 바이너리)",
+      "optional": true,
+      "reviewedAt": "2026-09-08",
+      "reviewedResolvedVersion": "0.3.198"
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-linux-x64-musl",
+      "versionRange": "0.3.198",
+      "kind": "ships_prebuilt",
+      "targets": [{ "os": "linux", "cpu": "x64" }],
+      "nodeFloor": ">=18.0.0",
+      "nodeFloorSource": "부모 패키지 @anthropic-ai/claude-agent-sdk 의 engines.node — 플랫폼 패키지 자체는 engines 미선언(Node-API 미사용 독립 실행 바이너리). musl(Alpine) 변종 — targets 의 os/cpu 쌍 자체는 glibc 변종과 동일하며 libc 구분은 패키지명으로 표현된다",
+      "optional": true,
+      "reviewedAt": "2026-09-08",
+      "reviewedResolvedVersion": "0.3.198"
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-linux-arm64-musl",
+      "versionRange": "0.3.198",
+      "kind": "ships_prebuilt",
+      "targets": [{ "os": "linux", "cpu": "arm64" }],
+      "nodeFloor": ">=18.0.0",
+      "nodeFloorSource": "부모 패키지 @anthropic-ai/claude-agent-sdk 의 engines.node — 플랫폼 패키지 자체는 engines 미선언(Node-API 미사용 독립 실행 바이너리). musl(Alpine) 변종 — targets 의 os/cpu 쌍 자체는 glibc 변종과 동일하며 libc 구분은 패키지명으로 표현된다",
+      "optional": true,
+      "reviewedAt": "2026-09-08",
+      "reviewedResolvedVersion": "0.3.198"
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-win32-x64",
+      "versionRange": "0.3.198",
+      "kind": "ships_prebuilt",
+      "targets": [{ "os": "win32", "cpu": "x64" }],
+      "nodeFloor": ">=18.0.0",
+      "nodeFloorSource": "부모 패키지 @anthropic-ai/claude-agent-sdk 의 engines.node — 플랫폼 패키지 자체는 engines 미선언(Node-API 미사용 독립 실행 바이너리)",
+      "optional": true,
+      "reviewedAt": "2026-09-08",
+      "reviewedResolvedVersion": "0.3.198"
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-win32-arm64",
+      "versionRange": "0.3.198",
+      "kind": "ships_prebuilt",
+      "targets": [{ "os": "win32", "cpu": "arm64" }],
+      "nodeFloor": ">=18.0.0",
+      "nodeFloorSource": "부모 패키지 @anthropic-ai/claude-agent-sdk 의 engines.node — 플랫폼 패키지 자체는 engines 미선언(Node-API 미사용 독립 실행 바이너리)",
+      "optional": true,
+      "reviewedAt": "2026-09-08",
+      "reviewedResolvedVersion": "0.3.198"
+    }
+  ]
+}

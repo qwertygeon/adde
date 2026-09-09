@@ -1,0 +1,68 @@
+{
+  "v": 1,
+  "allow": [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "PostgreSQL",
+    "SQLite-public-domain-dedication"
+  ],
+  "reviewRequired": [
+    "GPL-family",
+    "LGPL-family",
+    "MPL-family",
+    "EPL-family",
+    "CDDL-family",
+    "Unlicense",
+    "dual-license-unspecified"
+  ],
+  "deny": [
+    "AGPL-family",
+    "SSPL",
+    "BUSL-family",
+    "Elastic-family",
+    "PolyForm-family",
+    "Commons-Clause",
+    "non-commercial",
+    "source-available-field-of-use",
+    "proprietary-paid-redistribution",
+    "UNLICENSED"
+  ],
+  "dualLicenseSelections": [],
+  "overrides": [
+    {
+      "name": "@anthropic-ai/claude-agent-sdk",
+      "version": "0.3.198",
+      "reason": "package.json 의 license 필드가 SPDX 로 파싱되지 않는 참조(\"SEE LICENSE IN README.md\")이지만, 배포된 LICENSE.md 텍스트를 실제로 판독할 수 있어 review_required 로 분류한다(ADR-003 확정 규칙 — 참조 대상이 없거나 읽을 수 없으면 unknown 이었을 것).",
+      "licenseTextOrSource": "패키지에 동봉된 LICENSE.md 전문: \"© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.\"",
+      "reviewer": "ADDE 프로젝트 오너(사용자 결정, decisions.md DEC-001)",
+      "date": "2026-09-08",
+      "distributionImpact": "adde-acp 의 프로덕션 의존성(@agentclientprotocol/claude-agent-acp 경유 전이)으로 함께 배포된다. ADDE 는 이 패키지의 소스를 재배포하지 않고 npm 의존성 선언으로만 참조하며, Anthropic 의 독점 코드 자체를 수정·재배포하지 않는다.",
+      "reReviewTrigger": "이 패키지의 버전이 올라갈 때마다 재분류한다."
+    },
+    {
+      "name": "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+      "version": "0.3.198",
+      "reason": "package.json 의 license 필드가 SPDX 로 파싱되지 않는 참조(\"SEE LICENSE IN LICENSE.md\")이지만, 배포된 LICENSE.md 텍스트를 실제로 판독할 수 있어 review_required 로 분류한다(ADR-003 확정 규칙).",
+      "licenseTextOrSource": "패키지에 동봉된 LICENSE.md 전문: \"© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.\"",
+      "reviewer": "ADDE 프로젝트 오너(사용자 결정, decisions.md DEC-001)",
+      "date": "2026-09-08",
+      "distributionImpact": "@anthropic-ai/claude-agent-sdk 의 optionalDependencies 로 해석되는 os/cpu 게이트 네이티브 CLI 바이너리 패키지(darwin/arm64 타깃). ADDE 는 이 바이너리를 그대로 전달만 하고 수정·재배포하지 않는다.",
+      "reReviewTrigger": "이 패키지의 버전이 올라갈 때마다 재분류한다."
+    },
+    {
+      "name": "fast-sha256",
+      "version": "1.3.0",
+      "reason": "라이선스가 Unlicense(공개 도메인 헌정) — 프로젝트 정책이 이 의존성에 한해 명시적으로 허용한다(13_LICENSE_AND_DEPENDENCY_POLICY.md §2 — \"admitted only where project policy chooses to allow it, recorded per dependency\").",
+      "licenseTextOrSource": "SPDX Unlicense — https://unlicense.org/ (package.json license 필드 원문과 일치)",
+      "reviewer": "ADDE 프로젝트 오너",
+      "date": "2026-09-08",
+      "distributionImpact": "standardwebhooks → @anthropic-ai/sdk → @anthropic-ai/claude-agent-sdk 경유 전이 프로덕션 의존성. Unlicense 는 고지·귀속 요구가 없는 공개 도메인 헌정이라 재배포 조건이 없다.",
+      "reReviewTrigger": "이 패키지의 버전이 올라갈 때마다 재분류한다."
+    }
+  ]
+}

@@ -69,6 +69,9 @@ export interface ProjectConf {
   "vault.retention_days": number;
   /** 동기화 제공자 id(`local`|`icloud`) — 기본 local. */
   "vault.sync_provider": string;
+  /** 워크플로 처리 placeholder — 기본 false(옵트인). 명시 "true" 만 활성(기존 boolean 키의
+   * default-on 관행과 반대 — 신규 상주·부작용 기능이므로 옵트인이 기본). */
+  "workflow.enabled": boolean;
   /** 무효 값 폴백·미지원 키 감지 등 파싱 중 경고(SC-011 Edge·SC-043 Error — 침묵 처리 금지). 없으면 빈 배열. */
   warnings: string[];
 }
@@ -148,6 +151,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set([
   "vault.backup",
   "vault.retention_days",
   "vault.sync_provider",
+  "workflow.enabled",
 ]);
 
 /** 값이 제공됐으나(존재+비어있지 않음) `parsePositiveInt` 가 거부한 경우에만 경고를 남긴다
@@ -181,6 +185,12 @@ function parseBoolDefaultOn(raw: string | undefined): boolean {
 function parseOnOffDefaultOn(raw: string | undefined): boolean {
   const v = (raw ?? "").trim().toLowerCase();
   return v !== "off" && v !== "false";
+}
+
+/** 명시 "true"(대소문자 무관) 만 ON — 부재·false·빈값·무효값은 전부 OFF(default-off). `workflow.enabled`
+ * 전용 — 신규 상주·부작용 기능은 기존 boolean 키의 default-on 관행과 반대로 옵트인이 기본이다. */
+function parseBoolDefaultOff(raw: string | undefined): boolean {
+  return (raw ?? "").trim().toLowerCase() === "true";
 }
 
 export class ProjectConfParseError extends Error {
@@ -261,6 +271,7 @@ export function parseProjectConf(text: string): ProjectConf {
     "markdown.notices_cap": parseNonNegativeInt(kv["markdown.notices_cap"]) ?? DEFAULT_NOTICES_CAP,
     "vault.retention_days": parsePositiveInt(kv["vault.retention_days"]) ?? 2,
     "vault.sync_provider": kv["vault.sync_provider"] ?? "local",
+    "workflow.enabled": parseBoolDefaultOff(kv["workflow.enabled"]),
     warnings,
   };
 
@@ -326,6 +337,7 @@ export function serializeProjectConf(conf: ProjectConf): string {
   if (conf["vault.sync_provider"] !== "local") {
     lines.push(`vault.sync_provider=${conf["vault.sync_provider"]}`);
   }
+  if (conf["workflow.enabled"] === true) lines.push(`workflow.enabled=true`);
   return lines.join("\n") + "\n";
 }
 

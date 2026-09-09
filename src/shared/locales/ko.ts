@@ -385,7 +385,7 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
   doctor: {
     node: {
       name: "Node 버전",
-      hint: "Node 22 이상으로 업그레이드하세요(nvm install 22 등).",
+      hint: "Node 24.15.0 이상으로 업그레이드하세요(nvm install 24 등).",
     },
     adapter: {
       name: "ACP 어댑터 바이너리",
@@ -862,5 +862,19 @@ lane set 옵션(lane add 의 편집 전용 부분집합 — 정체성 필드·�
       "요청이 아직 노트에 반영되기 전이라 처리되지 않았습니다 — 항목이 다시 표시됩니다. 그래도 취소·해소하려면 표시된 뒤 다시 지워 주세요.",
     successionNoteFailed:
       "이전 세션({{oldSid}})의 노트 갱신이 실패했습니다 — 자동으로 재시도됩니다. 계속 실패하면 이전 세션의 노트 파일을 직접 확인하세요.",
+  },
+  workflow: {
+    precondition: {
+      unknownValue: "알 수 없음",
+      refused: "워크플로 처리를 시작할 수 없습니다.",
+      moduleAbsent:
+        '내장 SQLite 모듈("node:sqlite")을 이 Node 빌드에서 사용할 수 없습니다(요구 Node 하한: {{requiredNodeFloor}}, 요구 SQLite 라이브러리: {{requiredSqlite}}, 실행 중 Node: {{nodeVersion}}).',
+      moduleBehindFlag:
+        "내장 SQLite 모듈이 이 Node 빌드에서 아직 실험적 플래그 뒤에 있습니다(요구 Node 하한: {{requiredNodeFloor}}, 요구 SQLite 라이브러리: {{requiredSqlite}}, 실행 중 Node: {{nodeVersion}}).",
+      libraryVersionBelowFloor:
+        "링크된 SQLite 라이브러리 버전({{detectedSqlite}})이 요구 하한({{requiredSqlite}}, 실행 중 Node: {{nodeVersion}}) 미만입니다.",
+      indeterminate:
+        "스토리지 전제조건 체크가 판정에 도달하지 못했습니다(검출 SQLite 라이브러리: {{detectedSqlite}}, 요구 SQLite 라이브러리: {{requiredSqlite}}, 실행 중 Node: {{nodeVersion}}).",
+    },
   },
 } satisfies typeof en;

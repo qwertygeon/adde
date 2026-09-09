@@ -388,7 +388,7 @@ Note: editing --file-mode only updates the conf value; existing directory permis
   doctor: {
     node: {
       name: "Node version",
-      hint: "Upgrade to Node 22 or later (e.g. nvm install 22).",
+      hint: "Upgrade to Node 24.15.0 or later (e.g. nvm install 24).",
     },
     adapter: {
       name: "ACP adapter binary",
@@ -891,5 +891,19 @@ Note: editing --file-mode only updates the conf value; existing directory permis
     // 보일 계기가 없으므로 승계된 새 세션(이 경고가 뜨는 세션) 쪽에 낸다.
     successionNoteFailed:
       "The note update for the previous session ({{oldSid}}) failed — it will retry automatically. If it keeps failing, check that session's note file directly.",
+  },
+  workflow: {
+    precondition: {
+      unknownValue: "unknown",
+      refused: "Workflow processing could not start.",
+      moduleAbsent:
+        'The built-in SQLite module ("node:sqlite") is unavailable on this Node build (required Node floor: {{requiredNodeFloor}}, required SQLite library: {{requiredSqlite}}, running Node: {{nodeVersion}}).',
+      moduleBehindFlag:
+        "The built-in SQLite module is still behind an experimental flag on this Node build (required Node floor: {{requiredNodeFloor}}, required SQLite library: {{requiredSqlite}}, running Node: {{nodeVersion}}).",
+      libraryVersionBelowFloor:
+        "The linked SQLite library version ({{detectedSqlite}}) is below the required floor ({{requiredSqlite}}, running Node: {{nodeVersion}}).",
+      indeterminate:
+        "The storage precondition check could not reach a verdict (detected SQLite library: {{detectedSqlite}}, required SQLite library: {{requiredSqlite}}, running Node: {{nodeVersion}}).",
+    },
   },
 };

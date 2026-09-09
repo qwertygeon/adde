@@ -6,6 +6,9 @@
 
 ### Changed
 
+- **BREAKING: 런타임 하한 상향 — Node.js `>=22` → `>=24.15.0`.** 신설 `src/workflow/**` 스토리지 계층이 내장 `node:sqlite` 모듈에 링크된 SQLite 라이브러리 버전을 요구 하한(`3.51.3` — WAL 리셋 결함이 수정된 최초 버전)과 대조해 기동 전 검증한다. 이 검증이 신뢰 가능하려면 Node 자체가 그 하한 이상의 SQLite 를 링크한 빌드여야 하므로 선언 하한을 상향했다(설치 자체는 이 차수에서 강제 적용되지 않으며, 워크플로 기능이 비활성 상태로는 기존 명령·데몬 경로에 영향이 없다 — `workflow.enabled` 옵트인). 기존 설치는 `nvm install 24`(또는 배포판의 Node 24 LTS 이상)로 업그레이드한다.
+  - **BREAKING: Runtime floor raised — Node.js `>=22` → `>=24.15.0`.** The new `src/workflow/**` storage layer checks, before startup, that the SQLite library linked into the built-in `node:sqlite` module meets a required floor (`3.51.3` — the first version with the WAL reset defect fixed). For that check to be trustworthy, Node itself must ship a build linking at least that SQLite version, so the declared floor was raised (installation is not force-upgraded by this change, and existing commands/daemon paths are unaffected while the workflow feature stays inactive — `workflow.enabled` is opt-in). Upgrade existing installs with `nvm install 24` (or your distribution's Node 24 LTS or newer).
+
 - **BREAKING: 코어 골격 전면 재설계 — 레인(lane) 모델을 프로젝트/세션/바인딩 모델로 교체.** v0.2.x 의 `(source × backend × project)` 레인 단일 축을 프로젝트(vault + 설정)·세션(대화 1건, `active`/`hibernated`/`stopped`/`detached` 상태)·바인딩(채널 주소↔세션)의 3단 모델로 재설계했다. 하위호환은 보장하지 않는다(major 변경) — 유일한 보장은 **기존 v0.2.x 데이터를 읽지도 변경하지도 않는다**는 것이다(물리적으로 분리된 설정 루트 `~/.config/adde/projects/<proj>/` 사용, 구 루트는 `~/.config/adde/<proj>/` 그대로 보존).
   - **CLI 명령 전면 교체**: `lane add/set/ls/show/rm` → `project add/set/show/ls/rm`(프로젝트 설정) + `session new/ls/show/clear/rm`(세션) + `bind add/rm/ls`(채널 바인딩). `sessions <proj> <lane>` → `session ls <proj>`. `proj ls/rm` → `project ls/rm`. 제거된 명령을 실행하면 조용히 실패하는 대신 대체 명령 안내와 함께 exit 2 를 반환한다.
   - **프로젝트 생성에 vault 경로가 필수**(`project add --vault`) — 임의의 기본 저장 위치를 만들지 않는다. 마크다운 저장소(vault)가 대화의 유일한 사용자 대면 저장소가 된다.

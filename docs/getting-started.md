@@ -19,7 +19,7 @@ ADDE is a gateway that drives an AI CLI engine (Claude Code, etc.) from your mar
 ## Requirements
 
 - macOS (primary target — daemon control depends on launchd)
-- Node.js LTS (>=22) on PATH
+- Node.js `>=24.15.0` on PATH (raised from `>=22` — the storage layer verifies the `node:sqlite` module's linked SQLite library version, which requires a Node build at or above this floor)
 - AI engine ACP adapter (bundled with `adde`)
 - **Claude authentication**: the engine drives Claude Code through the bundled adapter, so Claude must be authenticated under the same user account (logged in via Claude Code, or `ANTHROPIC_API_KEY` set). Confirm Claude works on its own before troubleshooting ADDE.
 

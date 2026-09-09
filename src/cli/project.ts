@@ -118,6 +118,7 @@ async function handleAdd(p: ParseResult): Promise<number> {
         : 2,
     "vault.sync_provider":
       typeof p.flags["sync-provider"] === "string" ? p.flags["sync-provider"] : "local",
+    "workflow.enabled": false,
     ...(typeof p.flags["cwd"] === "string" ? { cwd: normalizeUserPath(p.flags["cwd"]) } : {}),
     ...(typeof p.flags["backup"] === "string"
       ? { "vault.backup": normalizeUserPath(p.flags["backup"]) }

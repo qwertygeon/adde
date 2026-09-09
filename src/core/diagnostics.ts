@@ -24,6 +24,7 @@ import { detectLegacyLayout, detectProjectsNameCollision } from "./legacy-guard.
 import type { HaltRecord } from "./crash-loop.js";
 import { errCode } from "../shared/errors.js";
 import { readRetentionLastRun } from "../record/retention.js";
+import { declaredNodeFloor, satisfiesDeclaredNodeFloor } from "../shared/node-floor.js";
 
 export interface DiagBaseOptions {
   base?: string;
@@ -200,15 +201,22 @@ export async function runDoctor(proj?: string, opts: DiagBaseOptions = {}): Prom
   const checks: DoctorCheck[] = [];
   const base = opts.base ?? defaultBase();
 
-  const nodeMajor = Number(process.versions.node.split(".")[0]);
+  const nodeFloor = declaredNodeFloor();
+  const nodeOk = satisfiesDeclaredNodeFloor(process.versions.node);
   checks.push(
-    nodeMajor >= 22
-      ? { name: "node", level: "PASS", detail: `v${process.versions.node} (≥22)` }
+    nodeOk
+      ? { name: "node", level: "PASS", detail: `v${process.versions.node} (≥${nodeFloor})` }
       : {
           name: "node",
           level: "FAIL",
-          detail: `v${process.versions.node} (<22)`,
-          hint: "Node 22+ 를 설치하세요.",
+          detail:
+            nodeFloor !== undefined
+              ? `v${process.versions.node} (<${nodeFloor})`
+              : `v${process.versions.node} (요구 하한 판독 실패)`,
+          hint:
+            nodeFloor !== undefined
+              ? `Node ${nodeFloor}+ 를 설치하세요.`
+              : "package.json 의 engines.node 를 확인하세요.",
         },
   );
 

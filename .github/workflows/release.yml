@@ -37,10 +37,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Re-run gates
-        run: |
-          pnpm run typecheck
-          pnpm run lint
-          pnpm test
+        run: pnpm run gates
 
       - name: Read version
         id: ver

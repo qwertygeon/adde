@@ -23,6 +23,9 @@ coverage/
 .npm/
 .pnpm-store/
 
+# 라이선스 게이트 귀속 인벤토리 산출 위치 — 매 의존성 변경마다 dirty 를 만들지 않도록 비추적
+.artifacts/
+
 # === 에디터 / OS ===
 .idea/
 .vscode/

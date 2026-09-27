@@ -21,8 +21,8 @@ const CANDIDATE_NEW_FILES = [
   "src/workflow/config.ts",
   "src/workflow/index.ts",
   "src/shared/node-floor.ts",
-  "docs/specs/design_v2/17_IMPLEMENTATION_ROADMAP.md",
-  "docs/specs/design_v2/19_PLATFORM_AND_PACKAGE_BASELINE.md",
+  "docs/spec/design_v2/17_IMPLEMENTATION_ROADMAP.md",
+  "docs/spec/design_v2/19_PLATFORM_AND_PACKAGE_BASELINE.md",
 ];
 
 function existingFiles(): string[] {
@@ -88,7 +88,7 @@ describe("SC-038: 산출물에 키 자료가 평문으로 없다", () => {
   });
 
   it("Edge: capability 키 파일은 keyId·보유자 라벨로만 지칭된다(경로표 검사)", () => {
-    const roadmap = path.join(repoRoot, "docs/specs/design_v2/17_IMPLEMENTATION_ROADMAP.md");
+    const roadmap = path.join(repoRoot, "docs/spec/design_v2/17_IMPLEMENTATION_ROADMAP.md");
     if (!fs.existsSync(roadmap)) return;
     const text = fs.readFileSync(roadmap, "utf8");
     const idx = text.indexOf("capability 키 파일");

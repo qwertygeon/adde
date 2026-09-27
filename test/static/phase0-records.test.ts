@@ -4,8 +4,8 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // 001-phase0-baseline-storage-spike — 차수 기록 정적 검증(T028).
-// 대상 문서는 docs/specs/design_v2/phase0/**·docs/specs/design_v2/17_*.md — 프로젝트
-// CLAUDE.md "공개/비공개 구조" 상 docs/specs/ 전체가 git 비추적(비공개)이다. 로컬에서만
+// 대상 문서는 docs/spec/design_v2/phase0/**·docs/spec/design_v2/17_*.md — 프로젝트
+// CLAUDE.md "공개/비공개 구조" 상 docs/spec/design_v2/ 전체가 git 비추적(비공개)이다. 로컬에서만
 // 실 검증하고 공개 CI 체크아웃에는 파일이 없으므로 skipped 로 구분 보고한다(선례
 // test/static/sla-exemption.test.ts). PPG-1 병렬 중 Development(레이어 A)가 아직 기록
 // 파일을 착지시키지 않은 시점의 RED 는 예상 상태다(PROC-R15). 파일 읽기는 `describe.skip`
@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 // 각 `it()` 본문 안에서 지연 읽기한다(top-level 읽기 금지 — sla-exemption.test.ts 선례와 동형).
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
-const phase0Dir = path.join(repoRoot, "docs/specs/design_v2/phase0");
+const phase0Dir = path.join(repoRoot, "docs/spec/design_v2/phase0");
 
 // ---------------------------------------------------------------------------
 // SC-001 (FR-001) — baseline-gates.md
@@ -111,7 +111,7 @@ describe.runIf(fs.existsSync(portBoundaryPath))("SC-002: 포트 경계 6종 인�
 
 const decisionChecksPath = path.join(phase0Dir, "decision-artifact-checks.md");
 const hasDecisionChecks = fs.existsSync(decisionChecksPath);
-const adrDir = path.join(repoRoot, "docs/specs/design_v2/adr");
+const adrDir = path.join(repoRoot, "docs/spec/design_v2/adr");
 
 describe.runIf(hasDecisionChecks)("SC-003: ADR 인덱스↔파일 상태 일치", () => {
   it("Happy: 대조 결과가 기록되어 있고 불일치 0건이 명시된다", () => {
@@ -245,7 +245,7 @@ const ARTIFACTS = [
   "백업",
 ];
 
-const roadmapPath = path.join(repoRoot, "docs/specs/design_v2/17_IMPLEMENTATION_ROADMAP.md");
+const roadmapPath = path.join(repoRoot, "docs/spec/design_v2/17_IMPLEMENTATION_ROADMAP.md");
 describe.runIf(fs.existsSync(roadmapPath))("SC-027: 경로표 8행 4답", () => {
   it("Happy: 8개 아티팩트 전부에 루트·동기화·초기화·수동삭제 답이 채워져 있다", () => {
     const text = fs.readFileSync(roadmapPath, "utf8");

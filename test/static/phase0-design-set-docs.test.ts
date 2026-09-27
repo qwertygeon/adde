@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // 001-phase0-baseline-storage-spike — 설계 세트 문서 정적 검증(T030).
-// docs/specs/design_v2/** 는 git 비추적(비공개) — existsSync + describe.runIf 가드.
+// docs/spec/design_v2/** 는 git 비추적(비공개) — existsSync + describe.runIf 가드.
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -14,7 +14,7 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 const licensePolicyDocPath = path.join(
   repoRoot,
-  "docs/specs/design_v2/13_LICENSE_AND_DEPENDENCY_POLICY.md",
+  "docs/spec/design_v2/13_LICENSE_AND_DEPENDENCY_POLICY.md",
 );
 
 const CHECKLIST_ITEMS: RegExp[] = [
@@ -58,11 +58,11 @@ describe.runIf(fs.existsSync(licensePolicyDocPath))("SC-012: 도입 체크리스
 
 const platformBaselineDocPath = path.join(
   repoRoot,
-  "docs/specs/design_v2/19_PLATFORM_AND_PACKAGE_BASELINE.md",
+  "docs/spec/design_v2/19_PLATFORM_AND_PACKAGE_BASELINE.md",
 );
 const storageSpecPath = path.join(
   repoRoot,
-  "docs/specs/design_v2/07_STORAGE_EVENT_AND_PROJECTION_SPEC.md",
+  "docs/spec/design_v2/07_STORAGE_EVENT_AND_PROJECTION_SPEC.md",
 );
 
 describe.runIf(fs.existsSync(platformBaselineDocPath) && fs.existsSync(storageSpecPath))(

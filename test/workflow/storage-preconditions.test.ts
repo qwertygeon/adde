@@ -161,3 +161,130 @@ describe("SC-037: 완료되지 못한 검사가 실패로 취급된다", () => {
     expect(result.ok).toBe(false);
   });
 });
+
+// 002-storage-precondition-close-guard — 검사 연결 close 실패·문자열 변환 불가 예외의 무예외 수렴.
+// 가짜 close 예외는 실측 형태(ERR_INVALID_STATE "database is not open")를 재현한다.
+
+interface ProbeOptions {
+  readonly version?: string;
+  readonly versionReadThrows?: unknown;
+  readonly closeThrows?: boolean;
+}
+
+function probeSqliteModule(opts: ProbeOptions) {
+  const calls = { close: 0 };
+  class ProbeDatabaseSync {
+    constructor(_path: string, _opts?: { timeout?: number }) {
+      void _path;
+      void _opts;
+    }
+    prepare(_sql: string) {
+      void _sql;
+      return {
+        get: () => {
+          if (opts.versionReadThrows !== undefined) throw opts.versionReadThrows;
+          return { v: opts.version ?? "3.51.3" };
+        },
+      };
+    }
+    close() {
+      calls.close += 1;
+      if (opts.closeThrows) {
+        throw Object.assign(new Error("database is not open"), { code: "ERR_INVALID_STATE" });
+      }
+    }
+  }
+  return { module: { DatabaseSync: ProbeDatabaseSync }, calls };
+}
+
+describe("002 SC-001: 판정 성공 뒤 close 실패는 indeterminate 로 수렴한다", () => {
+  it("Happy: 하한 충족 + close throw → resolve, ok:false, indeterminate, detail 에 close 사유", async () => {
+    const { checkStoragePreconditions } = await importPreconditions();
+    const probe = probeSqliteModule({ version: "3.51.3", closeThrows: true });
+    const pending = checkStoragePreconditions({
+      importSqlite: () => Promise.resolve(probe.module),
+      nodeVersion: "24.18.0",
+    });
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: "indeterminate" });
+    const result = await pending;
+    if (!result.ok) {
+      expect(result.detail).toContain("database is not open");
+      expect(result.detectedSqliteLibraryVersion).toBe("3.51.3");
+    }
+  });
+});
+
+describe("002 SC-002: 이미 실패인 판정은 close 실패에 가려지지 않는다", () => {
+  it("Edge: 하한 미달 + close throw → library_version_below_floor 유지", async () => {
+    const { checkStoragePreconditions } = await importPreconditions();
+    const probe = probeSqliteModule({ version: "3.40.0", closeThrows: true });
+    const result = await checkStoragePreconditions({
+      importSqlite: () => Promise.resolve(probe.module),
+      nodeVersion: "24.18.0",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("library_version_below_floor");
+      expect(result.detectedSqliteLibraryVersion).toBe("3.40.0");
+    }
+  });
+
+  it("Error: 버전 판독 throw + close throw → indeterminate, detail 은 1차 예외 메시지", async () => {
+    const { checkStoragePreconditions } = await importPreconditions();
+    const probe = probeSqliteModule({
+      versionReadThrows: new Error("version read failed"),
+      closeThrows: true,
+    });
+    const result = await checkStoragePreconditions({
+      importSqlite: () => Promise.resolve(probe.module),
+      nodeVersion: "24.18.0",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("indeterminate");
+      expect(result.detail).toContain("version read failed");
+      expect(result.detail).not.toContain("database is not open");
+    }
+  });
+});
+
+describe("002 SC-003: 문자열로 변환할 수 없는 예외 값도 결과 객체로 수렴한다", () => {
+  it("Edge: 버전 판독 단계에서 프로토타입 없는 객체를 throw → resolve ok:false", async () => {
+    const { checkStoragePreconditions } = await importPreconditions();
+    const probe = probeSqliteModule({ versionReadThrows: Object.create(null) as unknown });
+    await expect(
+      checkStoragePreconditions({
+        importSqlite: () => Promise.resolve(probe.module),
+        nodeVersion: "24.18.0",
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: "indeterminate" });
+  });
+
+  it("Error: 모듈 획득 단계에서 프로토타입 없는 객체로 reject → resolve ok:false", async () => {
+    const { checkStoragePreconditions } = await importPreconditions();
+    await expect(
+      checkStoragePreconditions({
+        importSqlite: () => Promise.reject(Object.create(null) as unknown),
+        nodeVersion: "24.18.0",
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: "module_absent" });
+  });
+});
+
+describe("002 SC-004: 연결이 열린 모든 경로에서 close 를 정확히 1회 시도한다", () => {
+  const cases: ReadonlyArray<[string, ProbeOptions]> = [
+    ["성공 판정", { version: "3.51.3" }],
+    ["하한 미달", { version: "3.40.0" }],
+    ["버전 판독 예외", { versionReadThrows: new Error("boom") }],
+    ["close 예외", { version: "3.51.3", closeThrows: true }],
+  ];
+  it.each(cases)("Happy: %s 경로에서 close 호출 1회", async (_label, opts) => {
+    const { checkStoragePreconditions } = await importPreconditions();
+    const probe = probeSqliteModule(opts);
+    await checkStoragePreconditions({
+      importSqlite: () => Promise.resolve(probe.module),
+      nodeVersion: "24.18.0",
+    });
+    expect(probe.calls.close).toBe(1);
+  });
+});

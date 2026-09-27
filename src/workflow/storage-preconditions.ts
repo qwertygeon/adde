@@ -40,8 +40,13 @@ export interface StoragePreconditionDeps {
 /** 오류 메시지에 이 문자열이 포함될 때만 "플래그 뒤"로 분류한다(진단 목적 — 안전망 절 참조). */
 const EXPERIMENTAL_FLAG_HINT = "--experimental-sqlite";
 
+/** 오류 값의 메시지. 문자열로 바꿀 수 없는 값(프로토타입 없는 객체 등)도 throw 하지 않는다. */
 function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  try {
+    return err instanceof Error ? err.message : String(err);
+  } catch {
+    return "(문자열로 변환할 수 없는 오류 값)";
+  }
 }
 
 /** 점으로 구분된 정수 버전 문자열 비교. 비파싱 입력은 undefined(판정 불가). */
@@ -89,12 +94,13 @@ export async function checkStoragePreconditions(
   }
 
   let db: DatabaseSync | undefined;
+  let result: StoragePreconditionResult;
   try {
     db = openWorkflowDatabase(sqlite, ":memory:");
     const detected = readSqliteLibraryVersion(db);
     const atLeast = isAtLeast(detected, REQUIRED_SQLITE_LIBRARY_VERSION);
     if (atLeast === undefined) {
-      return {
+      result = {
         ok: false,
         reason: "indeterminate",
         detail: `링크된 SQLite 라이브러리 버전(${detected})을 판정할 수 없습니다.`,
@@ -103,9 +109,8 @@ export async function checkStoragePreconditions(
         detectedSqliteLibraryVersion: detected,
         nodeVersion,
       };
-    }
-    if (!atLeast) {
-      return {
+    } else if (!atLeast) {
+      result = {
         ok: false,
         reason: "library_version_below_floor",
         detail: `링크된 SQLite 라이브러리 버전(${detected})이 요구 하한(${REQUIRED_SQLITE_LIBRARY_VERSION}) 미만입니다.`,
@@ -114,15 +119,16 @@ export async function checkStoragePreconditions(
         detectedSqliteLibraryVersion: detected,
         nodeVersion,
       };
+    } else {
+      result = {
+        ok: true,
+        sqliteLibraryVersion: detected,
+        requiredSqliteLibraryVersion: REQUIRED_SQLITE_LIBRARY_VERSION,
+        nodeVersion,
+      };
     }
-    return {
-      ok: true,
-      sqliteLibraryVersion: detected,
-      requiredSqliteLibraryVersion: REQUIRED_SQLITE_LIBRARY_VERSION,
-      nodeVersion,
-    };
   } catch (err) {
-    return {
+    result = {
       ok: false,
       reason: "indeterminate",
       detail: `전제조건 판정을 완료하지 못했습니다: ${messageOf(err)}`,
@@ -130,7 +136,23 @@ export async function checkStoragePreconditions(
       requiredNodeFloor,
       nodeVersion,
     };
-  } finally {
-    db?.close();
   }
+
+  if (db === undefined) return result;
+  try {
+    db.close();
+  } catch (err) {
+    // 이미 실패인 판정은 1차 원인을 보존한다 — 정리 단계 오류가 조치 가능한 사유를 가리지 않게.
+    if (!result.ok) return result;
+    return {
+      ok: false,
+      reason: "indeterminate",
+      detail: `전제조건 판정 뒤 검사 연결을 닫지 못했습니다: ${messageOf(err)}`,
+      requiredSqliteLibraryVersion: REQUIRED_SQLITE_LIBRARY_VERSION,
+      requiredNodeFloor,
+      detectedSqliteLibraryVersion: result.sqliteLibraryVersion,
+      nodeVersion,
+    };
+  }
+  return result;
 }

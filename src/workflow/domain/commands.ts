@@ -1,0 +1,353 @@
+/**
+ * 명령·신호·적용 입력 타입, 명령↔전이 행 매핑 표(FR-004, FR-010) — design.md §인터페이스 계약
+ * `commands.ts` 그대로. 표에 없는 조합 판정(SC-005·SC-018)과 테스트 케이스 생성의 SoT.
+ */
+import type {
+  TaskId,
+  WorkId,
+  PlanProposalId,
+  ConfirmationId,
+  DecisionId,
+  AttemptId,
+  SignalId,
+} from "./ids.js";
+import type { UtcInstant, ActorSource, ActorRef, CancelOrigin } from "./values.js";
+import type { PendingDecision } from "./pending-decision.js";
+import type { TriggerSpec } from "./trigger.js";
+import type { TaskPolicy } from "./task-policy.js";
+import type { OccurrenceId } from "./ids.js";
+import type { WorkSource } from "./aggregate.js";
+import type { ContentHash } from "./derivation/dedup-key.js";
+
+export interface CommandMeta {
+  readonly now: UtcInstant;
+  readonly actorSource: ActorSource;
+  readonly actor?: ActorRef;
+  readonly causationId?: string;
+}
+
+interface TaskCommandBase {
+  readonly taskId: TaskId;
+  readonly expectedRevision: number;
+  readonly meta: CommandMeta;
+}
+
+export type TaskBlockReason =
+  | { readonly kind: "descriptor_unknown"; readonly typeId: string; readonly typeVersion: number }
+  | { readonly kind: "dependency_unsatisfied"; readonly dependencyTaskIds: readonly TaskId[] }
+  | { readonly kind: "condition"; readonly code: string };
+
+export type ValidationOutcome =
+  | { readonly result: "valid" }
+  | { readonly result: "input_missing"; readonly requests: readonly unknown[] }
+  | { readonly result: "blocked"; readonly blockReason: TaskBlockReason }
+  | { readonly result: "structurally_invalid"; readonly issues: readonly unknown[] };
+
+export type AttemptOutcome =
+  | { readonly kind: "completed"; readonly evidence: unknown }
+  | {
+      readonly kind: "failed";
+      readonly code: string;
+      readonly retryable: boolean;
+      readonly retryDelayMs: number;
+    }
+  | { readonly kind: "attempt_timeout"; readonly retryDelayMs: number }
+  | {
+      readonly kind: "dispatch_orphaned";
+      readonly retryDelayMs: number;
+      readonly deadLetterDecision: PendingDecision;
+    }
+  | {
+      readonly kind: "dispatch_withdrawn";
+      readonly retryDelayMs: number;
+      readonly deadLetterDecision: PendingDecision;
+    }
+  | {
+      readonly kind: "blocked";
+      readonly cause: "gate_denied" | "executor_blocked" | "dispatcher_refused";
+      readonly decision: PendingDecision;
+    }
+  | { readonly kind: "effect_dead_lettered"; readonly decision: PendingDecision }
+  | { readonly kind: "abandoned_for_validity" };
+
+export type TaskCommand =
+  | (TaskCommandBase & { readonly kind: "begin_validation" })
+  | (TaskCommandBase & {
+      readonly kind: "complete_validation";
+      readonly outcome: ValidationOutcome;
+    })
+  | (TaskCommandBase & { readonly kind: "receive_input" })
+  | (TaskCommandBase & {
+      readonly kind: "schedule_task";
+      readonly occurrenceId: OccurrenceId;
+      readonly cause: "schedule" | "signal" | "retry";
+    })
+  | (TaskCommandBase & { readonly kind: "unschedule_task" })
+  | (TaskCommandBase & {
+      readonly kind: "start_attempt";
+      readonly firedOccurrenceId?: OccurrenceId;
+    })
+  | (TaskCommandBase & {
+      readonly kind: "request_confirmation";
+      readonly confirmationId: ConfirmationId;
+    })
+  | (TaskCommandBase & {
+      readonly kind: "park_awaiting_human";
+      readonly cause: "approval_required_before_execute" | "unattended_eligibility_refused";
+      readonly decision: PendingDecision;
+    })
+  | (TaskCommandBase & {
+      readonly kind: "record_attempt_outcome";
+      readonly attemptId: AttemptId;
+      readonly outcome: AttemptOutcome;
+    })
+  | (TaskCommandBase & { readonly kind: "retry_ready" })
+  | (TaskCommandBase & {
+      readonly kind: "abandon_retries";
+      readonly cause: "retry_budget_exhausted" | "retries_abandoned";
+    })
+  | (TaskCommandBase & { readonly kind: "expire" })
+  | (TaskCommandBase & { readonly kind: "emit_reminder"; readonly occurrenceId: OccurrenceId })
+  | (TaskCommandBase & { readonly kind: "unblock" })
+  | (TaskCommandBase & { readonly kind: "cancel_task"; readonly origin: CancelOrigin })
+  | (TaskCommandBase & {
+      readonly kind: "skip_task";
+      readonly reason: { readonly kind: "misfire_skip"; readonly occurrenceId?: OccurrenceId };
+    });
+
+export type TaskRef = { readonly draftRef: string } | { readonly taskId: TaskId };
+
+export interface PlanTaskDraft {
+  readonly draftRef: string;
+  readonly type: { readonly id: string; readonly version: number };
+  readonly title: string;
+  readonly input: unknown;
+  readonly dependsOn: readonly TaskRef[];
+  readonly trigger: TriggerSpec;
+  readonly policy: TaskPolicy;
+  /** 계약 TaskDraft 에 없는 도메인 확장 — 부모 간선(활성화·순환 검출에 참여하지 않음). */
+  readonly parent?: TaskRef;
+}
+
+export interface PlanCommitInput {
+  readonly proposalId: PlanProposalId;
+  readonly digest: string;
+  readonly basePlanRevision: number;
+  readonly drafts: readonly PlanTaskDraft[];
+  readonly retain: readonly TaskId[];
+}
+
+/** source.kind "definition_occurrence" 는 unsupported_in_this_phase 로 거절(셋째 차수). */
+export interface CreateWorkCommand {
+  readonly kind: "create_work";
+  readonly meta: CommandMeta;
+  readonly projectId: import("./ids.js").ProjectId;
+  readonly title: string;
+  readonly objective: string;
+  readonly source: WorkSource;
+  readonly correlationId?: string;
+}
+
+interface WorkCommandBase {
+  readonly expectedRevision: number;
+  readonly meta: CommandMeta;
+}
+
+export type WorkCommand =
+  | (WorkCommandBase & { readonly kind: "start_planning" })
+  | (WorkCommandBase & {
+      readonly kind: "request_work_input";
+      readonly requests: readonly unknown[];
+    })
+  | (WorkCommandBase & { readonly kind: "receive_work_input" })
+  | (WorkCommandBase & {
+      readonly kind: "propose_plan";
+      readonly proposalId: PlanProposalId;
+      readonly digest: string;
+      readonly decision: PendingDecision;
+    })
+  | (WorkCommandBase & {
+      readonly kind: "commit_plan";
+      readonly proposal: PlanCommitInput;
+      readonly onInvalid?: "stay_planning" | "fail_work";
+    })
+  | (WorkCommandBase & {
+      readonly kind: "fail_planning";
+      readonly invalidPlan?: { readonly issues: readonly unknown[] };
+    })
+  | (WorkCommandBase & {
+      readonly kind: "withdraw_plan_proposal";
+      readonly cause: "no_longer_validates" | "source_changed";
+    })
+  | (WorkCommandBase & { readonly kind: "fail_work" })
+  | (WorkCommandBase & { readonly kind: "cancel_work"; readonly origin: CancelOrigin });
+
+export type WorkflowCommand = TaskCommand | WorkCommand;
+
+interface SignalBase {
+  readonly signalId: SignalId;
+  readonly expectedRevision: number;
+  readonly actorSource: ActorSource;
+  readonly actor?: ActorRef;
+  readonly provenance?: import("./values.js").ProvenanceEvidence;
+  readonly receivedAt: UtcInstant;
+}
+
+export type DecisionSignal =
+  | (SignalBase & {
+      readonly type: "confirmation_decision";
+      readonly taskId: TaskId;
+      readonly confirmationId: ConfirmationId;
+      readonly decision: "accept" | "reject" | "cancel";
+    })
+  | (SignalBase & {
+      readonly type: "human_decision";
+      readonly decisionId: DecisionId;
+      readonly choice: "grant" | "deny";
+    })
+  | (SignalBase & {
+      readonly type: "cancel_requested";
+      readonly subject: { readonly taskId: TaskId } | { readonly workId: WorkId };
+      readonly reason?: string;
+    })
+  | (SignalBase & { readonly type: "replan_requested"; readonly workId: WorkId });
+
+export interface DelegationResponseSignal extends SignalBase {
+  readonly type: "delegation_response";
+  readonly taskId: TaskId;
+  readonly occurrenceId: OccurrenceId;
+  readonly responseContentHash: ContentHash;
+}
+
+export type GrantResume =
+  | { readonly to: "READY" }
+  | {
+      readonly to: "SCHEDULED";
+      readonly occurrence:
+        | { readonly kind: "given"; readonly occurrenceId: OccurrenceId }
+        | { readonly kind: "dead_letter_retry" };
+    };
+
+export type DecisionApplication =
+  | { readonly kind: "none" }
+  | { readonly kind: "task_grant"; readonly resume: GrantResume }
+  | { readonly kind: "task_deny"; readonly resolution: "declined" | "discarded_only_effect" }
+  | { readonly kind: "plan_grant"; readonly proposal: PlanCommitInput }
+  | { readonly kind: "plan_deny" };
+
+// ---------------------------------------------------------------------------
+// 명령 kind → 도달 가능한 전이 행 ID (SC-005·SC-018 SoT). 행 ID 는 contract/task-transitions.ts·
+// contract/work-transitions.ts 의 `id` 규칙과 일치해야 한다(design.md §DAG 요약 T010 완료 기준).
+// ---------------------------------------------------------------------------
+
+export const TASK_COMMAND_ROWS: Readonly<Record<TaskCommand["kind"], readonly string[]>> = {
+  begin_validation: ["DRAFT>VALIDATING:task_validation_started"],
+  complete_validation: [
+    "VALIDATING>WAITING_INPUT:task_input_requested",
+    "VALIDATING>READY:task_validated",
+    "VALIDATING>BLOCKED:task_blocked",
+    "VALIDATING>FAILED:task_validation_failed",
+  ],
+  receive_input: ["WAITING_INPUT>VALIDATING:task_input_received"],
+  schedule_task: ["READY>SCHEDULED:task_scheduled", "RETRY_WAIT>SCHEDULED:task_scheduled"],
+  unschedule_task: ["SCHEDULED>READY:task_unscheduled"],
+  start_attempt: ["READY>RUNNING:task_started", "SCHEDULED>RUNNING:task_started"],
+  request_confirmation: [
+    "READY>WAITING_CONFIRMATION:task_waiting_confirmation",
+    "SCHEDULED>WAITING_CONFIRMATION:task_waiting_confirmation",
+  ],
+  park_awaiting_human: [
+    "READY>BLOCKED_AWAITING_HUMAN:task_awaiting_human",
+    "SCHEDULED>BLOCKED_AWAITING_HUMAN:task_awaiting_human",
+  ],
+  record_attempt_outcome: [
+    "RUNNING>COMPLETED:task_completed",
+    "RUNNING>RETRY_WAIT:task_retry_wait",
+    "RUNNING>BLOCKED_AWAITING_HUMAN:task_awaiting_human",
+    "RUNNING>FAILED:task_failed",
+    "RUNNING>EXPIRED:task_expired",
+  ],
+  retry_ready: ["RETRY_WAIT>READY:task_retry_ready"],
+  abandon_retries: ["RETRY_WAIT>FAILED:task_failed"],
+  expire: [
+    "WAITING_INPUT>EXPIRED:task_expired",
+    "READY>EXPIRED:task_expired",
+    "SCHEDULED>EXPIRED:task_expired",
+    "RETRY_WAIT>EXPIRED:task_expired",
+    "WAITING_CONFIRMATION>EXPIRED:confirmation_expired",
+    "BLOCKED>EXPIRED:task_expired",
+    "BLOCKED_AWAITING_HUMAN>EXPIRED:task_expired",
+  ],
+  emit_reminder: ["WAITING_CONFIRMATION>WAITING_CONFIRMATION:reminder_occurrence_emitted"],
+  unblock: ["BLOCKED>VALIDATING:task_unblocked"],
+  cancel_task: [
+    "WAITING_CONFIRMATION>CANCELED:confirmation_cancelled",
+    "BLOCKED>CANCELED:task_canceled",
+    "BLOCKED_AWAITING_HUMAN>CANCELED:task_canceled",
+    "ANY_NONTERMINAL_EXCEPT_WAITING_CONFIRMATION>CANCELED:task_canceled",
+  ],
+  skip_task: ["ANY_NONTERMINAL>SKIPPED:task_skipped"],
+} as const;
+
+export const WORK_COMMAND_ROWS: Readonly<
+  Record<WorkCommand["kind"] | "create_work", readonly string[]>
+> = {
+  create_work: ["NONE>DRAFT:work_created"],
+  start_planning: ["DRAFT>PLANNING:work_planning_started"],
+  request_work_input: ["PLANNING>WAITING_INPUT:work_input_requested"],
+  receive_work_input: ["WAITING_INPUT>PLANNING:work_input_received"],
+  propose_plan: ["PLANNING>WAITING_APPROVAL:work_plan_proposed"],
+  commit_plan: ["PLANNING>READY:work_plan_committed", "PLANNING>FAILED:work_failed"],
+  fail_planning: ["PLANNING>FAILED:work_failed"],
+  withdraw_plan_proposal: ["WAITING_APPROVAL>PLANNING:work_plan_withdrawn"],
+  fail_work: ["ACTIVE>FAILED:work_failed"],
+  cancel_work: [
+    "WAITING_APPROVAL>CANCELED:work_canceled",
+    "ANY_NONTERMINAL>CANCELED:work_canceled",
+  ],
+} as const;
+
+/** 명령이 아닌 경로로만 생산되는 행: 연쇄. */
+export const TASK_CASCADE_ROWS: readonly string[] = [
+  "VALIDATING>BLOCKED:task_blocked",
+  "READY>BLOCKED:task_blocked",
+  "ANY_NONTERMINAL>SKIPPED:task_skipped",
+  "VALIDATING|WAITING_INPUT|READY|SCHEDULED|BLOCKED>FAILED:task_failed",
+  "READY>SCHEDULED:task_scheduled",
+] as const;
+
+/** 명령이 아닌 경로로만 생산되는 행: 신호. */
+export const TASK_SIGNAL_ROWS: readonly string[] = [
+  "WAITING_CONFIRMATION>COMPLETED:confirmation_accepted",
+  "WAITING_CONFIRMATION>REJECTED:confirmation_rejected",
+  "WAITING_CONFIRMATION>CANCELED:confirmation_cancelled",
+  "BLOCKED_AWAITING_HUMAN>READY:human_decision_granted",
+  "BLOCKED_AWAITING_HUMAN>SCHEDULED:human_decision_granted",
+  "BLOCKED_AWAITING_HUMAN>REJECTED:human_decision_denied",
+  "BLOCKED_AWAITING_HUMAN>FAILED:task_failed",
+  "BLOCKED>CANCELED:task_canceled",
+  "BLOCKED_AWAITING_HUMAN>CANCELED:task_canceled",
+  "ANY_NONTERMINAL_EXCEPT_WAITING_CONFIRMATION>CANCELED:task_canceled",
+] as const;
+
+/** 명령이 아닌 경로로만 생산되는 행: Work 파생. */
+export const WORK_DERIVED_ROWS: readonly string[] = [
+  "READY>ACTIVE:work_activated",
+  "READY>COMPLETED:work_completed",
+  "READY>BLOCKED:work_blocked",
+  "ACTIVE>BLOCKED:work_blocked",
+  "BLOCKED>ACTIVE:work_unblocked",
+  "BLOCKED>COMPLETED:work_completed",
+  "ACTIVE>COMPLETED:work_completed",
+] as const;
+
+/** 명령이 아닌 경로로만 생산되는 행: Work 신호. */
+export const WORK_SIGNAL_ROWS: readonly string[] = [
+  "WAITING_APPROVAL>READY:work_plan_committed",
+  "WAITING_APPROVAL>PLANNING:work_plan_rejected",
+  "WAITING_APPROVAL>READY:work_plan_rejected",
+  "ACTIVE>PLANNING:work_replanning_started",
+  "BLOCKED>PLANNING:work_replanning_started",
+  "WAITING_APPROVAL>CANCELED:work_canceled",
+  "ANY_NONTERMINAL>CANCELED:work_canceled",
+] as const;

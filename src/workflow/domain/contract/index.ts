@@ -8,3 +8,6 @@ export * from "./work-transitions.js";
 export * from "./event-catalog.js";
 export * from "./signal-dedup-keys.js";
 export * from "./value-sets.js";
+export * from "./extension-registries.js";
+export * from "./trigger-spec.js";
+export * from "./task-policy.js";

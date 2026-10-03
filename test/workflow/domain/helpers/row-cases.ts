@@ -1,4 +1,4 @@
-// Test Authoring Contract (tasks.md §헬퍼 계약, T101) 의 row-cases.ts 구현.
+// 전이 행별 테스트 케이스 생성기.
 //
 // 설계: `TASK_ROW_CASES`·`WORK_ROW_CASES` 는 **전사 데이터(`TASK_TRANSITION_ROWS`·`WORK_TRANSITION_ROWS`,
 // Development T003 산출)를 런타임에 순회**하며 케이스를 생성한다 — 행 ID 문자열을 이 파일에 하드코딩하지
@@ -45,6 +45,7 @@ import {
   mustCommit,
   draft,
   basePolicy,
+  reachDeadLetterParked,
   reachTaskState,
   reachWorkState,
   requireTaskFor,
@@ -52,7 +53,27 @@ import {
   taskSubjectPendingDecision,
   testDeps,
   planned,
+  patchTask,
+  RETRYABLE_FIXTURE_CODE,
+  STRUCTURALLY_INVALID_INPUT,
+  UNREGISTERED_TASK_TYPE,
 } from "./fixtures.js";
+import { fixtureRegistries, probeTaskType } from "./registry-fixtures.js";
+
+const MISSING_INPUT_TYPE = { id: probeTaskType().id, version: probeTaskType().version };
+
+function completeValidation(
+  deps: DomainDeps,
+  before: WorkAggregate,
+  taskId: TaskId,
+): CommandOutcome {
+  return executeCommand(deps, before, {
+    kind: "complete_validation",
+    taskId,
+    expectedRevision: requireTaskFor(before, taskId).revision,
+    meta: meta(NOW),
+  });
+}
 
 export interface RowCase {
   readonly row: TransitionRowData<string>;
@@ -96,55 +117,46 @@ put("task_validation_started", "DRAFT", "VALIDATING", {
     }),
 });
 
+// 아래 세 레시피의 레코드 패치는 같은 등록부로 계획 커밋이 막는 출구를 다른 생성 경로·등록부 drift
+// 대용으로 Task 수준에서 재현한다.
 put("task_input_requested", "VALIDATING", "WAITING_INPUT", {
-  reachBefore: () => reachTaskState("VALIDATING"),
-  apply: (deps, before, taskId) =>
-    executeCommand(deps, before, {
-      kind: "complete_validation",
-      taskId,
-      expectedRevision: requireTaskFor(before, taskId).revision,
-      meta: meta(NOW),
-      outcome: { result: "input_missing", requests: [] },
-    }),
+  reachBefore: () => {
+    const reached = reachTaskState("VALIDATING");
+    return {
+      ...reached,
+      aggregate: patchTask(reached.aggregate, reached.taskId, { type: MISSING_INPUT_TYPE }),
+    };
+  },
+  apply: completeValidation,
 });
 
 put("task_validated", "VALIDATING", "READY", {
   reachBefore: () => reachTaskState("VALIDATING"),
-  apply: (deps, before, taskId) =>
-    executeCommand(deps, before, {
-      kind: "complete_validation",
-      taskId,
-      expectedRevision: requireTaskFor(before, taskId).revision,
-      meta: meta(NOW),
-      outcome: { result: "valid" },
-    }),
+  apply: completeValidation,
 });
 
 put("task_blocked", "VALIDATING", "BLOCKED", {
-  reachBefore: () => reachTaskState("VALIDATING"),
-  apply: (deps, before, taskId) =>
-    executeCommand(deps, before, {
-      kind: "complete_validation",
-      taskId,
-      expectedRevision: requireTaskFor(before, taskId).revision,
-      meta: meta(NOW),
-      outcome: {
-        result: "blocked",
-        blockReason: { kind: "descriptor_unknown", typeId: "generic_task", typeVersion: 1 },
-      },
-    }),
+  reachBefore: () => {
+    const reached = reachTaskState("VALIDATING");
+    return {
+      ...reached,
+      aggregate: patchTask(reached.aggregate, reached.taskId, { type: UNREGISTERED_TASK_TYPE }),
+    };
+  },
+  apply: completeValidation,
 });
 
 put("task_validation_failed", "VALIDATING", "FAILED", {
-  reachBefore: () => reachTaskState("VALIDATING"),
-  apply: (deps, before, taskId) =>
-    executeCommand(deps, before, {
-      kind: "complete_validation",
-      taskId,
-      expectedRevision: requireTaskFor(before, taskId).revision,
-      meta: meta(NOW),
-      outcome: { result: "structurally_invalid", issues: [] },
-    }),
+  reachBefore: () => {
+    const reached = reachTaskState("VALIDATING");
+    return {
+      ...reached,
+      aggregate: patchTask(reached.aggregate, reached.taskId, {
+        input: STRUCTURALLY_INVALID_INPUT,
+      }),
+    };
+  },
+  apply: completeValidation,
 });
 
 put("task_input_received", "WAITING_INPUT", "VALIDATING", {
@@ -248,7 +260,7 @@ put("task_waiting_confirmation", "READY", "WAITING_CONFIRMATION", {
   reachBefore: () => reachTaskState("READY"),
   apply: (deps, before, taskId) =>
     executeCommand(deps, before, {
-      kind: "request_confirmation",
+      kind: "begin_confirmation_wait",
       taskId,
       expectedRevision: requireTaskFor(before, taskId).revision,
       meta: meta(NOW),
@@ -260,7 +272,7 @@ put("task_waiting_confirmation", "SCHEDULED", "WAITING_CONFIRMATION", {
   reachBefore: () => reachTaskState("SCHEDULED"),
   apply: (deps, before, taskId) =>
     executeCommand(deps, before, {
-      kind: "request_confirmation",
+      kind: "begin_confirmation_wait",
       taskId,
       expectedRevision: requireTaskFor(before, taskId).revision,
       meta: meta(NOW),
@@ -313,7 +325,7 @@ function dependencyCascadeReachBefore(
     dependentId: TaskId,
   ) => WorkAggregate,
 ): { deps: DomainDeps; aggregate: WorkAggregate; taskId: TaskId } {
-  const deps = testDeps(seed);
+  const deps = testDeps(seed, fixtureRegistries());
   const policy = basePolicy({ onDependencyUnsatisfied });
   const { aggregate: planAgg, taskIds } = planned(
     [
@@ -348,13 +360,9 @@ function failDependency(
       meta: meta(NOW),
     }),
   );
-  return executeCommand(deps, validating.aggregate, {
-    kind: "complete_validation",
-    taskId: depId,
-    expectedRevision: requireTaskFor(validating.aggregate, depId).revision,
-    meta: meta(NOW),
-    outcome: { result: "structurally_invalid", issues: [] },
-  });
+  // 레코드 패치: 의존 Task 를 구조 무효로 종결시키는 다른 생성 경로 대용.
+  const patched = patchTask(validating.aggregate, depId, { input: STRUCTURALLY_INVALID_INPUT });
+  return completeValidation(deps, patched, depId);
 }
 
 function bringToValidating(
@@ -378,15 +386,9 @@ function bringToWaitingInput(
   dependentId: TaskId,
 ): WorkAggregate {
   const validating = bringToValidating(deps, aggregate, dependentId);
-  return mustCommit(
-    executeCommand(deps, validating, {
-      kind: "complete_validation",
-      taskId: dependentId,
-      expectedRevision: requireTaskFor(validating, dependentId).revision,
-      meta: meta(NOW),
-      outcome: { result: "input_missing", requests: [] },
-    }),
-  ).aggregate;
+  // 레코드 패치: 필수 입력이 빠진 유형으로 바꿔 WAITING_INPUT 출구를 재현한다.
+  const patched = patchTask(validating, dependentId, { type: MISSING_INPUT_TYPE });
+  return mustCommit(completeValidation(deps, patched, dependentId)).aggregate;
 }
 
 function bringToReady(
@@ -395,15 +397,7 @@ function bringToReady(
   dependentId: TaskId,
 ): WorkAggregate {
   const validating = bringToValidating(deps, aggregate, dependentId);
-  return mustCommit(
-    executeCommand(deps, validating, {
-      kind: "complete_validation",
-      taskId: dependentId,
-      expectedRevision: requireTaskFor(validating, dependentId).revision,
-      meta: meta(NOW),
-      outcome: { result: "valid" },
-    }),
-  ).aggregate;
+  return mustCommit(completeValidation(deps, validating, dependentId)).aggregate;
 }
 
 function bringToScheduled(
@@ -440,18 +434,9 @@ function bringToBlocked(
   dependentId: TaskId,
 ): WorkAggregate {
   const validating = bringToValidating(deps, aggregate, dependentId);
-  return mustCommit(
-    executeCommand(deps, validating, {
-      kind: "complete_validation",
-      taskId: dependentId,
-      expectedRevision: requireTaskFor(validating, dependentId).revision,
-      meta: meta(NOW),
-      outcome: {
-        result: "blocked",
-        blockReason: { kind: "descriptor_unknown", typeId: "generic_task", typeVersion: 1 },
-      },
-    }),
-  ).aggregate;
+  // 레코드 패치: 등록부 drift(유형 미등록) 대용.
+  const patched = patchTask(validating, dependentId, { type: UNREGISTERED_TASK_TYPE });
+  return mustCommit(completeValidation(deps, patched, dependentId)).aggregate;
 }
 
 put("task_blocked", "READY", "BLOCKED", {
@@ -512,7 +497,7 @@ put("task_expired", "RUNNING", "EXPIRED", {
       expectedRevision: requireTaskFor(before, taskId).revision,
       meta: meta(LATER),
       attemptId,
-      outcome: { kind: "attempt_timeout", retryDelayMs: 1_000 },
+      outcome: { kind: "attempt_timeout" },
     });
   },
 });
@@ -548,7 +533,7 @@ put("task_retry_wait", "RUNNING", "RETRY_WAIT", {
       expectedRevision: requireTaskFor(before, taskId).revision,
       meta: meta(NOW),
       attemptId,
-      outcome: { kind: "failed", code: "fixture_retryable", retryable: true, retryDelayMs: 1_000 },
+      outcome: { kind: "failed", code: RETRYABLE_FIXTURE_CODE },
     });
   },
 });
@@ -569,7 +554,7 @@ put("task_failed", "RUNNING", "FAILED", {
       expectedRevision: requireTaskFor(before, taskId).revision,
       meta: meta(NOW),
       attemptId,
-      outcome: { kind: "failed", code: "fixture_nonretryable", retryable: false, retryDelayMs: 0 },
+      outcome: { kind: "failed", code: "fixture_nonretryable" },
     });
   },
 });
@@ -842,7 +827,10 @@ put("human_decision_denied", "BLOCKED_AWAITING_HUMAN", "REJECTED", {
 });
 
 put("task_failed", "BLOCKED_AWAITING_HUMAN", "FAILED", {
-  reachBefore: () => reachTaskState("BLOCKED_AWAITING_HUMAN"),
+  reachBefore: () => {
+    const { deps, aggregate, taskId } = reachDeadLetterParked();
+    return { deps, aggregate, taskId };
+  },
   apply: (deps, before, taskId) => {
     const task = requireTaskFor(before, taskId);
     const decisionId = task.pendingDecision?.id;
@@ -1168,13 +1156,7 @@ putWork("work_activated", "READY", "ACTIVE", {
   apply: (deps, before) => {
     const memberId = Object.values(before.tasks)[0]?.id;
     if (memberId === undefined) throw new Error("row-cases: expected member task");
-    return executeCommand(deps, before, {
-      kind: "complete_validation",
-      taskId: memberId,
-      expectedRevision: requireTaskFor(before, memberId).revision,
-      meta: meta(NOW),
-      outcome: { result: "valid" },
-    });
+    return completeValidation(deps, before, memberId);
   },
 });
 
@@ -1213,13 +1195,9 @@ putWork("work_blocked", "READY", "BLOCKED", {
   apply: (deps, before) => {
     const memberId = Object.values(before.tasks)[0]?.id;
     if (memberId === undefined) throw new Error("row-cases: expected member task");
-    return executeCommand(deps, before, {
-      kind: "complete_validation",
-      taskId: memberId,
-      expectedRevision: requireTaskFor(before, memberId).revision,
-      meta: meta(NOW),
-      outcome: { result: "structurally_invalid", issues: [] },
-    });
+    // 레코드 패치: 구조 무효 입력으로 member 를 종결시키는 다른 생성 경로 대용.
+    const patched = patchTask(before, memberId, { input: STRUCTURALLY_INVALID_INPUT });
+    return completeValidation(deps, patched, memberId);
   },
 });
 
@@ -1296,7 +1274,6 @@ putWork("work_completed", "BLOCKED", "COMPLETED", {
         taskId: t1,
         expectedRevision: requireTaskFor(t1Validating, t1).revision,
         meta: meta(NOW),
-        outcome: { result: "valid" },
       }),
     ).aggregate;
     const t1Running = mustCommit(
@@ -1334,7 +1311,6 @@ putWork("work_completed", "BLOCKED", "COMPLETED", {
         taskId: t2,
         expectedRevision: requireTaskFor(t2Validating, t2).revision,
         meta: meta(NOW),
-        outcome: { result: "valid" },
       }),
     ).aggregate;
     const t2BlockedAwaitingHuman = mustCommit(
@@ -1403,7 +1379,6 @@ putWork("work_unblocked", "BLOCKED", "ACTIVE", {
         taskId: t1,
         expectedRevision: requireTaskFor(t1Validating, t1).revision,
         meta: meta(NOW),
-        outcome: { result: "valid" },
       }),
     ).aggregate;
     const t1Running = mustCommit(
@@ -1434,18 +1409,9 @@ putWork("work_unblocked", "BLOCKED", "ACTIVE", {
         meta: meta(NOW),
       }),
     ).aggregate;
-    const t2Blocked = mustCommit(
-      executeCommand(deps, t2Validating, {
-        kind: "complete_validation",
-        taskId: t2,
-        expectedRevision: requireTaskFor(t2Validating, t2).revision,
-        meta: meta(NOW),
-        outcome: {
-          result: "blocked",
-          blockReason: { kind: "descriptor_unknown", typeId: "generic_task", typeVersion: 1 },
-        },
-      }),
-    ).aggregate;
+    // 레코드 패치: 등록부 drift(유형 미등록) 대용 — unblock 으로 다시 검증 가능한 차단이다.
+    const t2Patched = patchTask(t2Validating, t2, { type: UNREGISTERED_TASK_TYPE });
+    const t2Blocked = mustCommit(completeValidation(deps, t2Patched, t2)).aggregate;
     if (t2Blocked.work.state !== "BLOCKED") {
       throw new Error(
         `row-cases: expected Work BLOCKED via t2 Task-state BLOCKED, got "${t2Blocked.work.state}"`,

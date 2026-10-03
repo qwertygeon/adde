@@ -1,5 +1,4 @@
-// Test Authoring Contract (tasks.md §헬퍼 계약, T101) 의 fixtures.ts 구현.
-// 공개 배럴만 import 한다(런타임 제약 1) — 개별 모듈 경로는 참조하지 않는다.
+// 도메인 테스트 공용 픽스처. 공개 배럴만 import 한다 — 개별 모듈 경로는 참조하지 않는다.
 import {
   parseUtcInstant,
   parseProjectId,
@@ -45,7 +44,10 @@ import type {
   PendingDecisionKind,
   DecisionSignal,
   DecisionApplication,
+  DomainRegistries,
+  AttemptId,
 } from "../../../../src/workflow/domain/index.js";
+import { testRegistries, fixtureRegistries, probeTaskType } from "./registry-fixtures.js";
 
 /** Result 언랩 — 실패면 던진다(픽스처 불변식 위반은 프로그램 오류로 취급). */
 export function mustOk<T, E>(result: Result<T, E>): T {
@@ -114,13 +116,39 @@ export function at(iso: string): UtcInstant {
   return mustOk(parseUtcInstant(iso));
 }
 
-export function testDeps(seed = "seed"): DomainDeps {
-  return { ids: makeSeqIds(seed), operationalDefaults: { agentDispatchDeadlineMs: 600_000 } };
+export function testDeps(seed = "seed", registries?: DomainRegistries): DomainDeps {
+  return {
+    ids: makeSeqIds(seed),
+    operationalDefaults: { agentDispatchDeadlineMs: 600_000 },
+    registries: registries ?? testRegistries(),
+  };
 }
+
+/**
+ * 레코드 패치 — 같은 등록부로는 계획 커밋이 막는 출구(미등록 유형·구조 무효 입력)를 Task 수준에서
+ * 재현한다. 계약상 다른 생성 경로나 등록부 drift 를 대신하는 테스트 전용 구성이다.
+ */
+export function patchTask(
+  aggregate: WorkAggregate,
+  taskId: TaskId,
+  patch: Partial<TaskRecord>,
+): WorkAggregate {
+  const record = requireTask(aggregate, taskId);
+  return { ...aggregate, tasks: { ...aggregate.tasks, [taskId]: { ...record, ...patch } } };
+}
+
+/** 미등록 TaskType 식별(등록하지 않는 시험 유형). */
+export const UNREGISTERED_TASK_TYPE = { id: "probe_missing", version: 1 } as const;
+
+/** 생성 경로가 없는 구조 무효 입력(generic_task 의 strict 스키마 밖). */
+export const STRUCTURALLY_INVALID_INPUT = "not-an-object";
 
 export function meta(now: UtcInstant, actorSource: ActorSource = "adde_self"): CommandMeta {
   return { now, actorSource };
 }
+
+/** basePolicy 의 `retry.retryableErrors` 에 들어 있는 오류 코드. */
+export const RETRYABLE_FIXTURE_CODE = "fixture_retryable";
 
 export function basePolicy(overrides?: Partial<TaskPolicy>): TaskPolicy {
   const raw = {
@@ -128,10 +156,16 @@ export function basePolicy(overrides?: Partial<TaskPolicy>): TaskPolicy {
     terminalRequired: true,
     onDependencyUnsatisfied: "block",
     approvalRequiredBeforeExecute: false,
-    confirmationSurface: "markdown",
+    approvalSurface: "markdown",
     fanOutMaxConcurrent: 1,
     unattended: { eligible: false, onGateDenied: "block_awaiting_human" },
-    retry: { maxAttempts: 3, initialDelayMs: 1_000, maxDelayMs: 60_000, backoff: "fixed" },
+    retry: {
+      maxAttempts: 3,
+      initialDelayMs: 1_000,
+      maxDelayMs: 60_000,
+      backoff: "fixed",
+      retryableErrors: [RETRYABLE_FIXTURE_CODE],
+    },
     timezone: "Asia/Seoul",
     maxSpawnDepth: 1,
     maxTasksPerWork: 50,
@@ -182,6 +216,77 @@ export function taskSubjectPendingDecision(
       surfaceDeliveries: [],
     }),
   );
+}
+
+/** 열린 attempt 효과의 dead-letter 해소 결정 — Task 주체(taskId). */
+export function deadLetterDecision(
+  deps: DomainDeps,
+  taskId: TaskId,
+  now: UtcInstant,
+): PendingDecision {
+  return mustOk(
+    parsePendingDecision({
+      id: nextEntityId(deps.ids, "decision"),
+      kind: "dead_letter_resolution_required",
+      taskId,
+      requestedAt: now,
+      summary: "fixture dead-letter resolution",
+      surfaceDeliveries: [],
+    }),
+  );
+}
+
+/** 대기 효과·전이 반응 행을 주체 문자열로 가리키는 dead-letter 해소 결정 — Task 를 주차하지 않는 형태. */
+export function rowSubjectDeadLetterDecision(
+  deps: DomainDeps,
+  subject: string,
+  now: UtcInstant,
+): PendingDecision {
+  return mustOk(
+    parsePendingDecision({
+      id: nextEntityId(deps.ids, "decision"),
+      kind: "dead_letter_resolution_required",
+      subject,
+      requestedAt: now,
+      summary: "fixture row dead-letter resolution",
+      surfaceDeliveries: [],
+    }),
+  );
+}
+
+/**
+ * 재시도 예산 1 의 실행 중 Task 가 dispatch 고아로 끝나 dead-letter 결정에 주차된 상태 —
+ * `parkedAttemptId` 가 그 attempt 다.
+ */
+export function reachDeadLetterParked(): {
+  deps: DomainDeps;
+  aggregate: WorkAggregate;
+  taskId: TaskId;
+  attemptId: AttemptId;
+} {
+  const { deps, aggregate, taskId } = reachTaskState("RUNNING", {
+    policy: {
+      retry: { maxAttempts: 1, initialDelayMs: 1_000, maxDelayMs: 1_000, backoff: "fixed" },
+    },
+  });
+  const attemptId = requireTask(aggregate, taskId).openAttempt?.attemptId;
+  if (attemptId === undefined) throw new Error("fixture: expected open attempt");
+  const parked = mustCommit(
+    executeCommand(deps, aggregate, {
+      kind: "record_attempt_outcome",
+      taskId,
+      expectedRevision: requireTask(aggregate, taskId).revision,
+      meta: meta(FIXTURE_NOW),
+      attemptId,
+      outcome: {
+        kind: "dispatch_orphaned",
+        deadLetterDecision: deadLetterDecision(deps, taskId, FIXTURE_NOW),
+      },
+    }),
+  ).aggregate;
+  if (requireTask(parked, taskId).state !== "BLOCKED_AWAITING_HUMAN")
+    throw new Error("fixture: expected dead-letter park");
+  return { deps, aggregate: parked, taskId, attemptId };
 }
 
 export function mustCommit(outcome: CommandOutcome | SignalJudgement): {
@@ -324,7 +429,19 @@ export function reachTaskState(
         }
       : { kind: "immediate", version: 1, triggerId: ref });
 
-  const { deps, aggregate: draftAgg, taskIds } = planned([draft(ref, { trigger, policy })]);
+  // WAITING_INPUT 은 필수 입력이 빠진 유형으로 계획한다 — 누락 입력은 계획 무효가 아니다.
+  const draftType =
+    state === "WAITING_INPUT"
+      ? { id: probeTaskType().id, version: probeTaskType().version }
+      : undefined;
+  const {
+    deps,
+    aggregate: draftAgg,
+    taskIds,
+  } = planned(
+    [draft(ref, { trigger, policy, ...(draftType !== undefined ? { type: draftType } : {}) })],
+    testDeps("seed", fixtureRegistries()),
+  );
   const taskId = taskIds[ref];
   if (taskId === undefined) throw new Error("fixture: draft task id missing");
   if (state === "DRAFT") return { deps, aggregate: draftAgg, taskId };
@@ -340,64 +457,29 @@ export function reachTaskState(
   ).aggregate;
   if (state === "VALIDATING") return { deps, aggregate: validating, taskId };
 
-  if (state === "WAITING_INPUT") {
-    return {
-      deps,
-      aggregate: mustCommit(
-        executeCommand(deps, validating, {
-          kind: "complete_validation",
-          taskId,
-          expectedRevision: requireTask(validating, taskId).revision,
-          meta: meta(now),
-          outcome: { result: "input_missing", requests: [] },
-        }),
-      ).aggregate,
-      taskId,
-    };
-  }
+  const completeValidation = (from: WorkAggregate): WorkAggregate =>
+    mustCommit(
+      executeCommand(deps, from, {
+        kind: "complete_validation",
+        taskId,
+        expectedRevision: requireTask(from, taskId).revision,
+        meta: meta(now),
+      }),
+    ).aggregate;
+
+  if (state === "WAITING_INPUT") return { deps, aggregate: completeValidation(validating), taskId };
   if (state === "FAILED") {
-    return {
-      deps,
-      aggregate: mustCommit(
-        executeCommand(deps, validating, {
-          kind: "complete_validation",
-          taskId,
-          expectedRevision: requireTask(validating, taskId).revision,
-          meta: meta(now),
-          outcome: { result: "structurally_invalid", issues: [] },
-        }),
-      ).aggregate,
-      taskId,
-    };
+    // 레코드 패치: 계획 커밋이 막는 구조 무효 입력을 다른 생성 경로 대용으로 재현한다.
+    const patched = patchTask(validating, taskId, { input: STRUCTURALLY_INVALID_INPUT });
+    return { deps, aggregate: completeValidation(patched), taskId };
   }
   if (state === "BLOCKED") {
-    return {
-      deps,
-      aggregate: mustCommit(
-        executeCommand(deps, validating, {
-          kind: "complete_validation",
-          taskId,
-          expectedRevision: requireTask(validating, taskId).revision,
-          meta: meta(now),
-          outcome: {
-            result: "blocked",
-            blockReason: { kind: "descriptor_unknown", typeId: "generic_task", typeVersion: 1 },
-          },
-        }),
-      ).aggregate,
-      taskId,
-    };
+    // 레코드 패치: 검증 전 등록부 drift(유형 미등록) 대용.
+    const patched = patchTask(validating, taskId, { type: UNREGISTERED_TASK_TYPE });
+    return { deps, aggregate: completeValidation(patched), taskId };
   }
 
-  const ready = mustCommit(
-    executeCommand(deps, validating, {
-      kind: "complete_validation",
-      taskId,
-      expectedRevision: requireTask(validating, taskId).revision,
-      meta: meta(now),
-      outcome: { result: "valid" },
-    }),
-  ).aggregate;
+  const ready = completeValidation(validating);
   if (state === "READY") return { deps, aggregate: ready, taskId };
 
   if (state === "SCHEDULED") {
@@ -447,7 +529,7 @@ export function reachTaskState(
       deps,
       aggregate: mustCommit(
         executeCommand(deps, ready, {
-          kind: "request_confirmation",
+          kind: "begin_confirmation_wait",
           taskId,
           expectedRevision: requireTask(ready, taskId).revision,
           meta: meta(now),
@@ -571,12 +653,7 @@ export function reachTaskState(
           expectedRevision: requireTask(running, taskId).revision,
           meta: meta(now),
           attemptId: openAttempt.attemptId,
-          outcome: {
-            kind: "failed",
-            code: "fixture_retryable",
-            retryable: true,
-            retryDelayMs: 1_000,
-          },
+          outcome: { kind: "failed", code: RETRYABLE_FIXTURE_CODE },
         }),
       ).aggregate,
       taskId,
@@ -587,7 +664,7 @@ export function reachTaskState(
     const confirmationId = nextEntityId(deps.ids, "confirmation");
     const waiting = mustCommit(
       executeCommand(deps, ready, {
-        kind: "request_confirmation",
+        kind: "begin_confirmation_wait",
         taskId,
         expectedRevision: requireTask(ready, taskId).revision,
         meta: meta(now),
@@ -732,15 +809,16 @@ export function reachWorkState(state: WorkStateName): {
   ).aggregate;
 
   if (state === "BLOCKED") {
+    // 레코드 패치: 구조 무효 입력으로 member 를 FAILED 종결시켜 Work 를 BLOCKED 로 파생한다.
+    const patched = patchTask(validating, memberTaskId, { input: STRUCTURALLY_INVALID_INPUT });
     return {
       deps,
       aggregate: mustCommit(
-        executeCommand(deps, validating, {
+        executeCommand(deps, patched, {
           kind: "complete_validation",
           taskId: memberTaskId,
-          expectedRevision: requireTask(validating, memberTaskId).revision,
+          expectedRevision: requireTask(patched, memberTaskId).revision,
           meta: meta(now),
-          outcome: { result: "structurally_invalid", issues: [] },
         }),
       ).aggregate,
     };
@@ -752,7 +830,6 @@ export function reachWorkState(state: WorkStateName): {
       taskId: memberTaskId,
       expectedRevision: requireTask(validating, memberTaskId).revision,
       meta: meta(now),
-      outcome: { result: "valid" },
     }),
   ).aggregate;
   if (state === "ACTIVE") return { deps, aggregate: memberReady };

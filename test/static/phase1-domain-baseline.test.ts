@@ -49,10 +49,17 @@ function changedTestPaths(): string[] {
 
 const gitAvailable = hasGit();
 
+// DEC-012/DEC-013: 의존 단언 갱신이 승인된 기존 테스트 한 파일만 예외로 둔다.
+const APPROVED_PREEXISTING_TEST_EDITS: readonly string[] = [
+  "test/static/phase0-policy-files.test.ts",
+];
+
 describe.runIf(gitAvailable)("SC-048: 기존 테스트를 고치지 않는다", () => {
   it("Happy: baseCommit 대비 변경된 test/ 경로가 전부 신규 파일이다 (test_SC048_changed_test_paths_are_new_files_only)", () => {
     const changed = changedTestPaths();
-    const preexisting = changed.filter((p) => existsAtBase(p));
+    const preexisting = changed.filter(
+      (p) => existsAtBase(p) && !APPROVED_PREEXISTING_TEST_EDITS.includes(p),
+    );
     expect(preexisting).toEqual([]);
   });
 
@@ -73,20 +80,49 @@ describe.runIf(gitAvailable)("SC-048: 기존 테스트를 고치지 않는다", 
   });
 });
 
+// 기준 이후 허용된 프로덕션 의존 추가는 스키마 라이브러리 정확 핀 1건뿐이다.
+const ALLOWED_ADDED_DEPENDENCY = { name: "zod", version: "4.4.3" } as const;
+
 describe.runIf(gitAvailable)("SC-050: 프로덕션 의존이 그대로다", () => {
   function dependenciesOf(pkgJson: string): Record<string, string> {
     const parsed = JSON.parse(pkgJson) as { dependencies?: Record<string, string> };
     return parsed.dependencies ?? {};
   }
 
-  it("Happy: package.json 의 dependencies 가 기준과 동일하다 (test_SC050_package_json_dependencies_equal_base)", () => {
+  /** importer `dependencies:` 블록을 항목 이름 → 하위 줄(공백 정리) 로 나눈다. */
+  function importerEntries(block: string): Map<string, string> {
+    const entries = new Map<string, string>();
+    let current: string | undefined;
+    let entryIndent = -1;
+    for (const line of block.split("\n")) {
+      if (line.trim().length === 0) continue;
+      const lineIndent = line.match(/^\s*/)?.[0].length ?? 0;
+      if (entryIndent === -1 || lineIndent <= entryIndent) {
+        entryIndent = lineIndent;
+        current = line
+          .trim()
+          .replace(/:$/, "")
+          .replace(/^'(.*)'$/, "$1");
+        entries.set(current, "");
+      } else if (current !== undefined) {
+        const prev = entries.get(current) ?? "";
+        entries.set(current, prev.length === 0 ? line.trim() : `${prev}\n${line.trim()}`);
+      }
+    }
+    return entries;
+  }
+
+  it("Happy: package.json 의 dependencies 가 기준 + 스키마 라이브러리 정확 핀 1건이다 (test_SC050_package_json_dependencies_equal_base)", () => {
     const basePkg = readAtBase("package.json");
     if (basePkg === undefined) return;
     const currentPkg = fs.readFileSync(path.join(repoRoot, "package.json"), "utf8");
-    expect(dependenciesOf(currentPkg)).toEqual(dependenciesOf(basePkg));
+    expect(dependenciesOf(currentPkg)).toEqual({
+      ...dependenciesOf(basePkg),
+      [ALLOWED_ADDED_DEPENDENCY.name]: ALLOWED_ADDED_DEPENDENCY.version,
+    });
   });
 
-  it("Edge: lockfile 의 루트 importer dependencies 블록이 기준과 동일하다 (test_SC050_lockfile_importer_dependencies_block_equal_base)", () => {
+  it("Edge: lockfile 의 루트 importer dependencies 블록이 기준 항목 + 스키마 라이브러리 항목이다 (test_SC050_lockfile_importer_dependencies_block_equal_base)", () => {
     const baseLock = readAtBase("pnpm-lock.yaml");
     if (baseLock === undefined) return;
     const extractBlock = (text: string): string => {
@@ -104,7 +140,15 @@ describe.runIf(gitAvailable)("SC-050: 프로덕션 의존이 그대로다", () =
       return block.join("\n");
     };
     const currentLock = fs.readFileSync(path.join(repoRoot, "pnpm-lock.yaml"), "utf8");
-    expect(extractBlock(currentLock)).toBe(extractBlock(baseLock));
+    const baseEntries = importerEntries(extractBlock(baseLock));
+    const currentEntries = importerEntries(extractBlock(currentLock));
+    expect(baseEntries.size).toBeGreaterThan(0);
+    const added = currentEntries.get(ALLOWED_ADDED_DEPENDENCY.name);
+    expect(added).toBeDefined();
+    expect(added?.split("\n")).toContain(`specifier: ${ALLOWED_ADDED_DEPENDENCY.version}`);
+    const withoutAdded = new Map(currentEntries);
+    withoutAdded.delete(ALLOWED_ADDED_DEPENDENCY.name);
+    expect(withoutAdded).toEqual(baseEntries);
   });
 
   it("Error: 합성 의존성 추가를 검출한다 (test_SC050_detects_synthetic_added_dependency)", () => {

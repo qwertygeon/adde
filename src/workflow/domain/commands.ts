@@ -18,6 +18,9 @@ import type { TaskPolicy } from "./task-policy.js";
 import type { OccurrenceId } from "./ids.js";
 import type { WorkSource } from "./aggregate.js";
 import type { ContentHash } from "./derivation/dedup-key.js";
+import type { RegistryAxis } from "./registry/registries.js";
+import type { ApprovalSurfaceRefusalReason } from "./policy/approval-surface.js";
+import type { ReactionSpec } from "./validation/reaction-spec.js";
 
 export interface CommandMeta {
   readonly now: UtcInstant;
@@ -32,35 +35,43 @@ interface TaskCommandBase {
   readonly meta: CommandMeta;
 }
 
+/** 미등록 descriptor 하나 — 축·식별자·버전. */
+export interface UnknownDescriptorRef {
+  readonly axis: RegistryAxis;
+  readonly id: string;
+  readonly version: number;
+}
+
+export type DescriptorUnknownBlockReason = {
+  readonly kind: "descriptor_unknown";
+  readonly descriptors: readonly UnknownDescriptorRef[];
+};
+
+export type ApprovalSurfaceRefusedBlockReason = {
+  readonly kind: "approval_surface_refused";
+  readonly reason: ApprovalSurfaceRefusalReason;
+  readonly declaredSurface: "out_of_band";
+};
+
 export type TaskBlockReason =
-  | { readonly kind: "descriptor_unknown"; readonly typeId: string; readonly typeVersion: number }
+  | DescriptorUnknownBlockReason
   | { readonly kind: "dependency_unsatisfied"; readonly dependencyTaskIds: readonly TaskId[] }
-  | { readonly kind: "condition"; readonly code: string };
+  | ApprovalSurfaceRefusedBlockReason;
 
-export type ValidationOutcome =
-  | { readonly result: "valid" }
-  | { readonly result: "input_missing"; readonly requests: readonly unknown[] }
-  | { readonly result: "blocked"; readonly blockReason: TaskBlockReason }
-  | { readonly result: "structurally_invalid"; readonly issues: readonly unknown[] };
-
+/** 재시도 여부·지연은 도메인이 정책으로 계산한다 — 호출자는 시도별 지터 값만 주입한다. */
 export type AttemptOutcome =
   | { readonly kind: "completed"; readonly evidence: unknown }
-  | {
-      readonly kind: "failed";
-      readonly code: string;
-      readonly retryable: boolean;
-      readonly retryDelayMs: number;
-    }
-  | { readonly kind: "attempt_timeout"; readonly retryDelayMs: number }
+  | { readonly kind: "failed"; readonly code: string; readonly jitterDrawMs?: number }
+  | { readonly kind: "attempt_timeout"; readonly jitterDrawMs?: number }
   | {
       readonly kind: "dispatch_orphaned";
-      readonly retryDelayMs: number;
       readonly deadLetterDecision: PendingDecision;
+      readonly jitterDrawMs?: number;
     }
   | {
       readonly kind: "dispatch_withdrawn";
-      readonly retryDelayMs: number;
       readonly deadLetterDecision: PendingDecision;
+      readonly jitterDrawMs?: number;
     }
   | {
       readonly kind: "blocked";
@@ -72,15 +83,12 @@ export type AttemptOutcome =
 
 export type TaskCommand =
   | (TaskCommandBase & { readonly kind: "begin_validation" })
-  | (TaskCommandBase & {
-      readonly kind: "complete_validation";
-      readonly outcome: ValidationOutcome;
-    })
+  | (TaskCommandBase & { readonly kind: "complete_validation" })
   | (TaskCommandBase & { readonly kind: "receive_input" })
   | (TaskCommandBase & {
       readonly kind: "schedule_task";
       readonly occurrenceId: OccurrenceId;
-      readonly cause: "schedule" | "signal" | "retry";
+      readonly cause: "schedule" | "external_signal" | "retry";
     })
   | (TaskCommandBase & { readonly kind: "unschedule_task" })
   | (TaskCommandBase & {
@@ -88,12 +96,12 @@ export type TaskCommand =
       readonly firedOccurrenceId?: OccurrenceId;
     })
   | (TaskCommandBase & {
-      readonly kind: "request_confirmation";
+      readonly kind: "begin_confirmation_wait";
       readonly confirmationId: ConfirmationId;
     })
   | (TaskCommandBase & {
       readonly kind: "park_awaiting_human";
-      readonly cause: "approval_required_before_execute" | "unattended_eligibility_refused";
+      readonly cause: "unattended_eligibility_refused";
       readonly decision: PendingDecision;
     })
   | (TaskCommandBase & {
@@ -113,6 +121,11 @@ export type TaskCommand =
   | (TaskCommandBase & {
       readonly kind: "skip_task";
       readonly reason: { readonly kind: "misfire_skip"; readonly occurrenceId?: OccurrenceId };
+    })
+  | (TaskCommandBase & {
+      readonly kind: "present_late_result";
+      readonly attemptId: AttemptId;
+      readonly resultContentHash: ContentHash;
     });
 
 export type TaskRef = { readonly draftRef: string } | { readonly taskId: TaskId };
@@ -125,8 +138,10 @@ export interface PlanTaskDraft {
   readonly dependsOn: readonly TaskRef[];
   readonly trigger: TriggerSpec;
   readonly policy: TaskPolicy;
-  /** 계약 TaskDraft 에 없는 도메인 확장 — 부모 간선(활성화·순환 검출에 참여하지 않음). */
+  /** 계약 TaskDraft 에 없는 도메인 확장 — 부모 간선(활성화·의존 순환 검출에 참여하지 않음). */
   readonly parent?: TaskRef;
+  /** 선언 전이 반응. 부재 = []. */
+  readonly reactions?: readonly ReactionSpec[];
 }
 
 export interface PlanCommitInput {
@@ -247,14 +262,24 @@ export const TASK_COMMAND_ROWS: Readonly<Record<TaskCommand["kind"], readonly st
     "VALIDATING>READY:task_validated",
     "VALIDATING>BLOCKED:task_blocked",
     "VALIDATING>FAILED:task_validation_failed",
+    "READY>BLOCKED_AWAITING_HUMAN:task_awaiting_human",
   ],
   receive_input: ["WAITING_INPUT>VALIDATING:task_input_received"],
-  schedule_task: ["READY>SCHEDULED:task_scheduled", "RETRY_WAIT>SCHEDULED:task_scheduled"],
+  schedule_task: [
+    "READY>SCHEDULED:task_scheduled",
+    "RETRY_WAIT>SCHEDULED:task_scheduled",
+    "READY>BLOCKED_AWAITING_HUMAN:task_awaiting_human",
+  ],
   unschedule_task: ["SCHEDULED>READY:task_unscheduled"],
-  start_attempt: ["READY>RUNNING:task_started", "SCHEDULED>RUNNING:task_started"],
-  request_confirmation: [
+  start_attempt: [
+    "READY>RUNNING:task_started",
+    "SCHEDULED>RUNNING:task_started",
+    "READY>BLOCKED_AWAITING_HUMAN:task_awaiting_human",
+  ],
+  begin_confirmation_wait: [
     "READY>WAITING_CONFIRMATION:task_waiting_confirmation",
     "SCHEDULED>WAITING_CONFIRMATION:task_waiting_confirmation",
+    "READY>BLOCKED_AWAITING_HUMAN:task_awaiting_human",
   ],
   park_awaiting_human: [
     "READY>BLOCKED_AWAITING_HUMAN:task_awaiting_human",
@@ -287,7 +312,11 @@ export const TASK_COMMAND_ROWS: Readonly<Record<TaskCommand["kind"], readonly st
     "ANY_NONTERMINAL_EXCEPT_WAITING_CONFIRMATION>CANCELED:task_canceled",
   ],
   skip_task: ["ANY_NONTERMINAL>SKIPPED:task_skipped"],
+  present_late_result: [],
 } as const;
+
+/** 전이 행 없이 판정하는 명령 — 엔진 사전 검사가 빈 행 목록을 허용한다. */
+export const TASK_NON_ROW_COMMANDS: readonly TaskCommand["kind"][] = ["present_late_result"];
 
 export const WORK_COMMAND_ROWS: Readonly<
   Record<WorkCommand["kind"] | "create_work", readonly string[]>

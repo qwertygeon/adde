@@ -38,7 +38,6 @@ describe("SC-046: property — 임의 명령 순서열에서 fold 가 직접 적
               taskId,
               expectedRevision: task.revision,
               meta: meta(task.createdAt),
-              outcome: { result: "valid" },
             });
           } else if (step === "start_attempt" && task.state === "READY") {
             outcome = executeCommand(deps, aggregate, {

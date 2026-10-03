@@ -1,6 +1,8 @@
 /**
  * 신호 판정(FR-017, FR-018, FR-019, NFR-003) — design.md §7 적용표·세부 규칙 그대로. 검사 순서
- * provenance → 중복(`acceptedSignalKeys`) → 종결 → 토큰 → revision → 유효기한 → 적격 상태.
+ * provenance → 중복(`acceptedSignalKeys`) → 종결 → 토큰 → revision → 유효기한 → 적격 상태. 후보 키는
+ * provenance 검사 앞에서 파생해 거절 기록에도 싣고, 수용 키 조회·선점은 provenance 통과 뒤에만 한다
+ * (관찰 → 검증 → 선점 → 적용 — 거절은 키를 선점하지 않는다).
  * revision 비교-교체는 신원을 검증하지 않는다(FR-019) — 현재 revision 을 실은 위조 신호도 같은 결과로
  * 통과한다.
  */
@@ -25,6 +27,10 @@ import type {
   NonStaleReason,
 } from "./engine.js";
 import { assembleCommit } from "./engine.js";
+
+/** 키 문법 밖의 값은 관측 기록 대상이 아니다 — 후보 키를 만들기 전에 거절한다. */
+const CONFIRMATION_DECISIONS: ReadonlySet<string> = new Set(["accept", "reject", "cancel"]);
+const HUMAN_DECISION_CHOICES: ReadonlySet<string> = new Set(["grant", "deny"]);
 
 export type SignalJudgement =
   | {
@@ -103,6 +109,19 @@ function judgeConfirmationDecision(
     return { kind: "not_applicable", rejection: { reason: "unknown_subject" } };
   const subject: Subject = { taskId: task.id };
 
+  if (!CONFIRMATION_DECISIONS.has(signal.decision)) {
+    return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+  }
+
+  const keyResult = deriveSignalDedupKey({
+    signalType: "confirmation_decision",
+    confirmationId: signal.confirmationId,
+    expectedRevision: signal.expectedRevision,
+    decision: signal.decision,
+  });
+  if (!keyResult.ok) return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+  const candidateKey = keyResult.value;
+
   if (signal.actorSource !== "human_local") {
     return {
       kind: "forged_provenance",
@@ -114,7 +133,7 @@ function judgeConfirmationDecision(
           {
             signalId: signal.signalId,
             signalType: "confirmation_decision",
-            candidateKey: candidateKeyOrEmpty(signal, task),
+            candidateKey,
             subject,
             determinedActorSource: signal.actorSource,
             ...(signal.provenance !== undefined ? { provenance: signal.provenance } : {}),
@@ -126,15 +145,6 @@ function judgeConfirmationDecision(
       ),
     };
   }
-
-  const keyResult = deriveSignalDedupKey({
-    signalType: "confirmation_decision",
-    confirmationId: signal.confirmationId,
-    expectedRevision: signal.expectedRevision,
-    decision: signal.decision,
-  });
-  if (!keyResult.ok) return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
-  const candidateKey = keyResult.value;
 
   if (isAccepted(aggregate, candidateKey)) {
     return {
@@ -238,31 +248,41 @@ function judgeConfirmationDecision(
     },
     { taskId: task.id },
   );
-  const transitionEvent =
-    signal.decision === "accept"
-      ? mkEvent(
-          "confirmation_accepted",
-          { confirmationId: signal.confirmationId, signalId: signal.signalId },
-          { taskId: task.id },
-        )
-      : signal.decision === "reject"
-        ? mkEvent(
-            "confirmation_rejected",
-            { confirmationId: signal.confirmationId, signalId: signal.signalId },
-            { taskId: task.id },
-          )
-        : mkEvent(
-            "confirmation_cancelled",
-            {
-              confirmationId: signal.confirmationId,
-              origin: {
-                kind: "vault_signal",
-                actorSource: "human_local",
-                signalId: signal.signalId,
-              },
-            },
-            { taskId: task.id },
-          );
+  let transitionEvent: DecidedEvent;
+  switch (signal.decision) {
+    case "accept":
+      transitionEvent = mkEvent(
+        "confirmation_accepted",
+        { confirmationId: signal.confirmationId, signalId: signal.signalId },
+        { taskId: task.id },
+      );
+      break;
+    case "reject":
+      transitionEvent = mkEvent(
+        "confirmation_rejected",
+        { confirmationId: signal.confirmationId, signalId: signal.signalId },
+        { taskId: task.id },
+      );
+      break;
+    case "cancel":
+      transitionEvent = mkEvent(
+        "confirmation_cancelled",
+        {
+          confirmationId: signal.confirmationId,
+          origin: {
+            kind: "vault_signal",
+            actorSource: "human_local",
+            signalId: signal.signalId,
+          },
+        },
+        { taskId: task.id },
+      );
+      break;
+    default: {
+      const exhaustive: never = signal.decision;
+      throw new Error(`judgeConfirmationDecision: 알 수 없는 결정 ${String(exhaustive)}`);
+    }
+  }
   const { commit, aggregate: nextAggregate } = assembleCommit(
     deps,
     aggregate,
@@ -283,6 +303,20 @@ function judgeHumanDecision(
   if (subjectRef === undefined)
     return { kind: "not_applicable", rejection: { reason: "unknown_subject" } };
 
+  if (!HUMAN_DECISION_CHOICES.has(signal.choice)) {
+    return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+  }
+
+  // Task·Work 주체 공통 파생이라 한 번만 계산해 하위 판정에 넘긴다.
+  const keyResult = deriveSignalDedupKey({
+    signalType: "human_decision",
+    decisionId: signal.decisionId,
+    expectedRevision: signal.expectedRevision,
+    choice: signal.choice,
+  });
+  if (!keyResult.ok) return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+  const candidateKey = keyResult.value;
+
   if (signal.actorSource !== "human_local") {
     const subject: Subject = subjectRef;
     return {
@@ -296,7 +330,7 @@ function judgeHumanDecision(
           {
             signalId: signal.signalId,
             signalType: "human_decision",
-            candidateKey: emptyKey(),
+            candidateKey,
             subject,
             reason: "provenance_not_human",
             observedState: "",
@@ -310,9 +344,25 @@ function judgeHumanDecision(
   }
 
   if ("taskId" in subjectRef) {
-    return judgeHumanDecisionForTask(deps, aggregate, signal, application, now, subjectRef.taskId);
+    return judgeHumanDecisionForTask(
+      deps,
+      aggregate,
+      signal,
+      application,
+      now,
+      subjectRef.taskId,
+      candidateKey,
+    );
   }
-  return judgeHumanDecisionForWork(deps, aggregate, signal, application, now, subjectRef.workId);
+  return judgeHumanDecisionForWork(
+    deps,
+    aggregate,
+    signal,
+    application,
+    now,
+    subjectRef.workId,
+    candidateKey,
+  );
 }
 
 function judgeHumanDecisionForTask(
@@ -322,20 +372,12 @@ function judgeHumanDecisionForTask(
   application: DecisionApplication,
   now: UtcInstant,
   taskId: TaskRecord["id"],
+  candidateKey: SignalDedupKey,
 ): SignalJudgement {
   const task = taskOf(aggregate, taskId);
   if (task === undefined)
     return { kind: "not_applicable", rejection: { reason: "unknown_subject" } };
   const subject: Subject = { taskId };
-
-  const keyResult = deriveSignalDedupKey({
-    signalType: "human_decision",
-    decisionId: signal.decisionId,
-    expectedRevision: signal.expectedRevision,
-    choice: signal.choice,
-  });
-  if (!keyResult.ok) return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
-  const candidateKey = keyResult.value;
 
   if (isAccepted(aggregate, candidateKey)) {
     return {
@@ -436,6 +478,13 @@ function judgeHumanDecisionForTask(
   if (signal.choice === "grant") {
     if (application.kind !== "task_grant")
       return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+    // 실행 전 승인은 READY 로만 돌아간다 — 대기 요청 enqueue·예약은 승인 뒤 READY 에서 다시 판정된다.
+    if (
+      task.pendingDecision.kind === "pre_execution_approval" &&
+      application.resume.to !== "READY"
+    ) {
+      return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+    }
     if (application.resume.to === "READY") {
       transitionEvents = [
         mkEvent(
@@ -475,7 +524,16 @@ function judgeHumanDecisionForTask(
   } else {
     if (application.kind !== "task_deny")
       return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
-    if (application.resolution === "declined") {
+    // 거부는 정확히 두 형태다: declined, 그리고 Task 의 유일한 효과였던 dead letter 의 폐기.
+    // 그 밖의 값(타입 없는 호출자의 누락·임의 문자열 포함)은 FAILED 로 새지 않고 거절한다.
+    const resolution: unknown = application.resolution;
+    const discardsDeadLetter =
+      resolution === "discarded_only_effect" &&
+      task.pendingDecision?.kind === "dead_letter_resolution_required";
+    if (resolution !== "declined" && !discardsDeadLetter) {
+      return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+    }
+    if (resolution === "declined") {
       transitionEvents = [
         mkEvent(
           "human_decision_denied",
@@ -514,20 +572,12 @@ function judgeHumanDecisionForWork(
   application: DecisionApplication,
   now: UtcInstant,
   workId: WorkRecord["id"],
+  candidateKey: SignalDedupKey,
 ): SignalJudgement {
   const work = aggregate.work;
   if (work.id !== workId)
     return { kind: "not_applicable", rejection: { reason: "unknown_subject" } };
   const subject: Subject = { workId };
-
-  const keyResult = deriveSignalDedupKey({
-    signalType: "human_decision",
-    decisionId: signal.decisionId,
-    expectedRevision: signal.expectedRevision,
-    choice: signal.choice,
-  });
-  if (!keyResult.ok) return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
-  const candidateKey = keyResult.value;
 
   if (isAccepted(aggregate, candidateKey)) {
     return {
@@ -625,10 +675,12 @@ function judgeHumanDecisionForWork(
       return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
     }
     // 초안 검증·task_created·draftRefMap 생성은 work-decide.ts::decidePlanCommit 재사용(복제 금지).
-    const planDecision = decidePlanCommit(deps, work, proposal, { decisionId: signal.decisionId });
+    // 재검증이 무효면 커밋·키 선점 없이 거절한다 — 무효 적용은 수용 키를 선점하지 않는다.
+    const planDecision = decidePlanCommit(deps, work, proposal, {
+      decisionId: signal.decisionId,
+      onInvalid: "reject",
+    });
     if (planDecision.kind === "rejected") {
-      // design.md 는 grant 커밋 규칙 위반(basePlanRevision 불일치 등)의 신호 판정 결과를 명시하지
-      // 않는다 — 임시로 not_applicable 로 표면화(구현 이탈 아님, 명령 경로와 같은 거절 사유 전달).
       return { kind: "not_applicable", rejection: planDecision.rejection };
     }
     transitionEvents = [...planDecision.events];
@@ -675,48 +727,6 @@ function judgeCancelRequested(
     ? { taskId: (task as TaskRecord).id }
     : { workId: aggregate.work.id };
 
-  if (signal.actorSource !== "human_local") {
-    const isWaitingConfirmation =
-      isTaskSubject && (task as TaskRecord).state === "WAITING_CONFIRMATION";
-    const eventName = isWaitingConfirmation
-      ? "confirmation_rejected_forged_provenance"
-      : "signal_rejected";
-    const observedState = isTaskSubject ? (task as TaskRecord).state : aggregate.work.state;
-    const decided: DecidedEvent =
-      eventName === "confirmation_rejected_forged_provenance"
-        ? mkEvent(
-            "confirmation_rejected_forged_provenance",
-            {
-              signalId: signal.signalId,
-              signalType: "cancel_requested",
-              candidateKey: emptyKey(),
-              subject,
-              determinedActorSource: signal.actorSource,
-            },
-            isTaskSubject ? { taskId: (task as TaskRecord).id } : { workId: aggregate.work.id },
-          )
-        : mkEvent(
-            "signal_rejected",
-            {
-              signalId: signal.signalId,
-              signalType: "cancel_requested",
-              candidateKey: emptyKey(),
-              subject,
-              reason: "provenance_not_human",
-              observedState,
-            },
-            isTaskSubject ? { taskId: (task as TaskRecord).id } : { workId: aggregate.work.id },
-          );
-    return {
-      kind:
-        eventName === "confirmation_rejected_forged_provenance" ? "forged_provenance" : "rejected",
-      ...(eventName === "signal_rejected"
-        ? { reason: "provenance_not_human" as NonStaleReason }
-        : {}),
-      commit: record(deps, aggregate, decided, now, signal),
-    } as SignalJudgement;
-  }
-
   const keyResult = deriveSignalDedupKey({
     signalType: "cancel_requested",
     subjectId: isTaskSubject ? (task as TaskRecord).id : aggregate.work.id,
@@ -724,6 +734,32 @@ function judgeCancelRequested(
   });
   if (!keyResult.ok) return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
   const candidateKey = keyResult.value;
+
+  // 비인간 취소는 상태와 무관하게 신호 종류로 거절한다(확인 대기 Task 라도 위조 이벤트가 아니다).
+  if (signal.actorSource !== "human_local") {
+    return {
+      kind: "rejected",
+      reason: "provenance_not_human",
+      commit: record(
+        deps,
+        aggregate,
+        mkEvent(
+          "signal_rejected",
+          {
+            signalId: signal.signalId,
+            signalType: "cancel_requested",
+            candidateKey,
+            subject,
+            reason: "provenance_not_human",
+            observedState: isTaskSubject ? (task as TaskRecord).state : aggregate.work.state,
+          },
+          isTaskSubject ? { taskId: (task as TaskRecord).id } : { workId: aggregate.work.id },
+        ),
+        now,
+        signal,
+      ),
+    };
+  }
 
   if (isAccepted(aggregate, candidateKey)) {
     return {
@@ -825,6 +861,14 @@ function judgeReplanRequested(
     return { kind: "not_applicable", rejection: { reason: "unknown_subject" } };
   const subject: Subject = { workId: work.id };
 
+  const keyResult = deriveSignalDedupKey({
+    signalType: "replan_requested",
+    workId: work.id,
+    expectedRevision: signal.expectedRevision,
+  });
+  if (!keyResult.ok) return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+  const candidateKey = keyResult.value;
+
   if (signal.actorSource !== "human_local") {
     return {
       kind: "rejected",
@@ -837,7 +881,7 @@ function judgeReplanRequested(
           {
             signalId: signal.signalId,
             signalType: "replan_requested",
-            candidateKey: emptyKey(),
+            candidateKey,
             subject,
             reason: "provenance_not_human",
             observedState: work.state,
@@ -849,14 +893,6 @@ function judgeReplanRequested(
       ),
     };
   }
-
-  const keyResult = deriveSignalDedupKey({
-    signalType: "replan_requested",
-    workId: work.id,
-    expectedRevision: signal.expectedRevision,
-  });
-  if (!keyResult.ok) return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
-  const candidateKey = keyResult.value;
 
   if (isAccepted(aggregate, candidateKey)) {
     return {
@@ -1037,13 +1073,6 @@ export function judgeDelegationResponseStaleness(
     return staled as DelegationStalenessJudgement;
   }
   return { kind: "staleness_passed", candidateKey };
-}
-
-function emptyKey(): SignalDedupKey {
-  return "" as SignalDedupKey;
-}
-function candidateKeyOrEmpty(_signal: unknown, _task: TaskRecord): SignalDedupKey {
-  return emptyKey();
 }
 
 function staleCommit(

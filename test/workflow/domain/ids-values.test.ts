@@ -13,6 +13,7 @@ import {
 } from "../../../src/workflow/domain/index.js";
 import type { TaskId, WorkId, IdGenerator } from "../../../src/workflow/domain/index.js";
 import { planned, draft } from "./helpers/fixtures.js";
+import { testRegistries } from "./helpers/registry-fixtures.js";
 
 describe("SC-001: ID 종류 분리·형식 거절", () => {
   it("Happy: 올바른 tsk_ 문자열이 TaskId 로 구성된다 (test_SC001_valid_task_id_constructs)", () => {
@@ -48,10 +49,12 @@ describe("SC-002: 생성형 ID 는 주입된 생성기에서만 온다", () => {
     const a = planned([draft("t1")], {
       ids: makeCountingGenerator("seedA"),
       operationalDefaults: { agentDispatchDeadlineMs: 600_000 },
+      registries: testRegistries(),
     });
     const b = planned([draft("t1")], {
       ids: makeCountingGenerator("seedA"),
       operationalDefaults: { agentDispatchDeadlineMs: 600_000 },
+      registries: testRegistries(),
     });
     expect(JSON.stringify(a.aggregate)).toBe(JSON.stringify(b.aggregate));
   });
@@ -60,10 +63,12 @@ describe("SC-002: 생성형 ID 는 주입된 생성기에서만 온다", () => {
     const a = planned([draft("t1")], {
       ids: makeCountingGenerator("seedA"),
       operationalDefaults: { agentDispatchDeadlineMs: 600_000 },
+      registries: testRegistries(),
     });
     const b = planned([draft("t1")], {
       ids: makeCountingGenerator("seedB"),
       operationalDefaults: { agentDispatchDeadlineMs: 600_000 },
+      registries: testRegistries(),
     });
     expect(a.aggregate.work.id).not.toBe(b.aggregate.work.id);
   });

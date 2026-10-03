@@ -5,6 +5,7 @@
 import { type Result, ok, err } from "./result.js";
 import type { WorkAggregate } from "./aggregate.js";
 import type { DomainEvent, WorkflowEventEnvelope } from "./events.js";
+import { DOMAIN_EVENT_PRODUCERS } from "./events.js";
 import { EVENT_CATALOG } from "./contract/index.js";
 import type { EventProducer } from "./contract/index.js";
 import { evolveCommit } from "./evolve.js";
@@ -43,7 +44,7 @@ export function foldEvents(
     if (catalogRow === undefined) {
       return err({ kind: "unknown_event_type", eventId: event.id, type: event.type });
     }
-    if (catalogRow.producedBy !== "phase1-core") {
+    if (!DOMAIN_EVENT_PRODUCERS.includes(catalogRow.producedBy)) {
       return err({
         kind: "unsupported_event_type",
         eventId: event.id,

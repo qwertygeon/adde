@@ -21,6 +21,10 @@ import type { PendingDecision } from "./pending-decision.js";
 import type { SignalDedupKey } from "./derivation/dedup-key.js";
 import type { LogPosition } from "./derivation/occurrence-id.js";
 import type { MemberSnapshot } from "./completion.js";
+import type { TaskBlockReason } from "./commands.js";
+import type { ReactionSpec } from "./validation/reaction-spec.js";
+import type { DecisionId } from "./ids.js";
+import type { ContentHash } from "./derivation/dedup-key.js";
 
 export interface OpenAttempt {
   readonly attemptId: AttemptId;
@@ -64,6 +68,14 @@ export type WorkSource =
       readonly input: OccurrenceInput;
     };
 
+/** 열린 attempt 가 끝난 뒤 도착한 결과 — 증거로 보존하고 상태는 바꾸지 않는다. */
+export interface LateResult {
+  readonly attemptId: AttemptId;
+  readonly resultContentHash: ContentHash;
+  /** 열린 결정의 표시에 반영됐으면 그 결정. */
+  readonly presentedInDecisionId?: DecisionId;
+}
+
 export interface TaskRecord {
   readonly id: TaskId;
   readonly workId: WorkId;
@@ -78,6 +90,15 @@ export interface TaskRecord {
   readonly parentTaskId?: TaskId;
   readonly trigger: TriggerSpec;
   readonly policy: TaskPolicy;
+  /** 선언 전이 반응(부재 = []). */
+  readonly reactions: readonly ReactionSpec[];
+  /** BLOCKED 동안의 차단 사유. */
+  readonly blockReason?: TaskBlockReason;
+  /** 실행 전 승인 결정이 grant 로 닫혔음 — Task 당 한 번. */
+  readonly preExecutionApproved: boolean;
+  /** attempt 결과로 BLOCKED_AWAITING_HUMAN 에 들어왔을 때 그 attempt. */
+  readonly parkedAttemptId?: AttemptId;
+  readonly lateResults: readonly LateResult[];
   /** 계약 `Task.currentAttemptId = openAttempt.attemptId`. */
   readonly openAttempt?: OpenAttempt;
   /** 시작한 attempt 수(0 부터). */

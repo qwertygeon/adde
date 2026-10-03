@@ -1,7 +1,8 @@
 /**
- * 이벤트 → 상태 적용(단일 적용 경로)·커밋 단위 revision 규칙(FR-006, FR-011, FR-016, FR-017) —
- * design.md §2 "실행 모델"·§3 "커밋 파이프라인" 단계 7·ADR-004 그대로. 이벤트별 적용은 페이로드가 담은
- * 값만 쓴다(판정 로직 금지 — 이벤트가 곧 결정).
+ * 이벤트 → 상태 적용(단일 적용 경로)·커밋 단위 revision 규칙. 이벤트별 적용은 페이로드가 담은 값만
+ * 쓴다(판정 로직 금지 — 이벤트가 곧 결정). Task revision 은 그 Task 의 전이 행·동반 이벤트(리마인더
+ * 제외)나 열린 결정의 표시를 바꾸는 이벤트가 커밋에 하나라도 있으면 1 오른다 — 거절·중복 기록·신호
+ * 수용 기록·승인 채널 거절 기록은 단독으로 올리지 않는다.
  */
 import type { TaskId, EventId } from "./ids.js";
 import type {
@@ -12,17 +13,37 @@ import type {
   TerminalEventRef,
 } from "./aggregate.js";
 import type { DomainEvent } from "./events.js";
-import { RECORD_ONLY_EVENT_TYPES, WORK_EVENT_TYPES } from "./events.js";
+import { RECORD_ONLY_EVENT_TYPES, TASK_REVISION_EVENT_TYPES, WORK_EVENT_TYPES } from "./events.js";
 import type { SignalDedupKey } from "./derivation/dedup-key.js";
 
 const RECORD_ONLY_SET: ReadonlySet<string> = new Set(RECORD_ONLY_EVENT_TYPES);
 const WORK_EVENT_SET: ReadonlySet<string> = new Set(WORK_EVENT_TYPES);
+const TASK_REVISION_EVENT_SET: ReadonlySet<string> = new Set(TASK_REVISION_EVENT_TYPES);
+
+function bumpsTaskRevision(event: DomainEvent): boolean {
+  if (TASK_REVISION_EVENT_SET.has(event.type)) return true;
+  return (
+    event.type === "agent_result_unmatched" && event.payload.presentedInDecisionId !== undefined
+  );
+}
 
 function requireTaskId(event: DomainEvent): TaskId {
   if (event.taskId === undefined) {
     throw new Error(`evolve: 이벤트 ${event.type} 에 taskId 가 없다`);
   }
   return event.taskId;
+}
+
+/** 필드를 지운 레코드를 그대로 둔다 — 부분 패치 병합은 생략한 optional 필드를 지우지 못한다. */
+function replaceTask(
+  tasks: Record<string, TaskRecord>,
+  taskId: TaskId,
+  next: TaskRecord,
+): Record<string, TaskRecord> {
+  if (tasks[taskId] === undefined) {
+    throw new Error(`evolve: 알 수 없는 Task 대상 ${taskId}`);
+  }
+  return { ...tasks, [taskId]: next };
 }
 
 function patchTask(
@@ -49,7 +70,12 @@ function withoutOpenAttempt(current: TaskRecord): TaskRecord {
 }
 
 function withoutPendingDecision(current: TaskRecord): TaskRecord {
-  return omitFields(current, ["pendingDecision"]);
+  return omitFields(current, ["pendingDecision", "parkedAttemptId"]);
+}
+
+/** 종결 이벤트 — 열린 attempt·주차 attempt 를 함께 닫는다. */
+function withoutOpenAttemptOrPark(current: TaskRecord): TaskRecord {
+  return omitFields(current, ["openAttempt", "parkedAttemptId"]);
 }
 
 /** 한 커밋(같은 `commit.id`)의 이벤트를 순서대로 적용한다. 첫 커밋은 `work_created` 여야 한다. */
@@ -87,10 +113,8 @@ export function evolveCommit(
 
   for (const event of events) {
     const recordOnly = RECORD_ONLY_SET.has(event.type);
-    if (!recordOnly) {
-      if (WORK_EVENT_SET.has(event.type)) workMutated = true;
-      if (event.taskId !== undefined) mutatedTaskIds.add(event.taskId);
-    }
+    if (!recordOnly && WORK_EVENT_SET.has(event.type)) workMutated = true;
+    if (event.taskId !== undefined && bumpsTaskRevision(event)) mutatedTaskIds.add(event.taskId);
 
     switch (event.type) {
       case "work_created": {
@@ -153,7 +177,7 @@ export function evolveCommit(
         break;
       }
       case "work_plan_invalid":
-        // 상태·revision 불변 — 계약: work_plan_invalid 는 전이를 기록하지 않는다.
+        // 상태 불변 — Work 이벤트라 커밋 단위 Work revision 은 오른다(계약 Work revision 규칙).
         break;
       case "work_plan_committed": {
         const p = event.payload;
@@ -213,6 +237,9 @@ export function evolveCommit(
           ...(p.parentTaskId !== undefined ? { parentTaskId: p.parentTaskId } : {}),
           trigger: p.trigger,
           policy: p.policy,
+          reactions: p.reactions,
+          preExecutionApproved: false,
+          lateResults: [],
           lastAttemptNo: 0,
           dependencyActivated: false,
           createdAt: event.occurredAt,
@@ -245,7 +272,7 @@ export function evolveCommit(
         tasks = patchTask(tasks, requireTaskId(event), {
           state: "SCHEDULED",
           scheduledOccurrenceId: p.occurrenceId,
-          ...(p.cause === "dependencies_complete" ? { dependencyActivated: true } : {}),
+          ...(p.cause === "dependency_satisfaction" ? { dependencyActivated: true } : {}),
         });
         break;
       }
@@ -281,7 +308,7 @@ export function evolveCommit(
       }
       case "task_retry_wait": {
         const taskId = requireTaskId(event);
-        tasks = patchTask(tasks, taskId, {
+        tasks = replaceTask(tasks, taskId, {
           ...withoutOpenAttempt(tasks[taskId] as TaskRecord),
           state: "RETRY_WAIT",
         });
@@ -293,10 +320,11 @@ export function evolveCommit(
       case "task_awaiting_human": {
         const p = event.payload;
         const taskId = requireTaskId(event);
-        tasks = patchTask(tasks, taskId, {
-          ...withoutOpenAttempt(tasks[taskId] as TaskRecord),
+        tasks = replaceTask(tasks, taskId, {
+          ...omitFields(tasks[taskId] as TaskRecord, ["openAttempt", "parkedAttemptId"]),
           state: "BLOCKED_AWAITING_HUMAN",
           pendingDecision: p.pendingDecision,
+          ...(p.attemptId !== undefined ? { parkedAttemptId: p.attemptId } : {}),
         });
         decisionSubjects = { ...decisionSubjects, [p.pendingDecision.id]: { taskId } };
         break;
@@ -304,8 +332,13 @@ export function evolveCommit(
       case "human_decision_granted": {
         const p = event.payload;
         const taskId = requireTaskId(event);
-        const base = withoutPendingDecision(tasks[taskId] as TaskRecord);
-        tasks = patchTask(
+        const current = tasks[taskId] as TaskRecord;
+        const approvedNow = current.pendingDecision?.kind === "pre_execution_approval";
+        const base = {
+          ...withoutPendingDecision(current),
+          ...(approvedNow ? { preExecutionApproved: true } : {}),
+        };
+        tasks = replaceTask(
           tasks,
           taskId,
           p.resumedTo === "SCHEDULED"
@@ -323,7 +356,7 @@ export function evolveCommit(
         if (p.role === "transition") {
           const taskId = requireTaskId(event);
           const base = withoutPendingDecision(tasks[taskId] as TaskRecord);
-          tasks = patchTask(tasks, taskId, {
+          tasks = replaceTask(tasks, taskId, {
             ...base,
             state: "REJECTED",
             terminalRef: terminalRefOf(event),
@@ -332,15 +365,21 @@ export function evolveCommit(
         break;
       }
       case "task_blocked":
-        tasks = patchTask(tasks, requireTaskId(event), { state: "BLOCKED" });
+        tasks = patchTask(tasks, requireTaskId(event), {
+          state: "BLOCKED",
+          blockReason: event.payload.blockReason,
+        });
         break;
-      case "task_unblocked":
-        tasks = patchTask(tasks, requireTaskId(event), { state: "VALIDATING" });
+      case "task_unblocked": {
+        const taskId = requireTaskId(event);
+        const current = omitFields(tasks[taskId] as TaskRecord, ["blockReason"]);
+        tasks = { ...tasks, [taskId]: { ...current, state: "VALIDATING" } };
         break;
+      }
       case "task_completed": {
         const taskId = requireTaskId(event);
-        tasks = patchTask(tasks, taskId, {
-          ...withoutOpenAttempt(tasks[taskId] as TaskRecord),
+        tasks = replaceTask(tasks, taskId, {
+          ...withoutOpenAttemptOrPark(tasks[taskId] as TaskRecord),
           state: "COMPLETED",
           terminalRef: terminalRefOf(event),
         });
@@ -348,8 +387,8 @@ export function evolveCommit(
       }
       case "task_failed": {
         const taskId = requireTaskId(event);
-        tasks = patchTask(tasks, taskId, {
-          ...withoutOpenAttempt(tasks[taskId] as TaskRecord),
+        tasks = replaceTask(tasks, taskId, {
+          ...withoutOpenAttemptOrPark(tasks[taskId] as TaskRecord),
           state: "FAILED",
           terminalRef: terminalRefOf(event),
         });
@@ -357,8 +396,8 @@ export function evolveCommit(
       }
       case "task_expired": {
         const taskId = requireTaskId(event);
-        tasks = patchTask(tasks, taskId, {
-          ...withoutOpenAttempt(tasks[taskId] as TaskRecord),
+        tasks = replaceTask(tasks, taskId, {
+          ...withoutOpenAttemptOrPark(tasks[taskId] as TaskRecord),
           state: "EXPIRED",
           terminalRef: terminalRefOf(event),
         });
@@ -367,8 +406,8 @@ export function evolveCommit(
       case "task_canceled": {
         const p = event.payload;
         const taskId = requireTaskId(event);
-        tasks = patchTask(tasks, taskId, {
-          ...withoutOpenAttempt(tasks[taskId] as TaskRecord),
+        tasks = replaceTask(tasks, taskId, {
+          ...withoutOpenAttemptOrPark(tasks[taskId] as TaskRecord),
           state: "CANCELED",
           cancelOrigin: p.origin,
           terminalRef: terminalRefOf(event),
@@ -377,8 +416,8 @@ export function evolveCommit(
       }
       case "task_skipped": {
         const taskId = requireTaskId(event);
-        tasks = patchTask(tasks, taskId, {
-          ...withoutOpenAttempt(tasks[taskId] as TaskRecord),
+        tasks = replaceTask(tasks, taskId, {
+          ...withoutOpenAttemptOrPark(tasks[taskId] as TaskRecord),
           state: "SKIPPED",
           terminalRef: terminalRefOf(event),
         });
@@ -389,8 +428,29 @@ export function evolveCommit(
         break;
 
       case "reminder_occurrence_emitted":
-        // WAITING_CONFIRMATION 자기 전이 — 상태 불변(ADR-017 로 revision 만 오른다).
+        // 확인 대기·결정 만료 리마인더 — 상태·revision 불변.
         break;
+      case "approval_surface_refused":
+        // 거절 기록 — 같은 커밋의 task_blocked 가 상태를 바꾼다. 정책 값은 내려 쓰지 않는다.
+        break;
+      case "agent_result_unmatched": {
+        const p = event.payload;
+        const taskId = requireTaskId(event);
+        const current = tasks[taskId] as TaskRecord;
+        tasks = patchTask(tasks, taskId, {
+          lateResults: [
+            ...current.lateResults,
+            {
+              attemptId: p.attemptId,
+              resultContentHash: p.resultContentHash,
+              ...(p.presentedInDecisionId !== undefined
+                ? { presentedInDecisionId: p.presentedInDecisionId }
+                : {}),
+            },
+          ],
+        });
+        break;
+      }
       case "confirmation_accepted":
         tasks = patchTask(tasks, requireTaskId(event), {
           state: "COMPLETED",

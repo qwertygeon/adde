@@ -1,6 +1,6 @@
 /**
- * 커밋 내 연쇄(FR-011, FR-013, FR-014) — design.md §3 "커밋 파이프라인" 단계 3~5 그대로: Work 취소
- * 연쇄, 의존 불충족 라우팅, 의존 활성화, 파생 Work 상태. 순수 함수 — ID 생성·envelope 부여는 engine.ts.
+ * 커밋 내 연쇄 — Work 취소 연쇄, 의존 불충족 라우팅, 의존 활성화, 파생 Work 상태. 순수 함수 — ID
+ * 생성·envelope 부여는 engine.ts.
  */
 import type { WorkAggregate, TaskRecord } from "./aggregate.js";
 import { memberSnapshots } from "./aggregate.js";
@@ -15,6 +15,8 @@ import { deriveOccurrenceId, selectDependencyCausingEvent } from "./derivation/o
 import type { DerivedStateInput } from "./completion.js";
 import { deriveWorkState, evaluateCompletion } from "./completion.js";
 import { DomainInvariantError } from "./result.js";
+import type { DomainRegistries } from "./registry/registries.js";
+import { requiresPreExecutionApproval } from "./policy/pre-execution-approval.js";
 
 export interface CascadeDecided {
   readonly event: DecidedEvent;
@@ -84,8 +86,20 @@ const FAIL_ELIGIBLE_STATES = new Set([
   "BLOCKED",
 ]);
 
-/** 의존 불충족 라우팅·의존 활성화 한 라운드. 변화가 없으면 빈 배열. */
-export function decideDependencyCascadeRound(aggregate: WorkAggregate): readonly CascadeDecided[] {
+/** 의존 충족으로 발화하는 Trigger 인지 등록부 선언으로 판정한다(미등록이면 활성화하지 않는다). */
+function firesOnDependencies(registries: DomainRegistries, task: TaskRecord): boolean {
+  const descriptor = registries.triggers.get(task.trigger.kind, task.trigger.version);
+  return descriptor !== undefined && descriptor.firing === "dependencies_satisfied";
+}
+
+/**
+ * 의존 불충족 라우팅·의존 활성화 한 라운드. 변화가 없으면 빈 배열. 실행 전 승인을 기다리는 Task 는
+ * 활성화하지 않는다 — grant 로 READY 에 돌아온 커밋에서 다시 판정된다.
+ */
+export function decideDependencyCascadeRound(
+  registries: DomainRegistries,
+  aggregate: WorkAggregate,
+): readonly CascadeDecided[] {
   const out: CascadeDecided[] = [];
   for (const taskId of aggregate.work.taskIds) {
     const task = aggregate.tasks[taskId];
@@ -133,8 +147,9 @@ export function decideDependencyCascadeRound(aggregate: WorkAggregate): readonly
 
     if (
       task.state === "READY" &&
-      task.trigger.kind === "dependencies_complete" &&
-      !task.dependencyActivated
+      !task.dependencyActivated &&
+      !requiresPreExecutionApproval(task) &&
+      firesOnDependencies(registries, task)
     ) {
       if (isActivationSatisfied(aggregate, taskId)) {
         const refs = task.dependsOn
@@ -159,7 +174,7 @@ export function decideDependencyCascadeRound(aggregate: WorkAggregate): readonly
                 "task_scheduled",
                 {
                   occurrenceId: occ.value,
-                  cause: "dependencies_complete",
+                  cause: "dependency_satisfaction",
                   causingEventId: causing.id,
                 },
                 { taskId },

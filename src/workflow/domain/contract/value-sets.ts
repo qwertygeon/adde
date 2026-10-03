@@ -18,6 +18,7 @@ export const PENDING_DECISION_KINDS = [
   "plan_approval_required",
   "spawn_limit_exceeded",
   "high_risk_reaction_approval",
+  "pre_execution_approval",
   "dead_letter_resolution_required",
   "destructive_control_operation",
 ] as const satisfies readonly string[];

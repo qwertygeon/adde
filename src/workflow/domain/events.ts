@@ -3,7 +3,8 @@
  * 그대로. 카탈로그 밖 이벤트 타입이나 상태 이름은 무시하지 않고 실패로 드러낸다(fold.ts).
  */
 import { type Result, ok, err } from "./result.js";
-import { EVENT_CATALOG } from "./contract/index.js";
+import { EVENT_CATALOG, TASK_TRANSITION_ROWS } from "./contract/index.js";
+import type { EventProducer } from "./contract/index.js";
 import type { UnknownNameError } from "./task-state.js";
 import type {
   TaskId,
@@ -21,7 +22,11 @@ import type { PendingDecision } from "./pending-decision.js";
 import type { TriggerSpec } from "./trigger.js";
 import type { TaskPolicy } from "./task-policy.js";
 import type { TaskBlockReason, AttemptOutcome } from "./commands.js";
-import type { SignalDedupKey } from "./derivation/dedup-key.js";
+import type { SignalDedupKey, ContentHash } from "./derivation/dedup-key.js";
+import type { InputRequest } from "./registry/descriptors.js";
+import type { ValidationIssue } from "./validation/task-validation.js";
+import type { ReactionSpec } from "./validation/reaction-spec.js";
+import type { ApprovalSurfaceRefusalReason } from "./policy/approval-surface.js";
 import type { StaleReason, NonStaleReason } from "./engine.js";
 
 export const WORKFLOW_EVENT_SCHEMA_VERSION = 1;
@@ -44,7 +49,7 @@ export interface WorkflowEventEnvelope<T = unknown> {
 
 export type CatalogEventType = (typeof EVENT_CATALOG)[number]["name"];
 
-/** `producedBy = "phase1-core"` 파생 50종. */
+/** 도메인이 생산하는 이벤트 — 카탈로그 `producedBy` 가 `DOMAIN_EVENT_PRODUCERS` 인 행. */
 export type DomainEventType =
   | "work_created"
   | "work_planning_started"
@@ -95,7 +100,14 @@ export type DomainEventType =
   | "confirmation_rejected"
   | "confirmation_cancelled"
   | "confirmation_expired"
-  | "confirmation_rejected_forged_provenance";
+  | "confirmation_rejected_forged_provenance"
+  | "approval_surface_refused"
+  | "agent_result_unmatched";
+
+export const DOMAIN_EVENT_PRODUCERS: readonly EventProducer[] = [
+  "phase1-core",
+  "phase1-registries",
+];
 
 export type SignalTypeName =
   | "confirmation_decision"
@@ -185,15 +197,16 @@ export interface EventPayloadMap {
     readonly parentTaskId?: TaskId;
     readonly trigger: TriggerSpec;
     readonly policy: TaskPolicy;
+    readonly reactions: readonly ReactionSpec[];
   };
   task_validation_started: Record<string, never>;
   task_validated: Record<string, never>;
-  task_validation_failed: { readonly issues: readonly unknown[] };
-  task_input_requested: { readonly requests: readonly unknown[] };
+  task_validation_failed: { readonly issues: readonly ValidationIssue[] };
+  task_input_requested: { readonly requests: readonly InputRequest[] };
   task_input_received: Record<string, never>;
   task_scheduled: {
     readonly occurrenceId: OccurrenceId;
-    readonly cause: "schedule" | "signal" | "retry" | "dependencies_complete";
+    readonly cause: "schedule" | "external_signal" | "retry" | "dependency_satisfaction";
     readonly causingEventId?: string;
   };
   task_unscheduled: { readonly invalidatedOccurrenceId: OccurrenceId };
@@ -208,6 +221,7 @@ export interface EventPayloadMap {
     readonly attemptId: AttemptId;
     readonly attemptNo: number;
     readonly retryDelayMs: number;
+    readonly jitterDrawMs?: number;
     readonly outcome: AttemptOutcome;
   };
   task_retry_ready: Record<string, never>;
@@ -250,7 +264,10 @@ export interface EventPayloadMap {
     readonly currentRevision: number;
     readonly expectedRevision: number;
   };
-  reminder_occurrence_emitted: { readonly occurrenceId: OccurrenceId };
+  reminder_occurrence_emitted: {
+    readonly occurrenceId: OccurrenceId;
+    readonly decisionId?: DecisionId;
+  };
   signal_accepted: {
     readonly signalId: SignalId;
     readonly signalType: SignalTypeName;
@@ -296,6 +313,16 @@ export interface EventPayloadMap {
     readonly subject: SignalSubjectRef;
     readonly determinedActorSource: ActorSource;
     readonly provenance?: import("./values.js").ProvenanceEvidence;
+  };
+  approval_surface_refused: {
+    readonly declaredSurface: "out_of_band";
+    readonly reason: ApprovalSurfaceRefusalReason;
+  };
+  agent_result_unmatched: {
+    readonly attemptId: AttemptId;
+    readonly reason: "unknown_dispatch" | "task_terminal" | "superseded_attempt" | "attempt_ended";
+    readonly resultContentHash: ContentHash;
+    readonly presentedInDecisionId?: DecisionId;
   };
 }
 
@@ -365,6 +392,28 @@ export const RECORD_ONLY_EVENT_TYPES: readonly DomainEventType[] = [
   "signal_rejected",
   "confirmation_rejected_forged_provenance",
 ];
+
+/** 결정 만료·확인 대기 리마인더 — 상태와 revision 을 바꾸지 않는다. */
+export const TASK_REMINDER_EVENT_TYPES: readonly DomainEventType[] = [
+  "reminder_occurrence_emitted",
+];
+
+const DOMAIN_EVENT_TYPE_SET: ReadonlySet<string> = new Set(
+  EVENT_CATALOG.filter((row) => DOMAIN_EVENT_PRODUCERS.includes(row.producedBy)).map(
+    (row) => row.name,
+  ),
+);
+
+const TASK_ROW_EVENT_NAMES: readonly string[] = [
+  ...new Set(TASK_TRANSITION_ROWS.flatMap((row) => [row.event, ...row.companions])),
+];
+
+/** Task revision 을 올리는 이벤트 — 전이 표 행·동반 이벤트 중 도메인 생산분, 리마인더 제외. */
+export const TASK_REVISION_EVENT_TYPES: readonly DomainEventType[] = TASK_ROW_EVENT_NAMES.filter(
+  (name) =>
+    DOMAIN_EVENT_TYPE_SET.has(name) &&
+    !(TASK_REMINDER_EVENT_TYPES as readonly string[]).includes(name),
+) as DomainEventType[];
 
 const CATALOG_NAME_SET: ReadonlySet<string> = new Set(EVENT_CATALOG.map((row) => row.name));
 

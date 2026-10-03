@@ -4,8 +4,8 @@
  */
 import { type Result, ok, err } from "./result.js";
 import { PENDING_DECISION_KINDS } from "./contract/index.js";
-import { parseEntityId } from "./ids.js";
-import type { DecisionId, TaskId, WorkId, PlanProposalId } from "./ids.js";
+import { parseEntityId, nextEntityId } from "./ids.js";
+import type { DecisionId, TaskId, WorkId, PlanProposalId, IdGenerator } from "./ids.js";
 import { parseUtcInstant } from "./values.js";
 import type { UtcInstant } from "./values.js";
 
@@ -183,4 +183,23 @@ export function isTaskSubjectDecision(
   d: PendingDecision,
 ): d is Extract<PendingDecision, { readonly taskId: TaskId }> {
   return "taskId" in d;
+}
+
+/**
+ * 실행 전 승인 결정 — 요약은 Task 제목, 만료 없음(Task 의 유효기한은 `policy.expiresAt` 이 맡는다).
+ * READY 진입 커밋과 미승인 READY 출구 개입이 같은 생성기를 쓴다.
+ */
+export function buildPreExecutionApprovalDecision(
+  ids: IdGenerator,
+  task: { readonly id: TaskId; readonly title: string },
+  now: UtcInstant,
+): PendingDecision {
+  return {
+    id: nextEntityId(ids, "decision"),
+    kind: "pre_execution_approval",
+    taskId: task.id,
+    requestedAt: now,
+    summary: task.title,
+    surfaceDeliveries: [],
+  };
 }

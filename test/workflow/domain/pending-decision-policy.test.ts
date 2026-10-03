@@ -115,7 +115,7 @@ function fullPolicyRaw() {
     terminalRequired: true,
     onDependencyUnsatisfied: "block",
     approvalRequiredBeforeExecute: false,
-    confirmationSurface: "markdown",
+    approvalSurface: "markdown",
     fanOutMaxConcurrent: 1,
     unattended: { eligible: false, onGateDenied: "block_awaiting_human" },
     retry: { maxAttempts: 3, initialDelayMs: 1_000, maxDelayMs: 60_000, backoff: "fixed" },

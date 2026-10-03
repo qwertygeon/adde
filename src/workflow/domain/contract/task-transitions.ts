@@ -79,7 +79,8 @@ export const TASK_TRANSITION_ROWS = [
     from: ["VALIDATING"],
     to: "BLOCKED",
     event: "task_blocked",
-    condition: "Descriptor `(id, version)` unknown, or dependency unsatisfiable",
+    condition:
+      'Descriptor `(id, version)` unknown, dependency unsatisfiable, or the approval surface was refused ("TaskPolicy" "Approval surface")',
     companions: [],
   },
   {
@@ -116,7 +117,7 @@ export const TASK_TRANSITION_ROWS = [
     to: "SCHEDULED",
     event: "task_scheduled",
     condition:
-      "A durable trigger occurrence is persisted for the Task — from the schedule for `at@1`/`after@1`, or, for `dependencies_complete@1` and `signal@1`, derived from the committed causing event in the same commit as that event",
+      'A durable trigger occurrence is persisted for the Task \u2014 from the schedule for `at@1`/`after@1`, or, for `dependencies_complete@1` and `signal@1`, derived from the committed causing event in the same commit as that event, or, for a `dependencies_complete@1` Task that reaches `READY` after its dependencies were satisfied, in the commit where it reaches `READY` ("Occurrence ID derivation")',
     companions: [],
   },
   {
@@ -346,7 +347,8 @@ export const TASK_TRANSITION_ROWS = [
     from: ["BLOCKED"],
     to: "VALIDATING",
     event: "task_unblocked",
-    condition: "The blocking condition was repaired; revalidate before any execution",
+    condition:
+      'The blocking condition was repaired; revalidate before any execution. Never for `blockReason: "approval_surface_refused"`',
     companions: [],
   },
   {

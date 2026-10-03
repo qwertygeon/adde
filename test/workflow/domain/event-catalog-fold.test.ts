@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   EVENT_CATALOG,
+  DOMAIN_EVENT_PRODUCERS,
+  TASK_REMINDER_EVENT_TYPES,
   foldEvents,
   executeCommand,
   createWork,
@@ -28,7 +30,12 @@ import {
   reachTaskState,
   reachWorkState,
   requireTaskFor,
+  patchTask,
+  basePolicy,
+  reachDeadLetterParked,
 } from "./helpers/fixtures.js";
+
+const DOMAIN_PRODUCERS: ReadonlySet<string> = new Set(DOMAIN_EVENT_PRODUCERS);
 
 describe("SC-028: 이벤트 카탈로그 전사가 완결되어 있다", () => {
   it("Happy: 이름 중복 0·타입마다 효과 등급 정확히 하나 (test_SC028_names_unique_one_effect_class_each)", () => {
@@ -103,10 +110,37 @@ describe("SC-028: 이벤트 카탈로그 전사가 완결되어 있다", () => {
       });
       if (outcome.kind === "committed") for (const e of outcome.commit.events) produced.add(e.type);
     }
-    const phase1CoreNames = EVENT_CATALOG.filter((e) => e.producedBy === "phase1-core").map(
+    // 승인 채널 거절 — 같은 등록부로 계획 커밋이 막으므로 레코드 패치(다른 생성 경로 대용)로 재현.
+    {
+      const { deps, aggregate, taskId } = reachTaskState("VALIDATING");
+      const patched = patchTask(aggregate, taskId, {
+        policy: basePolicy({ approvalSurface: "out_of_band", approvalRequiredBeforeExecute: true }),
+      });
+      const outcome = executeCommand(deps, patched, {
+        kind: "complete_validation",
+        taskId,
+        expectedRevision: requireTaskFor(patched, taskId).revision,
+        meta: meta(patched.work.createdAt),
+      });
+      if (outcome.kind === "committed") for (const e of outcome.commit.events) produced.add(e.type);
+    }
+    // 늦은 결과 표시 — dead-letter 결정에 주차된 attempt 의 결과.
+    {
+      const { deps, aggregate, taskId, attemptId } = reachDeadLetterParked();
+      const outcome = executeCommand(deps, aggregate, {
+        kind: "present_late_result",
+        taskId,
+        expectedRevision: requireTaskFor(aggregate, taskId).revision,
+        meta: meta(aggregate.work.createdAt),
+        attemptId,
+        resultContentHash: contentHashOf("late result"),
+      });
+      if (outcome.kind === "committed") for (const e of outcome.commit.events) produced.add(e.type);
+    }
+    const domainNames = EVENT_CATALOG.filter((e) => DOMAIN_PRODUCERS.has(e.producedBy)).map(
       (e) => e.name,
     );
-    const notProduced = phase1CoreNames.filter((name) => !produced.has(name));
+    const notProduced = domainNames.filter((name) => !produced.has(name));
     // 레시피 미비 항목은 test-cases.md "미커버 항목"에 이관 — 본 단언은 그 갭을 명시적으로 드러낸다.
     expect(notProduced, notProduced.join(", ")).toEqual([]);
   });
@@ -133,7 +167,7 @@ describe("SC-029: 알 수 없는 이름은 무시되지 않는다", () => {
   });
 
   it("Edge: 후속 소유 이벤트는 unsupported_event_type 이 된다 (test_SC029_later_phase_event_fold_unsupported)", () => {
-    const laterPhaseEvent = EVENT_CATALOG.find((e) => e.producedBy !== "phase1-core");
+    const laterPhaseEvent = EVENT_CATALOG.find((e) => !DOMAIN_PRODUCERS.has(e.producedBy));
     expect(laterPhaseEvent).toBeDefined();
     if (laterPhaseEvent === undefined) return;
     const { aggregate } = reachTaskState("READY");
@@ -238,7 +272,6 @@ function buildFullHistoryToReady(seed: string): {
       taskId,
       expectedRevision: requireTaskFor(validating.aggregate, taskId).revision,
       meta: meta(now),
-      outcome: { result: "valid" },
     }),
   );
   return {
@@ -296,7 +329,8 @@ describe("SC-030: fold 가 직접 적용과 같다", () => {
 });
 
 describe("SC-031: 수용된 전이마다 revision 이 정확히 1 오른다", () => {
-  it("Happy: SC-004·SC-017 의 수용 케이스 전부에서 차이가 정확히 1 이다 (test_SC031_every_accepted_row_case_increments_by_one)", () => {
+  it("Happy: 수용 케이스 전부에서 차이가 정확히 1 이고 리마인더 행은 그대로다 (test_SC031_every_accepted_row_case_increments_by_one)", () => {
+    const reminderEvents: ReadonlySet<string> = new Set(TASK_REMINDER_EVENT_TYPES);
     const mismatches: string[] = [];
     for (const [key, rowCase] of Object.entries(TASK_ROW_CASES)) {
       try {
@@ -306,7 +340,8 @@ describe("SC-031: 수용된 전이마다 revision 이 정확히 1 오른다", ()
         const outcome = rowCase.apply(deps, before);
         if (outcome.kind === "committed" || outcome.kind === "accepted") {
           const afterRevision = requireTaskFor(outcome.aggregate, targetTaskId).revision;
-          if (afterRevision - beforeRevision !== 1)
+          const expected = reminderEvents.has(rowCase.row.event) ? 0 : 1;
+          if (afterRevision - beforeRevision !== expected)
             mismatches.push(`${key}: ${beforeRevision}->${afterRevision}`);
         }
       } catch {
@@ -324,7 +359,6 @@ describe("SC-031: 수용된 전이마다 revision 이 정확히 1 오른다", ()
       taskId,
       expectedRevision: before,
       meta: meta(aggregate.work.createdAt),
-      outcome: { result: "valid" },
     });
     if (outcome.kind === "committed")
       expect(requireTaskFor(outcome.aggregate, taskId).revision - before).toBe(1);

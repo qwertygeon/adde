@@ -11,6 +11,8 @@ import {
   reachWorkState,
   testDeps,
   requireTaskFor,
+  patchTask,
+  UNREGISTERED_TASK_TYPE,
 } from "./helpers/fixtures.js";
 
 describe("SC-020: 차단된 Work 의 재계획 진입은 현재 revision 에서만 된다", () => {
@@ -75,7 +77,7 @@ describe("SC-021: 파생 Work 상태가 우선순위대로 평가된다", () => 
     if (memberTaskId === undefined) throw new Error("expected member task");
     const before = requireTaskFor(aggregate, memberTaskId);
     const outcome = executeCommand(deps, aggregate, {
-      kind: "request_confirmation",
+      kind: "begin_confirmation_wait",
       taskId: memberTaskId,
       expectedRevision: before.revision,
       meta: meta(before.createdAt),
@@ -107,15 +109,13 @@ describe("SC-021: 파생 Work 상태가 우선순위대로 평가된다", () => 
         meta: meta(planAgg.work.createdAt),
       }),
     ).aggregate;
-    const blockedOutcome = executeCommand(deps, validating, {
+    // 레코드 패치: 등록부 drift(유형 미등록) 대용 — unblock 으로 다시 검증 가능한 차단을 만든다.
+    const patched = patchTask(validating, memberId, { type: UNREGISTERED_TASK_TYPE });
+    const blockedOutcome = executeCommand(deps, patched, {
       kind: "complete_validation",
       taskId: memberId,
-      expectedRevision: requireTaskFor(validating, memberId).revision,
+      expectedRevision: requireTaskFor(patched, memberId).revision,
       meta: meta(planAgg.work.createdAt),
-      outcome: {
-        result: "blocked",
-        blockReason: { kind: "descriptor_unknown", typeId: "generic_task", typeVersion: 1 },
-      },
     });
     if (blockedOutcome.kind !== "committed")
       throw new Error(`expected blocked to commit, got ${blockedOutcome.kind}`);
@@ -143,7 +143,7 @@ describe("SC-022: Work revision 은 Work 이벤트 커밋에서만 오른다", (
     if (memberTaskId === undefined) throw new Error("expected member task");
     const task = requireTaskFor(aggregate, memberTaskId);
     const outcome = executeCommand(deps, aggregate, {
-      kind: "request_confirmation",
+      kind: "begin_confirmation_wait",
       taskId: memberTaskId,
       expectedRevision: task.revision,
       meta: meta(task.createdAt),

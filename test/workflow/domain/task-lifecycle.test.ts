@@ -8,12 +8,14 @@ import {
 import type { TaskStateName, DecisionSignal } from "../../../src/workflow/domain/index.js";
 import {
   at,
+  deadLetterDecision,
   entityId,
   meta,
   mustOk,
   reachTaskState,
   requireTaskFor,
   taskSubjectPendingDecision,
+  RETRYABLE_FIXTURE_CODE,
 } from "./helpers/fixtures.js";
 
 const TERMINAL_STATES: readonly TaskStateName[] = [
@@ -83,10 +85,9 @@ describe("SC-007: 재시도 예정은 FAILED 를 거치지 않는다", () => {
       const outcome = useDispatchOrphaned
         ? {
             kind: "dispatch_orphaned" as const,
-            retryDelayMs: 1_000,
-            deadLetterDecision: taskSubjectPendingDecision(deps, taskId, before.createdAt),
+            deadLetterDecision: deadLetterDecision(deps, taskId, before.createdAt),
           }
-        : { kind: "attempt_timeout" as const, retryDelayMs: 1_000 };
+        : { kind: "attempt_timeout" as const };
       const result = executeCommand(deps, aggregate, {
         kind: "record_attempt_outcome",
         taskId,
@@ -112,7 +113,7 @@ describe("SC-007: 재시도 예정은 FAILED 를 거치지 않는다", () => {
       expectedRevision: before.revision,
       meta: meta(before.createdAt),
       attemptId,
-      outcome: { kind: "failed", code: "retryable", retryable: true, retryDelayMs: 1_000 },
+      outcome: { kind: "failed", code: RETRYABLE_FIXTURE_CODE },
     });
     if (outcome.kind === "committed") {
       expect(outcome.commit.events.map((e) => e.type)).not.toContain("task_failed");
@@ -215,7 +216,7 @@ describe("SC-013: attempt 결과의 라우팅이 전이 표를 따른다", () =>
     const before = requireTaskFor(aggregate, taskId);
     const attemptId = before.openAttempt?.attemptId;
     if (attemptId === undefined) throw new Error("expected open attempt");
-    const decision = taskSubjectPendingDecision(deps, taskId, before.createdAt);
+    const decision = deadLetterDecision(deps, taskId, before.createdAt);
     const parked = executeCommand(deps, aggregate, {
       kind: "record_attempt_outcome",
       taskId,

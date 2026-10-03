@@ -181,7 +181,7 @@ describe.runIf(gitAvailable)("SC-033: 신규 프로덕션·네이티브 의존�
   };
 
   it.runIf(beforeText !== undefined)(
-    "Happy: 전후 package.json 프로덕션 dependencies 집합 추가가 0건이다",
+    "Happy: 전후 package.json 프로덕션 dependencies 추가가 스키마 라이브러리 1건뿐이다",
     () => {
       const beforePkg = JSON.parse(beforeText as string) as {
         dependencies?: Record<string, string>;
@@ -189,7 +189,8 @@ describe.runIf(gitAvailable)("SC-033: 신규 프로덕션·네이티브 의존�
       const beforeDeps = new Set(Object.keys(beforePkg.dependencies ?? {}));
       const afterDeps = new Set(Object.keys(afterPkg.dependencies ?? {}));
       const added = [...afterDeps].filter((d) => !beforeDeps.has(d));
-      expect(added).toEqual([]);
+      // 이후 차수가 승인받아 추가한 프로덕션 의존은 스키마 라이브러리 하나뿐이다.
+      expect(added).toEqual(["zod"]);
     },
   );
 

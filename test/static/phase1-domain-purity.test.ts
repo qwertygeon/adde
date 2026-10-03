@@ -48,7 +48,8 @@ function importSpecifiers(content: string): string[] {
 function violatesAllowlist(filePath: string, content: string): string[] {
   const violations: string[] = [];
   for (const spec of importSpecifiers(content)) {
-    if (spec === "node:crypto") continue;
+    // 스키마 라이브러리는 패키지 루트 지정자만 허용한다(하위 경로 불허).
+    if (spec === "node:crypto" || spec === "zod") continue;
     if (!spec.startsWith(".")) {
       violations.push(`${filePath}: disallowed import specifier "${spec}"`);
       continue;

@@ -124,7 +124,7 @@ describe("SC-011: 유효기한 뒤에 끝난 attempt 는 만료로 끝난다", (
       expectedRevision: before.revision,
       meta: meta(at("2026-01-01T00:10:00Z")),
       attemptId,
-      outcome: { kind: "attempt_timeout", retryDelayMs: 1_000 },
+      outcome: { kind: "attempt_timeout" },
     });
     expect(outcome.kind).toBe("committed");
     if (outcome.kind === "committed") {

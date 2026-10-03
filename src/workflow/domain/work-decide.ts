@@ -10,6 +10,10 @@ import type { DecidedEvent, DraftRefMapping } from "./events.js";
 import { mkEvent } from "./events.js";
 import type { CommandRejection, DomainDeps } from "./engine.js";
 import { validatePlanDrafts } from "./plan-graph.js";
+import type { PlanValidationIssue } from "./plan-graph.js";
+import type { PlanTaskDraft } from "./commands.js";
+import { validateTask } from "./validation/task-validation.js";
+import type { NormalizedTaskDeclaration } from "./validation/task-validation.js";
 
 export type WorkDecideOutcome =
   | { readonly kind: "events"; readonly events: readonly DecidedEvent[] }
@@ -63,15 +67,79 @@ export type PlanCommitDecision =
   | { readonly kind: "rejected"; readonly rejection: CommandRejection };
 
 export interface PlanCommitOptions {
-  readonly onInvalid?: "stay_planning" | "fail_work";
+  /** "reject" 는 신호 grant 경로 전용 — 무효면 이벤트 없이 거절한다(키 선점·Work 변화 없음). */
+  readonly onInvalid?: "stay_planning" | "fail_work" | "reject";
   readonly decisionId?: DecisionId;
 }
 
+interface DraftCheck {
+  readonly issues: readonly PlanValidationIssue[];
+  /** 이슈가 없으면 초안마다 정규화한 Trigger·정책·반응(초안 순서). */
+  readonly normalized: readonly NormalizedTaskDeclaration[];
+}
+
 /**
- * 계획 커밋 규칙(FR-013, ADR-015) 의 공용 구현 — 직접 명령(`commit_plan`)과 신호 `human_decision`
- * grant(plan 주체, design.md §6 "신호 human_decision grant (plan 주체)" 행) 양쪽이 재사용한다.
- * 주체가 `PLANNING`(명령)이든 `WAITING_APPROVAL`(신호)이든 커밋 규칙 자체는 같다 — 상태 검사는
- * 호출자 책임.
+ * 초안별 검증 — 의존 충족으로 발화하는 Trigger 인데 의존이 없음, 그리고 Task 검증의 차단·구조 실패.
+ * 누락 입력은 계획을 무효로 만들지 않는다(Task 가 커밋된 뒤 검증에서 입력을 묻는다).
+ */
+function checkDrafts(deps: DomainDeps, drafts: readonly PlanTaskDraft[]): DraftCheck {
+  const issues: PlanValidationIssue[] = [];
+  const normalized: NormalizedTaskDeclaration[] = [];
+  for (const draft of drafts) {
+    const trigger = draft.trigger as unknown as {
+      readonly kind?: unknown;
+      readonly version?: unknown;
+    };
+    if (typeof trigger.kind === "string" && typeof trigger.version === "number") {
+      const descriptor = deps.registries.triggers.get(trigger.kind, trigger.version);
+      if (descriptor?.firing === "dependencies_satisfied" && draft.dependsOn.length === 0) {
+        issues.push({
+          kind: "trigger_requires_dependencies",
+          draftRef: draft.draftRef,
+          trigger: { kind: trigger.kind, version: trigger.version },
+        });
+      }
+    }
+    const result = validateTask(deps.registries, {
+      type: draft.type,
+      input: draft.input,
+      trigger: draft.trigger,
+      policy: draft.policy,
+      reactions: draft.reactions,
+    });
+    switch (result.exit) {
+      case "valid":
+      case "input_requested":
+        normalized.push(result.normalized);
+        break;
+      case "blocked":
+        issues.push({
+          kind: "draft_invalid",
+          draftRef: draft.draftRef,
+          reason: result.blockReason,
+        });
+        break;
+      case "validation_failed":
+        issues.push({
+          kind: "draft_invalid",
+          draftRef: draft.draftRef,
+          reason: { kind: "structurally_invalid", issues: result.issues },
+        });
+        break;
+      default: {
+        const exhaustive: never = result;
+        throw new Error(`checkDrafts: 알 수 없는 검증 출구 ${String(exhaustive)}`);
+      }
+    }
+  }
+  return { issues, normalized };
+}
+
+/**
+ * 계획 커밋 규칙의 공용 구현 — 직접 명령(`commit_plan`)과 신호 `human_decision` grant(plan 주체)
+ * 양쪽이 재사용한다. 주체가 `PLANNING`(명령)이든 `WAITING_APPROVAL`(신호)이든 커밋 규칙 자체는 같다 —
+ * 상태 검사는 호출자 책임. 그래프 이슈 뒤 초안 이슈를 붙이고, 이슈가 하나라도 있으면 Task 를 하나도
+ * 만들지 않는다.
  */
 export function decidePlanCommit(
   deps: DomainDeps,
@@ -92,8 +160,19 @@ export function decidePlanCommit(
       rejection: rejectUnsupported("재계획 커밋(보존·supersede)은 셋째 차수"),
     };
   }
-  const issues = validatePlanDrafts(proposal.drafts, []);
+  const draftCheck = checkDrafts(deps, proposal.drafts);
+  const issues = [...validatePlanDrafts(proposal.drafts, []), ...draftCheck.issues];
   if (issues.length > 0) {
+    if (options.onInvalid === "reject") {
+      return {
+        kind: "rejected",
+        rejection: {
+          reason: "condition_not_met",
+          detail: "plan_revalidation_invalid",
+          planIssues: issues,
+        },
+      };
+    }
     const invalidEvent = mkEvent(
       "work_plan_invalid",
       { proposalId: proposal.proposalId, issues },
@@ -122,8 +201,9 @@ export function decidePlanCommit(
     if (ref.taskId !== undefined) return ref.taskId;
     throw new Error("commit_plan: TaskRef 가 draftRef·taskId 어느 것도 갖지 않음");
   }
-  const taskCreatedEvents = proposal.drafts.map((draft) => {
+  const taskCreatedEvents = proposal.drafts.map((draft, index) => {
     const taskId = taskIdOf.get(draft.draftRef) as TaskId;
+    const normalized = draftCheck.normalized[index] as NormalizedTaskDeclaration;
     return mkEvent(
       "task_created",
       {
@@ -134,8 +214,9 @@ export function decidePlanCommit(
         input: draft.input,
         dependsOn: draft.dependsOn.map(resolveRef),
         ...(draft.parent !== undefined ? { parentTaskId: resolveRef(draft.parent) } : {}),
-        trigger: draft.trigger,
-        policy: draft.policy,
+        trigger: normalized.trigger,
+        policy: normalized.policy,
+        reactions: normalized.reactions,
       },
       { taskId, workId },
     );
@@ -207,8 +288,10 @@ export function decideWorkCommand(
         work.pendingDecision !== undefined && work.pendingDecision.kind === "plan_approval_required"
           ? work.pendingDecision.id
           : undefined;
+      // 직접 커밋은 무효면 항상 work_plan_invalid 를 커밋한다 — 이벤트 없는 거절은 신호 grant 경로
+      // 전용이라, 타입 밖 값이 와도 넘기지 않고 fail_work 만 그대로 따른다.
       const decision = decidePlanCommit(deps, work, command.proposal, {
-        ...(command.onInvalid !== undefined ? { onInvalid: command.onInvalid } : {}),
+        onInvalid: command.onInvalid === "fail_work" ? "fail_work" : "stay_planning",
         ...(decisionId !== undefined ? { decisionId } : {}),
       });
       return decision.kind === "events" ? events(...decision.events) : rejected(decision.rejection);
@@ -243,6 +326,9 @@ export function decideWorkCommand(
     case "cancel_work": {
       if (work.state === "COMPLETED" || work.state === "FAILED" || work.state === "CANCELED") {
         return rejected(rejectNotInTable());
+      }
+      if (command.origin.kind === "vault_signal" && command.origin.actorSource !== "human_local") {
+        return rejected(rejectInvalidInput("vault_signal 취소는 human_local 필수"));
       }
       return events(mkEvent("work_canceled", { origin: command.origin }, { workId }));
     }

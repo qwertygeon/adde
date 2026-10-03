@@ -1,13 +1,16 @@
 /**
- * TaskPolicy 와 하위 정책 형태(FR-009) — the workflow contract "TaskPolicy" 필드명 그대로.
- * 본 차수는 형태만 다룬다(확인 채널 검증 규칙·fan-out 평가는 범위 외).
+ * TaskPolicy 와 하위 정책 형태 — the workflow contract "TaskPolicy" 필드명 그대로. 수기 파서는 형태만
+ * 검사하고, 각 객체 층위에서 전사된 필드 표 밖의 키는 거절한다(옛 이름이 조용히 무시되지 않게).
+ * 승인 채널 판정·정책 평가는 `policy/**` 가 맡는다.
  */
 import { type Result, ok, err } from "./result.js";
 import { parseUtcInstant } from "./values.js";
 import type { UtcInstant } from "./values.js";
 import type { ActorRef } from "./values.js";
+import { APPROVAL_SURFACE_VALUES, TASK_POLICY_FIELD_SHAPES } from "./contract/index.js";
+import { normalizeTimeZoneIdentifier } from "./timezone.js";
 
-export type ConfirmationSurface = "markdown" | "out_of_band";
+export type ApprovalSurface = (typeof APPROVAL_SURFACE_VALUES)[number];
 
 export interface ToolScopeRef {
   readonly id: string;
@@ -49,7 +52,7 @@ export interface TaskPolicy {
   readonly terminalRequired: boolean;
   readonly onDependencyUnsatisfied: "block" | "skip" | "fail";
   readonly approvalRequiredBeforeExecute: boolean;
-  readonly confirmationSurface: ConfirmationSurface;
+  readonly approvalSurface: ApprovalSurface;
   readonly fanOutMaxConcurrent: number;
   readonly unattended: UnattendedPolicy;
   readonly retry: RetryPolicy;
@@ -69,18 +72,6 @@ export interface PolicyFormatError {
   readonly reason: string;
 }
 
-/** `+`/`-` 로 시작하거나 `:` 를 포함하면 거절(오프셋), 그 밖은 `Intl.DateTimeFormat` 이 받아들이면 통과, 원문 보존. */
-export function isIanaTimeZone(raw: string): boolean {
-  if (raw.length === 0) return false;
-  if (raw.startsWith("+") || raw.startsWith("-") || raw.includes(":")) return false;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: raw });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 const HH_MM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function isPlainObject(raw: unknown): raw is Record<string, unknown> {
@@ -91,6 +82,10 @@ function isNonNegInt(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 0;
 }
 
+function isApprovalSurface(raw: unknown): raw is ApprovalSurface {
+  return typeof raw === "string" && (APPROVAL_SURFACE_VALUES as readonly string[]).includes(raw);
+}
+
 function isPosInt(n: unknown): n is number {
   return typeof n === "number" && Number.isInteger(n) && n >= 1;
 }
@@ -99,7 +94,40 @@ function fail(field: string, reason: string): PolicyFormatError {
   return { kind: "policy_format", field, reason };
 }
 
-function parseLocalWindow(raw: unknown, field: string): Result<LocalWindow, PolicyFormatError> {
+const ALLOWED_KEYS_BY_SHAPE: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  TASK_POLICY_FIELD_SHAPES.map((entry) => [
+    entry.shape,
+    new Set(entry.fields.map((f) => f.name)) as ReadonlySet<string>,
+  ]),
+);
+
+/** 필드 형태 검사 뒤에 부른다 — 옛 이름만 있으면 새 필드 누락이 먼저 드러난다. */
+function rejectUnknownKeys(
+  raw: Record<string, unknown>,
+  shape: string,
+  field: string | undefined,
+): PolicyFormatError | undefined {
+  const allowed = ALLOWED_KEYS_BY_SHAPE.get(shape);
+  if (allowed === undefined) throw new Error(`전사 필드 표에 없는 정책 형태: ${shape}`);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      return fail(field === undefined ? key : `${field}.${key}`, "unknown_field");
+    }
+  }
+  return undefined;
+}
+
+function normalizeTimeZoneField(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const normalized = normalizeTimeZoneIdentifier(raw);
+  return normalized.ok ? normalized.value : undefined;
+}
+
+function parseLocalWindow(
+  raw: unknown,
+  field: string,
+  shape: string,
+): Result<LocalWindow, PolicyFormatError> {
   if (!isPlainObject(raw)) return err(fail(field, "not_an_object"));
   const fromLocal = raw["fromLocal"];
   const toLocal = raw["toLocal"];
@@ -110,10 +138,13 @@ function parseLocalWindow(raw: unknown, field: string): Result<LocalWindow, Poli
   if (typeof toLocal !== "string" || !HH_MM_RE.test(toLocal)) {
     return err(fail(`${field}.toLocal`, "not_hh_mm"));
   }
-  if (typeof timezone !== "string" || !isIanaTimeZone(timezone)) {
+  const normalizedTimeZone = normalizeTimeZoneField(timezone);
+  if (normalizedTimeZone === undefined) {
     return err(fail(`${field}.timezone`, "not_iana_timezone"));
   }
-  return ok({ fromLocal, toLocal, timezone });
+  const unknown = rejectUnknownKeys(raw, shape, field);
+  if (unknown !== undefined) return err(unknown);
+  return ok({ fromLocal, toLocal, timezone: normalizedTimeZone });
 }
 
 function parseToolScopeRef(raw: unknown, field: string): Result<ToolScopeRef, PolicyFormatError> {
@@ -128,6 +159,8 @@ function parseToolScopeRef(raw: unknown, field: string): Result<ToolScopeRef, Po
   const parsedAt = parseUtcInstant(approvedAt);
   if (!parsedAt.ok) return err(fail(`${field}.approvedAt`, "not_utc_instant"));
   if (!isPlainObject(approvedBy)) return err(fail(`${field}.approvedBy`, "not_an_object"));
+  const unknown = rejectUnknownKeys(raw, "ToolScopeRef", field);
+  if (unknown !== undefined) return err(unknown);
   return ok({
     id,
     configRef,
@@ -155,10 +188,12 @@ function parseUnattendedPolicy(
   }
   let window: LocalWindow | undefined;
   if (raw["window"] !== undefined) {
-    const parsed = parseLocalWindow(raw["window"], `${field}.window`);
+    const parsed = parseLocalWindow(raw["window"], `${field}.window`, "UnattendedPolicy.window");
     if (!parsed.ok) return err(parsed.error);
     window = parsed.value;
   }
+  const unknown = rejectUnknownKeys(raw, "UnattendedPolicy", field);
+  if (unknown !== undefined) return err(unknown);
   return ok({
     eligible,
     onGateDenied,
@@ -193,6 +228,8 @@ function parseRetryPolicy(raw: unknown, field: string): Result<RetryPolicy, Poli
       return err(fail(`${field}.jitterMs`, "not_nonnegative_integer"));
     jitterMs = raw["jitterMs"];
   }
+  const unknown = rejectUnknownKeys(raw, "RetryPolicy", field);
+  if (unknown !== undefined) return err(unknown);
   return ok({
     maxAttempts,
     initialDelayMs,
@@ -215,10 +252,16 @@ function parseReminderPolicy(
     return err(fail(`${field}.maxOccurrences`, "not_nonnegative_integer"));
   let quietHours: LocalWindow | undefined;
   if (raw["quietHours"] !== undefined) {
-    const parsed = parseLocalWindow(raw["quietHours"], `${field}.quietHours`);
+    const parsed = parseLocalWindow(
+      raw["quietHours"],
+      `${field}.quietHours`,
+      "ReminderPolicy.quietHours",
+    );
     if (!parsed.ok) return err(parsed.error);
     quietHours = parsed.value;
   }
+  const unknown = rejectUnknownKeys(raw, "ReminderPolicy", field);
+  if (unknown !== undefined) return err(unknown);
   return ok({ intervalMs, maxOccurrences, ...(quietHours !== undefined ? { quietHours } : {}) });
 }
 
@@ -245,9 +288,9 @@ export function parseTaskPolicy(raw: unknown): Result<TaskPolicy, PolicyFormatEr
     return err(fail("approvalRequiredBeforeExecute", "not_a_boolean"));
   }
 
-  const confirmationSurface = raw["confirmationSurface"];
-  if (confirmationSurface !== "markdown" && confirmationSurface !== "out_of_band") {
-    return err(fail("confirmationSurface", "unknown_value"));
+  const approvalSurface = raw["approvalSurface"];
+  if (!isApprovalSurface(approvalSurface)) {
+    return err(fail("approvalSurface", "unknown_value"));
   }
 
   const fanOutMaxConcurrent = raw["fanOutMaxConcurrent"];
@@ -289,9 +332,9 @@ export function parseTaskPolicy(raw: unknown): Result<TaskPolicy, PolicyFormatEr
   }
 
   const timezone = raw["timezone"];
-  if (typeof timezone !== "string" || timezone.length === 0)
-    return err(fail("timezone", "required"));
-  if (!isIanaTimeZone(timezone)) return err(fail("timezone", "not_iana_timezone"));
+  if (typeof timezone !== "string") return err(fail("timezone", "required"));
+  const normalizedTimeZone = normalizeTimeZoneField(timezone);
+  if (normalizedTimeZone === undefined) return err(fail("timezone", "not_iana_timezone"));
 
   const maxSpawnDepth = raw["maxSpawnDepth"];
   if (!isNonNegInt(maxSpawnDepth)) return err(fail("maxSpawnDepth", "not_nonnegative_integer"));
@@ -301,12 +344,15 @@ export function parseTaskPolicy(raw: unknown): Result<TaskPolicy, PolicyFormatEr
   if (!isNonNegInt(maxWorksPerChain))
     return err(fail("maxWorksPerChain", "not_nonnegative_integer"));
 
+  const unknown = rejectUnknownKeys(raw, "TaskPolicy", undefined);
+  if (unknown !== undefined) return err(unknown);
+
   return ok({
     policyVersion,
     terminalRequired,
     onDependencyUnsatisfied,
     approvalRequiredBeforeExecute,
-    confirmationSurface,
+    approvalSurface,
     fanOutMaxConcurrent,
     unattended: unattendedResult.value,
     retry: retryResult.value,
@@ -314,7 +360,7 @@ export function parseTaskPolicy(raw: unknown): Result<TaskPolicy, PolicyFormatEr
     ...(targetDueAt !== undefined ? { targetDueAt } : {}),
     ...(expiresAt !== undefined ? { expiresAt } : {}),
     ...(attemptTimeoutMs !== undefined ? { attemptTimeoutMs } : {}),
-    timezone,
+    timezone: normalizedTimeZone,
     maxSpawnDepth,
     maxTasksPerWork,
     maxWorksPerChain,

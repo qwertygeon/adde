@@ -5,6 +5,7 @@ import {
   findDependencyCycles,
   planRelationGraph,
   dependencySatisfaction,
+  validatePlanDrafts,
 } from "../../../src/workflow/domain/index.js";
 import {
   meta,
@@ -121,20 +122,25 @@ describe("SC-025: 비순환 다중 의존 계획은 커밋되고 조기 활성�
 });
 
 describe("SC-026: 부모·인과 간선은 의존으로 취급되지 않는다", () => {
-  it("Happy: 부모·인과만의 순환은 순환 없음으로 커밋된다 (test_SC026_parent_causal_only_cycle_commits)", () => {
-    const graph = planRelationGraph([
+  it("Happy: 부모만의 순환은 의존 순환이 아니지만 부모 순환으로 거절된다 (test_SC026_parent_causal_only_cycle_commits)", () => {
+    const drafts = [
       draft("A", { parent: { draftRef: "B" } }),
       draft("B", { parent: { draftRef: "A" } }),
+    ];
+    expect(findDependencyCycles(planRelationGraph(drafts))).toEqual([]);
+    expect(validatePlanDrafts(drafts, [])).toEqual([
+      { kind: "parent_cycle", draftRefs: ["A", "B"] },
     ]);
-    expect(findDependencyCycles(graph)).toEqual([]);
   });
 
-  it("Edge: 같은 쌍에 부모 + 의존 순환이 있으면 의존 순환으로 거절된다 (test_SC026_parent_plus_dependency_cycle_rejected)", () => {
-    const graph = planRelationGraph([
+  it("Edge: 같은 쌍에 부모 + 의존 순환이 있으면 부모 순환과 의존 순환 둘 다로 거절된다 (test_SC026_parent_plus_dependency_cycle_rejected)", () => {
+    const drafts = [
       draft("A", { parent: { draftRef: "B" }, dependsOn: [{ draftRef: "B" }] }),
-      draft("B", { dependsOn: [{ draftRef: "A" }] }),
-    ]);
-    expect(findDependencyCycles(graph).length).toBeGreaterThan(0);
+      draft("B", { parent: { draftRef: "A" }, dependsOn: [{ draftRef: "A" }] }),
+    ];
+    expect(findDependencyCycles(planRelationGraph(drafts)).length).toBeGreaterThan(0);
+    const kinds = validatePlanDrafts(drafts, []).map((issue) => issue.kind);
+    expect(kinds).toEqual(["parent_cycle", "dependency_cycle"]);
   });
 
   it("Error: 부모만 있는 Task 는 부모 상태와 무관하게 활성화가 막히지 않는다 (test_SC026_parent_only_task_not_blocked_and_causal_chain_reproduced)", () => {

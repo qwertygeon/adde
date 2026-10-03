@@ -3,8 +3,14 @@
  * 의존 간선만 활성화 게이트·의존 충족·순환 검출에 참여하고, 부모·인과 간선은 참여하지 않는다.
  */
 import type { TaskId } from "./ids.js";
-import type { TaskRef, PlanTaskDraft } from "./commands.js";
+import type {
+  TaskRef,
+  PlanTaskDraft,
+  DescriptorUnknownBlockReason,
+  ApprovalSurfaceRefusedBlockReason,
+} from "./commands.js";
 import type { WorkflowEventEnvelope } from "./events.js";
+import type { ValidationIssue } from "./validation/task-validation.js";
 
 export type RelationEdgeKind = "dependency" | "parent" | "causal";
 
@@ -20,12 +26,29 @@ export interface RelationGraph {
   readonly edges: readonly RelationEdge[];
 }
 
+export type DraftInvalidReason =
+  | DescriptorUnknownBlockReason
+  | ApprovalSurfaceRefusedBlockReason
+  | { readonly kind: "structurally_invalid"; readonly issues: readonly ValidationIssue[] };
+
 export type PlanValidationIssue =
-  | { readonly kind: "dependency_cycle"; readonly draftRefs: readonly string[] }
   | { readonly kind: "duplicate_draft_ref"; readonly draftRef: string }
   | { readonly kind: "unknown_dependency"; readonly draftRef: string; readonly ref: TaskRef }
   | { readonly kind: "unknown_parent"; readonly draftRef: string; readonly ref: TaskRef }
-  | { readonly kind: "dependencies_complete_without_dependencies"; readonly draftRef: string };
+  | { readonly kind: "self_parent"; readonly draftRef: string }
+  /** 초안 순서 정렬 */
+  | { readonly kind: "parent_cycle"; readonly draftRefs: readonly string[] }
+  | { readonly kind: "dependency_cycle"; readonly draftRefs: readonly string[] }
+  | {
+      readonly kind: "trigger_requires_dependencies";
+      readonly draftRef: string;
+      readonly trigger: { readonly kind: string; readonly version: number };
+    }
+  | {
+      readonly kind: "draft_invalid";
+      readonly draftRef: string;
+      readonly reason: DraftInvalidReason;
+    };
 
 function refKey(ref: TaskRef): string {
   return "draftRef" in ref ? ref.draftRef : ref.taskId;
@@ -48,10 +71,23 @@ export function planRelationGraph(drafts: readonly PlanTaskDraft[]): RelationGra
 /** dependency 간선만의 강연결요소 중 크기 ≥ 2 또는 자기 간선. 각 순환은 nodes 순서로 정렬, 순환 목록은
  * 첫 원소의 nodes 위치 순(Tarjan SCC, 결정적 순서). */
 export function findDependencyCycles(graph: RelationGraph): readonly (readonly string[])[] {
-  const dependencyEdges = graph.edges.filter((e) => e.kind === "dependency");
+  return findCycles(graph, "dependency", true);
+}
+
+/** 초안 → 초안 부모 간선의 순환(크기 ≥ 2). 자기 부모는 별도 이슈라 여기 넣지 않는다. */
+function findParentCycles(graph: RelationGraph): readonly (readonly string[])[] {
+  return findCycles(graph, "parent", false);
+}
+
+function findCycles(
+  graph: RelationGraph,
+  kind: RelationEdgeKind,
+  includeSelfEdges: boolean,
+): readonly (readonly string[])[] {
+  const kindEdges = graph.edges.filter((e) => e.kind === kind);
   const adjacency = new Map<string, string[]>();
   for (const node of graph.nodes) adjacency.set(node, []);
-  for (const edge of dependencyEdges) {
+  for (const edge of kindEdges) {
     const list = adjacency.get(edge.from);
     if (list !== undefined) list.push(edge.to);
     // 미지 노드를 가리키는 간선은 순환 검출 대상이 아니다(validatePlanDrafts 의 unknown_dependency 가 별도로 잡는다).
@@ -97,12 +133,13 @@ export function findDependencyCycles(graph: RelationGraph): readonly (readonly s
   }
 
   const nodePosition = new Map<string, number>(graph.nodes.map((n, i) => [n, i]));
-  const selfEdgeSet = new Set(dependencyEdges.filter((e) => e.from === e.to).map((e) => e.from));
+  const selfEdgeSet = new Set(kindEdges.filter((e) => e.from === e.to).map((e) => e.from));
 
   const cycles: string[][] = [];
   for (const component of sccs) {
     const isCycle =
-      component.length >= 2 || (component.length === 1 && selfEdgeSet.has(component[0] as string));
+      component.length >= 2 ||
+      (includeSelfEdges && component.length === 1 && selfEdgeSet.has(component[0] as string));
     if (!isCycle) continue;
     const sorted = [...component].sort(
       (a, b) => (nodePosition.get(a) ?? 0) - (nodePosition.get(b) ?? 0),
@@ -115,8 +152,9 @@ export function findDependencyCycles(graph: RelationGraph): readonly (readonly s
   return cycles;
 }
 
-/** memberTaskIds: 참조 가능한 기존 member(첫 계획은 빈 배열). 이슈 순서: 중복 → 미지 의존 → 미지 부모 →
- * 무의존 dependencies_complete → 순환. */
+/** memberTaskIds: 참조 가능한 기존 member(첫 계획은 빈 배열). 그래프 이슈만 낸다 — 순서: 중복 → 미지
+ * 의존 → 미지 부모 → 자기 부모 → 부모 순환 → 의존 순환. 부모 간선은 의존 충족·의존 순환에 참여하지
+ * 않는다. */
 export function validatePlanDrafts(
   drafts: readonly PlanTaskDraft[],
   memberTaskIds: readonly TaskId[],
@@ -150,12 +188,19 @@ export function validatePlanDrafts(
     }
   }
   for (const draft of drafts) {
-    if (draft.trigger.kind === "dependencies_complete" && draft.dependsOn.length === 0) {
-      issues.push({ kind: "dependencies_complete_without_dependencies", draftRef: draft.draftRef });
+    if (
+      draft.parent !== undefined &&
+      "draftRef" in draft.parent &&
+      draft.parent.draftRef === draft.draftRef
+    ) {
+      issues.push({ kind: "self_parent", draftRef: draft.draftRef });
     }
   }
 
   const graph = planRelationGraph(drafts);
+  for (const cycle of findParentCycles(graph)) {
+    issues.push({ kind: "parent_cycle", draftRefs: cycle });
+  }
   const cycles = findDependencyCycles(graph);
   for (const cycle of cycles) {
     issues.push({ kind: "dependency_cycle", draftRefs: cycle });

@@ -11,7 +11,9 @@ import { taskOf } from "./aggregate.js";
 import { isTerminalTaskState } from "./task-state.js";
 import { isTerminalWorkState } from "./work-state.js";
 import type { CreateWorkCommand, WorkflowCommand, TaskCommand, WorkCommand } from "./commands.js";
-import { TASK_COMMAND_ROWS, WORK_COMMAND_ROWS } from "./commands.js";
+import { TASK_COMMAND_ROWS, TASK_NON_ROW_COMMANDS, WORK_COMMAND_ROWS } from "./commands.js";
+import type { DomainRegistries } from "./registry/registries.js";
+import type { PlanValidationIssue } from "./plan-graph.js";
 import type { DecidedEvent, DomainEvent } from "./events.js";
 import { WORKFLOW_EVENT_SCHEMA_VERSION, mkEvent } from "./events.js";
 import { evolveCommit } from "./evolve.js";
@@ -26,9 +28,11 @@ import {
 export interface OperationalDefaults {
   readonly agentDispatchDeadlineMs: number;
 }
+/** 검증·발화 방식 조회·연쇄가 같은 등록부를 쓴다. */
 export interface DomainDeps {
   readonly ids: IdGenerator;
   readonly operationalDefaults: OperationalDefaults;
+  readonly registries: DomainRegistries;
 }
 export interface DomainCommit {
   readonly id: CommitId;
@@ -45,6 +49,8 @@ export type CommandRejectionReason =
 export interface CommandRejection {
   readonly reason: CommandRejectionReason;
   readonly detail?: string;
+  /** 계획 재검증 무효로 거절할 때만 — 수집 순서 그대로의 이슈 전부. */
+  readonly planIssues?: readonly PlanValidationIssue[];
 }
 export type CommandOutcome =
   | { readonly kind: "committed"; readonly commit: DomainCommit; readonly aggregate: WorkAggregate }
@@ -182,7 +188,7 @@ export function assembleCommit(
   // 4. 의존 연쇄 고정점
   for (;;) {
     if (scratch === undefined) break;
-    const round = decideDependencyCascadeRound(scratch);
+    const round = decideDependencyCascadeRound(deps.registries, scratch);
     if (round.length === 0) break;
     applyBatch(
       round.map((c) => ({
@@ -291,7 +297,10 @@ export function executeCommand(
       return { kind: "rejected", rejection: { reason: "revision_mismatch" }, record: commit };
     }
     const reachableRows = TASK_COMMAND_ROWS[command.kind];
-    if (reachableRows === undefined || reachableRows.length === 0) {
+    if (
+      (reachableRows === undefined || reachableRows.length === 0) &&
+      !TASK_NON_ROW_COMMANDS.includes(command.kind)
+    ) {
       return { kind: "rejected", rejection: { reason: "transition_not_in_table" } };
     }
     const decided = decideTaskCommand(deps, task, command);

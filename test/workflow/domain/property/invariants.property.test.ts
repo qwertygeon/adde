@@ -37,10 +37,9 @@ describe("SC-052: property — 종결 Task 는 비종결로 돌아가지 않는�
 
 describe("SC-052: property — 전제가 충족되기 전에는 활성화되지 않는다", () => {
   it("test_SC052_no_activation_before_prerequisites", () => {
-    // `dependencies_complete` 트리거 드래프트는 `dependsOn` 이 1건 이상이어야 한다 — 비어 있으면
-    // validatePlanDrafts 가 즉시 거절해(dependencies_complete_without_dependencies) Task 자체가
-    // 커밋되지 않는다(test-report.md 실패 #16). 아직 미충족인 실제 의존(dep)을 하나 붙여
-    // "커밋은 되지만 활성화는 아직" 상태를 재현한다.
+    // 의존 충족 발화 트리거 초안은 `dependsOn` 이 1건 이상이어야 한다 — 비어 있으면 계획 커밋이
+    // trigger_requires_dependencies 로 거절해 Task 자체가 커밋되지 않는다. 아직 미충족인 실제
+    // 의존(dep)을 하나 붙여 "커밋은 되지만 활성화는 아직" 상태를 재현한다.
     const deps = testDeps("sc052prereq");
     const { aggregate, taskIds } = planned(
       [

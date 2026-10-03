@@ -22,7 +22,7 @@ export const WORK_TRANSITION_ROWS = [
     to: "DRAFT",
     event: "work_created",
     condition:
-      'Work ingested from Markdown or CLI, created by a spawn reaction, or materialized from a WorkDefinition occurrence ("Work definition and occurrence contract")',
+      'Work ingested from Markdown or CLI, created by a spawn reaction, or materialized from a WorkDefinition occurrence ("Work definition and occurrence contract" (#work-definition))',
     companions: [],
   },
   {

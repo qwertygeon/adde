@@ -518,18 +518,18 @@ export const EVENT_CATALOG = [
     producedBy: "phase1-core",
   },
   {
-    name: "confirmation_surface_refused",
+    name: "approval_surface_refused",
     section: "Trigger, signal and confirmation events",
     meaning:
-      "A declared `TaskPolicy.confirmationSurface` failed the out-of-band validation check; carries the declared surface, the reason and the Task. The declaration is refused and rendered, never silently downgraded",
+      "A declared `TaskPolicy.approvalSurface` failed the out-of-band validation check; carries the declared surface, the reason (`no_pre_execution_approval` or `effect_records_only`) and the Task. The declaration is refused and rendered, never silently downgraded",
     affects: "P",
     producedBy: "phase1-registries",
   },
   {
-    name: "confirmation_refused_off_surface",
+    name: "approval_refused_off_surface",
     section: "Trigger, signal and confirmation events",
     meaning:
-      'A check was observed on the non-actionable pointer row of a Task whose `confirmationSurface` is `"out_of_band"`; the decision is refused and the refusal rendered in the status region, never ignored. Distinct from `confirmation_rejected_forged_provenance`, which refuses on `actorSource`: this refuses a decision taken on the wrong surface, and the writer may well be the human',
+      'A check was observed on the non-actionable pointer row of a `pre_execution_approval` decision whose Task\'s `approvalSurface` is `"out_of_band"`; the decision is refused and the refusal rendered in the status region, never ignored. Distinct from `confirmation_rejected_forged_provenance` and from `signal_rejected` with `provenance_not_human`, which refuse on `actorSource`: this refuses a decision taken on the wrong surface, and the writer may well be the human',
     affects: "P",
     producedBy: "phase4",
   },
@@ -633,7 +633,7 @@ export const EVENT_CATALOG = [
     producedBy: "phase3",
   },
 
-  // Agent dispatch events (7) — phase6
+  // Agent dispatch events (7) — phase6, agent_result_unmatched 만 phase1-registries
   {
     name: "agent_dispatch_accepted",
     section: "Agent dispatch events",
@@ -669,9 +669,9 @@ export const EVENT_CATALOG = [
     name: "agent_result_unmatched",
     section: "Agent dispatch events",
     meaning:
-      "A result arrived for an unknown dispatch, a terminal Task or an attempt that is not the current one (`unknown_dispatch`, `task_terminal`, `superseded_attempt`, `attempt_ended`); its evidence is kept as a late result and the Task is unchanged",
+      'A result arrived for an unknown dispatch, a terminal Task or an attempt that is not the current one (`unknown_dispatch`, `task_terminal`, `superseded_attempt`, `attempt_ended`); its evidence is kept as a late result; the Task\'s state is unchanged and its revision follows the workflow contract "Task state set" invariant 4',
     affects: "P+Q",
-    producedBy: "phase6",
+    producedBy: "phase1-registries",
   },
   {
     name: "agent_dispatch_orphaned",
@@ -906,7 +906,7 @@ export const EVENT_CATALOG = [
     meaning:
       "Spawn depth, Tasks-per-Work or Works-per-chain limit reached; a `PendingDecision` was created",
     affects: "P+Q",
-    producedBy: "phase1-registries",
+    producedBy: "phase3",
   },
   {
     name: "policy_blocked_reaction",

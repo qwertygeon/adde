@@ -65,6 +65,7 @@
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.55.0",
     "@agentclientprotocol/sdk": "1.1.0",
-    "i18next": "^26.3.4"
+    "i18next": "^26.3.4",
+    "zod": "4.4.3"
   }
 }

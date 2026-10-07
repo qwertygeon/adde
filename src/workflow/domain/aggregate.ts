@@ -25,6 +25,9 @@ import type { TaskBlockReason } from "./commands.js";
 import type { ReactionSpec } from "./validation/reaction-spec.js";
 import type { DecisionId } from "./ids.js";
 import type { ContentHash } from "./derivation/dedup-key.js";
+import type { PlanProposal } from "./plan/proposal.js";
+import type { InputBinding, BoundInput } from "./task-result/binding.js";
+import type { TaskResult } from "./task-result/outputs.js";
 
 export interface OpenAttempt {
   readonly attemptId: AttemptId;
@@ -92,6 +95,12 @@ export interface TaskRecord {
   readonly policy: TaskPolicy;
   /** 선언 전이 반응(부재 = []). */
   readonly reactions: readonly ReactionSpec[];
+  /** `{taskId}` 로 해석된 입력 결합(부재 = {}). */
+  readonly inputBindings: Readonly<Record<string, InputBinding>>;
+  /** 첫 효과에서 해석한 결합 기록 — 이후 불변. */
+  readonly boundInputs?: readonly BoundInput[];
+  /** 만족 종결 전이에서 한 번 기록된 결과. */
+  readonly result?: TaskResult;
   /** BLOCKED 동안의 차단 사유. */
   readonly blockReason?: TaskBlockReason;
   /** 실행 전 승인 결정이 grant 로 닫혔음 — Task 당 한 번. */
@@ -132,8 +141,12 @@ export interface WorkRecord {
   readonly memberTaskIds: readonly TaskId[];
   readonly pendingProposalId?: PlanProposalId;
   readonly pendingProposalDigest?: string;
+  /** 승인 대기 중인 제안 내용 — grant 가 커밋하는 유일한 내용. */
+  readonly pendingProposal?: PlanProposal;
   /** plan_approval_required, WAITING_APPROVAL 동안. */
   readonly pendingDecision?: PendingDecision;
+  /** 실패 종결의 원인(work_failed 페이로드). 재계획 중 실패로 끝난 Work 는 대기를 풀지 않는다. */
+  readonly failureCause?: "planning_failed" | "declared_failure_policy";
   readonly source: WorkSource;
   readonly completionPolicyVersion: 1;
   readonly startedUnderCurrentRevision: boolean;

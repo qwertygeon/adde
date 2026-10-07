@@ -21,6 +21,7 @@ import type {
   DecisionApplication,
   TaskTypeDescriptor,
   TaskStateName,
+  TriggerSpec,
   PendingDecision,
   PendingDecisionKind,
   ActorSource,
@@ -527,8 +528,11 @@ describe("SC-038: 대기 요청 유형은 요청 enqueue 전에 승인된다", (
 });
 
 /** 미승인 Task — 레코드 패치로 실행 전 승인 요구만 켠다(SCHEDULED·RETRY_WAIT 는 설계상 도달 불가 방어 분기). */
-function unapprovedIn(state: TaskStateName) {
-  const { deps, aggregate, taskId } = reachTaskState(state);
+function unapprovedIn(state: TaskStateName, trigger?: TriggerSpec) {
+  const { deps, aggregate, taskId } = reachTaskState(
+    state,
+    trigger !== undefined ? { trigger } : {},
+  );
   const patched = patchTask(aggregate, taskId, {
     policy: basePolicy({ approvalRequiredBeforeExecute: true }),
     preExecutionApproved: false,
@@ -541,8 +545,22 @@ const EXECUTION_SIDE_EVENTS = ["task_started", "task_scheduled", "task_waiting_c
 type GuardCommand =
   "start_attempt" | "schedule_task" | "begin_confirmation_wait" | "park_awaiting_human";
 
+/** 예약 발화 Trigger(`at@1`) — READY 의 예약 원인 `schedule_task` 칸이 쓴다. */
+const SCHEDULE_FIRING_TRIGGER: TriggerSpec = {
+  kind: "at",
+  version: 1,
+  triggerId: "fixture_task",
+  scheduledForUtc: at("2026-01-01T01:00:00Z"),
+  timezone: "Asia/Seoul",
+  expressionText: "fixture-at",
+  misfire: { kind: "skip" },
+};
+
 function runGuardCell(state: TaskStateName, command: GuardCommand): string {
-  const { deps, aggregate, taskId } = unapprovedIn(state);
+  const { deps, aggregate, taskId } = unapprovedIn(
+    state,
+    state === "READY" && command === "schedule_task" ? SCHEDULE_FIRING_TRIGGER : undefined,
+  );
   const task = requireTaskFor(aggregate, taskId);
   const base = { taskId, expectedRevision: task.revision, meta: meta(NOW) };
   const occurrenceId = mustOk(

@@ -20,6 +20,9 @@ export const FIXTURE_TASK_TYPE_IDS: readonly string[] = [
   "probe_getter",
   "probe_getter_b",
   "probe_cyclic",
+  "probe_producer",
+  "probe_consumer",
+  "probe_object_output",
 ];
 
 const NO_CAPABILITY = { canAutoPlan: true, requiresHumanBeforeExecute: false } as const;
@@ -111,6 +114,85 @@ export function probeOverridePromptTaskType(
         }))),
   };
 }
+
+/**
+ * probe_producer@1 — 결합 생산자. `text` 는 필수, `note` 는 선택(선택 출력 부재 시나리오),
+ * `stamp` 는 transform(파이프 — 호환성 판정 범위 밖).
+ */
+export const PROBE_PRODUCER_TASK_TYPE: TaskTypeDescriptor = {
+  id: "probe_producer",
+  version: 1,
+  title: "Probe producer",
+  description: "Test-only records-only task type whose outputs feed input bindings.",
+  schema: z.strictObject({ seed: z.string().optional() }),
+  inputFields: {},
+  outputs: {
+    text: z.string().min(1),
+    note: z.string().optional(),
+    stamp: z.string().transform((s) => s),
+  },
+  executionEffect: "records_only",
+  capabilities: NO_CAPABILITY,
+  approvalGatesQuestionOnly: false,
+  executionIsWaitRequest: false,
+};
+
+/**
+ * probe_consumer@1 — 결합 소비자. `coded` 는 정규식 검사(문자열 형식 — 판정 범위 밖),
+ * `either` 는 JSON Schema `oneOf` 변환(배타 union — 소비자 측 판정 범위 밖),
+ * `plain` 은 형식 검사 없는 선택 문자열(선택 출력 `note` 결합용).
+ */
+export const PROBE_CONSUMER_TASK_TYPE: TaskTypeDescriptor = {
+  id: "probe_consumer",
+  version: 1,
+  title: "Probe consumer",
+  description: "Test-only records-only task type whose inputs are bound from producer outputs.",
+  schema: z.strictObject({
+    text: z.string().min(1),
+    count: z.number().optional(),
+    coded: z.string().regex(/^a/).optional(),
+    either: z
+      .fromJSONSchema(
+        { oneOf: [{ type: "string" }, { type: "number" }] },
+        { registry: z.registry() },
+      )
+      .optional(),
+    plain: z.string().optional(),
+  }),
+  inputFields: { text: { question: "What text should be consumed?", safetyRelevant: false } },
+  outputs: {},
+  executionEffect: "records_only",
+  capabilities: NO_CAPABILITY,
+  approvalGatesQuestionOnly: false,
+  executionIsWaitRequest: false,
+};
+
+/**
+ * probe_consumer@1 의 다른 판 — 식별·스키마는 같고 `text` 만 안전 관련 필드로 선언한다.
+ * 결합이 커밋된 뒤 등록부 선언이 바뀐 상황(등록부 drift)을 대신한다.
+ */
+export const PROBE_CONSUMER_TEXT_SAFETY_TASK_TYPE: TaskTypeDescriptor = {
+  ...PROBE_CONSUMER_TASK_TYPE,
+  inputFields: { text: { question: "What text should be consumed?", safetyRelevant: true } },
+};
+
+/**
+ * probe_object_output@1 — 선언 zod strict 객체 출력 `record`(선택 키 `k`). 보고 출력의 own `__proto__`
+ * 키 거절은 dataSchema 출력만이 아니라 선언 zod 출력에도 적용된다.
+ */
+export const PROBE_OBJECT_OUTPUT_TASK_TYPE: TaskTypeDescriptor = {
+  id: "probe_object_output",
+  version: 1,
+  title: "Probe object output",
+  description: "Test-only records-only task type whose output is a strict object.",
+  schema: z.strictObject({}),
+  inputFields: {},
+  outputs: { record: z.strictObject({ a: z.string(), k: z.string().optional() }) },
+  executionEffect: "records_only",
+  capabilities: NO_CAPABILITY,
+  approvalGatesQuestionOnly: false,
+  executionIsWaitRequest: false,
+};
 
 /** 같은 Task 가 선언하는 `notify@1` 전이 반응. */
 export const COMPLETION_NOTIFY_REACTION = {

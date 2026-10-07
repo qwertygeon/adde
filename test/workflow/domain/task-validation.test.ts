@@ -26,7 +26,6 @@ import {
   reachWorkState,
   requireTaskFor,
   mustCommit,
-  entityId,
   testDeps,
   UNREGISTERED_TASK_TYPE,
 } from "./helpers/fixtures.js";
@@ -111,11 +110,10 @@ describe("SC-026: 반복 규칙을 실은 Task Trigger 는 거절된다", () => 
       kind: "commit_plan",
       expectedRevision: aggregate.work.revision,
       meta: meta(NOW),
-      proposal: {
-        proposalId: entityId("planProposal", "pln_sc026recur"),
-        digest: "7".repeat(64),
+      plan: {
         basePlanRevision: aggregate.work.planRevision,
-        drafts: [draft("recur", { trigger: RECURRING_AT as unknown as TriggerSpec })],
+        source: "planner",
+        tasks: [draft("recur", { trigger: RECURRING_AT as unknown as TriggerSpec })],
         retain: [],
       },
     });

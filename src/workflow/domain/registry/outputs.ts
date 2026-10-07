@@ -6,12 +6,20 @@ import * as z from "zod";
 import type { TaskTypeDescriptor } from "./descriptors.js";
 
 export type ResolvedOutput =
-  | { readonly name: string; readonly source: "declared"; readonly schema: z.ZodType }
+  | {
+      readonly name: string;
+      readonly source: "declared";
+      readonly schema: z.ZodType;
+      /** `schema` 가 `undefined` 를 받아들이면 선택. */
+      readonly optional: boolean;
+    }
   | {
       readonly name: string;
       readonly source: "input_field";
       readonly field: string;
       readonly schema: unknown;
+      /** 선언 `optional === true` 일 때만 선택. */
+      readonly optional: boolean;
     };
 
 function isPlainObject(raw: unknown): raw is Record<string, unknown> {
@@ -23,13 +31,26 @@ function resolveOne(
   declaration: unknown,
   input: unknown,
 ): ResolvedOutput | undefined {
-  if (declaration instanceof z.ZodType) return { name, source: "declared", schema: declaration };
+  if (declaration instanceof z.ZodType) {
+    return {
+      name,
+      source: "declared",
+      schema: declaration,
+      optional: declaration.safeParse(undefined).success,
+    };
+  }
   if (isPlainObject(declaration) && typeof declaration["outputSchemaFromInput"] === "string") {
     const field = declaration["outputSchemaFromInput"];
     if (!isPlainObject(input) || !Object.hasOwn(input, field) || input[field] === undefined) {
       return undefined;
     }
-    return { name, source: "input_field", field, schema: input[field] };
+    return {
+      name,
+      source: "input_field",
+      field,
+      schema: input[field],
+      optional: declaration["optional"] === true,
+    };
   }
   return undefined;
 }

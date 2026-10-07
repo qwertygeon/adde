@@ -16,13 +16,17 @@ import type { TaskCommand, AttemptOutcome } from "./commands.js";
 import type { DecidedEvent } from "./events.js";
 import { mkEvent } from "./events.js";
 import type { CommandRejection, DomainDeps } from "./engine.js";
-import { validateTask } from "./validation/task-validation.js";
+import { validateTaskRecord } from "./validation/task-validation.js";
 import { decideRetry } from "./policy/retry.js";
 import type { RetryFailure } from "./policy/retry.js";
 import {
   preExecutionApprovalPark,
   requiresPreExecutionApproval,
 } from "./policy/pre-execution-approval.js";
+import { scheduleCauseDeclared } from "./policy/trigger-cause.js";
+import { OUTPUT_SCHEMA_VIOLATION, prepareReportedOutputs } from "./task-result/outputs.js";
+import { bindingUnsatisfiedProducerIds, resolveBoundInputs } from "./task-result/binding.js";
+import type { BoundInput } from "./task-result/binding.js";
 
 export interface TimeEvaluation {
   readonly validityPassed: boolean;
@@ -48,14 +52,38 @@ export function evaluateTime(task: TaskRecord, now: UtcInstant): TimeEvaluation 
   return { validityPassed, decisionExpired, late, attemptDeadlinePassed };
 }
 
-/** dependsOn 전부 충족 종결(COMPLETED·SKIPPED). */
+/**
+ * dependsOn 전부 충족 종결(COMPLETED·SKIPPED)이고, 결합한 생산자는 결합 출력을 결과에 가지고 있다
+ * (결합한 SKIPPED 생산자는 불충족).
+ */
 export function isActivationSatisfied(aggregate: WorkAggregate, taskId: TaskId): boolean {
   const task = taskOf(aggregate, taskId);
   if (task === undefined) return false;
+  const bindingUnsatisfied = new Set<string>(bindingUnsatisfiedProducerIds(aggregate, task));
   return task.dependsOn.every((depId) => {
     const dep = taskOf(aggregate, depId);
-    return dep !== undefined && isSatisfyingTerminal(dep.state);
+    return dep !== undefined && isSatisfyingTerminal(dep.state) && !bindingUnsatisfied.has(depId);
   });
+}
+
+/** 첫 효과 시작의 결합 해석. 이미 해석했으면 undefined(페이로드에 싣지 않음). */
+function firstEffectBindings(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  task: TaskRecord,
+): Result<readonly BoundInput[] | undefined, CommandRejection> {
+  if (task.boundInputs !== undefined) return ok(undefined);
+  const resolved = resolveBoundInputs(deps.registries, aggregate, task);
+  if (!resolved.ok) {
+    return err(
+      rejectCondition(
+        resolved.error.kind === "safety_field_bound"
+          ? "binding_safety_field"
+          : "binding_unresolved",
+      ),
+    );
+  }
+  return ok(resolved.value);
 }
 
 function rejectCondition(detail?: string): CommandRejection {
@@ -165,6 +193,7 @@ export function decideTaskCommand(
   deps: DomainDeps,
   task: TaskRecord,
   command: TaskCommand,
+  aggregate: WorkAggregate,
 ): TaskDecideOutcome {
   const taskId = task.id;
   switch (command.kind) {
@@ -174,13 +203,7 @@ export function decideTaskCommand(
     }
     case "complete_validation": {
       if (task.state !== "VALIDATING") return rejected(rejectNotInTable());
-      const result = validateTask(deps.registries, {
-        type: task.type,
-        input: task.input,
-        trigger: task.trigger,
-        policy: task.policy,
-        reactions: task.reactions,
-      });
+      const result = validateTaskRecord(deps.registries, task);
       switch (result.exit) {
         case "valid": {
           const validated = mkEvent("task_validated", {}, { taskId });
@@ -220,6 +243,13 @@ export function decideTaskCommand(
       if (task.state === "READY") {
         if (command.cause !== "schedule" && command.cause !== "external_signal")
           return rejected(rejectCondition());
+        // 원인이 Trigger 발화 선언과 다르면 계약상 생기지 않는 occurrence 다. 승인 주차보다 먼저 거절해
+        // 무효 명령이 사람 요청을 만들지 않게 한다.
+        const trigger = deps.registries.triggers.get(task.trigger.kind, task.trigger.version);
+        if (trigger === undefined) return rejected(rejectCondition("descriptor_unknown"));
+        if (!scheduleCauseDeclared(trigger, command.cause)) {
+          return rejected(rejectCondition("trigger_cause_mismatch"));
+        }
         if (requiresPreExecutionApproval(task)) {
           return events(preExecutionApprovalPark(deps, task, command.meta.now));
         }
@@ -273,6 +303,9 @@ export function decideTaskCommand(
           "operationalDefaults.agentDispatchDeadlineMs 는 양의 정수여야 한다",
         );
       }
+      const bindings = firstEffectBindings(deps, aggregate, task);
+      if (!bindings.ok) return rejected(bindings.error);
+      const boundInputs = bindings.value;
       const attemptId = nextEntityId(deps.ids, "attempt");
       const attemptNo = task.lastAttemptNo + 1;
       const deadline = addMs(command.meta.now, task.policy.attemptTimeoutMs ?? defaultDeadlineMs);
@@ -286,6 +319,7 @@ export function decideTaskCommand(
             ...(command.firedOccurrenceId !== undefined
               ? { firedOccurrenceId: command.firedOccurrenceId }
               : {}),
+            ...(boundInputs !== undefined ? { boundInputs } : {}),
           },
           { taskId },
         ),
@@ -297,10 +331,16 @@ export function decideTaskCommand(
         if (task.state === "SCHEDULED") return rejected(rejectAwaitingApproval());
         return events(preExecutionApprovalPark(deps, task, command.meta.now));
       }
+      const bindings = firstEffectBindings(deps, aggregate, task);
+      if (!bindings.ok) return rejected(bindings.error);
+      const boundInputs = bindings.value;
       return events(
         mkEvent(
           "task_waiting_confirmation",
-          { confirmationId: command.confirmationId },
+          {
+            confirmationId: command.confirmationId,
+            ...(boundInputs !== undefined ? { boundInputs } : {}),
+          },
           { taskId },
         ),
       );
@@ -327,22 +367,44 @@ export function decideTaskCommand(
       if (task.openAttempt === undefined || task.openAttempt.attemptId !== command.attemptId) {
         return rejected(rejectCondition("attemptId 가 열린 attempt 와 다름"));
       }
-      const routed = routeAttemptOutcome(task, command.outcome, command.meta.now);
-      if (!routed.ok) return rejected(routed.error);
       const attemptId = task.openAttempt.attemptId;
       const attemptNo = task.openAttempt.attemptNo;
-      switch (routed.value.rowId) {
-        case "RUNNING>COMPLETED:task_completed": {
-          const evidence =
-            command.outcome.kind === "completed" ? command.outcome.evidence : undefined;
+      let outcome: AttemptOutcome = command.outcome;
+      if (outcome.kind === "completed") {
+        const reported = outcome.outputs === undefined ? {} : outcome.outputs;
+        const prepared = prepareReportedOutputs(deps, task, reported);
+        if (prepared.ok) {
+          const evidence = outcome.evidence;
           return events(
             mkEvent(
               "task_completed",
-              { attemptId, ...(evidence !== undefined ? { evidence } : {}) },
+              {
+                attemptId,
+                ...(evidence !== undefined ? { evidence } : {}),
+                result: {
+                  id: nextEntityId(deps.ids, "result"),
+                  attemptId,
+                  outputs: prepared.outputs,
+                  digest: prepared.digest,
+                },
+              },
               { taskId },
             ),
           );
         }
+        // 스키마를 어긴 완료는 완료가 아니라 실패한 attempt 다 — 재시도 정책·유효기한 매핑을 그대로 탄다.
+        outcome = {
+          kind: "failed",
+          code: OUTPUT_SCHEMA_VIOLATION,
+          outputIssues: prepared.issues,
+          ...(outcome.jitterDrawMs !== undefined ? { jitterDrawMs: outcome.jitterDrawMs } : {}),
+        };
+      }
+      const routed = routeAttemptOutcome(task, outcome, command.meta.now);
+      if (!routed.ok) return rejected(routed.error);
+      switch (routed.value.rowId) {
+        case "RUNNING>COMPLETED:task_completed":
+          throw new Error("record_attempt_outcome: 완료 결과는 출력 검사를 거쳐 위에서 처리된다");
         case "RUNNING>RETRY_WAIT:task_retry_wait": {
           const { retryDelayMs, jitterDrawMs } = routed.value;
           return events(
@@ -353,7 +415,7 @@ export function decideTaskCommand(
                 attemptNo,
                 retryDelayMs: retryDelayMs ?? 0,
                 ...(jitterDrawMs !== undefined ? { jitterDrawMs } : {}),
-                outcome: command.outcome,
+                outcome: outcome,
               },
               { taskId },
             ),
@@ -361,18 +423,17 @@ export function decideTaskCommand(
         }
         case "RUNNING>BLOCKED_AWAITING_HUMAN:task_awaiting_human": {
           const decision =
-            "decision" in command.outcome
-              ? command.outcome.decision
-              : "deadLetterDecision" in command.outcome
-                ? command.outcome.deadLetterDecision
+            "decision" in outcome
+              ? outcome.decision
+              : "deadLetterDecision" in outcome
+                ? outcome.deadLetterDecision
                 : undefined;
           if (decision === undefined)
             return rejected(rejectInvalidInput("blocked 결과에 decision 없음"));
           if (!isTaskSubjectDecision(decision) || decision.taskId !== taskId) {
             return rejected(rejectInvalidInput("decision 이 이 Task 주체가 아님"));
           }
-          const parkReason =
-            command.outcome.kind === "blocked" ? command.outcome.cause : command.outcome.kind;
+          const parkReason = outcome.kind === "blocked" ? outcome.cause : outcome.kind;
           const expectedKind = (
             PARK_DECISION_KIND as Readonly<Record<string, PendingDecisionKind | undefined>>
           )[parkReason];
@@ -381,11 +442,11 @@ export function decideTaskCommand(
           }
           const cause:
             "gate_denied" | "executor_blocked" | "dispatcher_refused" | "effect_dead_lettered" =
-            command.outcome.kind === "blocked" ? command.outcome.cause : "effect_dead_lettered";
+            outcome.kind === "blocked" ? outcome.cause : "effect_dead_lettered";
           return events(
             mkEvent(
               "task_awaiting_human",
-              { pendingDecision: decision, cause, attemptId, outcome: command.outcome },
+              { pendingDecision: decision, cause, attemptId, outcome: outcome },
               { taskId },
             ),
           );
@@ -395,7 +456,7 @@ export function decideTaskCommand(
             mkEvent(
               "task_failed",
               {
-                reason: { kind: "attempt_failed", attemptId, attemptNo, outcome: command.outcome },
+                reason: { kind: "attempt_failed", attemptId, attemptNo, outcome: outcome },
               },
               { taskId },
             ),
@@ -407,7 +468,7 @@ export function decideTaskCommand(
               {
                 basis: "task_validity",
                 closedAttemptId: attemptId,
-                attemptOutcome: command.outcome,
+                attemptOutcome: outcome,
               },
               { taskId },
             ),

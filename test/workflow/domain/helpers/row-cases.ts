@@ -16,7 +16,6 @@ import {
   createWork,
   nextEntityId,
   deriveOccurrenceId,
-  parsePendingDecision,
   parseProjectId,
   parseCancelOrigin,
 } from "../../../../src/workflow/domain/index.js";
@@ -29,10 +28,10 @@ import type {
   CommandOutcome,
   SignalJudgement,
   TransitionRowData,
+  TriggerSpec,
   DecisionSignal,
   DecisionApplication,
   WorkSource,
-  PlanCommitInput,
 } from "../../../../src/workflow/domain/index.js";
 import {
   TASK_TRANSITION_ROWS,
@@ -87,6 +86,19 @@ const LATER = at("2026-01-01T00:10:00Z");
 const PAST = at("2025-12-31T00:00:00Z");
 /** NOW(reach 시점) 이후·LATER(expire 평가 시점) 이전 — RETRY_WAIT 도달 시엔 유효기한 미경과, expire 평가 시엔 경과. */
 const BETWEEN = at("2026-01-01T00:05:00Z");
+
+/** 예약 발화 Trigger(`at@1`) — READY 에서 예약 원인 `schedule_task` 를 받는 Task 의 Trigger. */
+function scheduleFiringTrigger(triggerId: string): TriggerSpec {
+  return {
+    kind: "at",
+    version: 1,
+    triggerId,
+    scheduledForUtc: at("2026-01-01T01:00:00Z"),
+    timezone: "Asia/Seoul",
+    expressionText: "fixture-at",
+    misfire: { kind: "skip" },
+  };
+}
 
 function missingRecipe(row: TransitionRowData<string>, fromState: string): CommandOutcome {
   throw new Error(
@@ -171,7 +183,7 @@ put("task_input_received", "WAITING_INPUT", "VALIDATING", {
 });
 
 put("task_scheduled", "READY", "SCHEDULED", {
-  reachBefore: () => reachTaskState("READY"),
+  reachBefore: () => reachTaskState("READY", { trigger: scheduleFiringTrigger("fixture_task") }),
   apply: (deps, before, taskId) => {
     const task = requireTaskFor(before, taskId);
     const occ = mustOk(
@@ -324,6 +336,7 @@ function dependencyCascadeReachBefore(
     aggregate: WorkAggregate,
     dependentId: TaskId,
   ) => WorkAggregate,
+  dependentTrigger: TriggerSpec = { kind: "immediate", version: 1, triggerId: "dependent" },
 ): { deps: DomainDeps; aggregate: WorkAggregate; taskId: TaskId } {
   const deps = testDeps(seed, fixtureRegistries());
   const policy = basePolicy({ onDependencyUnsatisfied });
@@ -333,7 +346,7 @@ function dependencyCascadeReachBefore(
       draft("dependent", {
         dependsOn: [{ draftRef: "dep" }],
         policy,
-        trigger: { kind: "immediate", version: 1, triggerId: "dependent" },
+        trigger: dependentTrigger,
       }),
     ],
     deps,
@@ -461,7 +474,13 @@ put("task_failed", "READY", "FAILED", {
 });
 
 put("task_failed", "SCHEDULED", "FAILED", {
-  reachBefore: () => dependencyCascadeReachBefore("depfailscheduled", "fail", bringToScheduled),
+  reachBefore: () =>
+    dependencyCascadeReachBefore(
+      "depfailscheduled",
+      "fail",
+      bringToScheduled,
+      scheduleFiringTrigger("dependent"),
+    ),
   apply: failDependency,
 });
 
@@ -867,21 +886,18 @@ export function buildTaskRowCases(): Record<string, RowCase> {
             const reached = reachWorkState("PLANNING");
             return { deps: reached.deps, before: reached.aggregate };
           },
-          apply: (deps, before) => {
-            const proposalId = nextEntityId(deps.ids, "planProposal");
-            return executeCommand(deps, before, {
+          apply: (deps, before) =>
+            executeCommand(deps, before, {
               kind: "commit_plan",
               expectedRevision: before.work.revision,
               meta: meta(NOW),
-              proposal: {
-                proposalId,
-                digest: "0".repeat(64),
+              plan: {
                 basePlanRevision: before.work.planRevision,
-                drafts: [draft("gen")],
+                source: "planner",
+                tasks: [draft("gen")],
                 retain: [],
               },
-            });
-          },
+            }),
         };
         continue;
       }
@@ -957,47 +973,35 @@ putWork("work_input_received", "WAITING_INPUT", "PLANNING", {
 
 putWork("work_plan_proposed", "PLANNING", "WAITING_APPROVAL", {
   reachBefore: () => reachWorkState("PLANNING"),
-  apply: (deps, before) => {
-    const proposalId = nextEntityId(deps.ids, "planProposal");
-    const decision = mustOk(
-      parsePendingDecision({
-        id: nextEntityId(deps.ids, "decision"),
-        kind: "plan_approval_required",
-        workId: before.work.id,
-        planProposalId: proposalId,
-        requestedAt: NOW,
-        summary: "row-case plan approval",
-        surfaceDeliveries: [],
-      }),
-    );
-    return executeCommand(deps, before, {
+  apply: (deps, before) =>
+    executeCommand(deps, before, {
       kind: "propose_plan",
       expectedRevision: before.work.revision,
       meta: meta(NOW),
-      proposalId,
-      digest: "1".repeat(64),
-      decision,
-    });
-  },
+      plan: {
+        basePlanRevision: before.work.planRevision,
+        source: "planner",
+        tasks: [draft("member")],
+        retain: [],
+      },
+      summary: "row-case plan approval",
+    }),
 });
 
 putWork("work_plan_committed", "PLANNING", "READY", {
   reachBefore: () => reachWorkState("PLANNING"),
-  apply: (deps, before) => {
-    const proposalId = nextEntityId(deps.ids, "planProposal");
-    return executeCommand(deps, before, {
+  apply: (deps, before) =>
+    executeCommand(deps, before, {
       kind: "commit_plan",
       expectedRevision: before.work.revision,
       meta: meta(NOW),
-      proposal: {
-        proposalId,
-        digest: "2".repeat(64),
+      plan: {
         basePlanRevision: before.work.planRevision,
-        drafts: [draft("member")],
+        source: "planner",
+        tasks: [draft("member")],
         retain: [],
       },
-    });
-  },
+    }),
 });
 
 putWork("work_failed", "PLANNING", "FAILED", {
@@ -1027,13 +1031,6 @@ putWork("work_plan_committed", "WAITING_APPROVAL", "READY", {
     const decisionId = before.work.pendingDecision?.id;
     if (decisionId === undefined)
       throw new Error("row-cases: WAITING_APPROVAL work missing pendingDecision");
-    const proposal: PlanCommitInput = {
-      proposalId: before.work.pendingProposalId ?? nextEntityId(deps.ids, "planProposal"),
-      digest: before.work.pendingProposalDigest ?? "3".repeat(64),
-      basePlanRevision: before.work.planRevision,
-      drafts: [draft("member")],
-      retain: [],
-    };
     const signal: DecisionSignal = {
       type: "human_decision",
       decisionId,
@@ -1043,7 +1040,7 @@ putWork("work_plan_committed", "WAITING_APPROVAL", "READY", {
       actorSource: "human_local",
       receivedAt: NOW,
     };
-    return judgeSignal(deps, before, signal, { kind: "plan_grant", proposal }, NOW);
+    return judgeSignal(deps, before, signal, { kind: "plan_grant" }, NOW);
   },
 });
 
@@ -1086,26 +1083,18 @@ putWork("work_plan_rejected", "WAITING_APPROVAL", "READY", {
         NOW,
       ),
     ).aggregate;
-    const proposalId = nextEntityId(deps.ids, "planProposal");
-    const decision = mustOk(
-      parsePendingDecision({
-        id: nextEntityId(deps.ids, "decision"),
-        kind: "plan_approval_required",
-        workId: replanned.work.id,
-        planProposalId: proposalId,
-        requestedAt: NOW,
-        summary: "row-case replan approval",
-        surfaceDeliveries: [],
-      }),
-    );
     const proposed = mustCommit(
       executeCommand(deps, replanned, {
         kind: "propose_plan",
         expectedRevision: replanned.work.revision,
         meta: meta(NOW),
-        proposalId,
-        digest: "4".repeat(64),
-        decision,
+        plan: {
+          basePlanRevision: replanned.work.planRevision,
+          source: "planner",
+          tasks: [],
+          retain: replanned.work.memberTaskIds,
+        },
+        summary: "row-case replan approval",
       }),
     ).aggregate;
     return { deps, aggregate: proposed };

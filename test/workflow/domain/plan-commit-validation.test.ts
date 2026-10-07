@@ -7,7 +7,6 @@ import {
 } from "../../../src/workflow/domain/index.js";
 import type {
   DecisionSignal,
-  PlanCommitInput,
   PlanTaskDraft,
   TaskPolicy,
 } from "../../../src/workflow/domain/index.js";
@@ -19,12 +18,17 @@ import {
   entityId,
   planned,
   mustCommit,
+  planInput,
+  proposePlan,
+  applyCommits,
+  committedChain,
   reachWorkState,
   requireTaskFor,
   testDeps,
   UNREGISTERED_TASK_TYPE,
 } from "./helpers/fixtures.js";
 import { eventTypes, payloadOf } from "./helpers/commits.js";
+import { probeTaskType, testRegistries } from "./helpers/registry-fixtures.js";
 
 const NOW = at("2026-01-01T00:00:00Z");
 const ACTOR = { kind: "user", id: "u1" };
@@ -43,11 +47,10 @@ function commitPlan(drafts: readonly PlanTaskDraft[], onInvalid?: "stay_planning
     expectedRevision: aggregate.work.revision,
     meta: meta(NOW),
     ...(onInvalid !== undefined ? { onInvalid } : {}),
-    proposal: {
-      proposalId: entityId("planProposal", "pln_validation01"),
-      digest: "8".repeat(64),
+    plan: {
       basePlanRevision: aggregate.work.planRevision,
-      drafts,
+      source: "planner",
+      tasks: drafts,
       retain: [],
     },
   });
@@ -295,21 +298,18 @@ describe("SC-036: 범위 밖 선언을 실은 계획 제안은 커밋되지 않�
   });
 });
 
-describe("SC-032: 계획 승인 grant 의 재검증 무효는 커밋도 키 선점도 하지 않는다", () => {
-  it("Error: 무효 계획을 실은 grant 는 planIssues 와 함께 거절되고, 같은 결정의 유효 grant 가 이어서 수용된다 (test_SC032_plan_grant_invalid_revalidation_refused_no_commit_no_key)", () => {
-    const { deps, aggregate } = reachWorkState("WAITING_APPROVAL");
-    const decisionId = aggregate.work.pendingDecision?.id;
-    const proposalId = aggregate.work.pendingProposalId;
-    const digest = aggregate.work.pendingProposalDigest;
-    if (decisionId === undefined || proposalId === undefined || digest === undefined)
-      throw new Error("expected pending plan approval");
-    const proposalWith = (drafts: readonly PlanTaskDraft[]): PlanCommitInput => ({
-      proposalId,
-      digest,
-      basePlanRevision: 0,
-      drafts,
-      retain: [],
+describe("SC-032: 계획 승인 grant 의 재검증 무효는 철회 뒤 낡음으로 기록되고 키를 선점하지 않는다", () => {
+  it("Error: 무효가 된 대기 제안의 grant 는 철회 커밋 뒤 rejected_stale 이고, 같은 결정의 다음 grant 도 rejected_stale 이다 (test_SC032_plan_grant_invalid_revalidation_withdrawn_then_stale_no_key)", () => {
+    const { deps, aggregate: planning } = reachWorkState("PLANNING");
+    // 등록부 drift 대용: 제안 시점에만 시험 유형을 등록한 등록부로 판정하고, grant 는 원래 등록부로 판정한다.
+    const proposingDeps = { ...deps, registries: testRegistries({ taskTypes: [probeTaskType()] }) };
+    const probeDraft = draft("probe", {
+      type: { id: probeTaskType().id, version: probeTaskType().version },
+      input: { subject: "drift" },
     });
+    const aggregate = proposePlan(proposingDeps, planning, planInput([probeDraft]));
+    const decisionId = aggregate.work.pendingDecision?.id;
+    if (decisionId === undefined) throw new Error("expected pending plan approval");
     const grant = (signalId: string): DecisionSignal => ({
       type: "human_decision",
       decisionId,
@@ -320,33 +320,29 @@ describe("SC-032: 계획 승인 grant 의 재검증 무효는 커밋도 키 선�
       receivedAt: NOW,
     });
 
-    const invalidDrafts = [draft("a", { parent: { draftRef: "a" } })];
-    const refused = judgeSignal(
+    const judged = judgeSignal(
       deps,
       aggregate,
       grant("sig_plangrantbad1"),
-      { kind: "plan_grant", proposal: proposalWith(invalidDrafts) },
+      { kind: "plan_grant" },
       NOW,
     );
-    expect(refused.kind).toBe("not_applicable");
-    if (refused.kind !== "not_applicable") return;
-    expect(refused.rejection.reason).toBe("condition_not_met");
-    expect(refused.rejection.planIssues).toContainEqual({ kind: "self_parent", draftRef: "a" });
-    expect(refused.rejection.planIssues).toEqual(validatePlanDrafts(invalidDrafts, []));
-    expect("commit" in refused).toBe(false);
-    expect("aggregate" in refused).toBe(false);
+    expect(judged.kind).toBe("rejected_stale");
+    if (judged.kind !== "rejected_stale") return;
+    const preceding = judged.preceding;
+    if (preceding === undefined) throw new Error("expected preceding withdrawal commit");
+    expect(eventTypes(preceding.commit)).toEqual(["work_plan_withdrawn"]);
+    expect(payloadOf(preceding.commit, "work_plan_withdrawn")["cause"]).toBe("no_longer_validates");
+    expect(eventTypes(judged.commit)).toEqual(["signal_rejected_stale"]);
+    expect(eventTypes(judged.commit)).not.toContain("work_plan_committed");
+    expect(preceding.aggregate.work.state).toBe("PLANNING");
+    expect(preceding.aggregate.acceptedSignalKeys).toEqual(aggregate.acceptedSignalKeys);
 
-    // 거절은 애그리거트를 바꾸지 않으므로, 같은 결정·revision·choice 의 다음 grant 는 같은 애그리거트에서 판정된다.
-    const accepted = judgeSignal(
-      deps,
-      aggregate,
-      grant("sig_plangrantok1"),
-      { kind: "plan_grant", proposal: proposalWith([draft("ok")]) },
-      NOW,
-    );
-    expect(accepted.kind).toBe("accepted");
-    if (accepted.kind !== "accepted") return;
-    expect(eventTypes(accepted.commit)).toContain("work_plan_committed");
+    const after = applyCommits(aggregate, committedChain(judged));
+    expect(after.work.state).toBe("PLANNING");
+    expect(after.acceptedSignalKeys).toEqual(aggregate.acceptedSignalKeys);
+    const again = judgeSignal(deps, after, grant("sig_plangrantbad2"), { kind: "plan_grant" }, NOW);
+    expect(again.kind).toBe("rejected_stale");
   });
 });
 

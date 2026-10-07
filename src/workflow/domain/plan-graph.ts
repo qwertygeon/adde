@@ -11,6 +11,7 @@ import type {
 } from "./commands.js";
 import type { WorkflowEventEnvelope } from "./events.js";
 import type { ValidationIssue } from "./validation/task-validation.js";
+import type { TaskStateName } from "./task-state.js";
 
 export type RelationEdgeKind = "dependency" | "parent" | "causal";
 
@@ -48,7 +49,83 @@ export type PlanValidationIssue =
       readonly kind: "draft_invalid";
       readonly draftRef: string;
       readonly reason: DraftInvalidReason;
-    };
+    }
+  | {
+      readonly kind: "base_revision_mismatch";
+      readonly basePlanRevision: number;
+      readonly planRevision: number;
+    }
+  | { readonly kind: "retained_duplicate"; readonly taskId: TaskId }
+  | { readonly kind: "retained_not_member"; readonly taskId: TaskId }
+  | {
+      readonly kind: "retained_terminal_unsatisfying";
+      readonly taskId: TaskId;
+      readonly state: TaskStateName;
+    }
+  | {
+      readonly kind: "member_reference_outside_revision";
+      readonly taskId: TaskId;
+      readonly edge: "dependency" | "binding";
+      readonly ref: TaskId;
+    }
+  | {
+      readonly kind: "dependency_outside_revision";
+      readonly draftRef: string;
+      readonly taskId: TaskId;
+    }
+  | { readonly kind: "binding_malformed"; readonly draftRef: string; readonly field: string }
+  | {
+      readonly kind: "binding_occurrence_unavailable";
+      readonly draftRef: string;
+      readonly field: string;
+    }
+  | {
+      readonly kind: "binding_input_field_unknown";
+      readonly draftRef: string;
+      readonly field: string;
+    }
+  | { readonly kind: "binding_overlaps_input"; readonly draftRef: string; readonly field: string }
+  | {
+      readonly kind: "binding_producer_not_member";
+      readonly draftRef: string;
+      readonly field: string;
+      readonly ref: TaskRef;
+    }
+  | {
+      readonly kind: "binding_producer_not_dependency";
+      readonly draftRef: string;
+      readonly field: string;
+      readonly ref: TaskRef;
+    }
+  | {
+      readonly kind: "binding_output_undeclared";
+      readonly draftRef: string;
+      readonly field: string;
+      readonly output: string;
+    }
+  | {
+      readonly kind: "binding_producer_without_output";
+      readonly draftRef: string;
+      readonly field: string;
+      readonly reason: "skipped" | "output_absent";
+    }
+  | {
+      readonly kind: "binding_schema_incompatible";
+      readonly draftRef: string;
+      readonly field: string;
+      readonly reason: "not_provable" | "producer_schema_unsupported";
+    }
+  | { readonly kind: "no_terminal_required_member" }
+  | { readonly kind: "proposal_not_canonical_json"; readonly path: readonly (string | number)[] }
+  | { readonly kind: "binding_safety_field"; readonly draftRef: string; readonly field: string }
+  | {
+      readonly kind: "member_binding_without_output";
+      readonly taskId: TaskId;
+      readonly field: string;
+      readonly ref: TaskId;
+      readonly reason: "skipped" | "output_absent";
+    }
+  | { readonly kind: "proposal_digest_mismatch" };
 
 function refKey(ref: TaskRef): string {
   return "draftRef" in ref ? ref.draftRef : ref.taskId;

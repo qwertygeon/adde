@@ -5,6 +5,7 @@
  */
 import { DomainInvariantError } from "../result.js";
 import type { DomainRegistries } from "../registry/registries.js";
+import type { TaskRecord } from "../aggregate.js";
 import type {
   InputRequest,
   MissingInputIssue,
@@ -57,6 +58,8 @@ export interface TaskDeclaration {
   readonly policy: unknown;
   /** 부재 = [] */
   readonly reactions?: unknown;
+  /** 결합 선언 — 키만 읽는다(결합이 채울 필드는 누락 입력이 아니다). */
+  readonly inputBindings?: Readonly<Record<string, unknown>>;
 }
 
 export interface NormalizedTaskDeclaration {
@@ -149,10 +152,12 @@ function missingInputRequests(
   taskType: TaskTypeDescriptor,
   input: Record<string, unknown>,
   policy: TaskPolicy,
+  boundFields: ReadonlySet<string>,
 ): readonly InputRequest[] {
   const profile = taskTypeFieldProfile(taskType);
   const missing: MissingInputIssue[] = [];
   for (const field of profile.schemaKeys) {
+    if (boundFields.has(field)) continue;
     const required =
       profile.requiredFields.has(field) ||
       (profile.unattendedRequiredFields.has(field) && policy.unattended.eligible);
@@ -313,11 +318,31 @@ export function validateTask(
   }
 
   // 5. 누락 입력
-  const requests = missingInputRequests(taskType, input, policyResult.value);
+  const declaredBindings: unknown = declaration.inputBindings;
+  const boundFields = new Set(isPlainObject(declaredBindings) ? Object.keys(declaredBindings) : []);
+  const requests = missingInputRequests(taskType, input, policyResult.value, boundFields);
   if (requests.length > 0) return { exit: "input_requested", requests, normalized };
 
   // 6. 성공
   return { exit: "valid", normalized };
+}
+
+/**
+ * Task 레코드의 검증 선언으로 검증한다. 검증 판정과 재계획 게이트가 같은 선언·같은 등록부로 같은 출구를
+ * 얻도록 선언 구성을 한 곳에 둔다.
+ */
+export function validateTaskRecord(
+  registries: DomainRegistries,
+  task: Pick<TaskRecord, "type" | "input" | "trigger" | "policy" | "reactions" | "inputBindings">,
+): TaskValidationResult {
+  return validateTask(registries, {
+    type: task.type,
+    input: task.input,
+    trigger: task.trigger,
+    policy: task.policy,
+    reactions: task.reactions,
+    inputBindings: task.inputBindings,
+  });
 }
 
 function parseTrigger(

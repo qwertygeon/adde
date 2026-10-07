@@ -17,6 +17,9 @@ import { deriveWorkState, evaluateCompletion } from "./completion.js";
 import { DomainInvariantError } from "./result.js";
 import type { DomainRegistries } from "./registry/registries.js";
 import { requiresPreExecutionApproval } from "./policy/pre-execution-approval.js";
+import { revalidateHeldProposal } from "./plan/proposal.js";
+import { bindingUnsatisfiedProducerIds } from "./task-result/binding.js";
+import type { DomainDeps } from "./engine.js";
 
 export interface CascadeDecided {
   readonly event: DecidedEvent;
@@ -57,13 +60,96 @@ export function decideWorkCancellationCascade(
   return out;
 }
 
+/**
+ * 커밋된 제안이 보존하지 않는 비종결 member 를 `work_plan_committed` 와 같은 커밋에서 취소한다(탈락
+ * 순서). 확인 대기면 `confirmation_cancelled`, 그 밖이면 `task_canceled` 다.
+ */
+export function decideReplanDroppedCancellations(
+  aggregate: WorkAggregate,
+  workPlanCommittedEventId: string,
+  dropped: readonly TaskId[],
+  actorSource: ActorSource,
+): readonly CascadeDecided[] {
+  const out: CascadeDecided[] = [];
+  for (const taskId of dropped) {
+    const task = aggregate.tasks[taskId];
+    if (task === undefined || isTerminalTaskState(task.state)) continue;
+    const origin: CancelOrigin = {
+      kind: "replan_dropped",
+      actorSource,
+      workEventId: workPlanCommittedEventId as EventId,
+    };
+    const event =
+      task.state === "WAITING_CONFIRMATION"
+        ? mkEvent(
+            "confirmation_cancelled",
+            { confirmationId: task.confirmationId as import("./ids.js").ConfirmationId, origin },
+            { taskId },
+          )
+        : mkEvent("task_canceled", { origin }, { taskId });
+    out.push({ event, causationEventId: workPlanCommittedEventId });
+  }
+  return out;
+}
+
+/**
+ * 승인 대기 제안의 재검증 — 이 커밋이 커밋 전 member 를 하나 이상 종결시켰고, 커밋 뒤 Work 가 대기
+ * 제안을 가진 WAITING_APPROVAL 인데 제안이 더 이상 유효하지 않으면 같은 커밋에 철회를 붙인다.
+ */
+export function decidePendingProposalRevalidation(
+  deps: DomainDeps,
+  before: WorkAggregate | undefined,
+  scratch: WorkAggregate,
+  causationEventId: string | undefined,
+): CascadeDecided | undefined {
+  if (before === undefined) return undefined;
+  const work = scratch.work;
+  const proposal = work.pendingProposal;
+  if (work.state !== "WAITING_APPROVAL" || proposal === undefined) return undefined;
+  const terminatedNow = before.work.memberTaskIds.some((taskId) => {
+    const prior = before.tasks[taskId];
+    const now = scratch.tasks[taskId];
+    return (
+      prior !== undefined &&
+      now !== undefined &&
+      !isTerminalTaskState(prior.state) &&
+      isTerminalTaskState(now.state)
+    );
+  });
+  if (!terminatedNow) return undefined;
+  const check = revalidateHeldProposal(deps, scratch, proposal);
+  if (check.valid) return undefined;
+  const decisionId = work.pendingDecision?.id;
+  return {
+    event: mkEvent(
+      "work_plan_withdrawn",
+      {
+        proposalId: proposal.id,
+        ...(decisionId !== undefined ? { decisionId } : {}),
+        cause: "no_longer_validates",
+        issues: check.issues,
+      },
+      { workId: work.id },
+    ),
+    ...(causationEventId !== undefined ? { causationEventId } : {}),
+  };
+}
+
 const UNSATISFYING_TERMINAL_OR_CANCELED = new Set(["REJECTED", "EXPIRED", "FAILED", "CANCELED"]);
 
+/** 불충족 의존(dependsOn 순, 중복 없음) — 불만족 종결, 그리고 결합한 출력을 넘기지 못하는 생산자. */
 function unsatisfiedDependencyIds(aggregate: WorkAggregate, task: TaskRecord): readonly TaskId[] {
-  return task.dependsOn.filter((depId) => {
+  const bindingUnsatisfied = new Set<string>(bindingUnsatisfiedProducerIds(aggregate, task));
+  const out: TaskId[] = [];
+  for (const depId of task.dependsOn) {
+    if (out.includes(depId)) continue;
     const dep = aggregate.tasks[depId];
-    return dep !== undefined && UNSATISFYING_TERMINAL_OR_CANCELED.has(dep.state);
-  });
+    if (dep === undefined) continue;
+    if (UNSATISFYING_TERMINAL_OR_CANCELED.has(dep.state) || bindingUnsatisfied.has(depId)) {
+      out.push(depId);
+    }
+  }
+  return out;
 }
 
 function latestCausingEventId(

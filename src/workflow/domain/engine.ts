@@ -1,7 +1,7 @@
 /**
  * createWork·executeCommand(커밋 조립·envelope·순서) — design.md §2 "실행 모델"·§3 "커밋 파이프라인"
  * 그대로. 사전 검사 순서: 대상 존재 → (Task 명령) 종결 여부 → `expectedRevision` 일치 → 명령 kind 가
- * 현재 상태에서 가질 수 있는 행 존재 → 행 조건.
+ * 현재 상태에서 가질 수 있는 행 존재 → (Task 명령) 재계획 게이트 → 행 조건.
  */
 import type { IdGenerator, EventId, CommitId } from "./ids.js";
 import { nextEntityId } from "./ids.js";
@@ -22,17 +22,27 @@ import { decideCreateWork, decideWorkCommand } from "./work-decide.js";
 import {
   decideDependencyCascadeRound,
   decideDerivedWorkStateEvent,
+  decidePendingProposalRevalidation,
+  decideReplanDroppedCancellations,
   decideWorkCancellationCascade,
 } from "./cascade.js";
+import { isReplanGatedTaskCommand, isReplanWaitHeld } from "./plan/replan.js";
 
 export interface OperationalDefaults {
   readonly agentDispatchDeadlineMs: number;
+  /** 결과 크기 상한(정규 JSON UTF-8 바이트). 결과 기록 시점에 양의 안전 정수가 아니면 DomainInvariantError. */
+  readonly resultInlineMaxBytes?: number;
 }
+export type OutputRedactor = (
+  outputs: Readonly<Record<string, unknown>>,
+) => Readonly<Record<string, unknown>>;
 /** 검증·발화 방식 조회·연쇄가 같은 등록부를 쓴다. */
 export interface DomainDeps {
   readonly ids: IdGenerator;
   readonly operationalDefaults: OperationalDefaults;
   readonly registries: DomainRegistries;
+  /** 출력 마스킹. 결과 기록 시점에 부재면 DomainInvariantError. 결정적이어야 한다. */
+  readonly redactOutputs?: OutputRedactor;
 }
 export interface DomainCommit {
   readonly id: CommitId;
@@ -45,7 +55,8 @@ export type CommandRejectionReason =
   | "condition_not_met"
   | "invalid_input"
   | "unknown_subject"
-  | "unsupported_in_this_phase";
+  | "unsupported_in_this_phase"
+  | "replan_open";
 export interface CommandRejection {
   readonly reason: CommandRejectionReason;
   readonly detail?: string;
@@ -169,6 +180,29 @@ export function assembleCommit(
     );
   }
 
+  // 2a. 재계획 탈락 취소 — 커밋 이벤트 ID 를 출처에 싣는다.
+  const committedStaged = staged.find((s) => s.decided.type === "work_plan_committed");
+  if (committedStaged !== undefined && scratch !== undefined) {
+    const committed = committedStaged.decided as Extract<
+      DecidedEvent,
+      { readonly type: "work_plan_committed" }
+    >;
+    if (committed.payload.dropped.length > 0) {
+      const cancellations = decideReplanDroppedCancellations(
+        scratch,
+        committedStaged.id,
+        committed.payload.dropped,
+        meta.actorSource,
+      );
+      applyBatch(
+        cancellations.map((c) => ({
+          decided: c.event,
+          ...(c.causationEventId !== undefined ? { causationId: c.causationEventId } : {}),
+        })),
+      );
+    }
+  }
+
   // 3. Work 취소 연쇄
   const workCanceledStaged = staged.find((s) => s.decided.type === "work_canceled");
   if (workCanceledStaged !== undefined && scratch !== undefined) {
@@ -196,6 +230,26 @@ export function assembleCommit(
         ...(c.causationEventId !== undefined ? { causationId: c.causationEventId } : {}),
       })),
     );
+  }
+
+  // 4a. 대기 제안 재검증 — 의존 연쇄의 종결까지 본 뒤 판정한다.
+  if (scratch !== undefined) {
+    const withdrawal = decidePendingProposalRevalidation(
+      deps,
+      aggregateBefore,
+      scratch,
+      lastStateChangingId,
+    );
+    if (withdrawal !== undefined) {
+      applyBatch([
+        {
+          decided: withdrawal.event,
+          ...(withdrawal.causationEventId !== undefined
+            ? { causationId: withdrawal.causationEventId }
+            : {}),
+        },
+      ]);
+    }
   }
 
   // 5. 파생 Work 상태
@@ -238,11 +292,25 @@ function isTaskCommand(command: WorkflowCommand): command is TaskCommand {
   return "taskId" in command;
 }
 
+/**
+ * 명령을 진입에서 한 번만 읽은 얕은 동결 사본. 접근자·Proxy 가 읽을 때마다 다른 값을 내도 재계획 게이트·판정·기록이
+ * 같은 값을 보게 한다. 최상위와 `meta`(null 이 아닌 객체일 때)의 자기 열거 속성만 읽고 중첩 값은 참조 그대로 둔다.
+ */
+function captureCommand(received: WorkflowCommand): WorkflowCommand {
+  const top = { ...received };
+  const captured =
+    typeof top.meta === "object" && top.meta !== null
+      ? { ...top, meta: Object.freeze({ ...top.meta }) }
+      : top;
+  return Object.freeze(captured);
+}
+
 export function executeCommand(
   deps: DomainDeps,
   aggregate: WorkAggregate,
-  command: WorkflowCommand,
+  received: WorkflowCommand,
 ): CommandOutcome {
+  const command = captureCommand(received);
   const meta = {
     now: command.meta.now,
     actorSource: command.meta.actorSource,
@@ -303,7 +371,13 @@ export function executeCommand(
     ) {
       return { kind: "rejected", rejection: { reason: "transition_not_in_table" } };
     }
-    const decided = decideTaskCommand(deps, task, command);
+    if (
+      isReplanWaitHeld(aggregate.work) &&
+      isReplanGatedTaskCommand(deps.registries, task, command)
+    ) {
+      return { kind: "rejected", rejection: { reason: "replan_open" } };
+    }
+    const decided = decideTaskCommand(deps, task, command, aggregate);
     if (decided.kind === "rejected") return { kind: "rejected", rejection: decided.rejection };
     const { commit, aggregate: nextAggregate } = assembleCommit(
       deps,
@@ -326,7 +400,7 @@ export function executeCommand(
   if (reachableRows === undefined || reachableRows.length === 0) {
     return { kind: "rejected", rejection: { reason: "transition_not_in_table" } };
   }
-  const decided = decideWorkCommand(deps, work, workCommand);
+  const decided = decideWorkCommand(deps, aggregate, workCommand);
   if (decided.kind === "rejected") return { kind: "rejected", rejection: decided.rejection };
   const { commit, aggregate: nextAggregate } = assembleCommit(
     deps,

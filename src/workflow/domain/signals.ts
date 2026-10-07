@@ -15,7 +15,10 @@ import { evaluateTime } from "./task-decide.js";
 import type { DecisionSignal, DelegationResponseSignal, DecisionApplication } from "./commands.js";
 import type { DecidedEvent } from "./events.js";
 import { mkEvent } from "./events.js";
-import { decidePlanCommit } from "./work-decide.js";
+import { nextEntityId } from "./ids.js";
+import { DomainInvariantError } from "./result.js";
+import { buildPlanCommitEvents, revalidateHeldProposal } from "./plan/proposal.js";
+import { prepareAcceptanceOutputs } from "./task-result/outputs.js";
 import { deriveSignalDedupKey } from "./derivation/dedup-key.js";
 import type { SignalDedupKey } from "./derivation/dedup-key.js";
 import { deriveOccurrenceId } from "./derivation/occurrence-id.js";
@@ -40,7 +43,13 @@ export type SignalJudgement =
       readonly aggregate: WorkAggregate;
     }
   | { readonly kind: "duplicate"; readonly dedupKey: SignalDedupKey; readonly commit: DomainCommit }
-  | { readonly kind: "rejected_stale"; readonly reason: StaleReason; readonly commit: DomainCommit }
+  | {
+      readonly kind: "rejected_stale";
+      readonly reason: StaleReason;
+      readonly commit: DomainCommit;
+      /** 무효 grant 의 앞선 철회 커밋. 호출자는 preceding.commit → commit 순으로 저장한다. */
+      readonly preceding?: { readonly commit: DomainCommit; readonly aggregate: WorkAggregate };
+    }
   | { readonly kind: "rejected"; readonly reason: NonStaleReason; readonly commit: DomainCommit }
   | { readonly kind: "forged_provenance"; readonly commit: DomainCommit }
   | { readonly kind: "not_applicable"; readonly rejection: CommandRejection };
@@ -250,13 +259,29 @@ function judgeConfirmationDecision(
   );
   let transitionEvent: DecidedEvent;
   switch (signal.decision) {
-    case "accept":
+    case "accept": {
+      const prepared = prepareAcceptanceOutputs(deps, task, signal.receivedAt);
+      if (!prepared.ok) {
+        return {
+          kind: "not_applicable",
+          rejection: { reason: "invalid_input", detail: "confirmation_result_invalid" },
+        };
+      }
       transitionEvent = mkEvent(
         "confirmation_accepted",
-        { confirmationId: signal.confirmationId, signalId: signal.signalId },
+        {
+          confirmationId: signal.confirmationId,
+          signalId: signal.signalId,
+          result: {
+            id: nextEntityId(deps.ids, "result"),
+            outputs: prepared.outputs,
+            digest: prepared.digest,
+          },
+        },
         { taskId: task.id },
       );
       break;
+    }
     case "reject":
       transitionEvent = mkEvent(
         "confirmation_rejected",
@@ -665,25 +690,21 @@ function judgeHumanDecisionForWork(
   if (signal.choice === "grant") {
     if (application.kind !== "plan_grant")
       return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
-    const proposal = application.proposal;
-    // design.md §6 "신호 human_decision grant (plan 주체)" 행: 적용 입력의 제안 ID·digest 가
-    // 대기 제안과 같아야 한다.
-    if (
-      proposal.proposalId !== work.pendingProposalId ||
-      proposal.digest !== work.pendingProposalDigest
-    ) {
+    // grant 가 커밋하는 내용은 Work 가 보유한 제안뿐이다 — 적용 입력의 다른 필드는 읽지 않는다.
+    // 보유 내용이 승인 대상 digest 와 다르면 무효로 보고 철회한다.
+    const proposal = work.pendingProposal;
+    if (proposal === undefined) {
       return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
     }
-    // 초안 검증·task_created·draftRefMap 생성은 work-decide.ts::decidePlanCommit 재사용(복제 금지).
-    // 재검증이 무효면 커밋·키 선점 없이 거절한다 — 무효 적용은 수용 키를 선점하지 않는다.
-    const planDecision = decidePlanCommit(deps, work, proposal, {
-      decisionId: signal.decisionId,
-      onInvalid: "reject",
-    });
-    if (planDecision.kind === "rejected") {
-      return { kind: "not_applicable", rejection: planDecision.rejection };
+    const check = revalidateHeldProposal(deps, aggregate, proposal);
+    if (!check.valid) {
+      return withdrawInvalidGrant(deps, aggregate, signal, application, now, check.issues);
     }
-    transitionEvents = [...planDecision.events];
+    transitionEvents = [
+      ...buildPlanCommitEvents(deps, check.proposal, check.membership, {
+        decisionId: signal.decisionId,
+      }),
+    ];
   } else {
     if (application.kind !== "plan_deny")
       return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
@@ -708,6 +729,49 @@ function judgeHumanDecisionForWork(
     baseMeta(signal, now),
   );
   return { kind: "accepted", dedupKey: candidateKey, commit, aggregate: nextAggregate };
+}
+
+/**
+ * 무효 제안 grant — 철회를 그 자체 커밋으로 기록한 뒤 철회 뒤 애그리거트에서 같은 신호를 다시
+ * 판정한다. 대기 결정이 닫혔으므로 낡음 기록이 나오고, 수용 키는 선점하지 않는다.
+ */
+function withdrawInvalidGrant(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  signal: Extract<DecisionSignal, { type: "human_decision" }>,
+  application: DecisionApplication,
+  now: UtcInstant,
+  issues: readonly import("./plan-graph.js").PlanValidationIssue[],
+): SignalJudgement {
+  const work = aggregate.work;
+  const proposal = work.pendingProposal as NonNullable<WorkRecord["pendingProposal"]>;
+  const withdrawal = assembleCommit(
+    deps,
+    aggregate,
+    [
+      mkEvent(
+        "work_plan_withdrawn",
+        {
+          proposalId: proposal.id,
+          decisionId: signal.decisionId,
+          cause: "no_longer_validates",
+          issues,
+        },
+        { workId: work.id },
+      ),
+    ],
+    baseMeta(signal, now),
+  );
+  const rejudged = judgeSignal(deps, withdrawal.aggregate, signal, application, now);
+  if (rejudged.kind !== "rejected_stale") {
+    throw new DomainInvariantError(
+      `무효 grant 철회 뒤 재판정이 낡음 기록이 아니다: ${rejudged.kind}`,
+    );
+  }
+  return {
+    ...rejudged,
+    preceding: { commit: withdrawal.commit, aggregate: withdrawal.aggregate },
+  };
 }
 
 function judgeCancelRequested(

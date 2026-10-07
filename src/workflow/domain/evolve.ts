@@ -155,6 +155,7 @@ export function evolveCommit(
           state: "WAITING_APPROVAL",
           pendingProposalId: p.proposalId,
           pendingProposalDigest: p.digest,
+          pendingProposal: p.proposal,
           pendingDecision: p.decision,
         };
         decisionSubjects = { ...decisionSubjects, [p.decision.id]: { workId: w.id } };
@@ -163,7 +164,12 @@ export function evolveCommit(
       case "work_plan_rejected": {
         const w = work as WorkRecord;
         work = {
-          ...omitFields(w, ["pendingDecision", "pendingProposalId", "pendingProposalDigest"]),
+          ...omitFields(w, [
+            "pendingDecision",
+            "pendingProposalId",
+            "pendingProposalDigest",
+            "pendingProposal",
+          ]),
           state: w.planRevision === 0 ? "PLANNING" : "READY",
         };
         break;
@@ -171,7 +177,12 @@ export function evolveCommit(
       case "work_plan_withdrawn": {
         const w = work as WorkRecord;
         work = {
-          ...omitFields(w, ["pendingDecision", "pendingProposalId", "pendingProposalDigest"]),
+          ...omitFields(w, [
+            "pendingDecision",
+            "pendingProposalId",
+            "pendingProposalDigest",
+            "pendingProposal",
+          ]),
           state: "PLANNING",
         };
         break;
@@ -184,7 +195,12 @@ export function evolveCommit(
         const w = work as WorkRecord;
         const newTaskIds = p.draftRefMap.map((m) => m.taskId);
         work = {
-          ...omitFields(w, ["pendingDecision", "pendingProposalId", "pendingProposalDigest"]),
+          ...omitFields(w, [
+            "pendingDecision",
+            "pendingProposalId",
+            "pendingProposalDigest",
+            "pendingProposal",
+          ]),
           state: "READY",
           planRevision: p.planRevision,
           taskIds: [...w.taskIds, ...newTaskIds],
@@ -214,7 +230,7 @@ export function evolveCommit(
         work = { ...(work as WorkRecord), state: "COMPLETED" };
         break;
       case "work_failed":
-        work = { ...(work as WorkRecord), state: "FAILED" };
+        work = { ...(work as WorkRecord), state: "FAILED", failureCause: event.payload.cause };
         break;
       case "work_canceled":
         work = { ...(work as WorkRecord), state: "CANCELED" };
@@ -238,6 +254,7 @@ export function evolveCommit(
           trigger: p.trigger,
           policy: p.policy,
           reactions: p.reactions,
+          inputBindings: p.inputBindings ?? {},
           preExecutionApproved: false,
           lateResults: [],
           lastAttemptNo: 0,
@@ -295,6 +312,7 @@ export function evolveCommit(
             deadline: p.deadline,
           },
           lastAttemptNo: Math.max(current.lastAttemptNo, p.attemptNo),
+          ...(p.boundInputs !== undefined ? { boundInputs: p.boundInputs } : {}),
         });
         break;
       }
@@ -303,6 +321,7 @@ export function evolveCommit(
         tasks = patchTask(tasks, requireTaskId(event), {
           state: "WAITING_CONFIRMATION",
           confirmationId: p.confirmationId,
+          ...(p.boundInputs !== undefined ? { boundInputs: p.boundInputs } : {}),
         });
         break;
       }
@@ -381,6 +400,7 @@ export function evolveCommit(
         tasks = replaceTask(tasks, taskId, {
           ...withoutOpenAttemptOrPark(tasks[taskId] as TaskRecord),
           state: "COMPLETED",
+          result: { ...event.payload.result, taskId, eventId: event.id as EventId },
           terminalRef: terminalRefOf(event),
         });
         break;
@@ -451,12 +471,15 @@ export function evolveCommit(
         });
         break;
       }
-      case "confirmation_accepted":
-        tasks = patchTask(tasks, requireTaskId(event), {
+      case "confirmation_accepted": {
+        const taskId = requireTaskId(event);
+        tasks = patchTask(tasks, taskId, {
           state: "COMPLETED",
+          result: { ...event.payload.result, taskId, eventId: event.id as EventId },
           terminalRef: terminalRefOf(event),
         });
         break;
+      }
       case "confirmation_rejected":
         tasks = patchTask(tasks, requireTaskId(event), {
           state: "REJECTED",

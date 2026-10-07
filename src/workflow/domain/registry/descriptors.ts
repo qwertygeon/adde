@@ -23,7 +23,16 @@ export interface InputFieldMetadata {
   readonly requiredWhen?: "unattended_eligible";
 }
 
-export type OutputDeclaration = ZodType | { readonly outputSchemaFromInput: string };
+/** 입력 필드형 출력은 `optional` 이 참이면 선택, 부재·거짓이면 필수다. zod 형 출력은 `undefined` 수용 여부가 선택성이다. */
+export type OutputDeclaration =
+  ZodType | { readonly outputSchemaFromInput: string; readonly optional?: boolean };
+
+/** 확인 Task 수락 결과의 출력 원천 — 수락 결정 값(`"accept"`) 또는 신호 수신 시각. */
+export type AcceptanceOutputSource = "decision" | "decidedAt";
+export const ACCEPTANCE_OUTPUT_SOURCES: readonly AcceptanceOutputSource[] = [
+  "decision",
+  "decidedAt",
+];
 
 export interface MissingInputIssue {
   readonly field: string;
@@ -61,6 +70,8 @@ export interface TaskTypeDescriptor {
   /** 선언 (b): 실행이 대기 요청이다. */
   readonly executionIsWaitRequest: boolean;
   readonly describeMissingInput?: (issues: readonly MissingInputIssue[]) => readonly InputRequest[];
+  /** 확인 수락 결과의 출력 이름 → 원천. 없으면 수락 결과의 출력은 `{}` 다. */
+  readonly acceptanceOutputs?: Readonly<Record<string, AcceptanceOutputSource>>;
 }
 
 export type FiringMode = "on_ready" | "schedule" | "dependencies_satisfied" | "external_signal";

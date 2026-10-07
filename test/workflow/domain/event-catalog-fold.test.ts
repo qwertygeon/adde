@@ -22,7 +22,6 @@ import { signalFactorCases } from "./helpers/signal-cases.js";
 import {
   mustCommit,
   mustOk,
-  entityId,
   meta,
   at,
   draft,
@@ -100,11 +99,10 @@ describe("SC-028: 이벤트 카탈로그 전사가 완결되어 있다", () => {
         expectedRevision: planningAgg.work.revision,
         meta: meta(planningAgg.work.createdAt),
         onInvalid: "fail_work",
-        proposal: {
-          proposalId: entityId("planProposal", "pln_censuscycle01"),
-          digest: "6".repeat(64),
+        plan: {
           basePlanRevision: 0,
-          drafts: [draft("A", { dependsOn: [{ draftRef: "A" }] })],
+          source: "planner",
+          tasks: [draft("A", { dependsOn: [{ draftRef: "A" }] })],
           retain: [],
         },
       });
@@ -247,11 +245,10 @@ function buildFullHistoryToReady(seed: string): {
       kind: "commit_plan",
       expectedRevision: planning.aggregate.work.revision,
       meta: meta(now),
-      proposal: {
-        proposalId: entityId("planProposal", `pln_${seed}01`),
-        digest: contentHashOf(seed),
+      plan: {
         basePlanRevision: planning.aggregate.work.planRevision,
-        drafts: [draft("m")],
+        source: "planner",
+        tasks: [draft("m")],
         retain: [],
       },
     }),

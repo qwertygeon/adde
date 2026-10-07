@@ -2,15 +2,7 @@
  * 명령·신호·적용 입력 타입, 명령↔전이 행 매핑 표(FR-004, FR-010) — design.md §인터페이스 계약
  * `commands.ts` 그대로. 표에 없는 조합 판정(SC-005·SC-018)과 테스트 케이스 생성의 SoT.
  */
-import type {
-  TaskId,
-  WorkId,
-  PlanProposalId,
-  ConfirmationId,
-  DecisionId,
-  AttemptId,
-  SignalId,
-} from "./ids.js";
+import type { TaskId, WorkId, ConfirmationId, DecisionId, AttemptId, SignalId } from "./ids.js";
 import type { UtcInstant, ActorSource, ActorRef, CancelOrigin } from "./values.js";
 import type { PendingDecision } from "./pending-decision.js";
 import type { TriggerSpec } from "./trigger.js";
@@ -21,6 +13,9 @@ import type { ContentHash } from "./derivation/dedup-key.js";
 import type { RegistryAxis } from "./registry/registries.js";
 import type { ApprovalSurfaceRefusalReason } from "./policy/approval-surface.js";
 import type { ReactionSpec } from "./validation/reaction-spec.js";
+import type { InputBinding } from "./task-result/binding.js";
+import type { OutputIssue } from "./task-result/outputs.js";
+import type { PlanProposalInput } from "./plan/proposal.js";
 
 export interface CommandMeta {
   readonly now: UtcInstant;
@@ -60,8 +55,20 @@ export type TaskBlockReason =
 
 /** 재시도 여부·지연은 도메인이 정책으로 계산한다 — 호출자는 시도별 지터 값만 주입한다. */
 export type AttemptOutcome =
-  | { readonly kind: "completed"; readonly evidence: unknown }
-  | { readonly kind: "failed"; readonly code: string; readonly jitterDrawMs?: number }
+  | {
+      readonly kind: "completed";
+      readonly evidence: unknown;
+      /** 보고 출력. 부재 = `{}`. */
+      readonly outputs?: unknown;
+      readonly jitterDrawMs?: number;
+    }
+  | {
+      readonly kind: "failed";
+      readonly code: string;
+      readonly jitterDrawMs?: number;
+      /** 출력 위반으로 바뀐 실패일 때만. */
+      readonly outputIssues?: readonly OutputIssue[];
+    }
   | { readonly kind: "attempt_timeout"; readonly jitterDrawMs?: number }
   | {
       readonly kind: "dispatch_orphaned";
@@ -142,14 +149,8 @@ export interface PlanTaskDraft {
   readonly parent?: TaskRef;
   /** 선언 전이 반응. 부재 = []. */
   readonly reactions?: readonly ReactionSpec[];
-}
-
-export interface PlanCommitInput {
-  readonly proposalId: PlanProposalId;
-  readonly digest: string;
-  readonly basePlanRevision: number;
-  readonly drafts: readonly PlanTaskDraft[];
-  readonly retain: readonly TaskId[];
+  /** 입력 필드 → 결합. 결합이 채울 필드는 누락 입력이 아니다. */
+  readonly inputBindings?: Readonly<Record<string, InputBinding>>;
 }
 
 /** source.kind "definition_occurrence" 는 unsupported_in_this_phase 로 거절(셋째 차수). */
@@ -177,13 +178,14 @@ export type WorkCommand =
   | (WorkCommandBase & { readonly kind: "receive_work_input" })
   | (WorkCommandBase & {
       readonly kind: "propose_plan";
-      readonly proposalId: PlanProposalId;
-      readonly digest: string;
-      readonly decision: PendingDecision;
+      readonly plan: PlanProposalInput;
+      /** 계획 승인 결정의 요약. */
+      readonly summary: string;
+      readonly onInvalid?: "stay_planning" | "fail_work";
     })
   | (WorkCommandBase & {
       readonly kind: "commit_plan";
-      readonly proposal: PlanCommitInput;
+      readonly plan: PlanProposalInput;
       readonly onInvalid?: "stay_planning" | "fail_work";
     })
   | (WorkCommandBase & {
@@ -192,7 +194,8 @@ export type WorkCommand =
     })
   | (WorkCommandBase & {
       readonly kind: "withdraw_plan_proposal";
-      readonly cause: "no_longer_validates" | "source_changed";
+      /** 명령 경로 원인은 원문 변경 하나 — 재검증 실패 원인은 도메인 재검증만 낸다. */
+      readonly cause: "source_changed";
     })
   | (WorkCommandBase & { readonly kind: "fail_work" })
   | (WorkCommandBase & { readonly kind: "cancel_work"; readonly origin: CancelOrigin });
@@ -247,7 +250,8 @@ export type DecisionApplication =
   | { readonly kind: "none" }
   | { readonly kind: "task_grant"; readonly resume: GrantResume }
   | { readonly kind: "task_deny"; readonly resolution: "declined" | "discarded_only_effect" }
-  | { readonly kind: "plan_grant"; readonly proposal: PlanCommitInput }
+  /** 커밋되는 내용은 Work 가 보유한 대기 제안뿐이다. */
+  | { readonly kind: "plan_grant" }
   | { readonly kind: "plan_deny" };
 
 // ---------------------------------------------------------------------------
@@ -325,7 +329,7 @@ export const WORK_COMMAND_ROWS: Readonly<
   start_planning: ["DRAFT>PLANNING:work_planning_started"],
   request_work_input: ["PLANNING>WAITING_INPUT:work_input_requested"],
   receive_work_input: ["WAITING_INPUT>PLANNING:work_input_received"],
-  propose_plan: ["PLANNING>WAITING_APPROVAL:work_plan_proposed"],
+  propose_plan: ["PLANNING>WAITING_APPROVAL:work_plan_proposed", "PLANNING>FAILED:work_failed"],
   commit_plan: ["PLANNING>READY:work_plan_committed", "PLANNING>FAILED:work_failed"],
   fail_planning: ["PLANNING>FAILED:work_failed"],
   withdraw_plan_proposal: ["WAITING_APPROVAL>PLANNING:work_plan_withdrawn"],

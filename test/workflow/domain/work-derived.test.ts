@@ -159,11 +159,10 @@ describe("SC-022: Work revision 은 Work 이벤트 커밋에서만 오른다", (
       kind: "commit_plan",
       expectedRevision: before,
       meta: meta(aggregate.work.createdAt),
-      proposal: {
-        proposalId: entityId("planProposal", "pln_derived1"),
-        digest: "3".repeat(64),
+      plan: {
         basePlanRevision: aggregate.work.planRevision,
-        drafts: [draft("m2")],
+        source: "planner",
+        tasks: [draft("m2")],
         retain: [],
       },
     });

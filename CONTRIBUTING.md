@@ -56,6 +56,16 @@ Coverage measurement (optional):
 pnpm test:coverage    # generate a coverage report (coverage/)
 ```
 
+Mutation testing of the workflow domain (optional, report-only — not part of `pnpm gates`, the
+`pre-push` hook, or CI):
+
+```bash
+pnpm run mutation --concurrency 4    # Stryker over src/workflow/domain (report: .artifacts/mutation/)
+```
+
+A full run is slow and CPU/memory-heavy; `--concurrency` caps the worker processes (Stryker's default
+is one fewer than the logical CPU count when there are more than four).
+
 ## Code style
 
 - Prettier enforces formatting and ESLint enforces linting. Editors follow `.editorconfig`.

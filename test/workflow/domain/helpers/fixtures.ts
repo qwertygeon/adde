@@ -10,8 +10,8 @@ import {
   executeCommand,
   judgeSignal,
   foldEvents,
+  evolveCommit,
   nextEntityId,
-  contentHashOf,
   deriveOccurrenceId,
   taskOf,
   PENDING_DECISION_KINDS,
@@ -46,6 +46,9 @@ import type {
   DecisionApplication,
   DomainRegistries,
   AttemptId,
+  PlanProposalInput,
+  PlanProposalSource,
+  WorkRecord,
 } from "../../../../src/workflow/domain/index.js";
 import { testRegistries, fixtureRegistries, probeTaskType } from "./registry-fixtures.js";
 
@@ -119,8 +122,9 @@ export function at(iso: string): UtcInstant {
 export function testDeps(seed = "seed", registries?: DomainRegistries): DomainDeps {
   return {
     ids: makeSeqIds(seed),
-    operationalDefaults: { agentDispatchDeadlineMs: 600_000 },
+    operationalDefaults: { agentDispatchDeadlineMs: 600_000, resultInlineMaxBytes: 65_536 },
     registries: registries ?? testRegistries(),
+    redactOutputs: (outputs) => outputs,
   };
 }
 
@@ -348,17 +352,15 @@ function plannedInternal(
       meta: meta(FIXTURE_NOW),
     }),
   );
-  const proposalId = nextEntityId(deps.ids, "planProposal");
   const committedOutcome = mustCommit(
     executeCommand(deps, planningOutcome.aggregate, {
       kind: "commit_plan",
       expectedRevision: planningOutcome.aggregate.work.revision,
       meta: meta(FIXTURE_NOW),
-      proposal: {
-        proposalId,
-        digest: contentHashOf(drafts.map((d) => d.draftRef).join(",")),
+      plan: {
         basePlanRevision: planningOutcome.aggregate.work.planRevision,
-        drafts,
+        source: "planner",
+        tasks: drafts,
         retain: [],
       },
     }),
@@ -732,18 +734,6 @@ export function reachWorkState(state: WorkStateName): {
   }
 
   if (state === "WAITING_APPROVAL") {
-    const proposalId = nextEntityId(deps.ids, "planProposal");
-    const decision = mustOk(
-      parsePendingDecision({
-        id: nextEntityId(deps.ids, "decision"),
-        kind: "plan_approval_required",
-        workId: planningAgg.work.id,
-        planProposalId: proposalId,
-        requestedAt: now,
-        summary: "fixture plan approval",
-        surfaceDeliveries: [],
-      }),
-    );
     return {
       deps,
       aggregate: mustCommit(
@@ -751,9 +741,13 @@ export function reachWorkState(state: WorkStateName): {
           kind: "propose_plan",
           expectedRevision: planningAgg.work.revision,
           meta: meta(now),
-          proposalId,
-          digest: contentHashOf("fixture-proposal"),
-          decision,
+          plan: {
+            basePlanRevision: planningAgg.work.planRevision,
+            source: "planner",
+            tasks: [draft("fixture_member")],
+            retain: [],
+          },
+          summary: "fixture plan approval",
         }),
       ).aggregate,
     };
@@ -861,4 +855,184 @@ export function reachWorkState(state: WorkStateName): {
   }
 
   throw new Error(`fixture: unsupported work state ${String(state)}`);
+}
+
+// ---- 재계획·계획 제안·결과 결합 헬퍼 ----------------------------------------------
+
+/** 계획 출력 — 기본 basePlanRevision 0, retain [], source "planner". */
+export function planInput(
+  tasks: readonly PlanTaskDraft[],
+  options: {
+    basePlanRevision?: number;
+    retain?: readonly TaskId[];
+    source?: PlanProposalSource;
+    definition?: unknown;
+  } = {},
+): PlanProposalInput {
+  return {
+    basePlanRevision: options.basePlanRevision ?? 0,
+    source: options.source ?? "planner",
+    tasks,
+    retain: options.retain ?? [],
+    ...(options.definition !== undefined ? { definition: options.definition } : {}),
+  };
+}
+
+/** ACTIVE·BLOCKED Work 에 human_local replan_requested 를 수용시킨 애그리거트(재계획 열림). */
+export function openReplan(deps: DomainDeps, aggregate: WorkAggregate): WorkAggregate {
+  return mustCommit(
+    judgeSignal(
+      deps,
+      aggregate,
+      {
+        type: "replan_requested",
+        workId: aggregate.work.id,
+        signalId: nextEntityId(deps.ids, "signal"),
+        expectedRevision: aggregate.work.revision,
+        actorSource: "human_local",
+        receivedAt: FIXTURE_NOW,
+      },
+      { kind: "none" },
+      FIXTURE_NOW,
+    ),
+  ).aggregate;
+}
+
+/** propose_plan 커밋 애그리거트(실패 시 던짐). */
+export function proposePlan(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  plan: PlanProposalInput,
+  summary = "fixture plan approval",
+): WorkAggregate {
+  const committed = mustCommit(
+    executeCommand(deps, aggregate, {
+      kind: "propose_plan",
+      expectedRevision: aggregate.work.revision,
+      meta: meta(FIXTURE_NOW),
+      plan,
+      summary,
+    }),
+  );
+  if (committed.aggregate.work.state !== "WAITING_APPROVAL")
+    throw new Error(
+      `fixture: propose_plan did not reach WAITING_APPROVAL (got ${committed.aggregate.work.state})`,
+    );
+  return committed.aggregate;
+}
+
+/** 대기 계획 결정에 grant/deny 신호 판정. 기본 human_local·현재 Work revision. */
+export function decidePlan(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  choice: "grant" | "deny",
+  options: { actorSource?: ActorSource; expectedRevision?: number } = {},
+): SignalJudgement {
+  const decisionId = aggregate.work.pendingDecision?.id;
+  if (decisionId === undefined) throw new Error("fixture: no pending plan decision");
+  const application: DecisionApplication =
+    choice === "grant" ? { kind: "plan_grant" } : { kind: "plan_deny" };
+  return judgeSignal(
+    deps,
+    aggregate,
+    {
+      type: "human_decision",
+      decisionId,
+      choice,
+      signalId: nextEntityId(deps.ids, "signal"),
+      expectedRevision: options.expectedRevision ?? aggregate.work.revision,
+      actorSource: options.actorSource ?? "human_local",
+      receivedAt: FIXTURE_NOW,
+    },
+    application,
+    FIXTURE_NOW,
+  );
+}
+
+/** 판정·명령 결과의 커밋을 저장 순서로(preceding 먼저). 없으면 []. */
+export function committedChain(outcome: CommandOutcome | SignalJudgement): readonly DomainCommit[] {
+  switch (outcome.kind) {
+    case "committed":
+    case "accepted":
+    case "duplicate":
+    case "forged_provenance":
+      return [outcome.commit];
+    case "rejected_stale":
+      return outcome.preceding !== undefined
+        ? [outcome.preceding.commit, outcome.commit]
+        : [outcome.commit];
+    case "rejected":
+      if ("commit" in outcome) return [outcome.commit];
+      return outcome.record !== undefined ? [outcome.record] : [];
+    case "not_applicable":
+      return [];
+  }
+}
+
+/** Work 레코드 패치 — patchTask 와 같은 "다른 생성 경로 대용". */
+export function patchWork(aggregate: WorkAggregate, patch: Partial<WorkRecord>): WorkAggregate {
+  return { ...aggregate, work: { ...aggregate.work, ...patch } };
+}
+
+function commandOn(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  taskId: TaskId,
+  kind: "begin_validation" | "complete_validation" | "start_attempt",
+): WorkAggregate {
+  return mustCommit(
+    executeCommand(deps, aggregate, {
+      kind,
+      taskId,
+      expectedRevision: requireTask(aggregate, taskId).revision,
+      meta: meta(FIXTURE_NOW),
+    }),
+  ).aggregate;
+}
+
+/** member 를 명령으로 진행(begin_validation → complete_validation → start_attempt → record_attempt_outcome). */
+export function completeMember(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  taskId: TaskId,
+  outputs?: unknown,
+): WorkAggregate {
+  let current = aggregate;
+  if (requireTask(current, taskId).state === "DRAFT")
+    current = commandOn(deps, current, taskId, "begin_validation");
+  if (requireTask(current, taskId).state === "VALIDATING")
+    current = commandOn(deps, current, taskId, "complete_validation");
+  if (requireTask(current, taskId).state === "READY")
+    current = commandOn(deps, current, taskId, "start_attempt");
+  const running = requireTask(current, taskId);
+  const attemptId = running.openAttempt?.attemptId;
+  if (running.state !== "RUNNING" || attemptId === undefined)
+    throw new Error(`fixture: member ${taskId} not RUNNING (got ${running.state})`);
+  const completed = mustCommit(
+    executeCommand(deps, current, {
+      kind: "record_attempt_outcome",
+      taskId,
+      expectedRevision: running.revision,
+      meta: meta(FIXTURE_NOW),
+      attemptId,
+      outcome: {
+        kind: "completed",
+        evidence: {},
+        ...(outputs !== undefined ? { outputs } : {}),
+      },
+    }),
+  ).aggregate;
+  if (requireTask(completed, taskId).state !== "COMPLETED")
+    throw new Error(
+      `fixture: member ${taskId} not COMPLETED (got ${requireTask(completed, taskId).state})`,
+    );
+  return completed;
+}
+
+/** 커밋을 저장 순서대로 애그리거트에 적용한다(판정 결과에 이어지는 판정은 적용 뒤 애그리거트에서). */
+export function applyCommits(
+  aggregate: WorkAggregate,
+  commits: readonly DomainCommit[],
+): WorkAggregate {
+  return commits.reduce((current, commit) => evolveCommit(current, commit.events), aggregate);
 }

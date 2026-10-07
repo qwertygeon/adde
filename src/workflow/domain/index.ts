@@ -40,3 +40,34 @@ export * from "./policy/fan-out.js";
 export * from "./policy/retry.js";
 export * from "./policy/misfire.js";
 export * from "./policy/spawn-limits.js";
+export * from "./policy/trigger-cause.js";
+export * from "./derivation/canonical-json.js";
+export {
+  planProposalDigest,
+  planMembershipChange,
+  judgeMandatoryPlanApproval,
+  planPreconditionRejection,
+  validatePlanProposal,
+} from "./plan/proposal.js";
+export type {
+  PlanProposalSource,
+  PlanProposalInput,
+  ProposedTaskDraft,
+  PlanProposal,
+  PlanMembershipChange,
+  MandatoryApprovalReason,
+  MandatoryApprovalJudgement,
+  PlanProposalCheck,
+  PlanProposalContent,
+} from "./plan/proposal.js";
+export * from "./plan/replan.js";
+export * from "./task-result/data-schema.js";
+export * from "./task-result/schema-shape.js";
+export * from "./task-result/outputs.js";
+export { resolveBoundInputs, bindingUnsatisfiedProducerIds } from "./task-result/binding.js";
+export type {
+  OccurrenceBindingField,
+  InputBinding,
+  BoundInput,
+  BindingResolutionFailure,
+} from "./task-result/binding.js";

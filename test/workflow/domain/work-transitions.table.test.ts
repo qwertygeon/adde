@@ -10,10 +10,17 @@ import type {
   WorkCommand,
   WorkStateName,
   DecisionSignal,
-  PlanCommitInput,
 } from "../../../src/workflow/domain/index.js";
 import { WORK_ROW_CASES } from "./helpers/row-cases.js";
-import { draft, entityId, mustCommit, meta, reachWorkState } from "./helpers/fixtures.js";
+import {
+  draft,
+  entityId,
+  mustCommit,
+  meta,
+  planInput,
+  proposePlan,
+  reachWorkState,
+} from "./helpers/fixtures.js";
 
 /**
  * design.md 문서화 예외 — 재계획이 열려 닫힐 때(거부) `startedUnderCurrentRevision` 이 재설정되지 않으므로
@@ -76,17 +83,11 @@ describe("SC-017: Work 전이 표의 모든 행이 통과한다", () => {
     // Development 병행 수정 대상([A] 실패 #8 — plan_grant 가 draftRefMap: [] 을 하드코딩하고
     // task_created·DAG 검증을 생략하던 결함)을 test/ 쪽에서 계약으로 고정한다. 초안 3건을 승인하면
     // Task 도 정확히 3건 생성되고 draftRefMap 도 3건 채워져야 한다.
-    const { deps, aggregate } = reachWorkState("WAITING_APPROVAL");
+    const { deps, aggregate: planning } = reachWorkState("PLANNING");
+    const drafts = [draft("gd1"), draft("gd2"), draft("gd3")];
+    const aggregate = proposePlan(deps, planning, planInput(drafts));
     const decisionId = aggregate.work.pendingDecision?.id;
     if (decisionId === undefined) throw new Error("expected pendingDecision");
-    const drafts = [draft("gd1"), draft("gd2"), draft("gd3")];
-    const proposal: PlanCommitInput = {
-      proposalId: aggregate.work.pendingProposalId ?? entityId("planProposal", "pln_grantcheck1"),
-      digest: aggregate.work.pendingProposalDigest ?? "7".repeat(64),
-      basePlanRevision: aggregate.work.planRevision,
-      drafts,
-      retain: [],
-    };
     const signal: DecisionSignal = {
       type: "human_decision",
       decisionId,
@@ -100,7 +101,7 @@ describe("SC-017: Work 전이 표의 모든 행이 통과한다", () => {
       deps,
       aggregate,
       signal,
-      { kind: "plan_grant", proposal },
+      { kind: "plan_grant" },
       aggregate.work.createdAt,
     );
     expect(judged.kind).toBe("accepted");

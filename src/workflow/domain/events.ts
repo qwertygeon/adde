@@ -28,6 +28,10 @@ import type { ValidationIssue } from "./validation/task-validation.js";
 import type { ReactionSpec } from "./validation/reaction-spec.js";
 import type { ApprovalSurfaceRefusalReason } from "./policy/approval-surface.js";
 import type { StaleReason, NonStaleReason } from "./engine.js";
+import type { PlanProposal } from "./plan/proposal.js";
+import type { PlanValidationIssue } from "./plan-graph.js";
+import type { InputBinding, BoundInput } from "./task-result/binding.js";
+import type { RecordedTaskResult } from "./task-result/outputs.js";
 
 export const WORKFLOW_EVENT_SCHEMA_VERSION = 1;
 
@@ -154,6 +158,8 @@ export interface EventPayloadMap {
   work_plan_proposed: {
     readonly proposalId: PlanProposalId;
     readonly digest: string;
+    /** 승인 대기 동안 Work 가 보유하는 제안 내용 전체. */
+    readonly proposal: PlanProposal;
     readonly decision: PendingDecision;
   };
   work_plan_rejected: {
@@ -165,6 +171,8 @@ export interface EventPayloadMap {
     readonly proposalId: PlanProposalId;
     readonly decisionId?: DecisionId;
     readonly cause: "no_longer_validates" | "source_changed";
+    /** 재검증 무효로 철회할 때 그 이슈. */
+    readonly issues?: readonly PlanValidationIssue[];
   };
   work_plan_invalid: { readonly proposalId?: PlanProposalId; readonly issues: readonly unknown[] };
   work_input_requested: { readonly requests: readonly unknown[] };
@@ -198,6 +206,8 @@ export interface EventPayloadMap {
     readonly trigger: TriggerSpec;
     readonly policy: TaskPolicy;
     readonly reactions: readonly ReactionSpec[];
+    /** `{taskId}` 로 해석된 결합. 비면 생략. */
+    readonly inputBindings?: Readonly<Record<string, InputBinding>>;
   };
   task_validation_started: Record<string, never>;
   task_validated: Record<string, never>;
@@ -215,8 +225,14 @@ export interface EventPayloadMap {
     readonly attemptNo: number;
     readonly deadline: UtcInstant;
     readonly firedOccurrenceId?: OccurrenceId;
+    /** 첫 효과에서만 — 결합 해석 기록(결합이 없으면 []). */
+    readonly boundInputs?: readonly BoundInput[];
   };
-  task_waiting_confirmation: { readonly confirmationId: ConfirmationId };
+  task_waiting_confirmation: {
+    readonly confirmationId: ConfirmationId;
+    /** 첫 효과에서만 — 결합 해석 기록(결합이 없으면 []). */
+    readonly boundInputs?: readonly BoundInput[];
+  };
   task_retry_wait: {
     readonly attemptId: AttemptId;
     readonly attemptNo: number;
@@ -248,7 +264,11 @@ export interface EventPayloadMap {
   };
   task_blocked: { readonly blockReason: TaskBlockReason };
   task_unblocked: Record<string, never>;
-  task_completed: { readonly attemptId?: AttemptId; readonly evidence?: unknown };
+  task_completed: {
+    readonly attemptId?: AttemptId;
+    readonly evidence?: unknown;
+    readonly result: RecordedTaskResult;
+  };
   task_failed: { readonly reason: TaskFailedReason };
   task_expired: {
     readonly basis: "task_validity" | "decision_expiry";
@@ -299,7 +319,11 @@ export interface EventPayloadMap {
     readonly reason: NonStaleReason;
     readonly observedState: string;
   };
-  confirmation_accepted: { readonly confirmationId: ConfirmationId; readonly signalId: SignalId };
+  confirmation_accepted: {
+    readonly confirmationId: ConfirmationId;
+    readonly signalId: SignalId;
+    readonly result: RecordedTaskResult;
+  };
   confirmation_rejected: { readonly confirmationId: ConfirmationId; readonly signalId: SignalId };
   confirmation_cancelled: {
     readonly confirmationId: ConfirmationId;

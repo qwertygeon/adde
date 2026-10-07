@@ -15,7 +15,6 @@ import {
   reachWorkState,
   testDeps,
   requireTaskFor,
-  entityId,
 } from "./helpers/fixtures.js";
 
 describe("SC-024: 의존 순환 계획은 아무것도 커밋하지 않는다 (AC-27 도메인 수준)", () => {
@@ -45,11 +44,10 @@ describe("SC-024: 의존 순환 계획은 아무것도 커밋하지 않는다 (A
       expectedRevision: planningAgg.work.revision,
       meta: meta(planningAgg.work.createdAt),
       onInvalid: "fail_work",
-      proposal: {
-        proposalId: entityId("planProposal", "pln_cyclefail"),
-        digest: "4".repeat(64),
+      plan: {
         basePlanRevision: 0,
-        drafts: [draft("A", { dependsOn: [{ draftRef: "A" }] })],
+        source: "planner",
+        tasks: [draft("A", { dependsOn: [{ draftRef: "A" }] })],
         retain: [],
       },
     });
@@ -67,11 +65,10 @@ describe("SC-024: 의존 순환 계획은 아무것도 커밋하지 않는다 (A
       kind: "commit_plan",
       expectedRevision: planningAgg.work.revision,
       meta: meta(planningAgg.work.createdAt),
-      proposal: {
-        proposalId: entityId("planProposal", "pln_cyclestay"),
-        digest: "5".repeat(64),
+      plan: {
         basePlanRevision: 0,
-        drafts: [draft("A", { dependsOn: [{ draftRef: "A" }] })],
+        source: "planner",
+        tasks: [draft("A", { dependsOn: [{ draftRef: "A" }] })],
         retain: [],
       },
     });

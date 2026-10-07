@@ -8,7 +8,6 @@ import {
   at,
   meta,
   draft,
-  entityId,
   planned,
   mustCommit,
   reachWorkState,
@@ -59,7 +58,7 @@ describe("SC-051: 새 TaskType 이 등록만으로 종결까지 간다", () => {
         expectedRevision: requireTaskFor(current, taskId).revision,
         meta: meta(NOW),
         attemptId,
-        outcome: { kind: "completed", evidence: { result: "done" } },
+        outcome: { kind: "completed", evidence: { result: "done" }, outputs: { result: "done" } },
       }),
     ).aggregate;
     expect(requireTaskFor(completed, taskId).state).toBe("COMPLETED");
@@ -73,11 +72,10 @@ describe("SC-051: 새 TaskType 이 등록만으로 종결까지 간다", () => {
       kind: "commit_plan",
       expectedRevision: aggregate.work.revision,
       meta: meta(NOW),
-      proposal: {
-        proposalId: entityId("planProposal", "pln_sc051noreg"),
-        digest: "9".repeat(64),
+      plan: {
         basePlanRevision: aggregate.work.planRevision,
-        drafts: [draft("probe", { type: PROBE, input: { subject: "extension" } })],
+        source: "planner",
+        tasks: [draft("probe", { type: PROBE, input: { subject: "extension" } })],
         retain: [],
       },
     });

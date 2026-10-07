@@ -14,7 +14,7 @@ import type {
   ReactionDescriptor,
   InputFieldMetadata,
 } from "./descriptors.js";
-import { EXECUTION_EFFECTS, FIRING_MODES } from "./descriptors.js";
+import { ACCEPTANCE_OUTPUT_SOURCES, EXECUTION_EFFECTS, FIRING_MODES } from "./descriptors.js";
 import { computeTaskTypeFieldProfile, rememberTaskTypeFieldProfile } from "./field-profile.js";
 
 export type RegistryAxis = "task_type" | "trigger" | "reaction";
@@ -23,6 +23,7 @@ export type DescriptorDefect =
   | { readonly code: "identity_invalid" }
   | { readonly code: "execution_effect_invalid" }
   | { readonly code: "schema_not_object" }
+  | { readonly code: "schema_has_object_check" }
   | { readonly code: "required_field_without_metadata"; readonly field: string }
   | { readonly code: "metadata_for_unknown_field"; readonly field: string }
   | { readonly code: "metadata_invalid"; readonly field: string }
@@ -30,6 +31,7 @@ export type DescriptorDefect =
   | { readonly code: "conditional_field_not_optional"; readonly field: string }
   | { readonly code: "output_from_unknown_input"; readonly output: string; readonly field: string }
   | { readonly code: "output_invalid"; readonly output: string }
+  | { readonly code: "acceptance_output_invalid"; readonly output: string }
   | { readonly code: "declaration_invalid"; readonly declaration: string };
 
 export type RegistryConstructionError =
@@ -108,6 +110,16 @@ function taskTypeDefect(descriptor: TaskTypeDescriptor): DescriptorDefect | unde
     return { code: "execution_effect_invalid" };
   }
   if (!(descriptor.schema instanceof z.ZodObject)) return { code: "schema_not_object" };
+  // 입력 질문·결합·해석 재검사가 모두 필드 단위라 객체 수준 검사를 걸 단계가 없다. instanceof 는 덕
+  // 타이핑이라 정의를 읽지 못하는 객체도 통과하므로 그 경우도 거절한다.
+  const schemaDef: unknown = (descriptor.schema as { readonly def?: unknown }).def;
+  if (typeof schemaDef !== "object" || schemaDef === null) {
+    return { code: "schema_has_object_check" };
+  }
+  const objectChecks: unknown = (schemaDef as { readonly checks?: unknown }).checks;
+  if (objectChecks !== undefined && (!Array.isArray(objectChecks) || objectChecks.length > 0)) {
+    return { code: "schema_has_object_check" };
+  }
   if (!isPlainObject(descriptor.inputFields)) {
     return { code: "declaration_invalid", declaration: "inputFields" };
   }
@@ -149,10 +161,16 @@ function taskTypeDefect(descriptor: TaskTypeDescriptor): DescriptorDefect | unde
       if (!Object.hasOwn(shape, field)) {
         return { code: "output_from_unknown_input", output: name, field };
       }
+      const optional = declaration["optional"];
+      if (optional !== undefined && typeof optional !== "boolean") {
+        return { code: "output_invalid", output: name };
+      }
       continue;
     }
     return { code: "output_invalid", output: name };
   }
+  const acceptanceDefect = acceptanceOutputsDefect(descriptor);
+  if (acceptanceDefect !== undefined) return acceptanceDefect;
 
   const capabilities = descriptor.capabilities as unknown;
   if (
@@ -173,6 +191,23 @@ function taskTypeDefect(descriptor: TaskTypeDescriptor): DescriptorDefect | unde
     typeof descriptor.describeMissingInput !== "function"
   ) {
     return { code: "declaration_invalid", declaration: "describeMissingInput" };
+  }
+  return undefined;
+}
+
+function acceptanceOutputsDefect(descriptor: TaskTypeDescriptor): DescriptorDefect | undefined {
+  const declared = descriptor.acceptanceOutputs as unknown;
+  if (declared === undefined) return undefined;
+  if (!isPlainObject(declared)) return { code: "acceptance_output_invalid", output: "" };
+  for (const output of Object.keys(declared)) {
+    const source = declared[output];
+    if (
+      !Object.hasOwn(descriptor.outputs, output) ||
+      typeof source !== "string" ||
+      !(ACCEPTANCE_OUTPUT_SOURCES as readonly string[]).includes(source)
+    ) {
+      return { code: "acceptance_output_invalid", output };
+    }
   }
   return undefined;
 }

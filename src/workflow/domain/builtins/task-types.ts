@@ -5,6 +5,7 @@
 import * as z from "zod";
 import type { TaskTypeDescriptor } from "../registry/descriptors.js";
 import { actorRefSchema, utcInstantSchema } from "./schemas.js";
+import { checkDataSchema } from "../task-result/data-schema.js";
 
 const nonEmptyString = z.string().min(1);
 
@@ -33,6 +34,7 @@ export const CONFIRMATION_TASK_TYPE: TaskTypeDescriptor = {
     },
   },
   outputs: { decision: z.literal("accept"), decidedAt: utcInstantSchema },
+  acceptanceOutputs: { decision: "decision", decidedAt: "decidedAt" },
   executionEffect: "records_only",
   capabilities: { canAutoPlan: true, requiresHumanBeforeExecute: false },
   approvalGatesQuestionOnly: true,
@@ -52,7 +54,16 @@ export const AGENT_GOAL_TASK_TYPE: TaskTypeDescriptor = {
     sessionSelection: nonEmptyString,
     contextRef: z.string().optional(),
     toolScope: nonEmptyString.optional(),
-    dataSchema: z.record(z.string(), z.unknown()).optional(),
+    // 원본을 그대로 검사한다 — 레코드 파싱은 새 객체에 대입하며 최상위 `__proto__` 키를 잃는다.
+    // 비객체는 허용 목록 검사의 루트 검사가 거절한다.
+    dataSchema: z
+      .unknown()
+      .superRefine((value, ctx) => {
+        for (const issue of checkDataSchema(value)) {
+          ctx.addIssue({ code: "custom", message: issue.code, path: [...issue.path] });
+        }
+      })
+      .optional(),
   }),
   inputFields: {
     goal: { question: "What goal should the agent accomplish?", safetyRelevant: false },
@@ -72,7 +83,11 @@ export const AGENT_GOAL_TASK_TYPE: TaskTypeDescriptor = {
       requiredWhen: "unattended_eligible",
     },
   },
-  outputs: { summary: z.string(), data: { outputSchemaFromInput: "dataSchema" } },
+  // 빈 요약은 알릴 내용이 없는 결과라 출력 위반이다 — 요약을 알림 메시지에 결합하는 증명도 이로써 성립한다.
+  outputs: {
+    summary: nonEmptyString,
+    data: { outputSchemaFromInput: "dataSchema", optional: true },
+  },
   executionEffect: "agent_dispatch",
   capabilities: { canAutoPlan: true, requiresHumanBeforeExecute: false },
   approvalGatesQuestionOnly: false,

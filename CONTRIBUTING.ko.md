@@ -59,11 +59,12 @@ pnpm test:coverage    # 커버리지 리포트 생성(coverage/)
 워크플로 도메인 mutation 검증(선택, 보고 전용 — `pnpm gates`·`pre-push` 훅·CI 에 포함되지 않음):
 
 ```bash
-pnpm run mutation --concurrency 4    # src/workflow/domain 대상 Stryker 실행(리포트: .artifacts/mutation/)
+pnpm run mutation    # src/workflow/domain 대상 Stryker 실행(리포트: .artifacts/mutation/)
 ```
 
-전체 실행은 오래 걸리고 CPU·메모리를 많이 씁니다. `--concurrency` 로 작업 프로세스 수를 제한합니다(Stryker
-기본값은 논리 CPU 가 4개를 넘으면 그 수보다 하나 적음).
+전체 실행은 오래 걸리고 CPU·메모리를 많이 씁니다. `stryker.config.json` 이 작업 프로세스 수를 4로 제한합니다(Stryker
+기본값은 논리 CPU 가 4개를 넘으면 그 수보다 하나 적음). 한 번만 바꾸려면 `--concurrency <n>` 을 붙입니다.
+`vitest.config.ts` 도 테스트 파일 병렬 실행을 작업자 4개로 제한합니다.
 
 ## 코드 스타일
 

@@ -5,6 +5,7 @@
   "plugins": ["@stryker-mutator/vitest-runner"],
   "vitest": { "configFile": "vitest.mutation.config.ts" },
   "coverageAnalysis": "perTest",
+  "concurrency": 4,
   "mutate": ["src/workflow/domain/**/*.ts", "!src/workflow/domain/timezone-names.ts"],
   "thresholds": { "high": 80, "low": 60, "break": null },
   "reporters": ["clear-text", "progress", "html", "json"],

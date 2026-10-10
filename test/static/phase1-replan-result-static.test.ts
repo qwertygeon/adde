@@ -186,13 +186,30 @@ function includeGlobs(configText: string): string[] | undefined {
   return [...(match[1] ?? "").matchAll(/["']([^"']+)["']/g)].map((m) => m[1] ?? "");
 }
 
+/** 설정 텍스트의 첫 `setupFiles: [...]` 배열 문자열 원소(주석 제거 뒤). */
+function setupFileList(configText: string): string[] | undefined {
+  const match = stripLineComments(configText).match(/setupFiles:\s*\[([^\]]*)\]/);
+  if (match === null) return undefined;
+  return [...(match[1] ?? "").matchAll(/["']([^"']+)["']/g)].map((m) => m[1] ?? "");
+}
+
 describe("SC-004: mutation 전용 설정은 일반 테스트 실행을 바꾸지 않는다", () => {
+  // 일반 설정의 실행 자원 옵션(maxWorkers 등)은 바뀔 수 있다 — 수집 대상·setup 이 기준과 같고
+  // mutation 설정이 섞이지 않았는지만 본다(이전: 기준 커밋과 바이트 동일).
   it.runIf(gitAvailable)(
-    "Happy: 일반 vitest 설정이 기준 커밋과 바이트 단위로 같다 (test_SC004_vitest_config_unchanged_since_base)",
+    "Happy: 일반 vitest 설정의 수집 대상·setup 이 기준 커밋과 같고 mutation 설정을 참조하지 않는다 (test_SC004_vitest_config_unchanged_since_base)",
     () => {
       expect(existsAtBase("vitest.config.ts")).toBe(true);
-      expect(readRepo("vitest.config.ts")).toBe(readAtBase("vitest.config.ts"));
-      expect(git(["diff", "--name-only", BASE_COMMIT, "--", "vitest.config.ts"]).trim()).toBe("");
+      const current = readRepo("vitest.config.ts");
+      const base = readAtBase("vitest.config.ts");
+      expect(includeGlobs(current)).toEqual(includeGlobs(base));
+      expect(includeGlobs(current)).toEqual(["test/**/*.test.ts"]);
+      expect(setupFileList(current)).toEqual(setupFileList(base));
+      expect(stripLineComments(current)).not.toMatch(/vitest\.mutation\.config|stryker/i);
+      // 판정 자기 점검: 수집 대상이 바뀐 설정을 잡는다.
+      expect(includeGlobs('include: ["test/workflow/**/*.test.ts"]')).not.toEqual(
+        includeGlobs(base),
+      );
     },
   );
 

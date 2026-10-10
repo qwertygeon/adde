@@ -60,11 +60,12 @@ Mutation testing of the workflow domain (optional, report-only — not part of `
 `pre-push` hook, or CI):
 
 ```bash
-pnpm run mutation --concurrency 4    # Stryker over src/workflow/domain (report: .artifacts/mutation/)
+pnpm run mutation    # Stryker over src/workflow/domain (report: .artifacts/mutation/)
 ```
 
-A full run is slow and CPU/memory-heavy; `--concurrency` caps the worker processes (Stryker's default
-is one fewer than the logical CPU count when there are more than four).
+A full run is slow and CPU/memory-heavy. `stryker.config.json` caps the worker processes at 4 (Stryker's
+default is one fewer than the logical CPU count when there are more than four); `--concurrency <n>`
+overrides it for one run. `vitest.config.ts` likewise caps test-file parallelism at 4 workers.
 
 ## Code style
 

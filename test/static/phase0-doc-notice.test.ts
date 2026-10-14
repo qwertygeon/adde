@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 // 001-phase0-baseline-storage-spike — 하한 상향 고지·환경 사실 정적 검증(T042).
 //
 // **순서 유예(PROC-R17) — docs 단계 완료 전 RED 가 정상이다.** 사용자 대면 문서 본문 갱신
-// (CHANGELOG·README·getting-started·troubleshooting) 과 `.claude/docs/infra.md` §5 갱신은
+// (CHANGELOG·README·getting-started·troubleshooting) 과 `.agents/docs/infra.md` §5 갱신은
 // tasks.md "문서 갱신 위임" 절에 따라 docs 단계 소관이며 Test·Development 는 수행하지 않는다.
 // test(EXECUTION) 시점에 본 파일이 RED 여도 그 자체로는 결함이 아니다 — docs 단계 완료 후
 // 이 파일만 단독 재실행해 GREEN 으로 종결한다(선례: test/static/docs-coverage.test.ts 서두).
@@ -56,7 +56,7 @@ describe("SC-030: 하한 상향이 파괴적 변경으로 고지된다(docs 단�
 // SC-031 (FR-028) — infra.md §5 환경 사실 2건
 // ---------------------------------------------------------------------------
 
-const infraPath = path.join(repoRoot, ".claude/docs/infra.md");
+const infraPath = path.join(repoRoot, ".agents/docs/infra.md");
 describe.runIf(fs.existsSync(infraPath))(
   "SC-031: 인프라 문서 환경 사실 2건(docs 단계 완료 전 RED 정상 · 비공개 가드)",
   () => {

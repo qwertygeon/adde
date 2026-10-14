@@ -302,7 +302,15 @@ describe("SC-065: 보호 시험 파일은 바뀌지 않는다", () => {
   it("Happy: 보호 파일 187 개의 현재 해시가 기준과 같다 (test_SC065_protected_tests_unchanged)", () => {
     const protectedFacts = BASELINE.testFiles.filter((f) => isProtected(f.path));
     expect(protectedFacts).toHaveLength(187);
-    const approvedExceptions: readonly string[] = [];
+    // 비공개 문서 홈 경로 변경(`.claude/docs` → `.agents/docs`)에 따른 경로 갱신과 그 가드 예외.
+    const approvedExceptions: readonly string[] = [
+      "test/static/sla-exemption.test.ts",
+      "test/static/phase0-doc-notice.test.ts",
+      "test/static/phase0-existing-tests-unmodified.test.ts",
+      "test/static/phase1-domain-baseline.test.ts",
+      "test/static/phase1-registries-static.test.ts",
+      "test/static/phase1-replan-result-static.test.ts",
+    ];
     const changed = protectedFacts
       .filter((f) => !approvedExceptions.includes(f.path))
       .filter((f) => !exists(f.path) || sha256(readBytes(f.path)) !== f.sha256)

@@ -524,8 +524,14 @@ describe("SC-056: 기존 동작·의존·표면이 바뀌지 않는다", () => {
 
 // ---- SC-057 (이 차수 무수정 가드) -------------------------------------------
 
-/** 기획 단계가 사용자 결정으로 승인한 도메인 테스트 폴더 밖 기존 테스트 수정 — 이 차수는 없다. */
-const APPROVED_OUTSIDE_EXCEPTIONS: readonly string[] = [];
+/** 사용자 결정으로 승인한 도메인 테스트 폴더 밖 기존 테스트 수정 — 비공개 문서 홈 경로 변경(`.claude/docs` → `.agents/docs`)에 따른 경로 갱신과 그 가드 예외. */
+const APPROVED_OUTSIDE_EXCEPTIONS: readonly string[] = [
+  "test/static/sla-exemption.test.ts",
+  "test/static/phase0-doc-notice.test.ts",
+  "test/static/phase0-existing-tests-unmodified.test.ts",
+  "test/static/phase1-domain-baseline.test.ts",
+  "test/static/phase1-registries-static.test.ts",
+];
 
 /** 바뀐 test 경로 중 기준 커밋에 있던 도메인 테스트 폴더 밖 파일(승인 예외 제외). */
 function protectedChanges(changed: readonly string[], existed: (p: string) => boolean): string[] {
@@ -544,7 +550,7 @@ describe.runIf(gitAvailable)("SC-057: 기존 테스트 수정이 경계 안에 �
     expect(
       changed.filter((p) => p.startsWith("test/workflow/domain/")).length,
     ).toBeGreaterThanOrEqual(1);
-    expect(protectedChanges(changed, existsAtBase)).toEqual([...APPROVED_OUTSIDE_EXCEPTIONS]);
+    expect(protectedChanges(changed, existsAtBase)).toEqual([]);
   });
 
   it("Edge: 기준에 있던 test 파일이 삭제되지 않았고 보호 집합이 실제로 잡힌다 (test_SC057_no_base_test_deleted_and_capture_floor)", () => {
@@ -568,17 +574,15 @@ describe.runIf(gitAvailable)("SC-057: 기존 테스트 수정이 경계 안에 �
       protectedChanges(
         [
           "test/static/command-surface.test.ts",
-          "test/static/phase1-registries-static.test.ts",
+          "test/static/phase1-domain-purity.test.ts",
+          APPROVED_OUTSIDE_EXCEPTIONS[0] ?? "",
           "test/workflow/domain/plan-graph.test.ts",
           "test/workflow/domain/helpers/fixtures.ts",
           "test/static/brand-new.test.ts",
         ],
         existsAtBase,
       ),
-    ).toEqual([
-      "test/static/command-surface.test.ts",
-      "test/static/phase1-registries-static.test.ts",
-    ]);
+    ).toEqual(["test/static/command-surface.test.ts", "test/static/phase1-domain-purity.test.ts"]);
   });
 });
 

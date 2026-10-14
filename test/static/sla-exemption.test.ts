@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url";
 // SC-013 (NFR-006 관련 — SLA 면제 선언): 측정 가능한 수용 예시가 본질적으로 부재한 SC.
 // constitution.md §3 의 "SLA·측정 대상 NFR 없음(개발자용 로컬 CLI)" 선언 존재 확인으로 검증을 갈음한다.
 //
-// constitution.md 는 .claude/docs/(비공개, git 비추적 — 프로젝트 CLAUDE.md "공개/비공개 구조")
+// constitution.md 는 .agents/docs/(비공개, git 비추적 — 프로젝트 AGENTS.md "공개/비공개 구조")
 // 소재라 공개 CI 체크아웃에는 존재하지 않는다. 파일이 있을 때(로컬 파이프라인 실행)만 실 검증하고,
 // 없으면(공개 CI) skip 한다 — no-op 통과가 아니라 vitest 가 명시적으로 "skipped" 로 구분 보고한다.
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
-const constitutionPath = path.join(repoRoot, ".claude/docs/constitution.md");
+const constitutionPath = path.join(repoRoot, ".agents/docs/constitution.md");
 const hasConstitution = fs.existsSync(constitutionPath);
 
 describe.runIf(hasConstitution)("SC-013: constitution.md SLA 면제 선언(로컬 — 비공개 문서)", () => {

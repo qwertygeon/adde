@@ -39,6 +39,9 @@ function existsAtBaseCommit(rel: string): boolean {
 
 const gitAvailable = hasGit();
 
+// 비공개 문서 홈 경로 변경(`.claude/docs` → `.agents/docs`)에 따른 경로 갱신과 그 가드 예외으로 승인된 기존 테스트 수정.
+const APPROVED_PREEXISTING_TEST_EDITS: readonly string[] = ["test/static/sla-exemption.test.ts"];
+
 describe.runIf(gitAvailable)("SC-032: 기존 테스트 스위트 무수정(신규 파일만 추가)", () => {
   it("Happy: pnpm test 는 test(EXECUTION) 이 실행 판정한다(본 파일은 diff 무결성만 검증)", () => {
     // 전체 스위트 실행 판정은 test(EXECUTION) 소관(quality §1.7.2). 본 파일은 정적 무결성만 본다.
@@ -47,7 +50,9 @@ describe.runIf(gitAvailable)("SC-032: 기존 테스트 스위트 무수정(신�
 
   it("Edge: git diff 로 드러난 test/ 변경 경로 전부가 baseCommit 에 부재(=신규 파일)이다", () => {
     const changed = changedTestPaths();
-    const preexisting = changed.filter((p) => existsAtBaseCommit(p));
+    const preexisting = changed.filter(
+      (p) => existsAtBaseCommit(p) && !APPROVED_PREEXISTING_TEST_EDITS.includes(p),
+    );
     expect(preexisting).toEqual([]);
   });
 

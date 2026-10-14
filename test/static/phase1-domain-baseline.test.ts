@@ -50,8 +50,12 @@ function changedTestPaths(): string[] {
 const gitAvailable = hasGit();
 
 // DEC-012/DEC-013: 의존 단언 갱신이 승인된 기존 테스트 한 파일만 예외로 둔다.
+// 그 밖에 비공개 문서 홈 경로 변경(`.claude/docs` → `.agents/docs`)에 따른 경로 갱신과 그 가드 예외.
 const APPROVED_PREEXISTING_TEST_EDITS: readonly string[] = [
   "test/static/phase0-policy-files.test.ts",
+  "test/static/sla-exemption.test.ts",
+  "test/static/phase0-doc-notice.test.ts",
+  "test/static/phase0-existing-tests-unmodified.test.ts",
 ];
 
 describe.runIf(gitAvailable)("SC-048: 기존 테스트를 고치지 않는다", () => {

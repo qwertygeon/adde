@@ -1,6 +1,8 @@
 # === 비공개 문서 (로컬 보존 + private 백업 레포; public 추적 금지) ===
 /CLAUDE.md
+/AGENTS.md
 /.claude/
+/.agents/
 /docs/_internal/
 /docs/spec/
 # PoC 스파이크·결과 — 내부 R&D(docs/_internal 설계 참조). 비공개 + adde-internal 백업.
@@ -34,6 +36,17 @@ coverage/
 .DS_Store
 Thumbs.db
 *.log
+
+# .agents/ — AI 문서 홈 (기본 전체 비공개; 개별 문서만 opt-in 공개)
+.agents/*
+# 특정 문서만 공개하려면 상위 디렉터리부터 되살리고 나머지를 다시 제외한 뒤 파일을 지정:
+# !.agents/docs/
+# .agents/docs/*
+# !.agents/docs/context.md
+# !.agents/docs/session-state/
+# .agents/docs/session-state/*
+# !.agents/docs/session-state/handoff.md
+# !.agents/docs/session-state/handoff-*.md
 
 # .claude/ — AI 메타데이터 (기본 전체 비공개; 개별 문서만 opt-in 공개)
 .claude/*

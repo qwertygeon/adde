@@ -82,6 +82,13 @@ const DOMAIN_STATIC_TEST_FILES = [
   "test/static/phase0-policy-files.test.ts",
 ];
 
+// 비공개 문서 홈 경로 변경(`.claude/docs` → `.agents/docs`)에 따른 경로 갱신과 그 가드 예외.
+const APPROVED_DOC_PATH_EDITS = [
+  "test/static/sla-exemption.test.ts",
+  "test/static/phase0-doc-notice.test.ts",
+  "test/static/phase0-existing-tests-unmodified.test.ts",
+];
+
 /** 기준 커밋에 있던 테스트 중 도메인 테스트·단언 갱신 정적 테스트 밖에서 바뀐 경로. */
 function outsideDomainChanges(
   changed: readonly string[],
@@ -89,7 +96,10 @@ function outsideDomainChanges(
 ): string[] {
   return changed.filter(
     (p) =>
-      !p.startsWith("test/workflow/domain/") && !DOMAIN_STATIC_TEST_FILES.includes(p) && existed(p),
+      !p.startsWith("test/workflow/domain/") &&
+      !DOMAIN_STATIC_TEST_FILES.includes(p) &&
+      !APPROVED_DOC_PATH_EDITS.includes(p) &&
+      existed(p),
   );
 }
 

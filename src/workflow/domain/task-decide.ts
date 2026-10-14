@@ -5,7 +5,10 @@
 import { type Result, ok, err, DomainInvariantError } from "./result.js";
 import type { TaskRecord, WorkAggregate } from "./aggregate.js";
 import { taskOf } from "./aggregate.js";
-import type { TaskId } from "./ids.js";
+import type { OccurrenceId, TaskId } from "./ids.js";
+import { deriveOccurrenceId } from "./derivation/occurrence-id.js";
+import type { OccurrenceDerivationInput } from "./derivation/occurrence-id.js";
+import type { TriggerDescriptor } from "./registry/descriptors.js";
 import { nextEntityId } from "./ids.js";
 import { addMs, hasPassed } from "./values.js";
 import type { UtcInstant } from "./values.js";
@@ -84,6 +87,74 @@ function firstEffectBindings(
     );
   }
   return ok(resolved.value);
+}
+
+function derivedOrThrow(input: OccurrenceDerivationInput): OccurrenceId {
+  const derived = deriveOccurrenceId(input);
+  if (!derived.ok) {
+    throw new DomainInvariantError(
+      `Task 기록에서 occurrence 를 다시 계산하지 못했다: ${derived.error.field} ${derived.error.reason}`,
+    );
+  }
+  return derived.value;
+}
+
+/**
+ * `READY` 예약의 계약 입력 occurrence — 명령이 아니라 Task 기록에서 계산한다. 예약 원인은 Trigger 의 원래
+ * 예정 시각(첫 회차), 외부 신호 원인은 아직 소비되지 않은 수용 참조가 계약 입력이다.
+ */
+function recomputeScheduledOccurrence(
+  task: TaskRecord,
+  trigger: TriggerDescriptor,
+  cause: "schedule" | "external_signal",
+): Result<{ readonly occurrenceId: OccurrenceId; readonly causingEventId?: string }, string> {
+  const triggerId = task.trigger.triggerId;
+  if (cause === "schedule") {
+    if (trigger.occurrenceDerivation.kind !== "schedule") {
+      return err("occurrence_derivation_not_schedule");
+    }
+    const scheduled = (task.trigger as { readonly scheduledForUtc?: unknown }).scheduledForUtc;
+    if (typeof scheduled !== "string") return err("occurrence_id_mismatch");
+    return ok({
+      occurrenceId: derivedOrThrow({
+        kind: "schedule",
+        ownerId: task.id,
+        triggerId,
+        scheduledForUtc: scheduled as UtcInstant,
+        recurrenceIndex: 0,
+      }),
+    });
+  }
+  const acceptance = task.pendingSignalAcceptance;
+  if (acceptance === undefined) return err("accepted_signal_missing");
+  const declared = task.trigger as { readonly sourceId?: unknown; readonly signal?: unknown };
+  if (declared.sourceId !== acceptance.sourceId || declared.signal !== acceptance.signalName) {
+    return err("signal_source_mismatch");
+  }
+  return ok({
+    occurrenceId: derivedOrThrow({
+      kind: "event_caused",
+      ownerId: task.id,
+      triggerId,
+      causingEvent: { id: acceptance.eventId, occurredAt: acceptance.occurredAt },
+    }),
+    causingEventId: acceptance.eventId,
+  });
+}
+
+/** 재시도 예약의 계약 입력 occurrence — `RETRY_WAIT` 는 `task_retry_wait` 로만 들어가므로 기록이 있어야 한다. */
+function retryOccurrenceOf(task: TaskRecord): OccurrenceId {
+  const wait = task.lastRetryWait;
+  if (wait === undefined) {
+    throw new DomainInvariantError(`RETRY_WAIT Task ${task.id} 에 재시도 대기 기록이 없다`);
+  }
+  return derivedOrThrow({
+    kind: "execution_retry",
+    ownerId: task.id,
+    triggerId: task.trigger.triggerId,
+    causingEvent: { occurredAt: wait.occurredAt },
+    attemptNo: wait.attemptNo,
+  });
 }
 
 function rejectCondition(detail?: string): CommandRejection {
@@ -250,11 +321,32 @@ export function decideTaskCommand(
         if (!scheduleCauseDeclared(trigger, command.cause)) {
           return rejected(rejectCondition("trigger_cause_mismatch"));
         }
+        const recomputed = recomputeScheduledOccurrence(task, trigger, command.cause);
+        if (!recomputed.ok) return rejected(rejectCondition(recomputed.error));
+        if (recomputed.value.occurrenceId !== command.occurrenceId) {
+          return rejected(rejectCondition("occurrence_id_mismatch"));
+        }
         if (requiresPreExecutionApproval(task)) {
           return events(preExecutionApprovalPark(deps, task, command.meta.now));
         }
+        return events(
+          mkEvent(
+            "task_scheduled",
+            {
+              occurrenceId: command.occurrenceId,
+              cause: command.cause,
+              ...(recomputed.value.causingEventId !== undefined
+                ? { causingEventId: recomputed.value.causingEventId }
+                : {}),
+            },
+            { taskId },
+          ),
+        );
       } else if (task.state === "RETRY_WAIT") {
         if (command.cause !== "retry") return rejected(rejectCondition());
+        if (retryOccurrenceOf(task) !== command.occurrenceId) {
+          return rejected(rejectCondition("occurrence_id_mismatch"));
+        }
         if (requiresPreExecutionApproval(task)) return rejected(rejectAwaitingApproval());
       } else {
         return rejected(rejectNotInTable());

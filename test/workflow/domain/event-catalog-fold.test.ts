@@ -7,7 +7,6 @@ import {
   foldEvents,
   executeCommand,
   createWork,
-  contentHashOf,
   parseProjectId,
 } from "../../../src/workflow/domain/index.js";
 import type {
@@ -17,8 +16,8 @@ import type {
   WorkAggregate,
   TaskId,
 } from "../../../src/workflow/domain/index.js";
-import { TASK_ROW_CASES, WORK_ROW_CASES } from "./helpers/row-cases.js";
-import { signalFactorCases } from "./helpers/signal-cases.js";
+import { TASK_ROW_CASES } from "./helpers/row-cases.js";
+import { collectCoreProducedTypes, unproducedTypes } from "./helpers/event-census.js";
 import {
   mustCommit,
   mustOk,
@@ -27,11 +26,7 @@ import {
   draft,
   testDeps,
   reachTaskState,
-  reachWorkState,
   requireTaskFor,
-  patchTask,
-  basePolicy,
-  reachDeadLetterParked,
 } from "./helpers/fixtures.js";
 
 const DOMAIN_PRODUCERS: ReadonlySet<string> = new Set(DOMAIN_EVENT_PRODUCERS);
@@ -53,93 +48,11 @@ describe("SC-028: 이벤트 카탈로그 전사가 완결되어 있다", () => {
   });
 
   it("Error: phase1-core 타입마다 그것을 생산하는 테스트 케이스가 존재한다 (test_SC028_every_phase1_core_type_produced_by_a_case)", () => {
-    const produced = new Set<string>();
-    for (const rowCase of [...Object.values(TASK_ROW_CASES), ...Object.values(WORK_ROW_CASES)]) {
-      try {
-        const { deps, before } = rowCase.build();
-        const outcome = rowCase.apply(deps, before);
-        const committed =
-          outcome.kind === "committed" || outcome.kind === "accepted" ? outcome.commit : undefined;
-        for (const e of committed?.events ?? []) produced.add(e.type);
-      } catch {
-        // census 실행 실패(레시피 갭)는 SC-004/017 이 전담 — 여기서는 생산 목록에서 제외한다.
-      }
-    }
-    // TASK_ROW_CASES·WORK_ROW_CASES 만으로는 SC-033 거절 분류가 만드는 기록 전용 이벤트
-    // (confirmation_rejected_forged_provenance·signal_rejected_stale·signal_ignored_duplicate·
-    // signal_rejected 등) 가 census 에서 빠져 "생산 케이스 없음"으로 오판된다(test-report.md 실패
-    // #11). signalFactorCases() 결과를 함께 포함한다.
-    for (const c of signalFactorCases()) {
-      try {
-        const judged = c.run();
-        if (judged.kind !== "not_applicable")
-          for (const e of judged.commit.events) produced.add(e.type);
-      } catch {
-        // 판정 자체 실패는 SC-033 이 전담.
-      }
-    }
-    // SC-006(종결 흡수) — stale_transition_rejected 기록 이벤트.
-    {
-      const { deps, aggregate, taskId } = reachTaskState("COMPLETED");
-      const before = requireTaskFor(aggregate, taskId);
-      const outcome = executeCommand(deps, aggregate, {
-        kind: "unblock",
-        taskId,
-        expectedRevision: before.revision,
-        meta: meta(before.createdAt),
-      });
-      if (outcome.kind === "rejected" && outcome.record !== undefined)
-        for (const e of outcome.record.events) produced.add(e.type);
-    }
-    // SC-024(계획 순환 거절, onInvalid=fail_work) — work_plan_invalid(+work_failed) 기록 이벤트.
-    {
-      const { deps, aggregate: planningAgg } = reachWorkState("PLANNING");
-      const outcome = executeCommand(deps, planningAgg, {
-        kind: "commit_plan",
-        expectedRevision: planningAgg.work.revision,
-        meta: meta(planningAgg.work.createdAt),
-        onInvalid: "fail_work",
-        plan: {
-          basePlanRevision: 0,
-          source: "planner",
-          tasks: [draft("A", { dependsOn: [{ draftRef: "A" }] })],
-          retain: [],
-        },
-      });
-      if (outcome.kind === "committed") for (const e of outcome.commit.events) produced.add(e.type);
-    }
-    // 승인 채널 거절 — 같은 등록부로 계획 커밋이 막으므로 레코드 패치(다른 생성 경로 대용)로 재현.
-    {
-      const { deps, aggregate, taskId } = reachTaskState("VALIDATING");
-      const patched = patchTask(aggregate, taskId, {
-        policy: basePolicy({ approvalSurface: "out_of_band", approvalRequiredBeforeExecute: true }),
-      });
-      const outcome = executeCommand(deps, patched, {
-        kind: "complete_validation",
-        taskId,
-        expectedRevision: requireTaskFor(patched, taskId).revision,
-        meta: meta(patched.work.createdAt),
-      });
-      if (outcome.kind === "committed") for (const e of outcome.commit.events) produced.add(e.type);
-    }
-    // 늦은 결과 표시 — dead-letter 결정에 주차된 attempt 의 결과.
-    {
-      const { deps, aggregate, taskId, attemptId } = reachDeadLetterParked();
-      const outcome = executeCommand(deps, aggregate, {
-        kind: "present_late_result",
-        taskId,
-        expectedRevision: requireTaskFor(aggregate, taskId).revision,
-        meta: meta(aggregate.work.createdAt),
-        attemptId,
-        resultContentHash: contentHashOf("late result"),
-      });
-      if (outcome.kind === "committed") for (const e of outcome.commit.events) produced.add(e.type);
-    }
-    const domainNames = EVENT_CATALOG.filter((e) => DOMAIN_PRODUCERS.has(e.producedBy)).map(
-      (e) => e.name,
-    );
-    const notProduced = domainNames.filter((name) => !produced.has(name));
-    // 레시피 미비 항목은 test-cases.md "미커버 항목"에 이관 — 본 단언은 그 갭을 명시적으로 드러낸다.
+    const produced = collectCoreProducedTypes();
+    // 앞 차수 레시피가 다루는 생산 표기로 고정한다 — 정의 차수 표기는 종료 자동 집계가 다룬다.
+    const producers: ReadonlySet<string> = new Set(["phase1-core", "phase1-registries"]);
+    const domainNames = EVENT_CATALOG.filter((e) => producers.has(e.producedBy)).map((e) => e.name);
+    const notProduced = unproducedTypes(domainNames, produced);
     expect(notProduced, notProduced.join(", ")).toEqual([]);
   });
 });

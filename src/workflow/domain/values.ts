@@ -5,6 +5,7 @@
 import { type Result, ok, err } from "./result.js";
 import { ACTOR_SOURCES, CANCEL_ORIGIN_KINDS } from "./contract/index.js";
 import type { SignalId, EventId, ControlRequestId } from "./ids.js";
+import { parseEntityId } from "./ids.js";
 
 export type ActorSource = (typeof ACTOR_SOURCES)[number];
 
@@ -113,13 +114,46 @@ export function parseActorRef(raw: unknown): Result<ActorRef, ValueFormatError> 
   }
 }
 
+/**
+ * 제어 요청 인증 형태 — 출처 `unknown`·`ctl_` 형식 요청 ID·비어 있지 않은 키 ID. 정의 제어·Work 취소가
+ * 공유한다. MAC 미검증 — 제어 큐가 인증한 요청이라는 전제의 형태 검사이며 인증 판정이 아니다.
+ */
+export function hasControlRequestAuthShape(input: {
+  readonly actorSource: unknown;
+  readonly controlRequestId: unknown;
+  readonly keyId: unknown;
+}): boolean {
+  return (
+    input.actorSource === "unknown" &&
+    typeof input.controlRequestId === "string" &&
+    parseEntityId("controlRequest", input.controlRequestId).ok &&
+    typeof input.keyId === "string" &&
+    input.keyId.length > 0
+  );
+}
+
+/** kind 별로 허용되는 kind 전용 필드. 공통 필드(actor·reason)는 모든 kind 에 허용된다. */
+const KIND_FIELDS: Readonly<Record<CancelOriginKind, readonly string[]>> = {
+  vault_signal: ["signalId", "provenance"],
+  work_cascade: ["workEventId"],
+  replan_dropped: ["workEventId"],
+  control_request: ["controlRequestId", "keyId"],
+};
+const KIND_SCOPED_FIELDS = ["signalId", "provenance", "workEventId", "controlRequestId", "keyId"];
+
 function isCancelOriginKindValue(raw: unknown): raw is CancelOriginKind {
   return typeof raw === "string" && (CANCEL_ORIGIN_KINDS as readonly string[]).includes(raw);
 }
 
+function isEventId(raw: unknown): boolean {
+  return typeof raw === "string" && parseEntityId("event", raw).ok;
+}
+
 /**
- * kind·actorSource 열거 검증 + kind 별 필수 필드: vault_signal→signalId, work_cascade·replan_dropped→workEventId,
- * control_request→controlRequestId 와 actorSource "unknown".
+ * 신뢰 경계 파서 — kind·actorSource 열거, kind 별 필수 필드(`signalId` 는 문자열 — 신호 ID 는 수집 단계가
+ * 부여하는 식별 필드라 형식을 다시 보지 않는다, `workEventId` 는 evt_ 형식, `control_request` 는 인증 형태),
+ * 다른 kind 전용 필드 거절, 공통 필드(actor·reason) 형식 검사. 결과는 검사한 필드만으로 새로 만든다 — 모르는
+ * 키는 싣지 않고, `provenance` 는 객체인지만 보고 내용은 검사하지 않은 채 운반한다.
  */
 export function parseCancelOrigin(raw: unknown): Result<CancelOrigin, ValueFormatError> {
   if (!isPlainObject(raw))
@@ -136,10 +170,16 @@ export function parseCancelOrigin(raw: unknown): Result<CancelOrigin, ValueForma
       reason: "unknown_actor_source",
     });
   }
-  const base: { kind: CancelOriginKind; actorSource: ActorSource } = {
-    kind: kindRaw,
-    actorSource: actorSourceRaw,
-  };
+  for (const field of KIND_SCOPED_FIELDS) {
+    if (raw[field] !== undefined && !KIND_FIELDS[kindRaw].includes(field)) {
+      return err({
+        kind: "value_format",
+        field: `cancelOrigin.${field}`,
+        reason: "not_allowed_for_kind",
+      });
+    }
+  }
+  let scoped: Partial<CancelOrigin>;
   switch (kindRaw) {
     case "vault_signal": {
       const signalId = raw["signalId"];
@@ -150,58 +190,78 @@ export function parseCancelOrigin(raw: unknown): Result<CancelOrigin, ValueForma
           reason: "required_for_vault_signal",
         });
       }
+      const provenance = raw["provenance"];
+      if (provenance !== undefined && !isPlainObject(provenance)) {
+        return err({
+          kind: "value_format",
+          field: "cancelOrigin.provenance",
+          reason: "not_an_object",
+        });
+      }
+      scoped = {
+        signalId: signalId as SignalId,
+        ...(provenance !== undefined
+          ? { provenance: provenance as unknown as ProvenanceEvidence }
+          : {}),
+      };
       break;
     }
     case "work_cascade":
     case "replan_dropped": {
       const workEventId = raw["workEventId"];
-      if (typeof workEventId !== "string") {
+      if (!isEventId(workEventId)) {
         return err({
           kind: "value_format",
           field: "cancelOrigin.workEventId",
           reason: "required_for_kind",
         });
       }
+      scoped = { workEventId: workEventId as EventId };
       break;
     }
     case "control_request": {
-      const controlRequestId = raw["controlRequestId"];
-      if (typeof controlRequestId !== "string") {
+      const request = {
+        actorSource: actorSourceRaw,
+        controlRequestId: raw["controlRequestId"],
+        keyId: raw["keyId"],
+      };
+      if (!hasControlRequestAuthShape(request)) {
         return err({
           kind: "value_format",
-          field: "cancelOrigin.controlRequestId",
-          reason: "required_for_control_request",
+          field: "cancelOrigin",
+          reason: "control_request_auth_shape_invalid",
         });
       }
-      if (actorSourceRaw !== "unknown") {
-        return err({
-          kind: "value_format",
-          field: "cancelOrigin.actorSource",
-          reason: "control_request_requires_unknown_actor_source",
-        });
-      }
+      scoped = {
+        controlRequestId: request.controlRequestId as ControlRequestId,
+        keyId: request.keyId as string,
+      };
       break;
     }
-    default:
-      break;
   }
-  const result: CancelOrigin = {
-    ...base,
-    ...(raw["actor"] !== undefined ? { actor: raw["actor"] as ActorRef } : {}),
-    ...(typeof raw["signalId"] === "string" ? { signalId: raw["signalId"] as SignalId } : {}),
-    ...(raw["provenance"] !== undefined
-      ? { provenance: raw["provenance"] as ProvenanceEvidence }
-      : {}),
-    ...(typeof raw["workEventId"] === "string"
-      ? { workEventId: raw["workEventId"] as EventId }
-      : {}),
-    ...(typeof raw["controlRequestId"] === "string"
-      ? { controlRequestId: raw["controlRequestId"] as ControlRequestId }
-      : {}),
-    ...(typeof raw["keyId"] === "string" ? { keyId: raw["keyId"] } : {}),
-    ...(typeof raw["reason"] === "string" ? { reason: raw["reason"] } : {}),
-  };
-  return ok(result);
+  const actorRaw = raw["actor"];
+  let actor: ActorRef | undefined;
+  if (actorRaw !== undefined) {
+    const parsed = parseActorRef(actorRaw);
+    if (!parsed.ok)
+      return err({
+        kind: "value_format",
+        field: "cancelOrigin.actor",
+        reason: parsed.error.reason,
+      });
+    actor = parsed.value;
+  }
+  const reason = raw["reason"];
+  if (reason !== undefined && typeof reason !== "string") {
+    return err({ kind: "value_format", field: "cancelOrigin.reason", reason: "not_a_string" });
+  }
+  return ok({
+    kind: kindRaw,
+    actorSource: actorSourceRaw,
+    ...(actor !== undefined ? { actor } : {}),
+    ...scoped,
+    ...(reason !== undefined ? { reason } : {}),
+  });
 }
 
 const UTC_INSTANT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,3})?Z$/;

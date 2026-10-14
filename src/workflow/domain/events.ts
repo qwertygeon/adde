@@ -16,6 +16,8 @@ import type {
   AttemptId,
   SignalId,
   OccurrenceId,
+  WorkDefinitionId,
+  ProjectId,
 } from "./ids.js";
 import type { UtcInstant, ActorSource, ActorRef, CancelOrigin } from "./values.js";
 import type { PendingDecision } from "./pending-decision.js";
@@ -32,6 +34,16 @@ import type { PlanProposal } from "./plan/proposal.js";
 import type { PlanValidationIssue } from "./plan-graph.js";
 import type { InputBinding, BoundInput } from "./task-result/binding.js";
 import type { RecordedTaskResult } from "./task-result/outputs.js";
+import type {
+  DefinitionPauseOrigin,
+  DefinitionStopOrigin,
+  HeldOccurrence,
+  HoldCause,
+  ResolvedScheduleRef,
+  ScheduleRow,
+  SkipReason,
+} from "./definition/model.js";
+import type { ProposedTaskDraft } from "./plan/proposal.js";
 
 export const WORKFLOW_EVENT_SCHEMA_VERSION = 1;
 
@@ -106,11 +118,21 @@ export type DomainEventType =
   | "confirmation_expired"
   | "confirmation_rejected_forged_provenance"
   | "approval_surface_refused"
-  | "agent_result_unmatched";
+  | "agent_result_unmatched"
+  | "work_definition_created"
+  | "work_definition_revised"
+  | "work_definition_paused"
+  | "work_definition_resumed"
+  | "work_definition_stopped"
+  | "work_definition_occurrence_held"
+  | "work_definition_occurrences_skipped"
+  | "trigger_fired"
+  | "trigger_canceled";
 
 export const DOMAIN_EVENT_PRODUCERS: readonly EventProducer[] = [
   "phase1-core",
   "phase1-registries",
+  "phase1-plans-definitions",
 ];
 
 export type SignalTypeName =
@@ -118,9 +140,20 @@ export type SignalTypeName =
   | "human_decision"
   | "cancel_requested"
   | "replan_requested"
-  | "delegation_response";
+  | "delegation_response"
+  | "definition_control"
+  | "external_signal";
 
-export type SignalSubjectRef = { readonly taskId: TaskId } | { readonly workId: WorkId };
+export type SignalSubjectRef =
+  | { readonly taskId: TaskId }
+  | { readonly workId: WorkId }
+  | { readonly definitionId: WorkDefinitionId };
+
+/** 외부 신호가 관측·일치시킨 Trigger 정체(출처·신호 이름). */
+export interface SignalTriggerRef {
+  readonly sourceId: string;
+  readonly signalName: string;
+}
 
 export interface DraftRefMapping {
   readonly draftRef: string;
@@ -186,13 +219,19 @@ export interface EventPayloadMap {
     readonly retained: readonly TaskId[];
     readonly superseded: readonly TaskId[];
     readonly dropped: readonly TaskId[];
+    /** 정의 템플릿에서 만든 회차 Work 의 첫 계획에만. */
+    readonly source?: "definition_template";
   };
   work_replanning_started: { readonly signalId: SignalId };
   work_ready: Record<string, never>;
   work_activated: Record<string, never>;
   work_blocked: { readonly unsatisfiedRequiredTaskIds: readonly TaskId[] };
   work_unblocked: Record<string, never>;
-  work_completed: { readonly completionPolicyVersion: 1 };
+  work_completed: {
+    readonly completionPolicyVersion: 1;
+    /** 관리 Work 의 완료에만 — 정의의 중지 출처. */
+    readonly stopOrigin?: DefinitionStopOrigin;
+  };
   work_failed: { readonly cause: "planning_failed" | "declared_failure_policy" };
   work_canceled: { readonly origin: CancelOrigin };
   task_created: {
@@ -293,6 +332,8 @@ export interface EventPayloadMap {
     readonly signalType: SignalTypeName;
     readonly dedupKey: SignalDedupKey;
     readonly subject: SignalSubjectRef;
+    /** 외부 신호에만 — 일치한 출처·신호 이름. */
+    readonly trigger?: SignalTriggerRef;
   };
   signal_ignored_duplicate: {
     readonly signalId: SignalId;
@@ -307,9 +348,12 @@ export interface EventPayloadMap {
     readonly subject: SignalSubjectRef;
     readonly reason: StaleReason;
     readonly observedState: string;
-    readonly comparedRevision: number;
+    /** 기대 revision 을 싣는 신호만(외부 신호는 생략). */
+    readonly comparedRevision?: number;
     readonly currentRevision: number;
     readonly token?: string;
+    /** 외부 신호에만 — 관측한 출처·신호 이름. */
+    readonly trigger?: SignalTriggerRef;
   };
   signal_rejected: {
     readonly signalId: SignalId;
@@ -318,6 +362,8 @@ export interface EventPayloadMap {
     readonly subject: SignalSubjectRef;
     readonly reason: NonStaleReason;
     readonly observedState: string;
+    /** 외부 신호에만 — 관측한 출처·신호 이름. */
+    readonly trigger?: SignalTriggerRef;
   };
   confirmation_accepted: {
     readonly confirmationId: ConfirmationId;
@@ -347,6 +393,88 @@ export interface EventPayloadMap {
     readonly reason: "unknown_dispatch" | "task_terminal" | "superseded_attempt" | "attempt_ended";
     readonly resultContentHash: ContentHash;
     readonly presentedInDecisionId?: DecisionId;
+  };
+  work_definition_created: {
+    readonly definition: {
+      readonly id: WorkDefinitionId;
+      readonly projectId: ProjectId;
+      readonly sourceWorkId: WorkId;
+      readonly title: string;
+      readonly activation: TriggerSpec;
+      readonly template: readonly ProposedTaskDraft[];
+      readonly maxOpenOccurrences: number;
+      readonly maxOccurrences?: number;
+      readonly correlationId: string;
+    };
+    readonly proposalId: PlanProposalId;
+    /** 일정 활성화의 첫 회차. */
+    readonly nextSchedule?: ScheduleRow;
+  };
+  work_definition_revised: {
+    readonly definitionId: WorkDefinitionId;
+    readonly proposalId: PlanProposalId;
+    readonly title: string;
+    readonly activation: TriggerSpec;
+    readonly template: readonly ProposedTaskDraft[];
+    readonly maxOpenOccurrences: number;
+    readonly maxOccurrences?: number;
+    /** 새 활성화의 첫 대기 행. 없으면 null. */
+    readonly nextSchedule: ScheduleRow | null;
+  };
+  work_definition_paused: {
+    readonly definitionId: WorkDefinitionId;
+    readonly pauseOrigin: DefinitionPauseOrigin;
+    /** 템플릿 무효 일시정지의 검증 이슈. */
+    readonly templateIssues?: readonly PlanValidationIssue[];
+  };
+  work_definition_resumed: {
+    readonly definitionId: WorkDefinitionId;
+    readonly signalId: SignalId;
+    /** 재개 시점에 대기 행이 이미 도래해 있었다. */
+    readonly pendingScheduleOverdue: boolean;
+  };
+  work_definition_stopped: {
+    readonly definitionId: WorkDefinitionId;
+    readonly stopOrigin: DefinitionStopOrigin;
+  };
+  work_definition_occurrence_held: {
+    readonly definitionId: WorkDefinitionId;
+    readonly occurrenceId: OccurrenceId;
+    readonly cause: HoldCause;
+    readonly occurrence: HeldOccurrence;
+    /** 필드 없음 = 대기 행 불변, null = 대기 행 없음, 값 = 새 대기 행. */
+    readonly nextSchedule?: ScheduleRow | null;
+  };
+  work_definition_occurrences_skipped: {
+    readonly definitionId: WorkDefinitionId;
+    readonly count: number;
+    readonly firstOriginalInstant: UtcInstant;
+    readonly lastOriginalInstant: UtcInstant;
+    readonly reason: SkipReason;
+    /** 건너뛴 보류 회차(보류 순). */
+    readonly heldOccurrenceIds: readonly OccurrenceId[];
+    readonly lastResolvedSchedule?: ResolvedScheduleRef;
+    readonly nextSchedule?: ScheduleRow | null;
+  };
+  trigger_fired: {
+    readonly definitionId: WorkDefinitionId;
+    readonly triggerId: string;
+    readonly occurrenceId: OccurrenceId;
+    readonly workId: WorkId;
+    readonly definitionRevision: number;
+    readonly originalInstant: UtcInstant;
+    readonly recurrenceIndex?: number;
+    /** 보류 회차의 해제. */
+    readonly released: boolean;
+    readonly nextSchedule?: ScheduleRow | null;
+  };
+  trigger_canceled: {
+    readonly definitionId: WorkDefinitionId;
+    readonly triggerId: string;
+    readonly occurrenceId: OccurrenceId;
+    readonly scheduledForUtc: UtcInstant;
+    readonly recurrenceIndex: number;
+    readonly reason: "definition_revised" | "definition_stopped";
   };
 }
 
@@ -406,6 +534,15 @@ export const WORK_EVENT_TYPES: readonly DomainEventType[] = [
   "work_completed",
   "work_failed",
   "work_canceled",
+];
+
+/** 정의 전이 표의 이벤트 — 커밋에 하나라도 있으면 정의 revision 이 1 오른다. */
+export const DEFINITION_TRANSITION_EVENT_TYPES: readonly DomainEventType[] = [
+  "work_definition_created",
+  "work_definition_revised",
+  "work_definition_paused",
+  "work_definition_resumed",
+  "work_definition_stopped",
 ];
 
 /** ADR-004 의 5종 — 기록 전용(비변이) 이벤트. */

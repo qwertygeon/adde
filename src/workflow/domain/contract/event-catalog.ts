@@ -406,14 +406,14 @@ export const EVENT_CATALOG = [
     section: "Trigger, signal and confirmation events",
     meaning: "Occurrence became due and was claimed",
     affects: "P+Q",
-    producedBy: "phase3",
+    producedBy: "phase1-plans-definitions",
   },
   {
     name: "trigger_canceled",
     section: "Trigger, signal and confirmation events",
     meaning: "Occurrence invalidated before firing",
     affects: "P+Q",
-    producedBy: "phase3",
+    producedBy: "phase1-plans-definitions",
   },
   {
     name: "trigger_misfired",

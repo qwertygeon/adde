@@ -19,6 +19,7 @@ import type {
   DomainDeps,
   TaskId,
   TriggerSpec,
+  UtcInstant,
   WorkAggregate,
   WorkflowCommand,
 } from "../../../src/workflow/domain/index.js";
@@ -65,6 +66,10 @@ import {
   taskPayload,
   validate,
 } from "./helpers/scenario.js";
+import { withPendingSignalAcceptance } from "./helpers/definition-fixtures.js";
+
+/** `atTrigger` 의 기본 원래 예정 시각. */
+const AT_TRIGGER_DEFAULT = at("2026-01-01T01:00:00Z");
 
 function commitPlan(journal: Journal, plan: ReturnType<typeof planInput>): CommandOutcome {
   return executeCommand(journal.deps, journal.aggregate, {
@@ -227,7 +232,7 @@ function gatedCases(journal: Journal, id: (ref: string) => TaskId): readonly Gat
               kind: "schedule",
               ownerId: id("slot"),
               triggerId: requireTaskFor(agg, id("slot")).trigger.triggerId,
-              scheduledForUtc: NOW,
+              scheduledForUtc: AT_TRIGGER_DEFAULT,
               recurrenceIndex: 0,
             }),
           ),
@@ -306,29 +311,36 @@ function fireScheduled(journal: Journal, taskId: TaskId): CommandOutcome {
   });
 }
 
-/** 예약 명령 — 예약 원인은 예약 시각 occurrence, 외부 신호 원인은 원인 이벤트에서 파생한 occurrence. */
+/**
+ * 예약 명령 — 예약 원인은 Trigger 의 원래 예정 시각 occurrence. 외부 신호 원인은 Task 기록에 미소비 수용
+ * 참조를 패치한 애그리거트(수용과 예약이 한 커밋인 이 차수 흐름에서 남길 수 없는 상태 — 다른 생성 경로
+ * 대용)에서 명령을 내고, occurrence 는 그 참조에서 파생한다.
+ */
 function scheduleOn(
   deps: DomainDeps,
   aggregate: WorkAggregate,
   taskId: TaskId,
   cause: "schedule" | "external_signal",
 ): CommandOutcome {
-  const triggerId = requireTaskFor(aggregate, taskId).trigger.triggerId;
+  if (cause === "external_signal") {
+    const accepted = withPendingSignalAcceptance(aggregate, taskId);
+    return taskCommand(deps, accepted.aggregate, taskId, {
+      kind: "schedule_task",
+      occurrenceId: accepted.occurrenceId,
+      cause,
+    });
+  }
+  const task = requireTaskFor(aggregate, taskId);
+  const scheduledForUtc =
+    (task.trigger as unknown as { readonly scheduledForUtc?: UtcInstant }).scheduledForUtc ?? NOW;
   const occurrenceId = mustOk(
-    cause === "schedule"
-      ? deriveOccurrenceId({
-          kind: "schedule",
-          ownerId: taskId,
-          triggerId,
-          scheduledForUtc: NOW,
-          recurrenceIndex: 0,
-        })
-      : deriveOccurrenceId({
-          kind: "event_caused",
-          ownerId: taskId,
-          triggerId,
-          causingEvent: { id: nextEntityId(deps.ids, "event"), occurredAt: NOW },
-        }),
+    deriveOccurrenceId({
+      kind: "schedule",
+      ownerId: taskId,
+      triggerId: task.trigger.triggerId,
+      scheduledForUtc,
+      recurrenceIndex: 0,
+    }),
   );
   return taskCommand(deps, aggregate, taskId, { kind: "schedule_task", occurrenceId, cause });
 }
@@ -404,18 +416,6 @@ function countingProxy<T extends object>(target: T, counts: Map<string, number>)
       return Reflect.get(obj, key, receiver) as unknown;
     },
   });
-}
-
-/** 외부 신호 원인 occurrence — 원인 이벤트에서 파생한다. */
-function signalOccurrenceId(deps: DomainDeps, aggregate: WorkAggregate, taskId: TaskId) {
-  return mustOk(
-    deriveOccurrenceId({
-      kind: "event_caused",
-      ownerId: taskId,
-      triggerId: requireTaskFor(aggregate, taskId).trigger.triggerId,
-      causingEvent: { id: nextEntityId(deps.ids, "event"), occurredAt: NOW },
-    }),
-  );
 }
 
 /** 커밋 이벤트의 종류·payload — 커밋·이벤트 ID 생성 순서와 무관한 부분만. */
@@ -537,14 +537,11 @@ describe("SC-010: 재계획 중 member 는 새 attempt·첫 효과·발화를 �
       }),
       "schedule_task{schedule}",
     );
-    const occurrenceId = mustOk(
-      deriveOccurrenceId({
-        kind: "event_caused",
-        ownerId: listener,
-        triggerId: "listener",
-        causingEvent: { id: nextEntityId(journal.deps.ids, "event"), occurredAt: NOW },
-      }),
-    );
+    // 레코드 패치: 미소비 외부 신호 수용 참조(수용과 예약이 한 커밋인 흐름에서 남길 수 없는 상태 — 다른
+    // 생성 경로 대용). occurrence 는 그 참조에서 파생한다.
+    const accepted = withPendingSignalAcceptance(journal.aggregate, listener);
+    journal.aggregate = accepted.aggregate;
+    const occurrenceId = accepted.occurrenceId;
     const persisted = journal.apply(
       taskCommand(journal.deps, journal.aggregate, listener, {
         kind: "schedule_task",
@@ -556,7 +553,9 @@ describe("SC-010: 재계획 중 member 는 새 attempt·첫 효과·발화를 �
     expect(taskPayload(persisted, listener, "task_scheduled")).toEqual({
       occurrenceId,
       cause: "external_signal",
+      causingEventId: accepted.ref.eventId,
     });
+    expect(journal.task(listener).pendingSignalAcceptance).toBeUndefined();
     expect(journal.task(listener).state).toBe("SCHEDULED");
     expect(journal.task(listener).scheduledOccurrenceId).toBe(occurrenceId);
     expect(journal.aggregate.work.state).toBe("PLANNING");
@@ -830,12 +829,15 @@ describe("SC-010: 재계획 중 member 는 새 attempt·첫 효과·발화를 �
     journal.apply(replanSignal(journal));
     expect(journal.aggregate.work.state).toBe("PLANNING");
     expect(journal.task(listener).state).toBe("READY");
+    // 레코드 패치: 미소비 외부 신호 수용 참조(다른 생성 경로 대용) — occurrence 는 그 참조에서 파생한다.
+    const accepted = withPendingSignalAcceptance(journal.aggregate, listener);
+    journal.aggregate = accepted.aggregate;
     const base = {
       kind: "schedule_task",
       taskId: listener,
       expectedRevision: journal.task(listener).revision,
       meta: meta(NOW),
-      occurrenceId: signalOccurrenceId(journal.deps, journal.aggregate, listener),
+      occurrenceId: accepted.occurrenceId,
     };
     const plain = executeCommand(journal.deps, journal.aggregate, {
       ...base,

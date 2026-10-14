@@ -11,3 +11,5 @@ export * from "./value-sets.js";
 export * from "./extension-registries.js";
 export * from "./trigger-spec.js";
 export * from "./task-policy.js";
+export * from "./definition-transitions.js";
+export * from "./occurrence-input.js";

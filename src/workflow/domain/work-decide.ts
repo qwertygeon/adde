@@ -11,6 +11,7 @@ import type { CommandRejection, DomainDeps } from "./engine.js";
 import type { PendingDecision } from "./pending-decision.js";
 import type { PlanValidationIssue } from "./plan-graph.js";
 import type { PlanProposal, PlanProposalContent, PlanProposalInput } from "./plan/proposal.js";
+import { parseCancelOrigin } from "./values.js";
 import {
   buildPlanCommitEvents,
   planInputEnvelope,
@@ -37,14 +38,11 @@ function rejectInvalidInput(detail?: string): CommandRejection {
 function rejectNotInTable(): CommandRejection {
   return { reason: "transition_not_in_table" };
 }
-function rejectUnsupported(detail?: string): CommandRejection {
-  return { reason: "unsupported_in_this_phase", ...(detail !== undefined ? { detail } : {}) };
-}
 
-/** `definition_occurrence` 는 unsupported_in_this_phase 로 거절(셋째 차수). */
+/** 회차 Work 는 정의 회차의 materialize 만 만든다 — 명령 경로의 `definition_occurrence` 는 거절한다. */
 export function decideCreateWork(deps: DomainDeps, command: CreateWorkCommand): WorkDecideOutcome {
   if (command.source.kind === "definition_occurrence") {
-    return rejected(rejectUnsupported("definition_occurrence Work 생성은 셋째 차수"));
+    return rejected(rejectInvalidInput("definition_occurrence_by_materialization_only"));
   }
   const workId = nextEntityId(deps.ids, "work");
   const correlationId = command.correlationId ?? workId;
@@ -203,10 +201,21 @@ export function decideWorkCommand(
       if (work.state === "COMPLETED" || work.state === "FAILED" || work.state === "CANCELED") {
         return rejected(rejectNotInTable());
       }
-      if (command.origin.kind === "vault_signal" && command.origin.actorSource !== "human_local") {
+      // 관리 Work 취소는 정의 중지 출처로 이어지므로 취소 출처를 검사한다 — Work 취소는 노트 신호와 제어
+      // 요청만 낼 수 있고, 기록되는 출처는 명령 출처와 같아야 한다(키 보유자의 취소가 사람 결정으로 남지 않게).
+      const parsed = parseCancelOrigin(command.origin);
+      if (!parsed.ok) return rejected(rejectInvalidInput("cancel_origin_invalid"));
+      const origin = parsed.value;
+      if (origin.kind !== "vault_signal" && origin.kind !== "control_request") {
+        return rejected(rejectInvalidInput("cancel_origin_kind_not_allowed"));
+      }
+      if (origin.kind === "vault_signal" && origin.actorSource !== "human_local") {
         return rejected(rejectInvalidInput("vault_signal 취소는 human_local 필수"));
       }
-      return events(mkEvent("work_canceled", { origin: command.origin }, { workId }));
+      if (origin.actorSource !== command.meta.actorSource) {
+        return rejected(rejectInvalidInput("cancel_origin_actor_source_mismatch"));
+      }
+      return events(mkEvent("work_canceled", { origin }, { workId }));
     }
     default: {
       const exhaustive: never = command;

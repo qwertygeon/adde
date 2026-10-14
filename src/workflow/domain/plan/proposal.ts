@@ -1,7 +1,9 @@
 /**
  * 계획 제안 — 사전 거절, 제안 검증(그래프 → 초안 → 보존 집합 → 보존 member 참조 → 새 초안 참조 →
- * 결합 → 필수 member → 정규 JSON), digest, membership 변화, 필수 승인 판정, 커밋 이벤트 조립. 제안
- * ID·digest·결정은 도메인이 만들고, 승인 grant 가 커밋하는 내용은 Work 가 보유한 제안뿐이다.
+ * 결합 → 정의 초안 → 필수 member → 정규 JSON), digest, membership 변화, 필수 승인 판정, 커밋 이벤트 조립.
+ * 제안 ID·digest·결정은 도메인이 만들고, 승인 grant 가 커밋하는 내용은 Work 가 보유한 제안뿐이다.
+ * 검증 핵심은 기준 애그리거트와 제공 회차 필드 위에서 돈다 — 정의 템플릿도 "그 활성화로 materialize 될
+ * 회차 Work 의 첫 계획" 기준으로 같은 핵심을 거친다.
  */
 import { type Result, DomainInvariantError } from "../result.js";
 import type { TaskId, WorkId, PlanProposalId, DecisionId } from "../ids.js";
@@ -23,7 +25,13 @@ import { validateTask } from "../validation/task-validation.js";
 import type { NormalizedTaskDeclaration } from "../validation/task-validation.js";
 import { isSatisfyingTerminal, isTerminalTaskState } from "../task-state.js";
 import type { InputBinding } from "../task-result/binding.js";
-import { checkDraftBindings, producerWithoutOutputReason } from "../task-result/binding.js";
+import type { OccurrenceBindingField } from "../task-result/binding.js";
+import {
+  checkDraftBindings,
+  producerWithoutOutputReason,
+  providedOccurrenceFields,
+} from "../task-result/binding.js";
+import { validateDefinitionDraft } from "../definition/draft.js";
 
 export type PlanProposalSource = "planner" | "definition_template";
 
@@ -34,7 +42,7 @@ export interface PlanProposalInput {
   readonly source: PlanProposalSource;
   readonly tasks: readonly PlanTaskDraft[];
   readonly retain: readonly TaskId[];
-  /** WorkDefinitionDraft 자리. 존재하면 이 차수는 미지원 거절. */
+  /** WorkDefinitionDraft — 검증을 통과하면 정규화한 정의 초안으로 바뀐다. */
   readonly definition?: unknown;
 }
 
@@ -185,7 +193,7 @@ export function judgeMandatoryPlanApproval(
 }
 
 /**
- * 미지원(definition·definition_template) → unsupported_in_this_phase, source 밖 값 → invalid_input,
+ * 정의 템플릿 출처(materialize 만 만든다) → invalid_input, source 밖 값 → invalid_input,
  * basePlanRevision 불일치 → condition_not_met. 없으면 undefined. 입력은 planInputEnvelope 로 한 번 읽는다.
  */
 export function planPreconditionRejection(
@@ -194,8 +202,8 @@ export function planPreconditionRejection(
 ): CommandRejection | undefined {
   const input = planInputEnvelope(plan);
   if (!isPlainObject(input)) return { reason: "invalid_input", detail: "plan 이 객체가 아님" };
-  if (input.definition !== undefined || input.source === "definition_template") {
-    return { reason: "unsupported_in_this_phase", detail: "정의 초안·정의 템플릿 제안" };
+  if (input.source === "definition_template") {
+    return { reason: "invalid_input", detail: "definition_template_source_reserved" };
   }
   if (typeof input.source !== "string" || !PLAN_PROPOSAL_SOURCES.includes(input.source)) {
     return { reason: "invalid_input", detail: "제안 출처가 정의된 값이 아님" };
@@ -297,6 +305,17 @@ function normalizeDraft(
   };
 }
 
+/** digest 를 뺀 검증 결과 — 기준 애그리거트 위에서 돈 검증 핵심의 출력. */
+export type PlanContentCheck =
+  | {
+      readonly valid: true;
+      /** 정규 JSON 왕복 깊은 동결 사본. */
+      readonly content: PlanProposalContent;
+      readonly membership: PlanMembershipChange;
+      readonly mandatoryApproval: MandatoryApprovalJudgement;
+    }
+  | { readonly valid: false; readonly issues: readonly PlanValidationIssue[] };
+
 /**
  * 등록부는 deps.registries(판정 시점 주입). 전제: 사전 거절을 통과한 입력. 진입에서 입력 전체를 정규 JSON
  * 왕복 깊은 동결 사본으로 바꾸고 이후 그 사본만 읽는다 — 검증한 값·digest 원천·커밋 내용이 같고, 이슈가
@@ -307,6 +326,38 @@ export function validatePlanProposal(
   aggregate: WorkAggregate,
   plan: PlanProposalInput,
 ): PlanProposalCheck {
+  const check = checkPlanContentOn(
+    deps,
+    aggregate,
+    plan,
+    providedOccurrenceFields(aggregate.work.source),
+  );
+  if (!check.valid) return check;
+  const digest = planProposalDigest(aggregate.work.id, check.content);
+  if (!digest.ok) {
+    throw new DomainInvariantError("계획 검증: 정규 JSON 사본이 성공한 제안 내용의 digest 실패");
+  }
+  return {
+    valid: true,
+    content: check.content,
+    tasks: check.content.tasks,
+    membership: check.membership,
+    mandatoryApproval: check.mandatoryApproval,
+    digest: digest.value,
+  };
+}
+
+/**
+ * 검증 핵심 — 기준 애그리거트(계획 revision·기준 member·Task·Work 출처·관리 정의)와 제공 회차 필드
+ * 위에서 판정한다. 정의 초안은 결합 뒤·필수 member 앞에서 검증하고, 정의 초안을 싣거나 정의를 관리(했던)
+ * Work 의 계획은 필수 member 부재를 무효로 보지 않는다.
+ */
+export function checkPlanContentOn(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  plan: PlanProposalInput,
+  occurrenceFields: ReadonlySet<OccurrenceBindingField>,
+): PlanContentCheck {
   const work = aggregate.work;
   // 0. 입력 포착
   const captured = canonicalJsonFrozenCopy(planInputEnvelope(plan));
@@ -417,10 +468,19 @@ export function validatePlanProposal(
     drafts: draftsByRef,
     retained,
     workSource: work.source,
+    occurrenceFields,
   };
   for (const draft of input.tasks) issues.push(...checkDraftBindings(bindingContext, draft));
 
-  // 8. 결과 membership 에 terminal-required member 가 있어야 한다.
+  // 7b. 정의 초안 — 초안 무효는 제안 전체를 무효로 만든다.
+  const definitionCheck =
+    input.definition === undefined
+      ? undefined
+      : validateDefinitionDraft(deps, aggregate, input.definition);
+  if (definitionCheck !== undefined) issues.push(...definitionCheck.issues);
+
+  // 8. 결과 membership 에 terminal-required member 가 있어야 한다 — 정의 초안을 싣거나 정의를 관리(했던)
+  //    Work 는 정의가 그 Work 를 붙들므로 예외다.
   const retainedRequired = [...retained].some(
     (taskId) => aggregate.tasks[taskId]?.policy.terminalRequired === true,
   );
@@ -430,7 +490,10 @@ export function validatePlanProposal(
     const rawPolicy = draft.policy as unknown;
     return isPlainObject(rawPolicy) && rawPolicy["terminalRequired"] === true;
   });
-  if (!retainedRequired && !draftRequired) issues.push({ kind: "no_terminal_required_member" });
+  const requiredMemberExempt = input.definition !== undefined || aggregate.definition !== undefined;
+  if (!retainedRequired && !draftRequired && !requiredMemberExempt) {
+    issues.push({ kind: "no_terminal_required_member" });
+  }
 
   // 9. 정규화 제안 내용의 정규 JSON — 모든 초안이 정규화됐을 때만 판정할 수 있다.
   const normalizedAll = draftCheck.normalized.every((n) => n !== undefined);
@@ -444,25 +507,21 @@ export function validatePlanProposal(
     source: input.source,
     tasks,
     retain: input.retain,
-    ...(input.definition !== undefined ? { definition: input.definition } : {}),
+    ...(input.definition !== undefined
+      ? { definition: definitionCheck?.normalized ?? input.definition }
+      : {}),
   });
   if (!contentCopy.ok) {
     issues.push({ kind: "proposal_not_canonical_json", path: contentCopy.error.path });
   }
   if (issues.length > 0 || !contentCopy.ok) return { valid: false, issues };
   const content = contentCopy.value as PlanProposalContent;
-  const digest = planProposalDigest(work.id, content);
-  if (!digest.ok) {
-    throw new DomainInvariantError("계획 검증: 정규 JSON 사본이 성공한 제안 내용의 digest 실패");
-  }
 
   return {
     valid: true,
     content,
-    tasks: content.tasks,
     membership: planMembershipChange(aggregate, input.retain),
     mandatoryApproval: judgeMandatoryPlanApproval(aggregate, input),
-    digest: digest.value,
   };
 }
 
@@ -527,7 +586,13 @@ export function buildPlanCommitEvents(
   deps: DomainDeps,
   proposal: PlanProposal,
   membership: PlanMembershipChange,
-  options: { readonly decisionId?: DecisionId },
+  options: {
+    readonly decisionId?: DecisionId;
+    /** `work_plan_committed` 와 `work_ready` 사이에 넣는 정의 이벤트(생성·개정과 그 해소). */
+    readonly definitionEvents?: readonly DecidedEvent[];
+    /** 정의 템플릿에서 만든 회차 Work 의 첫 계획. */
+    readonly templateSource?: boolean;
+  },
 ): readonly DecidedEvent[] {
   const workId = proposal.workId;
   const draftRefMap: DraftRefMapping[] = proposal.tasks.map((draft) => ({
@@ -592,9 +657,11 @@ export function buildPlanCommitEvents(
         retained: membership.retained,
         superseded: membership.superseded,
         dropped: membership.dropped,
+        ...(options.templateSource === true ? { source: "definition_template" as const } : {}),
       },
       { workId },
     ),
+    ...(options.definitionEvents ?? []),
     mkEvent("work_ready", {}, { workId }),
   ];
 }

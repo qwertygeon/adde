@@ -92,9 +92,20 @@ export function decideReplanDroppedCancellations(
   return out;
 }
 
+/** 대기 제안이 관리 정의의 개정(`definition.amends`)을 싣는가. */
+function proposalAmendsDefinition(proposal: { readonly definition?: unknown }): boolean {
+  const definition = proposal.definition;
+  return (
+    typeof definition === "object" &&
+    definition !== null &&
+    (definition as { readonly amends?: unknown }).amends !== undefined
+  );
+}
+
 /**
- * 승인 대기 제안의 재검증 — 이 커밋이 커밋 전 member 를 하나 이상 종결시켰고, 커밋 뒤 Work 가 대기
- * 제안을 가진 WAITING_APPROVAL 인데 제안이 더 이상 유효하지 않으면 같은 커밋에 철회를 붙인다.
+ * 승인 대기 제안의 재검증 — 이 커밋이 커밋 전 member 를 하나 이상 종결시켰거나, 관리 정의의 revision 을
+ * 바꿨고 대기 제안이 정의 개정을 실었으며, 커밋 뒤 Work 가 대기 제안을 가진 WAITING_APPROVAL 인데 제안이
+ * 더 이상 유효하지 않으면 같은 커밋에 철회를 붙인다.
  */
 export function decidePendingProposalRevalidation(
   deps: DomainDeps,
@@ -116,7 +127,10 @@ export function decidePendingProposalRevalidation(
       isTerminalTaskState(now.state)
     );
   });
-  if (!terminatedNow) return undefined;
+  const definitionRevised =
+    before.definition?.revision !== scratch.definition?.revision &&
+    proposalAmendsDefinition(proposal);
+  if (!terminatedNow && !definitionRevised) return undefined;
   const check = revalidateHeldProposal(deps, scratch, proposal);
   if (check.valid) return undefined;
   const decisionId = work.pendingDecision?.id;
@@ -284,10 +298,12 @@ export function decideDerivedWorkStateEvent(
   if (isTerminalWorkState(state)) return undefined;
   if (state !== "READY" && state !== "ACTIVE" && state !== "BLOCKED") return undefined;
 
+  const definition = aggregate.definition;
   const input: DerivedStateInput = {
     ownedTasks: memberSnapshots(aggregate),
     memberTaskIds: aggregate.work.memberTaskIds,
     startedUnderCurrentRevision: aggregate.work.startedUnderCurrentRevision,
+    ...(definition !== undefined ? { stewardedDefinitionState: definition.state } : {}),
   };
   const derived = deriveWorkState(input);
   if (derived === state) return undefined;
@@ -297,7 +313,10 @@ export function decideDerivedWorkStateEvent(
     return {
       event: mkEvent(
         "work_completed",
-        { completionPolicyVersion: 1 },
+        {
+          completionPolicyVersion: 1,
+          ...(definition?.stopOrigin !== undefined ? { stopOrigin: definition.stopOrigin } : {}),
+        },
         { workId: aggregate.work.id },
       ),
       ...causation,

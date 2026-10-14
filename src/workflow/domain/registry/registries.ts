@@ -14,7 +14,13 @@ import type {
   ReactionDescriptor,
   InputFieldMetadata,
 } from "./descriptors.js";
-import { ACCEPTANCE_OUTPUT_SOURCES, EXECUTION_EFFECTS, FIRING_MODES } from "./descriptors.js";
+import type { FiringMode, OccurrenceDerivationKind } from "./descriptors.js";
+import {
+  ACCEPTANCE_OUTPUT_SOURCES,
+  EXECUTION_EFFECTS,
+  FIRING_MODES,
+  FIRING_OCCURRENCE_DERIVATION,
+} from "./descriptors.js";
 import { computeTaskTypeFieldProfile, rememberTaskTypeFieldProfile } from "./field-profile.js";
 
 export type RegistryAxis = "task_type" | "trigger" | "reaction";
@@ -32,7 +38,12 @@ export type DescriptorDefect =
   | { readonly code: "output_from_unknown_input"; readonly output: string; readonly field: string }
   | { readonly code: "output_invalid"; readonly output: string }
   | { readonly code: "acceptance_output_invalid"; readonly output: string }
-  | { readonly code: "declaration_invalid"; readonly declaration: string };
+  | { readonly code: "declaration_invalid"; readonly declaration: string }
+  | {
+      readonly code: "firing_derivation_mismatch";
+      readonly firing: FiringMode;
+      readonly derivation: OccurrenceDerivationKind;
+    };
 
 export type RegistryConstructionError =
   | {
@@ -234,6 +245,14 @@ function triggerDefect(descriptor: TriggerDescriptor): DescriptorDefect | undefi
     (derivation["kind"] !== "none" && !isStringArray(derivation["inputs"]))
   ) {
     return { code: "declaration_invalid", declaration: "occurrenceDerivation" };
+  }
+  const derivationKind = derivation["kind"] as OccurrenceDerivationKind;
+  if (FIRING_OCCURRENCE_DERIVATION[descriptor.firing] !== derivationKind) {
+    return {
+      code: "firing_derivation_mismatch",
+      firing: descriptor.firing,
+      derivation: derivationKind,
+    };
   }
   return undefined;
 }

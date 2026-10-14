@@ -87,6 +87,20 @@ export type OccurrenceDerivationDeclaration =
   | { readonly kind: "schedule"; readonly inputs: readonly string[] }
   | { readonly kind: "event_caused"; readonly inputs: readonly string[] };
 
+export type OccurrenceDerivationKind = OccurrenceDerivationDeclaration["kind"];
+
+/**
+ * 발화 방식마다 허용하는 occurrence 파생 — 준비 즉시 발화는 occurrence 가 없고, 예약 발화는 예약
+ * 파생, 의존 충족·외부 신호 발화는 원인 이벤트 파생이다. 짝이 어긋난 Trigger descriptor 는 등록되지 않는다.
+ */
+export const FIRING_OCCURRENCE_DERIVATION: Readonly<Record<FiringMode, OccurrenceDerivationKind>> =
+  {
+    on_ready: "none",
+    schedule: "schedule",
+    dependencies_satisfied: "event_caused",
+    external_signal: "event_caused",
+  };
+
 export interface TriggerDescriptor {
   /** `^[a-z][a-z0-9_]{0,63}$` */
   readonly kind: string;

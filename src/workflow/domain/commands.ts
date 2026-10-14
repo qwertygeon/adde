@@ -2,7 +2,16 @@
  * 명령·신호·적용 입력 타입, 명령↔전이 행 매핑 표(FR-004, FR-010) — design.md §인터페이스 계약
  * `commands.ts` 그대로. 표에 없는 조합 판정(SC-005·SC-018)과 테스트 케이스 생성의 SoT.
  */
-import type { TaskId, WorkId, ConfirmationId, DecisionId, AttemptId, SignalId } from "./ids.js";
+import type {
+  TaskId,
+  WorkId,
+  ConfirmationId,
+  DecisionId,
+  AttemptId,
+  SignalId,
+  WorkDefinitionId,
+  ControlRequestId,
+} from "./ids.js";
 import type { UtcInstant, ActorSource, ActorRef, CancelOrigin } from "./values.js";
 import type { PendingDecision } from "./pending-decision.js";
 import type { TriggerSpec } from "./trigger.js";
@@ -153,7 +162,7 @@ export interface PlanTaskDraft {
   readonly inputBindings?: Readonly<Record<string, InputBinding>>;
 }
 
-/** source.kind "definition_occurrence" 는 unsupported_in_this_phase 로 거절(셋째 차수). */
+/** source.kind "definition_occurrence" 는 invalid_input 으로 거절 — 회차 Work 는 materialize 만 만든다. */
 export interface CreateWorkCommand {
   readonly kind: "create_work";
   readonly meta: CommandMeta;
@@ -236,6 +245,60 @@ export interface DelegationResponseSignal extends SignalBase {
   readonly occurrenceId: OccurrenceId;
   readonly responseContentHash: ContentHash;
 }
+
+/** 정의 제어 신호의 채널 — 인증된 제어 요청은 어느 키로 인증됐는지(`keyId`)를 싣는다. */
+export type DefinitionControlChannel =
+  | { readonly kind: "vault_signal" }
+  | {
+      readonly kind: "control_request";
+      readonly controlRequestId: ControlRequestId;
+      readonly keyId: string;
+    };
+
+/** WorkDefinition 제어 — 정의 revision 비교-교체. */
+export interface DefinitionControlSignal {
+  readonly type: "definition_control";
+  readonly signalId: SignalId;
+  readonly definitionId: WorkDefinitionId;
+  readonly expectedRevision: number;
+  readonly action: "pause" | "resume" | "stop";
+  readonly channel: DefinitionControlChannel;
+  readonly actorSource: ActorSource;
+  readonly actor?: ActorRef;
+  readonly provenance?: import("./values.js").ProvenanceEvidence;
+  readonly receivedAt: UtcInstant;
+}
+
+/** 외부 신호 — 기대 revision 이 없다. subject 는 Task 또는 정의. */
+export interface ExternalSignal {
+  readonly type: "external_signal";
+  readonly signalId: SignalId;
+  readonly subject: { readonly taskId: TaskId } | { readonly definitionId: WorkDefinitionId };
+  readonly sourceId: string;
+  readonly signalName: string;
+  readonly sourceOccurrenceId: string;
+  readonly payload: unknown;
+  readonly actorSource: ActorSource;
+  readonly actor?: ActorRef;
+  readonly receivedAt: UtcInstant;
+}
+
+/** 정의 회차 명령 — 스케줄러가 대기 행 도래·빈 자리마다 부른다. */
+export type DefinitionCommand =
+  | {
+      readonly kind: "resolve_due_schedule";
+      readonly definitionId: WorkDefinitionId;
+      readonly occurrenceId: OccurrenceId;
+      /** 늦게 발견한 경로(복구·유지보수 해제)가 준다 — 대기 행의 마지막 회차를 놓친 회차로 본다. */
+      readonly late?: boolean;
+      readonly meta: CommandMeta;
+    }
+  | {
+      readonly kind: "release_held_occurrence";
+      readonly definitionId: WorkDefinitionId;
+      readonly occurrenceId: OccurrenceId;
+      readonly meta: CommandMeta;
+    };
 
 export type GrantResume =
   | { readonly to: "READY" }

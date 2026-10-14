@@ -545,12 +545,14 @@ const EXECUTION_SIDE_EVENTS = ["task_started", "task_scheduled", "task_waiting_c
 type GuardCommand =
   "start_attempt" | "schedule_task" | "begin_confirmation_wait" | "park_awaiting_human";
 
+const SCHEDULE_FIRING_AT = at("2026-01-01T01:00:00Z");
+
 /** 예약 발화 Trigger(`at@1`) — READY 의 예약 원인 `schedule_task` 칸이 쓴다. */
 const SCHEDULE_FIRING_TRIGGER: TriggerSpec = {
   kind: "at",
   version: 1,
   triggerId: "fixture_task",
-  scheduledForUtc: at("2026-01-01T01:00:00Z"),
+  scheduledForUtc: SCHEDULE_FIRING_AT,
   timezone: "Asia/Seoul",
   expressionText: "fixture-at",
   misfire: { kind: "skip" },
@@ -563,14 +565,26 @@ function runGuardCell(state: TaskStateName, command: GuardCommand): string {
   );
   const task = requireTaskFor(aggregate, taskId);
   const base = { taskId, expectedRevision: task.revision, meta: meta(NOW) };
+  // 계약 입력: READY 는 Trigger 의 원래 예정 시각, RETRY_WAIT 는 마지막 재시도 대기(도달 레시피가 NOW 에
+  // 낸 첫 attempt 실패)의 시각·attempt 번호.
   const occurrenceId = mustOk(
-    deriveOccurrenceId({
-      kind: "schedule",
-      ownerId: taskId,
-      triggerId: task.trigger.triggerId,
-      scheduledForUtc: NOW,
-      recurrenceIndex: 0,
-    }),
+    deriveOccurrenceId(
+      state === "RETRY_WAIT"
+        ? {
+            kind: "execution_retry",
+            ownerId: taskId,
+            triggerId: task.trigger.triggerId,
+            causingEvent: { occurredAt: NOW },
+            attemptNo: task.lastAttemptNo,
+          }
+        : {
+            kind: "schedule",
+            ownerId: taskId,
+            triggerId: task.trigger.triggerId,
+            scheduledForUtc: SCHEDULE_FIRING_AT,
+            recurrenceIndex: 0,
+          },
+    ),
   );
   const outcome =
     command === "start_attempt"

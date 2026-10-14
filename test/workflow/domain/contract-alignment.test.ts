@@ -990,7 +990,7 @@ describe("SC-006: 취소 명령의 vault 출처는 human_local 이어야 한다"
       executeCommand(deps, before, {
         kind: "cancel_work",
         expectedRevision: before.work.revision,
-        meta: meta(NOW),
+        meta: meta(NOW, actorSource),
         origin: vaultCancelOrigin(deps, actorSource),
       });
     const refused = cancelWork(aggregate, "agent_session");
@@ -1010,7 +1010,7 @@ describe("SC-006: 취소 명령의 vault 출처는 human_local 이어야 한다"
     const terminalOutcome = executeCommand(terminal.deps, terminal.aggregate, {
       kind: "cancel_work",
       expectedRevision: terminal.aggregate.work.revision,
-      meta: meta(NOW),
+      meta: meta(NOW, "agent_session"),
       origin: vaultCancelOrigin(terminal.deps, "agent_session"),
     });
     // 종결 검사가 출처 검사보다 먼저다 — 종결 Work 는 출처와 무관하게 종결 거절이다.

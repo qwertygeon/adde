@@ -13,6 +13,11 @@ import { isTerminalTaskState } from "./task-state.js";
 import { isTerminalWorkState } from "./work-state.js";
 import { evaluateTime } from "./task-decide.js";
 import type { DecisionSignal, DelegationResponseSignal, DecisionApplication } from "./commands.js";
+import type { PlanProposal } from "./plan/proposal.js";
+import type { DefinitionDraftContent } from "./definition/draft.js";
+import { isScheduleActivation } from "./definition/model.js";
+import { firstRowAtCreation } from "./definition/schedule.js";
+import { decideAmendment, seriesExhaustedOrigin } from "./definition/resolution.js";
 import type { DecidedEvent } from "./events.js";
 import { mkEvent } from "./events.js";
 import { nextEntityId } from "./ids.js";
@@ -700,9 +705,11 @@ function judgeHumanDecisionForWork(
     if (!check.valid) {
       return withdrawInvalidGrant(deps, aggregate, signal, application, now, check.issues);
     }
+    const definitionEvents = decideDefinitionCommitEvents(deps, aggregate, check.proposal, now);
     transitionEvents = [
       ...buildPlanCommitEvents(deps, check.proposal, check.membership, {
         decisionId: signal.decisionId,
+        ...(definitionEvents.length > 0 ? { definitionEvents } : {}),
       }),
     ];
   } else {
@@ -729,6 +736,65 @@ function judgeHumanDecisionForWork(
     baseMeta(signal, now),
   );
   return { kind: "accepted", dedupKey: candidateKey, commit, aggregate: nextAggregate };
+}
+
+/**
+ * 승인된 제안이 실은 정의 초안의 커밋 이벤트 — 생성은 정의 ID 를 만들어 `work_definition_created`(일정
+ * 활성화면 커밋 시각 이상 첫 회차)를, 개정은 `work_definition_revised` 와 이전 활성화 대기 행 해소를 낸다.
+ * 생성 시점에 일정 계열이 이미 끝났으면 같은 커밋에서 중지한다. 정의 초안이 없으면 빈 목록.
+ */
+function decideDefinitionCommitEvents(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  proposal: PlanProposal,
+  now: UtcInstant,
+): readonly DecidedEvent[] {
+  if (proposal.definition === undefined) return [];
+  const draft = proposal.definition as DefinitionDraftContent;
+  const work = aggregate.work;
+  if (draft.amends !== undefined) {
+    const stewarded = aggregate.definition;
+    if (stewarded === undefined) {
+      throw new DomainInvariantError(
+        "재검증을 통과한 정의 개정인데 Work 가 정의를 관리하지 않는다",
+      );
+    }
+    return decideAmendment(deps, stewarded, draft, proposal.id, now);
+  }
+  const definitionId = nextEntityId(deps.ids, "workDefinition");
+  const schedule = isScheduleActivation(deps.registries, draft.activation);
+  const firstRow = schedule
+    ? firstRowAtCreation(deps, definitionId, draft.activation, now)
+    : undefined;
+  const created = mkEvent(
+    "work_definition_created",
+    {
+      definition: {
+        id: definitionId,
+        projectId: work.projectId,
+        sourceWorkId: work.id,
+        title: draft.title,
+        activation: draft.activation,
+        template: draft.template,
+        maxOpenOccurrences: draft.maxOpenOccurrences,
+        ...(draft.maxOccurrences !== undefined ? { maxOccurrences: draft.maxOccurrences } : {}),
+        correlationId: work.correlationId,
+      },
+      proposalId: proposal.id,
+      ...(firstRow !== undefined ? { nextSchedule: firstRow } : {}),
+    },
+    { workId: work.id },
+  );
+  if (!schedule || firstRow !== undefined) return [created];
+  // 계열이 이미 끝난 일정 활성화 — 생성 직후라 대기 행·보류가 없어 중지 이벤트만 붙는다.
+  return [
+    created,
+    mkEvent(
+      "work_definition_stopped",
+      { definitionId, stopOrigin: seriesExhaustedOrigin() },
+      { workId: work.id },
+    ),
+  ];
 }
 
 /**

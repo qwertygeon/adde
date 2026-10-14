@@ -1,7 +1,8 @@
 /**
  * 입력 결합 — 계획 결합 검사(결합당 첫 실패), 첫 효과 시작에서의 해석, 결합 인지 의존 충족 판정.
- * 결합은 생산자 결과에 기록된 출력값만 넘긴다. 결합 출처의 종류는 선언 형태(`from`)로만 가르고,
- * 유형·Trigger 식별자나 occurrence 필드 값으로 분기하지 않는다.
+ * 결합은 생산자 결과에 기록된 출력값이나 회차 Work 의 회차 입력 값만 넘긴다. 결합 출처의 종류는 선언
+ * 형태(`from`)로만 가르고, 회차 필드는 계약 전사 표로 판정한다 — 유형·Trigger 식별자로 분기하지 않는다.
+ * 안전 관련 필드 검사는 회차 결합의 어떤 통과 판정(제공 필드·스키마 증명·값 조회)보다 먼저다.
  */
 import { type Result, ok, err, DomainInvariantError } from "../result.js";
 import type { TaskId, ResultId } from "../ids.js";
@@ -18,8 +19,10 @@ import { parseDataSchema } from "./data-schema.js";
 import type { SchemaShape } from "./schema-shape.js";
 import { proveSchemaSubset, shapeOf } from "./schema-shape.js";
 import type * as z from "zod";
+import type { OccurrenceInputField } from "../contract/occurrence-input.js";
+import { OCCURRENCE_INPUT_FIELDS } from "../contract/occurrence-input.js";
 
-export type OccurrenceBindingField = "scheduledForUtc" | "localDate" | "timezone" | "signal";
+export type OccurrenceBindingField = OccurrenceInputField;
 
 export type InputBinding =
   | { readonly from: "task"; readonly task: TaskRef; readonly output: string }
@@ -41,7 +44,7 @@ export type BindingResolutionFailure =
       readonly field: string;
       readonly producerTaskId: TaskId;
     }
-  | { readonly kind: "occurrence_unsupported"; readonly field: string }
+  | { readonly kind: "occurrence_input_unavailable"; readonly field: string }
   | { readonly kind: "safety_field_bound"; readonly field: string };
 
 function isPlainObject(raw: unknown): raw is Record<string, unknown> {
@@ -71,7 +74,12 @@ export function isInputBinding(raw: unknown): raw is InputBinding {
     );
   }
   if (raw["from"] === "occurrence") {
-    return hasExactKeys(raw, ["from", "field"]) && typeof raw["field"] === "string";
+    const field = raw["field"];
+    return (
+      hasExactKeys(raw, ["from", "field"]) &&
+      typeof field === "string" &&
+      (OCCURRENCE_INPUT_FIELDS as readonly string[]).includes(field)
+    );
   }
   return false;
 }
@@ -111,6 +119,34 @@ function unwrapOptional(shape: SchemaShape): SchemaShape {
   return shape.k === "optional" ? shape.inner : shape;
 }
 
+const NON_EMPTY_STRING: SchemaShape = { k: "string", min: 1 };
+
+/** 회차 입력 필드의 생산자 형태 — 정규 UTC 표기 24자, 현지 날짜 10자, 타임존, 수용 신호. */
+const OCCURRENCE_PRODUCER_SHAPES: Readonly<Record<OccurrenceBindingField, SchemaShape>> = {
+  scheduledForUtc: { k: "string", min: 24, max: 24 },
+  localDate: { k: "string", min: 10, max: 10 },
+  timezone: NON_EMPTY_STRING,
+  signal: {
+    k: "object",
+    props: {
+      sourceId: { shape: NON_EMPTY_STRING, optional: false },
+      signalName: { shape: NON_EMPTY_STRING, optional: false },
+      sourceOccurrenceId: { shape: NON_EMPTY_STRING, optional: false },
+      payload: { shape: { k: "unknown" }, optional: false },
+    },
+    extra: "none",
+  },
+};
+
+/** 회차 Work 입력에 값이 있는 회차 필드(계약 전사 표 순). */
+export function providedOccurrenceFields(
+  workSource: WorkSource,
+): ReadonlySet<OccurrenceBindingField> {
+  if (workSource.kind !== "definition_occurrence") return new Set();
+  const input = workSource.input as unknown as Readonly<Record<string, unknown>>;
+  return new Set(OCCURRENCE_INPUT_FIELDS.filter((field) => input[field] !== undefined));
+}
+
 /** 계획 결합 검사의 결과 revision 문맥. */
 export interface PlanBindingContext {
   readonly registries: DomainRegistries;
@@ -120,6 +156,8 @@ export interface PlanBindingContext {
   /** 보존 집합 중 기준 member 인 것. */
   readonly retained: ReadonlySet<TaskId>;
   readonly workSource: WorkSource;
+  /** 회차 Work 가 제공하는 회차 필드 — 실제 회차 Work 는 입력에 값이 있는 필드, 템플릿은 발화 선언 표. */
+  readonly occurrenceFields: ReadonlySet<OccurrenceBindingField>;
 }
 
 interface ProducerView {
@@ -183,7 +221,20 @@ function checkOneBinding(
   if (isPlainObject(input) && Object.hasOwn(input, field) && input[field] !== undefined) {
     return { kind: "binding_overlaps_input", draftRef, field };
   }
-  if (binding.from === "occurrence") return undefined;
+  if (binding.from === "occurrence") {
+    if (!context.occurrenceFields.has(binding.field)) {
+      return { kind: "binding_occurrence_field_unavailable", draftRef, field: binding.field };
+    }
+    const consumerSchema = consumerShape[field] as z.ZodType;
+    const provable = proveSchemaSubset(
+      OCCURRENCE_PRODUCER_SHAPES[binding.field],
+      unwrapOptional(shapeOf(consumerSchema, "consumer")),
+    );
+    if (!provable) {
+      return { kind: "binding_schema_incompatible", draftRef, field, reason: "not_provable" };
+    }
+    return undefined;
+  }
 
   const ref = binding.task;
   const producer = producerOf(context, ref);
@@ -252,7 +303,27 @@ export function resolveBoundInputs(
     // 커밋 뒤 descriptor 선언이 바뀌어도 안전 관련 필드는 결합 값으로 채우지 않는다.
     if (isSafetyRelevantField(consumer, field)) return err({ kind: "safety_field_bound", field });
     const binding = task.inputBindings[field] as InputBinding;
-    if (binding.from === "occurrence") return err({ kind: "occurrence_unsupported", field });
+    if (binding.from === "occurrence") {
+      const source = aggregate.work.source;
+      if (source.kind !== "definition_occurrence") {
+        return err({ kind: "occurrence_input_unavailable", field });
+      }
+      const occurrenceInput = source.input as unknown as Readonly<Record<string, unknown>>;
+      const value = occurrenceInput[binding.field];
+      if (value === undefined) return err({ kind: "occurrence_input_unavailable", field });
+      const digest = canonicalJsonDigest(value);
+      if (!digest.ok) {
+        throw new DomainInvariantError(`결합 해석: 회차 입력 값이 정규 JSON 이 아니다 ${field}`);
+      }
+      const fieldSchema = consumerShape[field];
+      if (fieldSchema === undefined || !fieldSchema.safeParse(value).success) {
+        throw new DomainInvariantError(
+          `결합 해석: 회차 입력 값이 소비자 필드 스키마를 어긴다(호환성 증명 결함) ${field}`,
+        );
+      }
+      bound.push({ field, binding, digest: digest.value });
+      continue;
+    }
     if (!("taskId" in binding.task)) {
       throw new DomainInvariantError(
         `결합 해석: 커밋된 결합이 TaskId 로 해석돼 있지 않다 ${field}`,

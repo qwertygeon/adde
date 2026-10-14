@@ -76,13 +76,14 @@ export function entityId<K extends EntityIdKind>(kind: K, raw: string): EntityId
   return mustOk(parseEntityId(kind, raw));
 }
 
-/** `control_request` 출처 취소 — `control_request` kind 는 `actorSource` 가 항상 `"unknown"` 이어야 한다(design.md `values.ts` 주석). */
+/** `control_request` 출처 취소 — 인증 조건(출처 `unknown`·ctl_ ID·`keyId`)을 갖춘 값. */
 export function controlRequestCancelOrigin(deps: DomainDeps) {
   return mustOk(
     parseCancelOrigin({
       kind: "control_request",
       actorSource: "unknown",
       controlRequestId: nextEntityId(deps.ids, "controlRequest"),
+      keyId: "fixture-key",
     }),
   );
 }
@@ -565,6 +566,7 @@ export function reachTaskState(
         kind: "control_request",
         actorSource: "unknown",
         controlRequestId: nextEntityId(deps.ids, "controlRequest"),
+        keyId: "fixture-key",
       }),
     );
     return {
@@ -772,6 +774,7 @@ export function reachWorkState(state: WorkStateName): {
         kind: "control_request",
         actorSource: "unknown",
         controlRequestId: nextEntityId(deps.ids, "controlRequest"),
+        keyId: "fixture-key",
       }),
     );
     return {
@@ -780,7 +783,7 @@ export function reachWorkState(state: WorkStateName): {
         executeCommand(deps, planningAgg, {
           kind: "cancel_work",
           expectedRevision: planningAgg.work.revision,
-          meta: meta(now),
+          meta: meta(now, "unknown"),
           origin,
         }),
       ).aggregate,

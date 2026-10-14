@@ -8,8 +8,7 @@
 //
 // 레시피가 없는 (event, fromState, to) 조합은 `apply()` 가 명확한 오류로 실패하는 케이스를 생성한다 —
 // census(SC-004·SC-017·SC-042)는 "케이스 존재"를 구조적으로 만족시키되, 실행 결과(구현/레시피 갭)는
-// test(EXECUTION) 이 실패 원인 분류로 드러낸다. 미비 레시피 목록은 SPEC_ROOT/test/test-cases.md
-// "미커버 항목"을 참조.
+// test(EXECUTION) 이 실패 원인 분류로 드러낸다. 레시피가 없으면 AUTHORING 공백이다 — 레시피를 이 파일에 더한다.
 import {
   executeCommand,
   judgeSignal,
@@ -87,13 +86,15 @@ const PAST = at("2025-12-31T00:00:00Z");
 /** NOW(reach 시점) 이후·LATER(expire 평가 시점) 이전 — RETRY_WAIT 도달 시엔 유효기한 미경과, expire 평가 시엔 경과. */
 const BETWEEN = at("2026-01-01T00:05:00Z");
 
+const SCHEDULE_FIRING_AT = at("2026-01-01T01:00:00Z");
+
 /** 예약 발화 Trigger(`at@1`) — READY 에서 예약 원인 `schedule_task` 를 받는 Task 의 Trigger. */
 function scheduleFiringTrigger(triggerId: string): TriggerSpec {
   return {
     kind: "at",
     version: 1,
     triggerId,
-    scheduledForUtc: at("2026-01-01T01:00:00Z"),
+    scheduledForUtc: SCHEDULE_FIRING_AT,
     timezone: "Asia/Seoul",
     expressionText: "fixture-at",
     misfire: { kind: "skip" },
@@ -102,7 +103,7 @@ function scheduleFiringTrigger(triggerId: string): TriggerSpec {
 
 function missingRecipe(row: TransitionRowData<string>, fromState: string): CommandOutcome {
   throw new Error(
-    `row-cases: no test recipe for event="${row.event}" fromState="${fromState}" to="${row.to}" (row id="${row.id}") — AUTHORING gap, see SPEC_ROOT/test/test-cases.md "미커버 항목"`,
+    `row-cases: no test recipe for event="${row.event}" fromState="${fromState}" to="${row.to}" (row id="${row.id}") — AUTHORING 공백 — 레시피를 이 파일에 더한다`,
   );
 }
 
@@ -186,12 +187,13 @@ put("task_scheduled", "READY", "SCHEDULED", {
   reachBefore: () => reachTaskState("READY", { trigger: scheduleFiringTrigger("fixture_task") }),
   apply: (deps, before, taskId) => {
     const task = requireTaskFor(before, taskId);
+    // 계약 입력은 Trigger 의 원래 예정 시각이다.
     const occ = mustOk(
       deriveOccurrenceId({
         kind: "schedule",
         ownerId: taskId,
         triggerId: task.trigger.triggerId,
-        scheduledForUtc: NOW,
+        scheduledForUtc: SCHEDULE_FIRING_AT,
         recurrenceIndex: 0,
       }),
     );
@@ -210,13 +212,14 @@ put("task_scheduled", "RETRY_WAIT", "SCHEDULED", {
   reachBefore: () => reachTaskState("RETRY_WAIT"),
   apply: (deps, before, taskId) => {
     const task = requireTaskFor(before, taskId);
+    // 계약 입력은 마지막 재시도 대기(도달 레시피가 NOW 에 낸 첫 attempt 실패)의 시각·attempt 번호다.
     const occ = mustOk(
       deriveOccurrenceId({
-        kind: "schedule",
+        kind: "execution_retry",
         ownerId: taskId,
         triggerId: task.trigger.triggerId,
-        scheduledForUtc: NOW,
-        recurrenceIndex: 0,
+        causingEvent: { occurredAt: NOW },
+        attemptNo: task.lastAttemptNo,
       }),
     );
     return executeCommand(deps, before, {
@@ -425,7 +428,8 @@ function bringToScheduled(
       kind: "schedule",
       ownerId: dependentId,
       triggerId: task.trigger.triggerId,
-      scheduledForUtc: NOW,
+      // 이 경로의 의존 Task Trigger 는 예약 발화 Trigger 다 — 계약 입력은 그 원래 예정 시각.
+      scheduledForUtc: SCHEDULE_FIRING_AT,
       recurrenceIndex: 0,
     }),
   );
@@ -1475,7 +1479,7 @@ for (const state of [
       executeCommand(deps, before, {
         kind: "cancel_work",
         expectedRevision: before.work.revision,
-        meta: meta(NOW),
+        meta: meta(NOW, "unknown"),
         origin: controlRequestCancelOrigin(deps),
       }),
   });

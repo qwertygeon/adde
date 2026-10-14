@@ -12,6 +12,8 @@ import type {
 import type { WorkflowEventEnvelope } from "./events.js";
 import type { ValidationIssue } from "./validation/task-validation.js";
 import type { TaskStateName } from "./task-state.js";
+import type { DefinitionDraftInvalidReason } from "./definition/model.js";
+import type { OccurrenceBindingField } from "./task-result/binding.js";
 
 export type RelationEdgeKind = "dependency" | "parent" | "causal";
 
@@ -125,7 +127,15 @@ export type PlanValidationIssue =
       readonly ref: TaskId;
       readonly reason: "skipped" | "output_absent";
     }
-  | { readonly kind: "proposal_digest_mismatch" };
+  | { readonly kind: "proposal_digest_mismatch" }
+  | { readonly kind: "definition_invalid"; readonly reason: DefinitionDraftInvalidReason }
+  /** 정의 템플릿을 회차 Work 의 첫 계획으로 검증한 이슈. */
+  | { readonly kind: "definition_template_issue"; readonly issue: PlanValidationIssue }
+  | {
+      readonly kind: "binding_occurrence_field_unavailable";
+      readonly draftRef: string;
+      readonly field: OccurrenceBindingField;
+    };
 
 function refKey(ref: TaskRef): string {
   return "draftRef" in ref ? ref.draftRef : ref.taskId;

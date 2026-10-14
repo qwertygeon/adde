@@ -28,6 +28,7 @@ import type { ContentHash } from "./derivation/dedup-key.js";
 import type { PlanProposal } from "./plan/proposal.js";
 import type { InputBinding, BoundInput } from "./task-result/binding.js";
 import type { TaskResult } from "./task-result/outputs.js";
+import type { DefinitionRecord } from "./definition/model.js";
 
 export interface OpenAttempt {
   readonly attemptId: AttemptId;
@@ -124,6 +125,18 @@ export interface TaskRecord {
   readonly dependencyActivated: boolean;
   /** 종결 이벤트의 위치. */
   readonly terminalRef?: TerminalEventRef;
+  /** 마지막 `task_retry_wait` 의 시각·attempt 번호 — 재시도 예약 occurrence 의 계약 입력. */
+  readonly lastRetryWait?: { readonly occurredAt: UtcInstant; readonly attemptNo: number };
+  /**
+   * 이 Task 를 subject 로 수용한 외부 신호 중 아직 예약에 쓰이지 않은 것 — 외부 신호 원인 예약
+   * occurrence 의 계약 입력. `task_scheduled` 가 지운다(수용 하나는 예약 하나).
+   */
+  readonly pendingSignalAcceptance?: {
+    readonly eventId: EventId;
+    readonly occurredAt: UtcInstant;
+    readonly sourceId: string;
+    readonly signalName: string;
+  };
   readonly createdAt: UtcInstant;
   readonly updatedAt: UtcInstant;
   readonly correlationId: string;
@@ -168,6 +181,8 @@ export interface WorkAggregate {
   readonly decisionSubjects: Readonly<Record<string, DecisionSubjectRef>>;
   /** 상태 변이 커밋 수. */
   readonly commitSeq: number;
+  /** 이 Work 가 관리하는(관리했던) 정의. 한 Work 는 일생에 정의를 최대 하나 관리한다. */
+  readonly definition?: DefinitionRecord;
 }
 
 export function taskOf(aggregate: WorkAggregate, taskId: TaskId): TaskRecord | undefined {

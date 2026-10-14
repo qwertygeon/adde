@@ -15,7 +15,11 @@ import { TASK_COMMAND_ROWS, TASK_NON_ROW_COMMANDS, WORK_COMMAND_ROWS } from "./c
 import type { DomainRegistries } from "./registry/registries.js";
 import type { PlanValidationIssue } from "./plan-graph.js";
 import type { DecidedEvent, DomainEvent } from "./events.js";
-import { WORKFLOW_EVENT_SCHEMA_VERSION, mkEvent } from "./events.js";
+import {
+  DEFINITION_TRANSITION_EVENT_TYPES,
+  WORKFLOW_EVENT_SCHEMA_VERSION,
+  mkEvent,
+} from "./events.js";
 import { evolveCommit } from "./evolve.js";
 import { decideTaskCommand } from "./task-decide.js";
 import { decideCreateWork, decideWorkCommand } from "./work-decide.js";
@@ -27,6 +31,9 @@ import {
   decideWorkCancellationCascade,
 } from "./cascade.js";
 import { isReplanGatedTaskCommand, isReplanWaitHeld } from "./plan/replan.js";
+import type { RecurrenceExpander } from "./definition/model.js";
+import { decideStop, workCascadeStopOrigin } from "./definition/resolution.js";
+import type { CausingEventRef } from "./derivation/occurrence-id.js";
 
 export interface OperationalDefaults {
   readonly agentDispatchDeadlineMs: number;
@@ -43,6 +50,8 @@ export interface DomainDeps {
   readonly registries: DomainRegistries;
   /** 출력 마스킹. 결과 기록 시점에 부재면 DomainInvariantError. 결정적이어야 한다. */
   readonly redactOutputs?: OutputRedactor;
+  /** 반복 전개 포트. 일정 활성화를 다루는 시점에 부재면 DomainInvariantError. 결정적이어야 한다. */
+  readonly recurrence?: RecurrenceExpander;
 }
 export interface DomainCommit {
   readonly id: CommitId;
@@ -75,12 +84,23 @@ export type StaleReason = "revision_mismatch" | "token_mismatch" | "terminal_sub
 export type NonStaleReason =
   "provenance_not_human" | "unexpected_state" | "trigger_mismatch" | "validity_passed";
 
-interface CommitMeta {
+export interface CommitMeta {
   readonly now: UtcInstant;
   readonly actorSource: ActorSource;
   readonly actor?: ActorRef;
   readonly causationId?: string;
 }
+
+/**
+ * 지연 head 주 이벤트 — 신호 수용 이벤트(head)의 ID·시각이 정해진 뒤 그 이벤트에서 파생하는 나머지 주
+ * 이벤트를 만든다. 나머지의 판정 단계 ID 는 head 이벤트 ID 뒤에 소비된다.
+ */
+export interface DeferredMain {
+  readonly head: DecidedEvent;
+  readonly then: (head: CausingEventRef) => readonly DecidedEvent[];
+}
+
+const DEFINITION_TRANSITION_SET: ReadonlySet<string> = new Set(DEFINITION_TRANSITION_EVENT_TYPES);
 
 interface Staged {
   readonly id: EventId;
@@ -124,14 +144,18 @@ function buildEnvelope(
   } as unknown as DomainEvent;
 }
 
+function isDeferredMain(main: readonly DecidedEvent[] | DeferredMain): main is DeferredMain {
+  return !Array.isArray(main);
+}
+
 /**
- * 커밋 조립 — §3 단계 2~7. `mainDecided` 는 주 이벤트(신호 수용이면 맨 앞에 `signal_accepted`).
+ * 커밋 조립 — §3 단계 2~7. 주 이벤트는 배열(신호 수용이면 맨 앞에 `signal_accepted`) 또는 지연 head.
  * `aggregateBefore` 가 `undefined` 면 `work_created` 로 새 애그리거트를 만든다.
  */
 export function assembleCommit(
   deps: DomainDeps,
   aggregateBefore: WorkAggregate | undefined,
-  mainDecided: readonly DecidedEvent[],
+  main: readonly DecidedEvent[] | DeferredMain,
   meta: CommitMeta,
 ): { readonly commit: DomainCommit; readonly aggregate: WorkAggregate } {
   const commitId = nextEntityId(deps.ids, "commit");
@@ -155,25 +179,38 @@ export function assembleCommit(
     );
     scratch = evolveCommit(scratch, envs);
     for (const s of newStaged) {
-      if (s.decided.taskId !== undefined || s.decided.type === "work_plan_committed")
+      if (
+        s.decided.taskId !== undefined ||
+        s.decided.type === "work_plan_committed" ||
+        DEFINITION_TRANSITION_SET.has(s.decided.type)
+      )
         lastStateChangingId = s.id;
     }
   }
 
   // 2. 주 이벤트
-  const isSignalPath = mainDecided.length > 0 && mainDecided[0]?.type === "signal_accepted";
-  if (isSignalPath) {
+  if (isDeferredMain(main)) {
     applyBatch([
       {
-        decided: mainDecided[0] as DecidedEvent,
+        decided: main.head,
+        ...(meta.causationId !== undefined ? { causationId: meta.causationId } : {}),
+      },
+    ]);
+    const head = staged[0] as Staged;
+    const rest = main.then({ id: head.id, occurredAt: meta.now });
+    applyBatch(rest.map((d) => ({ decided: d, causationId: head.id })));
+  } else if (main.length > 0 && main[0]?.type === "signal_accepted") {
+    applyBatch([
+      {
+        decided: main[0],
         ...(meta.causationId !== undefined ? { causationId: meta.causationId } : {}),
       },
     ]);
     const signalAcceptedId = staged[0]?.id as string;
-    applyBatch(mainDecided.slice(1).map((d) => ({ decided: d, causationId: signalAcceptedId })));
+    applyBatch(main.slice(1).map((d) => ({ decided: d, causationId: signalAcceptedId })));
   } else {
     applyBatch(
-      mainDecided.map((d) => ({
+      main.map((d) => ({
         decided: d,
         ...(meta.causationId !== undefined ? { causationId: meta.causationId } : {}),
       })),
@@ -217,6 +254,21 @@ export function assembleCommit(
         ...(c.causationEventId !== undefined ? { causationId: c.causationEventId } : {}),
       })),
     );
+    // 관리 Work 취소는 살아 있는 정의를 같은 커밋에서 멈춘다(회차 Work 는 다른 애그리거트라 그대로).
+    const definition = scratch?.definition;
+    if (definition !== undefined && definition.state !== "STOPPED") {
+      const canceled = workCanceledStaged.decided as Extract<
+        DecidedEvent,
+        { readonly type: "work_canceled" }
+      >;
+      const stopEvents = decideStop(
+        deps,
+        definition,
+        workCascadeStopOrigin(canceled.payload.origin, meta.actorSource),
+        meta.now,
+      );
+      applyBatch(stopEvents.map((d) => ({ decided: d, causationId: workCanceledStaged.id })));
+    }
   }
 
   // 4. 의존 연쇄 고정점

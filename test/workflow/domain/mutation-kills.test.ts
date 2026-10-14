@@ -45,8 +45,32 @@ import {
   BUILTIN_TASK_TYPES,
   BUILTIN_TRIGGERS,
   BUILTIN_REACTIONS,
+  deriveOccurrenceId,
+  judgeTaskExternalSignal,
+  materializationBlocker,
+  executeDefinitionCommand,
+  createWork,
+  parseProjectId,
+  parseCancelOrigin,
+  localToUtc,
+  isScheduleActivation,
+  isSignalActivation,
+  scheduleActivationView,
+  signalActivationView,
+  judgeDefinitionSignal,
+  workflowStateOf,
+  findSteward,
+  foldEvents,
+  assembleCommit,
+  mkEvent,
+  foldWorkflowEvents,
+  openOccurrenceCount,
+  withWork,
+  buildTemplateProposal,
+  templateProposalDigest,
 } from "../../../src/workflow/domain/index.js";
 import type {
+  ActorSource,
   SchemaShape,
   PlanTaskDraft,
   PlanProposalInput,
@@ -63,6 +87,15 @@ import type {
   WorkAggregate,
   WorkCommand,
   WorkStateName,
+  DomainCommit,
+  WorkDefinitionId,
+  RecurrenceExpander,
+  DefinitionRecord,
+  DomainRegistries,
+  TriggerDescriptor,
+  WorkId,
+  UtcInstant,
+  WorkflowState,
 } from "../../../src/workflow/domain/index.js";
 import {
   applyCommits,
@@ -95,6 +128,45 @@ import {
   testRegistries,
 } from "./helpers/registry-fixtures.js";
 import { eventTypes, payloadOf } from "./helpers/commits.js";
+import {
+  OCCURRENCE_CONSUMER,
+  WorkflowJournal,
+  dailyActivation,
+  dayAt,
+  firstTaskOf,
+  scheduleOccurrenceId,
+  definitionDeps,
+  definitionDraft,
+  definitionTour,
+  externalSignal,
+  occurrenceConsumerDeps,
+  registerAndMaterializeFirst,
+  registerDefinition,
+  signalActivation,
+  signalDefinitionDraft,
+  templateDraft,
+  vaultOrigin,
+  controlSignal,
+  definitionInvalidReasons,
+  issuesOf,
+  proposeDraft,
+  testDailyRecurrence,
+  DEF_NOW,
+  markdownWorkInPlanning,
+  templateIssues,
+  withPendingSignalAcceptance,
+  FIXTURE_SIGNAL_NAME,
+  FIXTURE_SIGNAL_SOURCE,
+  typesOf,
+  commitOf,
+  OCCURRENCE_CONSUMER_TASK_TYPE,
+  bindingTemplate,
+  payloadsOf,
+  stepActivation,
+  testStepRecurrence,
+} from "./helpers/definition-fixtures.js";
+import { ACTION_AT, STEWARD_MEMBER } from "./helpers/definition-row-cases.js";
+import type { DefinitionDraftInput } from "./helpers/definition-fixtures.js";
 import {
   CONFIRMATION_INPUT,
   CONFIRMATION_TYPE,
@@ -171,13 +243,17 @@ function decideOnTaskIn(
   return decideTaskCommand(deps, task, command, aggregate);
 }
 
-function decideOnWorkIn(state: WorkStateName, body: (deps: DomainDeps) => WorkCommandBody) {
+function decideOnWorkIn(
+  state: WorkStateName,
+  body: (deps: DomainDeps) => WorkCommandBody,
+  actorSource: ActorSource = "adde_self",
+) {
   const { deps, aggregate } = reachWorkState(state);
   expect(aggregate.work.state).toBe(state);
   const command = {
     ...body(deps),
     expectedRevision: aggregate.work.revision,
-    meta: meta(KILL_NOW),
+    meta: meta(KILL_NOW, actorSource),
   } as WorkCommand;
   return decideWorkCommand(deps, aggregate, command);
 }
@@ -207,9 +283,17 @@ describe("SC-007: Task 명령 판정의 상태 적격 검사", () => {
         label: "schedule_task",
         wrong: "DRAFT",
         right: "READY",
-        body: () => ({
+        body: (_deps, taskId) => ({
           kind: "schedule_task",
-          occurrenceId: entityId("occurrence", "occ_" + "B".repeat(26)),
+          occurrenceId: mustOk(
+            deriveOccurrenceId({
+              kind: "schedule",
+              ownerId: taskId,
+              triggerId: "fixture_task",
+              scheduledForUtc: at("2026-01-01T01:00:00Z"),
+              recurrenceIndex: 0,
+            }),
+          ),
           cause: "schedule",
         }),
         trigger: atTrigger("fixture_task", { kind: "skip" }),
@@ -308,6 +392,8 @@ describe("SC-007: Work 명령 판정의 상태 적격 검사", () => {
       readonly wrong: readonly WorkStateName[];
       readonly right: WorkStateName;
       readonly body: (deps: DomainDeps) => WorkCommandBody;
+      /** 명령 meta 출처 — 취소 명령은 취소 origin 출처와 같아야 한다. */
+      readonly actorSource?: ActorSource;
     }[] = [
       {
         label: "request_work_input",
@@ -354,11 +440,12 @@ describe("SC-007: Work 명령 판정의 상태 적격 검사", () => {
         wrong: ["COMPLETED", "FAILED", "CANCELED"],
         right: "ACTIVE",
         body: (deps) => ({ kind: "cancel_work", origin: controlRequestCancelOrigin(deps) }),
+        actorSource: "unknown",
       },
     ];
     for (const c of cases) {
-      for (const wrong of c.wrong) expectNotInTable(decideOnWorkIn(wrong, c.body));
-      expect(decideOnWorkIn(c.right, c.body).kind, c.label).toBe("events");
+      for (const wrong of c.wrong) expectNotInTable(decideOnWorkIn(wrong, c.body, c.actorSource));
+      expect(decideOnWorkIn(c.right, c.body, c.actorSource).kind, c.label).toBe("events");
     }
   });
 
@@ -451,7 +538,7 @@ describe("SC-007: 신호 판정의 revision·상태 적격 검사", () => {
       executeCommand(deps, aggregate, {
         kind: "cancel_work",
         expectedRevision: aggregate.work.revision,
-        meta: meta(KILL_NOW),
+        meta: meta(KILL_NOW, "unknown"),
         origin: controlRequestCancelOrigin(deps),
       }),
     ).aggregate;
@@ -2055,10 +2142,29 @@ describe("SC-028: 필수 member 판정의 원천", () => {
   });
 });
 
+/** 유효한 정의 초안(신호 활성화) — 정의 자리를 실은 제안 픽스처. */
+const VALID_DEFINITION_DRAFT = {
+  title: "slot",
+  activation: {
+    kind: "signal",
+    version: 1,
+    triggerId: "on_signal",
+    sourceId: "fixture_source",
+    signal: "fixture_ready",
+  },
+  template: [draft("t")],
+  maxOpenOccurrences: 1,
+};
+
+/** 정의 초안을 낼 수 있는 markdown 출처 Work — markdown 출처 create_work 경로 대용 레코드 패치. */
+function asMarkdownWork(aggregate: WorkAggregate): WorkAggregate {
+  return patchWork(aggregate, { source: { kind: "markdown", documentId: "doc-kill" } });
+}
+
 describe("SC-022: 제안 정규화·digest 의 선택 자리", () => {
   it("Edge: 빈 결합 목록은 정규화 초안·digest 에서 빠지고, 정의 자리는 있을 때만 digest 에 든다 (test_SC022_empty_bindings_omitted_and_definition_in_digest)", () => {
     const deps = killBindingDeps("killdigest");
-    const planning = reachWorkState("PLANNING").aggregate;
+    const planning = asMarkdownWork(reachWorkState("PLANNING").aggregate);
     const plain = validatePlanProposal(deps, planning, planInput([draft("x")]));
     const empty = validatePlanProposal(
       deps,
@@ -2070,15 +2176,17 @@ describe("SC-022: 제안 정규화·digest 의 선택 자리", () => {
     expect(Object.hasOwn(empty.tasks[0] as object, "inputBindings")).toBe(false);
     expect(empty.digest).toBe(plain.digest);
 
-    const definition = { title: "slot" };
     const withDefinition = validatePlanProposal(
       deps,
       planning,
-      planInput([draft("x")], { definition }),
+      planInput([draft("x")], { definition: VALID_DEFINITION_DRAFT }),
     );
     expect(withDefinition.valid).toBe(true);
     if (!withDefinition.valid) return;
     expect(withDefinition.digest).not.toBe(plain.digest);
+    // digest 원천은 정규화된 정의 사본이다.
+    const definition = withDefinition.content.definition;
+    expect(definition).toBeDefined();
     const content = {
       basePlanRevision: 0,
       source: "planner" as const,
@@ -2224,7 +2332,8 @@ describe("SC-036: occurrence 결합 커밋", () => {
         definitionId: "wdf_fixture",
         definitionRevision: 1,
         occurrenceId: "occ_fixture",
-        input: {},
+        // 결합 필드가 회차 입력의 제공 필드여야 결합이 통과한다.
+        input: { timezone: "Asia/Seoul" },
       } as unknown as WorkAggregate["work"]["source"],
     });
     const consumer = draft("c", {
@@ -2483,7 +2592,7 @@ describe("SC-050: 결합 해석 값·digest·순서", () => {
       resolve(consumer(journal.aggregate, { plain: { from: "occurrence", field: "timezone" } })),
     ).toEqual({
       ok: false,
-      error: { kind: "occurrence_unsupported", field: "plain" },
+      error: { kind: "occurrence_input_unavailable", field: "plain" },
     });
     expect(() =>
       resolve(
@@ -3393,10 +3502,18 @@ describe("SC-038: 수 검사·수 정의의 통제 필드 판독", () => {
 
 describe("SC-025: 보유 제안 재검증은 보유 내용 전체를 한 사본으로 읽는다", () => {
   it("Edge: 정의 자리를 실은 보유 제안(레코드 패치)의 grant 는 그 자리까지 포함한 사본이 승인 digest 와 맞아 커밋된다 (test_SC025_held_proposal_revalidation_reads_definition_slot)", () => {
-    const { deps, aggregate } = reachWorkState("WAITING_APPROVAL");
+    const { deps, aggregate: waiting } = reachWorkState("WAITING_APPROVAL");
+    const aggregate = asMarkdownWork(waiting);
     const held = aggregate.work.pendingProposal;
     if (held === undefined) throw new Error("expected held proposal");
-    const definition = { title: "slot" };
+    // 보유 내용의 정의 자리는 검증이 정규화한 사본이다(제안 경로가 보유하는 형태).
+    const normalized = validatePlanProposal(
+      deps,
+      asMarkdownWork(reachWorkState("PLANNING").aggregate),
+      planInput([draft("t")], { definition: VALID_DEFINITION_DRAFT }),
+    );
+    if (!normalized.valid) throw new Error("expected valid definition draft");
+    const definition = normalized.content.definition;
     const digest = mustOk(planProposalDigest(aggregate.work.id, { ...held, definition }));
     // 레코드 패치: 정의 자리를 가진 보유 제안(다른 생성 경로 대용) — digest 는 그 내용으로 다시 계산한다.
     const patched = patchWork(aggregate, { pendingProposal: { ...held, definition, digest } });
@@ -3480,9 +3597,9 @@ describe("SC-035: 계획 출처 값 목록", () => {
       planPreconditionRejection(aggregate.work, { ...fields, source } as PlanProposalInput)?.reason;
     for (const source of ["", "Planner", "definition"])
       expect(reasonOf(source), source).toBe("invalid_input");
-    // 대조: 정의된 출처는 사전 거절을 지나거나 미지원으로 거절된다.
+    // 대조: 정의된 출처는 사전 거절을 지나고, 템플릿 출처는 materialize 만 만들므로 명령으로는 invalid_input 이다.
     expect(reasonOf("planner")).toBeUndefined();
-    expect(reasonOf("definition_template")).toBe("unsupported_in_this_phase");
+    expect(reasonOf("definition_template")).toBe("invalid_input");
   });
 });
 
@@ -3617,5 +3734,3357 @@ describe("SC-038: 입력 스키마 객체 수준 검사의 정의 판독", () =>
         defect: { code: "schema_has_object_check" },
       },
     });
+  });
+});
+
+describe("SC-029: materialize 차단 조건의 순서와 경계", () => {
+  it("Edge: 정의 비활성 → 오래된 보류 → 열린 회차 상한 순으로 첫 차단 사유를 내고, 모두 통과하면 차단이 없다 (test_SC029_materialization_blocker_order_and_bound)", () => {
+    const view = {
+      definitionState: "ACTIVE",
+      heldCount: 0,
+      openCount: 0,
+      maxOpenOccurrences: 1,
+    } as const;
+    expect(materializationBlocker(view)).toBeUndefined();
+    // 경계: 열린 회차가 상한과 같으면 차단, 하나 적으면 통과.
+    expect(materializationBlocker({ ...view, openCount: 1 })).toBe("open_bound");
+    expect(
+      materializationBlocker({ ...view, openCount: 1, maxOpenOccurrences: 2 }),
+    ).toBeUndefined();
+    expect(materializationBlocker({ ...view, heldCount: 1 })).toBe("older_held");
+    expect(materializationBlocker({ ...view, heldCount: 1, openCount: 1 })).toBe("older_held");
+    expect(
+      materializationBlocker({ ...view, definitionState: "PAUSED", heldCount: 1, openCount: 1 }),
+    ).toBe("definition_paused");
+  });
+});
+
+describe("SC-046: 실행 전 승인이 남은 READY Task 의 외부 신호", () => {
+  it("Error: 실행 전 승인이 남은 READY 는 unexpected_state 이고 승인된 같은 Task 는 수용된다 (test_SC046_ready_with_pending_pre_execution_approval_refused)", () => {
+    const listenerTrigger = {
+      kind: "signal",
+      version: 1,
+      triggerId: "listener",
+      sourceId: "fixture_source",
+      signal: "fixture_ready",
+    } as unknown as TriggerSpec;
+    const { journal, ids } = startJournal(
+      [draft("listener", { trigger: listenerTrigger })],
+      testDeps("killextgate"),
+    );
+    const listener = ids["listener"] as TaskId;
+    validate(journal, listener);
+    const signal = {
+      type: "external_signal",
+      signalId: nextEntityId(journal.deps.ids, "signal"),
+      subject: { taskId: listener },
+      sourceId: "fixture_source",
+      signalName: "fixture_ready",
+      sourceOccurrenceId: "src-1",
+      payload: {},
+      actorSource: "unknown",
+      receivedAt: KILL_NOW,
+    } as const;
+    // 레코드 패치: 실행 전 승인이 남은 READY(명령 경로로 도달 불가 — 검증 차단 → unblock 경로 대용).
+    const gated = patchTask(journal.aggregate, listener, {
+      policy: basePolicy({ approvalRequiredBeforeExecute: true }),
+      preExecutionApproved: false,
+    });
+    const refused = judgeTaskExternalSignal(journal.deps, gated, signal, KILL_NOW);
+    expect(refused.kind).toBe("rejected");
+    if (refused.kind === "rejected") expect(refused.reason).toBe("unexpected_state");
+    const approved = patchTask(gated, listener, { preExecutionApproved: true });
+    expect(judgeTaskExternalSignal(journal.deps, approved, signal, KILL_NOW).kind).toBe("accepted");
+  });
+});
+
+// ---- 반복 정의·회차 흐름의 커밋 전체 형태 — 공용 판별 입력 ----
+// 정의 판정이 만드는 커밋의 이벤트 순서·envelope(커밋 내 위치·ID·원인·Work 정체·출처·행위자·시각)·페이로드와
+// 최종 상태의 정의 레코드를 시나리오마다 한 줄씩 투영해 digest 로 고정한다. 값이 undefined 인 키도 표시한다.
+// 생성 ID 는 시나리오 안의 첫 등장 순 별칭으로 바꿔 개별 ID 값에 기대지 않는다. 실패 메시지가 투영 전문이라
+// 어긋난 줄을 바로 볼 수 있다.
+
+const GOLDEN_ID_TOKEN =
+  /\b(?:wrk|wdf|pln|tsk|res|rct|occ|sig|evt|att|cfm|dec|dsp|ctl|cmt|prj)_[0-9A-Za-z]+/g;
+
+class GoldenProjection {
+  readonly lines: string[] = [];
+  private readonly alias = new Map<string, string>();
+  private readonly counters = new Map<string, number>();
+
+  private name(text: string): string {
+    return text.replace(GOLDEN_ID_TOKEN, (token) => {
+      const known = this.alias.get(token);
+      if (known !== undefined) return known;
+      const prefix = token.slice(0, 3);
+      const n = (this.counters.get(prefix) ?? 0) + 1;
+      this.counters.set(prefix, n);
+      const named = `${prefix}#${n}`;
+      this.alias.set(token, named);
+      return named;
+    });
+  }
+
+  private norm(value: unknown): unknown {
+    if (value === undefined) return "<undefined>";
+    if (typeof value === "string") return this.name(value);
+    if (Array.isArray(value)) return value.map((v) => this.norm(v));
+    if (value !== null && typeof value === "object") {
+      const out: Record<string, unknown> = {};
+      for (const key of Object.keys(value).sort()) {
+        out[key] = this.norm((value as Record<string, unknown>)[key]);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  note(text: string): void {
+    this.lines.push(this.name(text));
+  }
+
+  outcome(outcome: unknown): void {
+    const o = outcome as {
+      kind: string;
+      reason?: string;
+      rejection?: { reason: string; detail?: string };
+    };
+    this.note(
+      `outcome ${o.kind}${o.reason !== undefined ? ` ${o.reason}` : ""}${
+        o.rejection !== undefined ? ` ${o.rejection.reason}/${o.rejection.detail ?? ""}` : ""
+      }`,
+    );
+  }
+
+  commits(commits: readonly DomainCommit[]): void {
+    commits.forEach((commit, ci) => {
+      for (const e of commit.events) {
+        const env = e as unknown as Record<string, unknown> & {
+          commit: { index: number; count: number };
+        };
+        this.lines.push(
+          [
+            `${ci}`,
+            `${env.commit.index}/${env.commit.count}`,
+            this.name(String(env["id"])),
+            e.type,
+            `w=${this.name(String(env["workId"]))}`,
+            `prj=${this.name(String(env["projectId"]))}`,
+            `corr=${this.name(String(env["correlationId"]))}`,
+            env["taskId"] !== undefined ? `t=${this.name(String(env["taskId"]))}` : "",
+            env["causationId"] !== undefined ? `c=${this.name(String(env["causationId"]))}` : "",
+            `by=${String(env["actorSource"])}`,
+            env["actor"] !== undefined ? `actor=${JSON.stringify(this.norm(env["actor"]))}` : "",
+            `at=${String(env["occurredAt"])}`,
+            JSON.stringify(this.norm(e.payload)),
+          ]
+            .filter((part) => part !== "")
+            .join(" "),
+        );
+      }
+    });
+  }
+
+  /** 최종 상태의 Work 마다 상태·정의 레코드 전체. */
+  state(state: WorkflowState): void {
+    for (const aggregate of Object.values(state.works)) {
+      this.lines.push(
+        `state w=${this.name(aggregate.work.id)} ${aggregate.work.state}${
+          aggregate.definition !== undefined
+            ? ` def=${JSON.stringify(this.norm(aggregate.definition))}`
+            : ""
+        }`,
+      );
+    }
+  }
+}
+
+/** 개정 제안 + 사람 grant. 제안이 승인 대기에 들지 않으면 무효 이슈를 기록한다. */
+function goldenAmend(
+  g: GoldenProjection,
+  journal: WorkflowJournal,
+  definitionId: WorkDefinitionId,
+  overrides: DefinitionDraftInput,
+  now: ReturnType<typeof dayAt>,
+): void {
+  const stewardId = journal.steward(definitionId).work.id;
+  const proposed = journal.proposeAmendment(definitionId, overrides, now);
+  if (proposed.kind !== "committed" || journal.work(stewardId).work.state !== "WAITING_APPROVAL") {
+    const invalid =
+      proposed.kind === "committed"
+        ? proposed.commit.events.find((e) => e.type === "work_plan_invalid")
+        : undefined;
+    g.note(`amend-proposal ${proposed.kind} ${JSON.stringify(invalid?.payload ?? null)}`);
+    return;
+  }
+  g.outcome(journal.decidePlan(stewardId, "grant", now));
+}
+
+function goldenScenario(run: (g: GoldenProjection) => void): string[] {
+  const g = new GoldenProjection();
+  run(g);
+  return g.lines;
+}
+
+const GOLDEN_SCENARIOS: Record<string, () => string[]> = {
+  tour: () =>
+    goldenScenario((g) => {
+      const tour = definitionTour(definitionDeps("goldtour"), definitionDeps("goldtoursig"));
+      g.note(`failures ${JSON.stringify(tour.failures)}`);
+      for (const journal of tour.journals) {
+        g.commits(journal.commits);
+        g.state(journal.state);
+      }
+    }),
+  misfire: () =>
+    goldenScenario((g) => {
+      for (const misfire of [
+        { kind: "skip" },
+        { kind: "fire_once_now" },
+        { kind: "catch_up_bounded", maxCatchUp: 2 },
+        { kind: "catch_up_bounded", maxCatchUp: 1 },
+        { kind: "catch_up_bounded", maxCatchUp: 0 },
+      ] as const) {
+        const seed = `goldmis${misfire.kind.replace(/_/g, "")}${"maxCatchUp" in misfire ? misfire.maxCatchUp : ""}`;
+        const r = registerDefinition(definitionDeps(seed), {
+          draft: definitionDraft({
+            activation: dailyActivation({ misfire }),
+            maxOpenOccurrences: 2,
+          }),
+        });
+        const before = r.journal.commits.length;
+        g.note(JSON.stringify(misfire));
+        g.outcome(r.journal.resolveDue(r.definitionId, dayAt(3)));
+        g.outcome(r.journal.resolveDue(r.definitionId, dayAt(5), { late: true }));
+        g.commits(r.journal.commits.slice(before));
+        g.state(r.journal.state);
+      }
+    }),
+  signalExhaustion: () =>
+    goldenScenario((g) => {
+      const r = registerDefinition(definitionDeps("goldsigmax"), {
+        draft: signalDefinitionDraft({ maxOccurrences: 1 }),
+      });
+      const before = r.journal.commits.length;
+      g.outcome(r.journal.external(r.definitionId, "src-1", dayAt(0)));
+      g.outcome(r.journal.external(r.definitionId, "src-2", dayAt(0, "08:00")));
+      g.commits(r.journal.commits.slice(before));
+      g.state(r.journal.state);
+    }),
+  stewardCancel: () =>
+    goldenScenario((g) => {
+      for (const kind of ["vault", "control"] as const) {
+        const r = registerAndMaterializeFirst(definitionDeps(`goldcancel${kind}`));
+        r.journal.resolveDue(r.definitionId, dayAt(1));
+        const before = r.journal.commits.length;
+        const origin =
+          kind === "vault"
+            ? vaultOrigin(r.journal.deps)
+            : mustOk(
+                parseCancelOrigin({
+                  kind: "control_request",
+                  actorSource: "unknown",
+                  controlRequestId: nextEntityId(r.journal.deps.ids, "controlRequest"),
+                  keyId: "fixture-key",
+                }),
+              );
+        g.note(kind);
+        g.outcome(
+          r.journal.onWork(r.stewardId, { kind: "cancel_work", origin }, dayAt(1, "09:00"), {
+            actorSource: kind === "vault" ? "human_local" : "unknown",
+          }),
+        );
+        g.commits(r.journal.commits.slice(before));
+        g.state(r.journal.state);
+      }
+      for (const state of ["PAUSED", "STOPPED"] as const) {
+        const r = registerAndMaterializeFirst(definitionDeps(`goldcxl${state.toLowerCase()}`));
+        r.journal.control(r.definitionId, state === "PAUSED" ? "pause" : "stop", dayAt(0, "08:00"));
+        const before = r.journal.commits.length;
+        g.note(state);
+        g.outcome(
+          r.journal.onWork(
+            r.stewardId,
+            { kind: "cancel_work", origin: vaultOrigin(r.journal.deps) },
+            dayAt(0, "09:00"),
+            { actorSource: "human_local" },
+          ),
+        );
+        g.commits(r.journal.commits.slice(before));
+        g.state(r.journal.state);
+      }
+    }),
+  amendment: () =>
+    goldenScenario((g) => {
+      const a = registerAndMaterializeFirst(definitionDeps("goldamtime"));
+      a.journal.resolveDue(a.definitionId, dayAt(1));
+      const beforeA = a.journal.commits.length;
+      goldenAmend(
+        g,
+        a.journal,
+        a.definitionId,
+        { activation: dailyActivation({ localTime: "08:00" }) },
+        dayAt(1, "10:00"),
+      );
+      goldenAmend(
+        g,
+        a.journal,
+        a.definitionId,
+        { activation: signalActivation(), maxOccurrences: 3 },
+        dayAt(1, "11:00"),
+      );
+      g.outcome(a.journal.external(a.definitionId, "src-a", dayAt(1, "11:30")));
+      goldenAmend(
+        g,
+        a.journal,
+        a.definitionId,
+        { activation: dailyActivation({ triggerId: "daily2" }) },
+        dayAt(1, "11:40"),
+      );
+      goldenAmend(
+        g,
+        a.journal,
+        a.definitionId,
+        {
+          activation: dailyActivation({ triggerId: "daily2" }),
+          maxOccurrences: undefined,
+        } as unknown as DefinitionDraftInput,
+        dayAt(1, "12:00"),
+      );
+      g.commits(a.journal.commits.slice(beforeA));
+      g.state(a.journal.state);
+
+      const b = registerDefinition(definitionDeps("goldamsig"), {
+        draft: signalDefinitionDraft({ maxOccurrences: 5 }),
+      });
+      b.journal.external(b.definitionId, "src-1", dayAt(0));
+      b.journal.external(b.definitionId, "src-2", dayAt(0, "07:10"));
+      const beforeB = b.journal.commits.length;
+      goldenAmend(g, b.journal, b.definitionId, { maxOccurrences: 1 }, dayAt(0, "08:00"));
+      g.commits(b.journal.commits.slice(beforeB));
+      g.state(b.journal.state);
+
+      const c = registerAndMaterializeFirst(definitionDeps("goldamend"));
+      const beforeC = c.journal.commits.length;
+      goldenAmend(
+        g,
+        c.journal,
+        c.definitionId,
+        { activation: dailyActivation({ until: dayAt(0, "08:00") }) },
+        dayAt(0, "09:00"),
+      );
+      g.commits(c.journal.commits.slice(beforeC));
+      g.state(c.journal.state);
+    }),
+  signalRecords: () =>
+    goldenScenario((g) => {
+      const r = registerAndMaterializeFirst(definitionDeps("goldrej"));
+      const id = r.definitionId;
+      const before = r.journal.commits.length;
+      g.outcome(r.journal.control(id, "pause", dayAt(0, "08:00"), { expectedRevision: 0 }));
+      g.outcome(r.journal.control(id, "resume", dayAt(0, "08:01")));
+      g.outcome(
+        r.journal.control(id, "pause", dayAt(0, "08:02"), { actorSource: "agent_session" }),
+      );
+      g.outcome(r.journal.control(id, "pause", dayAt(0, "08:03"), { channel: "control_request" }));
+      g.outcome(
+        r.journal.control(id, "pause", dayAt(0, "08:03"), {
+          channel: "control_request",
+          expectedRevision: r.journal.definition(id).revision - 1,
+        }),
+      );
+      g.outcome(r.journal.external(id, "src-x", dayAt(0, "08:04")));
+      g.outcome(r.journal.control(id, "resume", dayAt(0, "08:05"), { channel: "control_request" }));
+      g.outcome(r.journal.control(id, "stop", dayAt(0, "08:06"), { channel: "control_request" }));
+      g.outcome(r.journal.control(id, "stop", dayAt(0, "08:07")));
+      g.commits(r.journal.commits.slice(before));
+      g.state(r.journal.state);
+
+      const s = registerDefinition(definitionDeps("goldrejsig"), {
+        draft: signalDefinitionDraft(),
+      });
+      const beforeS = s.journal.commits.length;
+      g.outcome(s.journal.external(s.definitionId, "src-0", dayAt(0)));
+      g.outcome(s.journal.external(s.definitionId, "src-0", dayAt(0, "06:30")));
+      g.outcome(s.journal.external(s.definitionId, "src-1", dayAt(0), { signalName: "other" }));
+      g.outcome(s.journal.control(s.definitionId, "stop", dayAt(0, "08:00")));
+      g.outcome(s.journal.external(s.definitionId, "src-2", dayAt(0, "09:00")));
+      g.commits(s.journal.commits.slice(beforeS));
+      g.state(s.journal.state);
+    }),
+  taskSignal: () =>
+    goldenScenario((g) => {
+      const listenerTrigger = {
+        kind: "signal",
+        version: 1,
+        triggerId: "listener",
+        sourceId: "fixture_source",
+        signal: "fixture_ready",
+      } as unknown as TriggerSpec;
+      const { journal, ids } = startJournal(
+        [draft("listener", { trigger: listenerTrigger })],
+        definitionDeps("goldtask"),
+      );
+      const listener = ids["listener"] as TaskId;
+      const workId = journal.aggregate.work.id;
+      const signal = (occ: string, overrides: Record<string, unknown> = {}) =>
+        ({
+          ...externalSignal(journal.deps, {
+            subject: { taskId: listener },
+            sourceOccurrenceId: occ,
+            receivedAt: dayAt(0),
+          }),
+          ...overrides,
+        }) as never;
+      const draftStage = new WorkflowJournal(
+        journal.deps,
+        { works: { [workId]: journal.aggregate } } as never,
+        [],
+      );
+      g.outcome(draftStage.taskExternal(workId, signal("o-1"), dayAt(0)));
+      validate(journal, listener);
+      const ready = new WorkflowJournal(
+        journal.deps,
+        { works: { [workId]: journal.aggregate } } as never,
+        [],
+      );
+      g.outcome(ready.taskExternal(workId, signal("o-2", { signalName: "other" }), dayAt(0)));
+      g.outcome(
+        ready.taskExternal(workId, signal("o-3", { actor: { kind: "human", id: "u1" } }), dayAt(0)),
+      );
+      g.outcome(ready.taskExternal(workId, signal("o-3"), dayAt(0, "07:01")));
+      g.commits([...draftStage.commits, ...ready.commits]);
+      g.state(ready.state);
+    }),
+  templateDrift: () =>
+    goldenScenario((g) => {
+      const registered = registerDefinition(occurrenceConsumerDeps("golddrift"), {
+        draft: definitionDraft({
+          template: [templateDraft("consumer", { type: OCCURRENCE_CONSUMER, input: {} })],
+        }),
+      });
+      const j = new WorkflowJournal(
+        { ...registered.journal.deps, registries: testRegistries() },
+        registered.journal.state,
+        registered.journal.commits,
+      );
+      const before = j.commits.length;
+      g.outcome(j.resolveDue(registered.definitionId, dayAt(0)));
+      g.outcome(j.control(registered.definitionId, "resume", dayAt(0, "08:00")));
+      g.outcome(j.release(registered.definitionId, dayAt(0, "08:01")));
+      g.commits(j.commits.slice(before));
+      g.state(j.state);
+    }),
+  commandMeta: () =>
+    goldenScenario((g) => {
+      const r = registerDefinition(definitionDeps("goldmeta"));
+      const pending = r.journal.definition(r.definitionId).pendingSchedule;
+      if (pending === undefined) throw new Error("golden: no pending schedule");
+      const outcome = executeDefinitionCommand(r.journal.deps, r.journal.state, {
+        kind: "resolve_due_schedule",
+        definitionId: r.definitionId,
+        occurrenceId: pending.occurrenceId,
+        meta: {
+          ...meta(dayAt(0), "adde_self"),
+          actor: { kind: "system", id: "sched" },
+          causationId: entityId("event", "evt_cause1"),
+        },
+      } as never);
+      g.outcome(outcome);
+      if ("commit" in outcome) {
+        g.commits([outcome.commit]);
+        g.state(outcome.state);
+      }
+    }),
+  overdueResume: () =>
+    goldenScenario((g) => {
+      const r = registerDefinition(definitionDeps("goldoverdue"), {
+        draft: definitionDraft({ activation: dailyActivation({ misfire: { kind: "skip" } }) }),
+      });
+      const before = r.journal.commits.length;
+      g.outcome(r.journal.control(r.definitionId, "pause", dayAt(-1, "13:00")));
+      g.outcome(r.journal.resolveDue(r.definitionId, dayAt(0)));
+      g.outcome(r.journal.control(r.definitionId, "resume", dayAt(0, "09:00")));
+      g.outcome(r.journal.resolveDue(r.definitionId, dayAt(0, "09:01")));
+      g.commits(r.journal.commits.slice(before));
+      g.state(r.journal.state);
+    }),
+  signalRelease: () =>
+    goldenScenario((g) => {
+      const r = registerDefinition(definitionDeps("goldrelease"), {
+        draft: signalDefinitionDraft(),
+      });
+      const before = r.journal.commits.length;
+      g.outcome(r.journal.external(r.definitionId, "s-1", dayAt(0)));
+      g.outcome(r.journal.external(r.definitionId, "s-2", dayAt(0, "07:01")));
+      g.outcome(r.journal.external(r.definitionId, "s-3", dayAt(0, "07:02")));
+      g.outcome(r.journal.release(r.definitionId, dayAt(0, "07:03")));
+      const second = r.journal.definition(r.definitionId).held[1]?.occurrenceId;
+      const firstWork = r.journal.occurrenceWorkIds(r.definitionId)[0];
+      if (second === undefined || firstWork === undefined) throw new Error("golden: holds");
+      r.journal.completeWork(firstWork, dayAt(0, "07:04"));
+      g.outcome(r.journal.release(r.definitionId, dayAt(0, "07:05"), { occurrenceId: second }));
+      g.outcome(r.journal.release(r.definitionId, dayAt(0, "07:06")));
+      g.commits(r.journal.commits.slice(before));
+      g.state(r.journal.state);
+    }),
+  releaseExhaustion: () =>
+    goldenScenario((g) => {
+      const r = registerDefinition(definitionDeps("goldrelmax"), {
+        draft: signalDefinitionDraft({ maxOccurrences: 2 }),
+      });
+      const before = r.journal.commits.length;
+      g.outcome(r.journal.control(r.definitionId, "pause", dayAt(0, "06:00")));
+      for (const [k, occ] of ["h-1", "h-2", "h-3"].entries()) {
+        g.outcome(r.journal.external(r.definitionId, occ, dayAt(0, `06:1${k}`)));
+      }
+      g.outcome(r.journal.control(r.definitionId, "resume", dayAt(0, "06:30")));
+      g.outcome(r.journal.release(r.definitionId, dayAt(0, "06:31")));
+      const firstWork = r.journal.occurrenceWorkIds(r.definitionId)[0];
+      if (firstWork === undefined) throw new Error("golden: first occurrence");
+      r.journal.completeWork(firstWork, dayAt(0, "06:40"));
+      g.outcome(r.journal.release(r.definitionId, dayAt(0, "06:41")));
+      g.commits(r.journal.commits.slice(before));
+      g.state(r.journal.state);
+    }),
+  stewardReplan: () =>
+    goldenScenario((g) => {
+      for (const stopped of [true, false]) {
+        const r = registerDefinition(definitionDeps(`goldreplan${stopped ? "stop" : "live"}`), {
+          tasks: STEWARD_MEMBER,
+        });
+        if (stopped) r.journal.control(r.definitionId, "stop", dayAt(0, "08:00"));
+        const before = r.journal.commits.length;
+        g.note(stopped ? "stopped" : "live");
+        r.journal.ensurePlanning(r.stewardId, dayAt(0, "09:00"));
+        g.outcome(
+          r.journal.commitPlan(
+            r.stewardId,
+            r.journal.replanBase(r.stewardId, { tasks: [templateDraft("added")] }),
+            dayAt(0, "09:00"),
+          ),
+        );
+        g.commits(r.journal.commits.slice(before));
+        g.state(r.journal.state);
+      }
+    }),
+  exhaustionWithdrawsAmendment: () =>
+    goldenScenario((g) => {
+      const r = registerDefinition(definitionDeps("goldwithdraw"), {
+        draft: signalDefinitionDraft({ maxOccurrences: 1 }),
+      });
+      r.journal.proposeAmendment(r.definitionId, { title: "pending title" }, dayAt(0, "06:00"));
+      const before = r.journal.commits.length;
+      g.note(`state ${r.journal.steward(r.definitionId).work.state}`);
+      g.outcome(r.journal.external(r.definitionId, "s-1", dayAt(0)));
+      g.note(`state ${r.journal.steward(r.definitionId).work.state}`);
+      g.commits(r.journal.commits.slice(before));
+      g.state(r.journal.state);
+    }),
+  commandRejections: () =>
+    goldenScenario((g) => {
+      const r = registerAndMaterializeFirst(definitionDeps("goldcmdrej"));
+      const id = r.definitionId;
+      const pending = r.journal.definition(id).pendingSchedule?.occurrenceId;
+      if (pending === undefined) throw new Error("golden: no pending schedule");
+      g.outcome(r.journal.resolveDue(id, dayAt(0, "08:00"), { occurrenceId: pending }));
+      g.outcome(
+        r.journal.resolveDue(id, dayAt(1), {
+          occurrenceId: "occ_AAAAAAAAAAAAAAAAAAAAAAAAAA" as never,
+        }),
+      );
+      g.outcome(r.journal.release(id, dayAt(1), { occurrenceId: pending }));
+      r.journal.resolveDue(id, dayAt(1));
+      r.journal.completeWork(r.firstWorkId, dayAt(1, "07:10"));
+      g.outcome(r.journal.resolveDue(id, dayAt(2)));
+      g.outcome(
+        executeDefinitionCommand(r.journal.deps, r.journal.state, {
+          kind: "unknown_kind",
+          meta: meta(dayAt(2)),
+        } as never),
+      );
+      for (const kind of ["resolve_due_schedule", "release_held_occurrence"] as const) {
+        g.outcome(
+          executeDefinitionCommand(r.journal.deps, r.journal.state, {
+            kind,
+            definitionId: nextEntityId(r.journal.deps.ids, "workDefinition"),
+            occurrenceId: pending,
+            meta: meta(dayAt(2)),
+          }),
+        );
+      }
+      const s = registerDefinition(definitionDeps("goldcmdrejsig"), {
+        draft: signalDefinitionDraft(),
+      });
+      g.outcome(
+        s.journal.resolveDue(s.definitionId, dayAt(0), {
+          occurrenceId: "occ_AAAAAAAAAAAAAAAAAAAAAAAAAA" as never,
+        }),
+      );
+    }),
+  heldPolicies: () =>
+    goldenScenario((g) => {
+      for (const misfire of [
+        { kind: "fire_once_now" },
+        { kind: "catch_up_bounded", maxCatchUp: 1 },
+        { kind: "catch_up_bounded", maxCatchUp: 2 },
+        { kind: "skip" },
+      ] as const) {
+        const seed = `goldheld${misfire.kind.replace(/_/g, "")}${"maxCatchUp" in misfire ? misfire.maxCatchUp : ""}`;
+        const r = registerAndMaterializeFirst(
+          definitionDeps(seed),
+          definitionDraft({ activation: dailyActivation({ misfire, until: dayAt(3) }) }),
+        );
+        const id = r.definitionId;
+        const before = r.journal.commits.length;
+        g.note(JSON.stringify(misfire));
+        for (const k of [1, 2, 3]) g.outcome(r.journal.resolveDue(id, dayAt(k)));
+        for (let round = 0; round < 3 && r.journal.definition(id).held.length > 0; round += 1) {
+          for (const workId of r.journal.occurrenceWorkIds(id)) {
+            if (r.journal.work(workId).work.state !== "COMPLETED") {
+              r.journal.completeWork(workId, dayAt(3, `0${round + 7}:30`));
+            }
+          }
+          g.outcome(r.journal.release(id, dayAt(3, `0${round + 7}:40`)));
+        }
+        g.commits(r.journal.commits.slice(before));
+        g.state(r.journal.state);
+      }
+    }),
+  amendmentSearch: () =>
+    goldenScenario((g) => {
+      const a = registerAndMaterializeFirst(definitionDeps("goldroundtrip"));
+      const beforeA = a.journal.commits.length;
+      goldenAmend(
+        g,
+        a.journal,
+        a.definitionId,
+        { activation: dailyActivation({ localTime: "08:00" }) },
+        dayAt(0, "09:00"),
+      );
+      goldenAmend(
+        g,
+        a.journal,
+        a.definitionId,
+        { activation: dailyActivation() },
+        dayAt(0, "10:00"),
+      );
+      goldenAmend(g, a.journal, a.definitionId, { title: "renamed" }, dayAt(0, "11:00"));
+      g.commits(a.journal.commits.slice(beforeA));
+      g.state(a.journal.state);
+
+      const b = registerAndMaterializeFirst(definitionDeps("goldsearchend"));
+      const beforeB = b.journal.commits.length;
+      goldenAmend(
+        g,
+        b.journal,
+        b.definitionId,
+        { activation: dailyActivation({ localTime: "08:00", until: dayAt(0, "08:00") }) },
+        dayAt(0, "07:30"),
+      );
+      g.commits(b.journal.commits.slice(beforeB));
+      g.state(b.journal.state);
+
+      const p = registerAndMaterializeFirst(definitionDeps("goldsearchstart"));
+      const beforeP = p.journal.commits.length;
+      goldenAmend(
+        g,
+        p.journal,
+        p.definitionId,
+        { activation: dailyActivation({ localTime: "03:00" }) },
+        dayAt(1, "06:00"),
+      );
+      g.commits(p.journal.commits.slice(beforeP));
+      g.state(p.journal.state);
+
+      for (const [seed, at] of [
+        ["golddueexact", dayAt(1)],
+        ["goldduepast", dayAt(1, "10:00")],
+      ] as const) {
+        const c = registerAndMaterializeFirst(definitionDeps(seed));
+        const beforeC = c.journal.commits.length;
+        goldenAmend(g, c.journal, c.definitionId, { title: "renamed" }, at);
+        g.commits(c.journal.commits.slice(beforeC));
+        g.state(c.journal.state);
+      }
+    }),
+  amendHeldSignals: () =>
+    goldenScenario((g) => {
+      for (const [seed, activation] of [
+        ["goldheldsrc", signalActivation({ sourceId: "other_source" })],
+        ["goldheldname", signalActivation({ signal: "other_signal" })],
+        ["goldheldsame", signalActivation({ triggerId: "on_signal2" })],
+        ["goldheldsched", dailyActivation()],
+      ] as const) {
+        const r = registerDefinition(definitionDeps(seed), { draft: signalDefinitionDraft() });
+        const before = r.journal.commits.length;
+        g.note(seed);
+        r.journal.control(r.definitionId, "pause", dayAt(0, "06:00"));
+        r.journal.external(r.definitionId, "h-1", dayAt(0, "06:10"));
+        r.journal.external(r.definitionId, "h-2", dayAt(0, "06:20"));
+        r.journal.control(r.definitionId, "resume", dayAt(0, "06:30"));
+        g.state(r.journal.state);
+        goldenAmend(g, r.journal, r.definitionId, { activation }, dayAt(0, "06:40"));
+        g.commits(r.journal.commits.slice(before));
+        g.state(r.journal.state);
+      }
+    }),
+  templateInvalidCandidates: () =>
+    goldenScenario((g) => {
+      const registered = registerDefinition(occurrenceConsumerDeps("goldtplcand"), {
+        draft: definitionDraft({
+          activation: dailyActivation({ misfire: { kind: "catch_up_bounded", maxCatchUp: 2 } }),
+          maxOpenOccurrences: 2,
+          template: [templateDraft("consumer", { type: OCCURRENCE_CONSUMER, input: {} })],
+        }),
+      });
+      const j = new WorkflowJournal(
+        { ...registered.journal.deps, registries: testRegistries() },
+        registered.journal.state,
+        registered.journal.commits,
+      );
+      const before = j.commits.length;
+      g.outcome(j.resolveDue(registered.definitionId, dayAt(1)));
+      g.commits(j.commits.slice(before));
+      g.state(j.state);
+    }),
+};
+
+const GOLDEN_DIGESTS: Record<string, string> = {
+  tour: "6dda0185f5ce3f2fedd08351ada49317121caf2dc2cc6e15242aa482ef1a72bd",
+  misfire: "947195d28a24260275cb7cfe5a0f835b5e9109008ea461bbfbfee320d7d503fc",
+  signalExhaustion: "6c57f3c838bf92a43c224902212796546d85f4fb27693f2bf6428058e6f22561",
+  stewardCancel: "991559d1b9275b0d5a80c667adb75c9f40a8cc066d3865eab4748bca7f1ceef5",
+  amendment: "3d024dda48c811d928cd9d7c9a0dceca75eb5fd3ccf2bed2dff387a9705b6da6",
+  signalRecords: "28f149b201b4ad45ecfba838465f8a6fd59a8edfb42dbeac1620b47fd96ec942",
+  taskSignal: "70d169571c7819a85f6a49abe5e5d665a652dce0962f3ae07abb2144d73fa69c",
+  templateDrift: "75b165a8bcd853983118d40e40e0682b9aec9c1683f47a63a6c406148ead3260",
+  commandMeta: "af6336e32119162ac4721be203997d643a070d5a9e6dbc0c348cbb0c536e7328",
+  overdueResume: "5516710cfcdf3c3ac9e62a72141479cabe4efed34fdf7b1dd192680302745508",
+  signalRelease: "16cb925d085cc4c9d398843db25fb4a44ee18a8876047c14b1715d84fd810f9d",
+  releaseExhaustion: "345d8d35355d70af4e7806418d58820488a5cbcf729fba05e808e714f2ba24ad",
+  stewardReplan: "35f609e092768ac6a4281293fb7b48677fdbaa289cb673f145849ff7edac749e",
+  exhaustionWithdrawsAmendment: "57729189361c4018ce489350a408b7b73c8e352e0411db7ecace5ac112600ac6",
+  commandRejections: "368fe7cb7f9dea5a7c97c0976d4236776b9ae494ca498adb171dfa0f09e33514",
+  heldPolicies: "1c8175d3c0997d48af7c94c7b836df3c12455c455c2f1c0b704f0d8586aae339",
+  amendmentSearch: "a7cc01b738f060081286df67fed382d7513c892f4a384955e8bc8c060888b7ee",
+  amendHeldSignals: "21c3ee0b4213664dc0937839f64cc4816bc140f34eabf7c798976069fb23135c",
+  templateInvalidCandidates: "c336b6461ec8aeaee5139fe57ef2e24a61a6224856ba76225f7056ef46620d41",
+};
+
+describe("SC-023·SC-063: 정의 흐름 커밋 전체 형태(공용 판별 입력)", () => {
+  for (const [name, scenario] of Object.entries(GOLDEN_SCENARIOS)) {
+    it(`Edge: 시나리오 ${name} 의 커밋 투영 digest 가 고정값이다 (test_SC023_definition_flow_projection_${name})`, () => {
+      const projection = scenario().join("\n");
+      expect(sha256Hex(projection), projection).toBe(GOLDEN_DIGESTS[name]);
+    });
+  }
+});
+
+// ---- 반복 정의·회차 판정의 입력 경계 — 전체 mutation 실행이 생존·미커버로 지목한 조건 ----
+
+describe("SC-052·SC-053: 재계산 입력 형식의 경계", () => {
+  it("Error: 앞뒤 군더더기·범위 밖 시각은 거절되고 초 단독·짧은 밀리초는 정확히 읽는다 (test_SC052_local_input_format_boundaries)", () => {
+    const kindOf = (localDate: string, localTime: string): string => {
+      const result = localToUtc({ localDate, localTime, timeZone: "UTC" });
+      return result.ok ? result.value.kind : result.error.kind;
+    };
+    expect(kindOf("x2026-03-01", "07:00")).toBe("local_date_invalid");
+    expect(kindOf("2026-03-01x", "07:00")).toBe("local_date_invalid");
+    expect(kindOf("2026-02-30", "07:00")).toBe("local_date_invalid");
+    expect(kindOf("2026-03-01", "x07:00")).toBe("local_time_invalid");
+    expect(kindOf("2026-03-01", "07:00x")).toBe("local_time_invalid");
+    expect(kindOf("2026-03-01", "24:00")).toBe("local_time_invalid");
+    expect(kindOf("2026-03-01", "07:60")).toBe("local_time_invalid");
+    expect(kindOf("2026-03-01", "07:00:60")).toBe("local_time_invalid");
+    // 대조: 같은 날짜의 정상 시각은 정확히 하나다.
+    const exactOf = (localTime: string) =>
+      localToUtc({ localDate: "2026-03-01", localTime, timeZone: "UTC" });
+    expect(exactOf("07:00:30")).toEqual({
+      ok: true,
+      value: { kind: "exact", utc: "2026-03-01T07:00:30.000Z" },
+    });
+    expect(exactOf("07:00:00.5")).toEqual({
+      ok: true,
+      value: { kind: "exact", utc: "2026-03-01T07:00:00.500Z" },
+    });
+    expect(exactOf("07:00:00.05")).toEqual({
+      ok: true,
+      value: { kind: "exact", utc: "2026-03-01T07:00:00.050Z" },
+    });
+    expect(exactOf("23:59:59.999")).toEqual({
+      ok: true,
+      value: { kind: "exact", utc: "2026-03-01T23:59:59.999Z" },
+    });
+  });
+});
+
+describe("SC-010·SC-045: 활성화 판독(형태·descriptor)의 경계", () => {
+  it("Error: 형태가 어긋난 활성화는 판독하지 않고 미등록 활성화는 어느 종류도 아니다 (test_SC010_activation_view_shape_boundaries)", () => {
+    const registries = definitionDeps("killview").registries;
+    const daily = dailyActivation() as unknown as Record<string, unknown>;
+    const signal = signalActivation() as unknown as Record<string, unknown>;
+    const asSpec = (raw: Record<string, unknown>) => raw as unknown as TriggerSpec;
+    expect(scheduleActivationView(asSpec(daily))).toEqual({
+      triggerId: "daily",
+      timezone: "UTC",
+      misfire: { kind: "fire_once_now" },
+      recurrence: daily["recurrence"],
+    });
+    for (const broken of [
+      { ...daily, triggerId: 1 },
+      { ...daily, timezone: 1 },
+      { ...daily, misfire: null },
+      { ...daily, misfire: "skip" },
+      { ...daily, recurrence: null },
+      { ...daily, recurrence: "test-daily 07:00" },
+    ]) {
+      expect(scheduleActivationView(asSpec(broken))).toBeUndefined();
+    }
+    expect(signalActivationView(asSpec(signal))).toEqual({
+      triggerId: "on_signal",
+      sourceId: "fixture_source",
+      signal: "fixture_ready",
+    });
+    for (const broken of [
+      { ...signal, triggerId: 1 },
+      { ...signal, sourceId: 1 },
+      { ...signal, signal: 1 },
+    ]) {
+      expect(signalActivationView(asSpec(broken))).toBeUndefined();
+    }
+    // descriptor 판독: kind·version 형태가 어긋나거나 미등록이면 어느 종류도 아니고 던지지 않는다.
+    expect(isScheduleActivation(registries, asSpec(daily))).toBe(true);
+    expect(isSignalActivation(registries, asSpec(signal))).toBe(true);
+    expect(isScheduleActivation(registries, asSpec(signal))).toBe(false);
+    expect(isSignalActivation(registries, asSpec(daily))).toBe(false);
+    for (const broken of [
+      { ...daily, kind: 1 },
+      { ...daily, version: "1" },
+      { ...daily, kind: "unregistered" },
+    ]) {
+      expect(isScheduleActivation(registries, asSpec(broken))).toBe(false);
+      expect(isSignalActivation(registries, asSpec({ ...signal, ...broken }))).toBe(false);
+    }
+    const { recurrence: _omit, ...noRecurrence } = daily;
+    void _omit;
+    expect(isScheduleActivation(registries, asSpec(noRecurrence))).toBe(false);
+  });
+});
+
+describe("SC-041: 반복 전개 포트 출력 계약의 검사", () => {
+  function portedJournal(seed: string, port: RecurrenceExpander) {
+    const registered = registerDefinition(definitionDeps(seed));
+    const journal = new WorkflowJournal(
+      { ...registered.journal.deps, recurrence: port },
+      registered.journal.state,
+      registered.journal.commits,
+    );
+    return { journal, definitionId: registered.definitionId };
+  }
+  function stepping(
+    override: (step: { scheduledForUtc: unknown; recurrenceIndex: unknown }) => unknown,
+  ): RecurrenceExpander {
+    return {
+      firstAtOrAfter: (activation, atOrAfter) => {
+        const real = testDailyRecurrence.firstAtOrAfter(activation, atOrAfter);
+        return real === undefined ? undefined : (override(real) as never);
+      },
+      periodOf: (activation, at) => testDailyRecurrence.periodOf(activation, at),
+    };
+  }
+
+  it("Error: 정규 표기 아님·질의보다 이름·0 이상 안전 정수 아닌 번호·빈 주기 키는 불변식 위반이다 (test_SC041_recurrence_port_output_contract_enforced)", () => {
+    const broken: Record<string, RecurrenceExpander> = {
+      notCanonical: stepping((s) => ({
+        ...s,
+        scheduledForUtc: String(s.scheduledForUtc).replace(".000Z", "Z"),
+      })),
+      notString: stepping((s) => ({
+        ...s,
+        scheduledForUtc: Date.parse(String(s.scheduledForUtc)),
+      })),
+      earlier: stepping((s) => ({ ...s, scheduledForUtc: "2026-02-01T07:00:00.000Z" })),
+      indexString: stepping((s) => ({ ...s, recurrenceIndex: String(s.recurrenceIndex) })),
+      indexFraction: stepping((s) => ({ ...s, recurrenceIndex: 1.5 })),
+      indexNegative: stepping((s) => ({ ...s, recurrenceIndex: -1 })),
+      emptyPeriod: {
+        firstAtOrAfter: (a, t) => testDailyRecurrence.firstAtOrAfter(a, t),
+        periodOf: () => "",
+      },
+      numberPeriod: {
+        firstAtOrAfter: (a, t) => testDailyRecurrence.firstAtOrAfter(a, t),
+        periodOf: () => 7 as unknown as string,
+      },
+    };
+    for (const [name, port] of Object.entries(broken)) {
+      const { journal, definitionId } = portedJournal(`killport${name.toLowerCase()}`, port);
+      // 첫 회차 해소는 다음 대기 행을 포트로 전개한다. 주기 키는 개정 재예약이 읽는다.
+      const act = () =>
+        name.endsWith("Period")
+          ? (() => {
+              journal.resolveDue(definitionId, dayAt(0));
+              return journal.amend(
+                definitionId,
+                { activation: dailyActivation({ localTime: "09:00" }) },
+                dayAt(0, "08:00"),
+              );
+            })()
+          : journal.resolveDue(definitionId, dayAt(0));
+      // 포트 출력 검사가 직접 잡는다 — 뒤 단계(occurrence 파생·개정 탐색 상한)의 실패로 대신 걸리지 않는다.
+      const message = name.startsWith("index")
+        ? /회차 번호/
+        : name.endsWith("Period")
+          ? /주기 키/
+          : name === "earlier"
+            ? /보다 이른 회차/
+            : /정규 UTC 표기가 아닌/;
+      let thrown: unknown;
+      try {
+        act();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown, name).toBeInstanceOf(DomainInvariantError);
+      expect((thrown as Error).message, name).toMatch(message);
+    }
+    // 대조: 같은 경로를 정상 포트로 돌리면 던지지 않는다.
+    const { journal, definitionId } = portedJournal("killportok", testDailyRecurrence);
+    expect(journal.resolveDue(definitionId, dayAt(0)).kind).toBe("committed");
+    expect(
+      journal.amend(
+        definitionId,
+        { activation: dailyActivation({ localTime: "09:00" }) },
+        dayAt(0, "08:00"),
+      ).kind,
+    ).toBe("accepted");
+  });
+
+  it("Edge: 포트가 계열 끝(undefined)을 내면 대기 행 없이 생성 커밋에서 중지하고 다음 회차가 없다 (test_SC041_port_series_end_stops_at_creation_and_after_resolution)", () => {
+    const ended: RecurrenceExpander = {
+      firstAtOrAfter: () => undefined,
+      periodOf: (a, t) => testDailyRecurrence.periodOf(a, t),
+    };
+    const created = registerDefinition(definitionDeps("killportend", undefined, ended));
+    expect(created.journal.definition(created.definitionId).state).toBe("STOPPED");
+    expect(created.journal.definition(created.definitionId).pendingSchedule).toBeUndefined();
+    // 첫 회차 뒤 포트가 끝을 내면 그 해소 커밋에서 다음 대기 행이 없다(null).
+    const { journal, definitionId } = portedJournal("killportendafter", {
+      firstAtOrAfter: (a, t) =>
+        Date.parse(t) <= Date.parse(dayAt(0))
+          ? testDailyRecurrence.firstAtOrAfter(a, t)
+          : undefined,
+      periodOf: (a, t) => testDailyRecurrence.periodOf(a, t),
+    });
+    const outcome = journal.resolveDue(definitionId, dayAt(0));
+    expect(outcome.kind).toBe("committed");
+    const fired =
+      "commit" in outcome
+        ? outcome.commit.events.find((e) => e.type === "trigger_fired")
+        : undefined;
+    expect((fired?.payload as unknown as Record<string, unknown>)["nextSchedule"]).toBeNull();
+  });
+
+  it("Error: 개정 탐색이 주기 필터로 끝없이 넘기면 탐색 상한에서 불변식 위반이다 (test_SC041_amendment_search_limit_enforced)", () => {
+    const { journal, definitionId } = portedJournal("killportloop", {
+      firstAtOrAfter: (a, t) => testDailyRecurrence.firstAtOrAfter(a, t),
+      periodOf: () => "same-period",
+    });
+    journal.resolveDue(definitionId, dayAt(0));
+    expect(() =>
+      journal.amend(
+        definitionId,
+        { activation: dailyActivation({ localTime: "09:00" }) },
+        dayAt(0, "08:00"),
+      ),
+    ).toThrow(DomainInvariantError);
+  });
+
+  it("Edge: 탐색 상한은 정확히 1만 후보다 — 1만째 후보에서 주기가 바뀌면 찾고 1만 1째면 던진다 (test_SC041_amendment_search_limit_exact)", () => {
+    const amendWithBoundary = (seed: string, boundary: UtcInstant) => {
+      const { journal, definitionId } = portedJournal(seed, {
+        firstAtOrAfter: (a, t) => testDailyRecurrence.firstAtOrAfter(a, t),
+        periodOf: (_a, t) => (Date.parse(t) < Date.parse(boundary) ? "p0" : t),
+      });
+      journal.resolveDue(definitionId, dayAt(0));
+      return () =>
+        journal.amend(
+          definitionId,
+          { activation: dailyActivation({ localTime: "09:00" }) },
+          dayAt(0, "08:00"),
+        );
+    };
+    // 후보 k 는 dayAt(k, 09:00) — 0..9999 가 상한 안이다.
+    expect(amendWithBoundary("killsearch9999", dayAt(9999, "09:00"))().kind).toBe("accepted");
+    expect(amendWithBoundary("killsearch10000", dayAt(10000, "09:00"))).toThrow(
+      DomainInvariantError,
+    );
+  });
+
+  it("Edge: 커밋 시각이 회차 시각과 같으면 그 회차가 첫 대기 행이다 (test_SC041_first_row_at_exact_commit_instant)", () => {
+    const r = registerDefinition(definitionDeps("killexactfirst"), { now: dayAt(0) });
+    expect(r.journal.definition(r.definitionId).pendingSchedule?.scheduledForUtc).toBe(dayAt(0));
+  });
+});
+
+describe("SC-034: 정의 제어 신호 판독의 경계", () => {
+  it("Error: 동작·식별·채널 형태가 어긋난 제어 신호는 수용되지 않고 정의가 그대로다 (test_SC034_control_signal_input_boundaries)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("killctlinput"));
+    const id = r.definitionId;
+    const base = () =>
+      controlSignal(r.journal.deps, {
+        definitionId: id,
+        expectedRevision: r.journal.definition(id).revision,
+        action: "pause",
+        channel: "control_request",
+        receivedAt: dayAt(0, "08:00"),
+      });
+    const judge = (signal: unknown) =>
+      judgeDefinitionSignal(r.journal.deps, r.journal.state, signal as never, dayAt(0, "08:00"));
+    const label = (j: { kind: string; reason?: string; rejection?: { reason: string } }) =>
+      j.kind === "not_applicable" ? `na:${j.rejection?.reason}` : `${j.kind}:${j.reason ?? ""}`;
+    const before = r.journal.definition(id);
+    expect(label(judge({ ...base(), action: "explode" }))).toBe("na:invalid_input");
+    expect(label(judge({ ...base(), definitionId: "wdf_unknowndef" }))).toBe("na:unknown_subject");
+    const ctl = base().channel as unknown as Record<string, unknown>;
+    // 채널 종류가 제어 요청이 아니면 ctl_ ID·keyId 가 있어도 인증 요청이 아니다.
+    expect(label(judge({ ...base(), channel: { ...ctl, kind: "markdown" } }))).toBe(
+      "rejected:provenance_not_human",
+    );
+    // 요청 ID 가 없으면 던지지 않고 사람 아님이다.
+    const { controlRequestId: _drop, ...noId } = ctl;
+    void _drop;
+    expect(label(judge({ ...base(), channel: noId }))).toBe("rejected:provenance_not_human");
+    expect(r.journal.definition(id)).toEqual(before);
+    // 대조: 형태가 맞는 같은 요청은 수용된다.
+    expect(label(judge(base()))).toBe("accepted:");
+  });
+
+  it("Edge: 노트 출처 전이 출처는 요청 필드를 싣지 않고 신호 행위자는 envelope 에 실린다 (test_SC034_vault_origin_has_no_request_fields_and_actor_carried)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("killctlorigin"));
+    const signal = {
+      ...controlSignal(r.journal.deps, {
+        definitionId: r.definitionId,
+        expectedRevision: r.journal.definition(r.definitionId).revision,
+        action: "pause",
+        receivedAt: dayAt(0, "08:00"),
+      }),
+      actor: { kind: "human", id: "owner" },
+    };
+    const judged = r.journal.signal(signal as never, dayAt(0, "08:00"));
+    expect(judged.kind).toBe("accepted");
+    const commit = "commit" in judged ? judged.commit : undefined;
+    const paused = commit?.events.find((e) => e.type === "work_definition_paused");
+    const origin = (paused?.payload as unknown as { pauseOrigin: Record<string, unknown> })
+      .pauseOrigin;
+    expect(Object.keys(origin).sort()).toEqual(["actorSource", "kind", "signalId"]);
+    expect(
+      commit?.events.every((e) => (e as unknown as { actor?: unknown }).actor !== undefined),
+    ).toBe(true);
+    // 대조: 행위자 없는 신호의 envelope 에는 행위자 키가 없다.
+    const resumed = r.journal.control(r.definitionId, "resume", dayAt(0, "09:00"));
+    const resumeCommit = "commit" in resumed ? resumed.commit : undefined;
+    expect(resumeCommit?.events.some((e) => "actor" in e)).toBe(false);
+  });
+
+  it("Edge: 대기 행 시각에 정확히 재개하면 지연 표식이고 대기 행 없는 신호 정의 재개는 표식 없이 수용된다 (test_SC036_resume_overdue_boundary_and_signal_definition)", () => {
+    const r = registerDefinition(definitionDeps("killresumeedge"));
+    r.journal.control(r.definitionId, "pause", dayAt(-1, "13:00"));
+    const atDue = r.journal.control(r.definitionId, "resume", dayAt(0));
+    const resumedAt =
+      "commit" in atDue
+        ? atDue.commit.events.find((e) => e.type === "work_definition_resumed")
+        : undefined;
+    expect(
+      (resumedAt?.payload as unknown as Record<string, unknown>)["pendingScheduleOverdue"],
+    ).toBe(true);
+    const s = registerDefinition(definitionDeps("killresumesig"), {
+      draft: signalDefinitionDraft(),
+    });
+    s.journal.control(s.definitionId, "pause", dayAt(0));
+    const signalResume = s.journal.control(s.definitionId, "resume", dayAt(0, "08:00"));
+    expect(signalResume.kind).toBe("accepted");
+    const resumedSig =
+      "commit" in signalResume
+        ? signalResume.commit.events.find((e) => e.type === "work_definition_resumed")
+        : undefined;
+    expect(
+      (resumedSig?.payload as unknown as Record<string, unknown>)["pendingScheduleOverdue"],
+    ).toBe(false);
+  });
+});
+
+describe("SC-023: 정의 명령의 진입 포착과 입력 경계", () => {
+  it("Error: 명령 meta 는 한 번만 읽고 객체가 아닌 meta·모르는 명령은 커밋하지 않는다 (test_SC023_definition_command_meta_captured_once)", () => {
+    const r = registerDefinition(definitionDeps("killcmdmeta"));
+    const pending = r.journal.definition(r.definitionId).pendingSchedule;
+    if (pending === undefined) throw new Error("no pending schedule");
+    const reads: Record<string, number> = {};
+    const counted = (key: string, value: unknown) => ({
+      get: () => {
+        reads[key] = (reads[key] ?? 0) + 1;
+        return value;
+      },
+      enumerable: true,
+    });
+    const metaObject = Object.defineProperties(
+      {},
+      {
+        now: counted("now", dayAt(0)),
+        actorSource: counted("actorSource", "adde_self"),
+        actor: counted("actor", { kind: "system", id: "sched" }),
+        causationId: counted("causationId", entityId("event", "evt_metacause")),
+      },
+    );
+    const outcome = executeDefinitionCommand(r.journal.deps, r.journal.state, {
+      kind: "resolve_due_schedule",
+      definitionId: r.definitionId,
+      occurrenceId: pending.occurrenceId,
+      meta: metaObject,
+    } as never);
+    expect(outcome.kind).toBe("committed");
+    expect(reads).toEqual({ now: 1, actorSource: 1, actor: 1, causationId: 1 });
+    // 객체가 아닌 meta 는 복사하지 않고 그대로 읽어 던진다(커밋하지 않는다).
+    expect(() =>
+      executeDefinitionCommand(r.journal.deps, r.journal.state, {
+        kind: "resolve_due_schedule",
+        definitionId: r.definitionId,
+        occurrenceId: pending.occurrenceId,
+        meta: null,
+      } as never),
+    ).toThrow(TypeError);
+    const unknown = executeDefinitionCommand(r.journal.deps, r.journal.state, {
+      kind: "rewind",
+      meta: meta(dayAt(0)),
+    } as never);
+    expect(unknown).toEqual({
+      kind: "rejected",
+      rejection: { reason: "invalid_input", detail: "unknown_command" },
+    });
+  });
+
+  it("Error: 정의 신호 진입은 대상이 객체가 아니거나 Task 대상이면 적용하지 않는다 (test_SC045_definition_signal_entry_subject_checks)", () => {
+    const r = registerDefinition(definitionDeps("killsigentry"), {
+      draft: signalDefinitionDraft(),
+    });
+    const ext = externalSignal(r.journal.deps, {
+      subject: { definitionId: r.definitionId },
+      sourceOccurrenceId: "e-1",
+    });
+    const judge = (signal: unknown) =>
+      judgeDefinitionSignal(r.journal.deps, r.journal.state, signal as never, dayAt(0));
+    expect(judge({ ...ext, subject: null })).toEqual({
+      kind: "not_applicable",
+      rejection: { reason: "invalid_input" },
+    });
+    expect(judge({ ...ext, subject: "wdf" })).toEqual({
+      kind: "not_applicable",
+      rejection: { reason: "invalid_input" },
+    });
+    expect(judge({ ...ext, subject: { taskId: "tsk_x" } })).toEqual({
+      kind: "not_applicable",
+      rejection: { reason: "invalid_input", detail: "task_subject_not_definition_signal" },
+    });
+    expect(judge({ ...ext, type: "unknown_type" })).toEqual({
+      kind: "not_applicable",
+      rejection: { reason: "invalid_input" },
+    });
+    expect(judge({ ...ext, subject: { definitionId: "wdf_unknowndef" } })).toEqual({
+      kind: "not_applicable",
+      rejection: { reason: "unknown_subject" },
+    });
+    expect(judge({ ...ext, sourceOccurrenceId: "" })).toEqual({
+      kind: "not_applicable",
+      rejection: { reason: "invalid_input" },
+    });
+    expect(judge({ ...ext, payload: { bad: Number.NaN } })).toEqual({
+      kind: "not_applicable",
+      rejection: { reason: "invalid_input" },
+    });
+    // 대조: 형태가 맞는 같은 신호는 수용된다.
+    expect(judge(ext).kind).toBe("accepted");
+  });
+});
+
+describe("SC-046: Task 대상 외부 신호 진입의 경계", () => {
+  it("Error: Task ID 가 문자열이 아니거나 없는 Task·예약 Trigger Task 는 수용되지 않는다 (test_SC046_task_signal_entry_boundaries)", () => {
+    const listenerTrigger = {
+      kind: "signal",
+      version: 1,
+      triggerId: "listener",
+      sourceId: "fixture_source",
+      signal: "fixture_ready",
+    } as unknown as TriggerSpec;
+    const { journal, ids } = startJournal(
+      [draft("listener", { trigger: listenerTrigger }), draft("timed")],
+      definitionDeps("killtaskentry"),
+    );
+    const listener = ids["listener"] as TaskId;
+    const timed = ids["timed"] as TaskId;
+    validate(journal, listener);
+    validate(journal, timed);
+    const ext = (subject: unknown, overrides: Record<string, unknown> = {}) => ({
+      ...externalSignal(journal.deps, { subject: { taskId: listener }, sourceOccurrenceId: "t-1" }),
+      subject,
+      ...overrides,
+    });
+    const judge = (signal: unknown) =>
+      judgeTaskExternalSignal(journal.deps, journal.aggregate, signal as never, KILL_NOW);
+    const label = (j: { kind: string; reason?: string; rejection?: { reason: string } }) =>
+      j.kind === "not_applicable" ? `na:${j.rejection?.reason}` : `${j.kind}:${j.reason ?? ""}`;
+    expect(label(judge(ext({ taskId: 7 })))).toBe("na:invalid_input");
+    expect(label(judge(ext({ taskId: "tsk_notinwork" })))).toBe("na:unknown_subject");
+    expect(label(judge(ext({ taskId: listener }, { sourceOccurrenceId: "" })))).toBe(
+      "na:invalid_input",
+    );
+    expect(label(judge(ext({ taskId: listener }, { payload: { bad: Number.NaN } })))).toBe(
+      "na:invalid_input",
+    );
+    expect(label(judge(ext({ taskId: timed })))).toBe("rejected:trigger_mismatch");
+    expect(label(judge(ext({ taskId: listener }, { sourceId: "other_source" })))).toBe(
+      "rejected:trigger_mismatch",
+    );
+    expect(label(judge(ext({ taskId: listener })))).toBe("accepted:");
+  });
+});
+
+describe("SC-016·SC-018: 중지된 정의의 관리 Work 파생 상태", () => {
+  it("Edge: 정의가 중지된 관리 Work 의 새 계획은 member 가 시작 전이면 READY 다 (test_SC018_stopped_steward_new_plan_derives_ready)", () => {
+    const r = registerDefinition(definitionDeps("killstopready"), { tasks: STEWARD_MEMBER });
+    r.journal.control(r.definitionId, "stop", dayAt(0, "08:00"));
+    const steward = r.stewardId;
+    expect(r.journal.work(steward).work.state).toBe("ACTIVE");
+    r.journal.ensurePlanning(steward, dayAt(0, "09:00"));
+    const committed = r.journal.commitPlan(
+      steward,
+      r.journal.replanBase(steward, { tasks: [templateDraft("added")] }),
+      dayAt(0, "09:00"),
+    );
+    expect(committed.kind).toBe("committed");
+    expect(r.journal.work(steward).work.state).toBe("READY");
+    // 대조: 살아 있는 정의의 같은 계획은 ACTIVE 다(정의가 진행을 붙든다).
+    const live = registerDefinition(definitionDeps("killliveactive"), { tasks: STEWARD_MEMBER });
+    live.journal.ensurePlanning(live.stewardId, dayAt(0, "09:00"));
+    live.journal.commitPlan(
+      live.stewardId,
+      live.journal.replanBase(live.stewardId, { tasks: [templateDraft("added")] }),
+      dayAt(0, "09:00"),
+    );
+    expect(live.journal.work(live.stewardId).work.state).toBe("ACTIVE");
+  });
+});
+
+describe("SC-008·SC-009·SC-010: 정의 초안 형태 판독의 경계", () => {
+  it("Error: 객체·키·필드 형태가 어긋난 초안은 draft_malformed 하나이고 수치 필드는 각자의 사유다 (test_SC010_definition_draft_shape_boundaries)", () => {
+    const deps = definitionDeps("killdraftshape");
+    const reasons = (content: unknown): string[] =>
+      definitionInvalidReasons(issuesOf(proposeDraft(deps, content).outcome));
+    const base = definitionDraft();
+    const validAmends = { definitionId: "wdf_someother", expectedRevision: 1 };
+    const malformed: Record<string, unknown> = {
+      nullDraft: null,
+      arrayDraft: [base],
+      stringDraft: "draft",
+      extraKey: { ...base, extra: 1 },
+      missingTitle: (() => {
+        const { title: _t, ...rest } = base;
+        void _t;
+        return rest;
+      })(),
+      titleNumber: { ...base, title: 5 },
+      templateString: { ...base, template: "digest" },
+      amendsString: { ...base, amends: "wdf_x" },
+      amendsThreeKeys: { ...base, amends: { ...validAmends, extra: 1 } },
+      amendsNoDefinitionId: { ...base, amends: { other: "wdf_x", expectedRevision: 1 } },
+      amendsNoRevision: { ...base, amends: { definitionId: "wdf_x", other: 1 } },
+      amendsIdNumber: { ...base, amends: { definitionId: 5, expectedRevision: 1 } },
+      amendsIdFormat: { ...base, amends: { definitionId: "wrk_notadef", expectedRevision: 1 } },
+      amendsRevisionString: { ...base, amends: { ...validAmends, expectedRevision: "1" } },
+      amendsRevisionFraction: { ...base, amends: { ...validAmends, expectedRevision: 1.5 } },
+      amendsRevisionNegative: { ...base, amends: { ...validAmends, expectedRevision: -1 } },
+    };
+    for (const [name, content] of Object.entries(malformed)) {
+      expect(reasons(content), name).toEqual(["draft_malformed"]);
+    }
+    // 대조: 형태가 맞는 개정(0 revision 포함)은 형태를 통과해 관리 여부 판정에 이른다.
+    expect(reasons({ ...base, amends: validAmends })).toEqual(["amends_not_steward"]);
+    expect(reasons({ ...base, amends: { ...validAmends, expectedRevision: 0 } })).toEqual([
+      "amends_not_steward",
+    ]);
+    for (const value of [0, 1.5, "1"]) {
+      expect(reasons({ ...base, maxOpenOccurrences: value }), String(value)).toEqual([
+        "max_open_occurrences_invalid",
+      ]);
+    }
+    expect(reasons(signalDefinitionDraft({ maxOccurrences: 0 }))).toEqual([
+      "max_occurrences_invalid",
+    ]);
+    expect(reasons({ ...base, maxOccurrences: 2 })).toEqual(["max_occurrences_not_allowed"]);
+    expect(reasons({ ...base, activation: { ...dailyActivation(), kind: 5 } })).toEqual([
+      "activation_descriptor_unknown",
+    ]);
+    expect(reasons({ ...base, activation: { ...dailyActivation(), version: "1" } })).toEqual([
+      "activation_descriptor_unknown",
+    ]);
+    expect(reasons({ ...base, activation: "daily" })).toEqual(["activation_descriptor_unknown"]);
+    expect(reasons(base)).toEqual([]);
+  });
+
+  it("Edge: 정규화한 초안·생성 정의는 없는 선택 필드의 키를 싣지 않는다 (test_SC006_normalized_draft_omits_absent_optional_keys)", () => {
+    const r = registerDefinition(definitionDeps("killdraftkeys"));
+    const proposed = r.commits
+      .flatMap((c) => c.events)
+      .find((e) => e.type === "work_plan_proposed");
+    const created = r.grant.events.find((e) => e.type === "work_definition_created");
+    const proposedDefinition = (
+      proposed?.payload as unknown as { proposal: { definition: Record<string, unknown> } }
+    ).proposal.definition;
+    const createdDefinition = (
+      created?.payload as unknown as { definition: Record<string, unknown> }
+    ).definition;
+    for (const record of [proposedDefinition, createdDefinition]) {
+      expect(Object.hasOwn(record, "amends")).toBe(false);
+      expect(Object.hasOwn(record, "maxOccurrences")).toBe(false);
+    }
+    // 대조: 신호 정의의 최대 회차 수는 키로 실린다.
+    const s = registerDefinition(definitionDeps("killdraftkeyssig"), {
+      draft: signalDefinitionDraft({ maxOccurrences: 4 }),
+    });
+    const sigCreated = s.grant.events.find((e) => e.type === "work_definition_created");
+    expect(
+      (sigCreated?.payload as unknown as { definition: Record<string, unknown> }).definition[
+        "maxOccurrences"
+      ],
+    ).toBe(4);
+  });
+
+  it("Error: 템플릿 출처 제안의 내용·digest 는 계약 입력 그대로이고 정규 JSON 이 아닌 템플릿은 불변식 위반이다 (test_SC024_template_proposal_content_and_digest_inputs)", () => {
+    const r = registerDefinition(definitionDeps("killtplcontent"));
+    const definition = r.journal.definition(r.definitionId);
+    const occurrenceId = definition.pendingSchedule?.occurrenceId;
+    if (occurrenceId === undefined) throw new Error("no pending schedule");
+    const input = {
+      occurrenceId,
+      definitionId: definition.id,
+      definitionRevision: definition.revision,
+      scheduledForUtc: dayAt(0),
+      localDate: "2026-03-01",
+      timezone: "UTC",
+    };
+    const built = buildTemplateProposal(r.journal.deps, definition, {
+      occurrenceId,
+      input,
+    } as never);
+    expect(built.valid).toBe(true);
+    if (!built.valid) return;
+    expect(built.content).toEqual({
+      basePlanRevision: 0,
+      source: "definition_template",
+      tasks: definition.template,
+      retain: [],
+    });
+    expect(built.digest).toBe(
+      independentDigest({
+        source: "definition_template",
+        definitionId: definition.id,
+        definitionRevision: definition.revision,
+        occurrenceId,
+        basePlanRevision: 0,
+        tasks: definition.template,
+        retain: [],
+      }),
+    );
+    expect(() =>
+      templateProposalDigest({
+        definitionId: definition.id,
+        definitionRevision: 1,
+        occurrenceId,
+        tasks: [{ bad: Number.NaN }] as never,
+      }),
+    ).toThrow(DomainInvariantError);
+  });
+});
+
+describe("SC-005·SC-016: 다중 Work 상태와 전체 로그 fold 의 방어 경계", () => {
+  it("Error: 같은 Work 둘·같은 정의를 가진 Work 둘·상태에 없는 회차 Work 는 불변식 위반이다 (test_SC016_workflow_state_invariants_enforced)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("stateinv"));
+    const steward = r.journal.work(r.stewardId);
+    const occurrence = r.journal.work(r.firstWorkId);
+    expect(Object.keys(workflowStateOf([steward, occurrence]).works)).toEqual([
+      r.stewardId,
+      r.firstWorkId,
+    ]);
+    expect(() => workflowStateOf([steward, occurrence, steward])).toThrow(DomainInvariantError);
+
+    const definition = r.journal.definition(r.definitionId);
+    const twin = { ...occurrence, definition };
+    expect(findSteward(withWork(r.journal.state, steward), r.definitionId)).toBe(steward);
+    expect(() => findSteward(withWork(r.journal.state, twin), r.definitionId)).toThrow(
+      DomainInvariantError,
+    );
+
+    expect(openOccurrenceCount(r.journal.state, definition)).toBe(1);
+    const withoutOccurrence = workflowStateOf([steward]);
+    expect(() => openOccurrenceCount(withoutOccurrence, definition)).toThrow(DomainInvariantError);
+  });
+
+  it("Error: 전체 로그 fold 의 실패는 종류·대상 이벤트·사유를 그대로 돌려준다 (test_SC005_fold_errors_carry_kind_and_reason)", () => {
+    const { journal } = registerAndMaterializeFirst(definitionDeps("folderr"));
+    const events = journal.commits.flatMap((c) => c.events);
+    expect(foldWorkflowEvents(events).ok).toBe(true);
+    const multi = journal.commits.find((c) => new Set(c.events.map((e) => e.workId)).size > 1);
+    if (multi === undefined) throw new Error("expected a multi-work commit");
+    const before = journal.commits
+      .slice(0, journal.commits.indexOf(multi))
+      .flatMap((c) => c.events);
+    const [m1, m2] = multi.events;
+    if (m1 === undefined || m2 === undefined) throw new Error("expected two events");
+    const mid = multi.events.slice(2);
+    const foldErr = (stream: readonly unknown[]) => {
+      const folded = foldWorkflowEvents(stream as never);
+      return folded.ok ? "ok" : folded.error;
+    };
+
+    const first = events[0];
+    if (first === undefined) throw new Error("expected events");
+    expect(foldErr([{ ...first, type: "no_such_event" }, ...events.slice(1)])).toEqual({
+      kind: "unknown_event_type",
+      eventId: first.id,
+      type: "no_such_event",
+    });
+    expect(foldErr([{ ...first, schemaVersion: 2 }, ...events.slice(1)])).toEqual({
+      kind: "unsupported_schema_version",
+      eventId: first.id,
+      schemaVersion: 2,
+    });
+    const { workId: _dropped, ...withoutWork } = first;
+    void _dropped;
+    expect(foldErr([withoutWork, ...events.slice(1)])).toEqual({
+      kind: "inconsistent_stream",
+      eventId: first.id,
+      reason: "missing_work_id",
+    });
+
+    const recount = { ...m2, commit: { ...m2.commit, count: m2.commit.count + 1 } };
+    expect(foldErr([...before, m1, recount, ...mid])).toEqual({
+      kind: "malformed_commit",
+      commitId: multi.id,
+      reason: "inconsistent_count",
+    });
+    const reindex = { ...m2, commit: { ...m2.commit, index: 3 } };
+    expect(foldErr([...before, m1, reindex, ...mid])).toEqual({
+      kind: "malformed_commit",
+      commitId: multi.id,
+      reason: "non_consecutive_index",
+    });
+    expect(foldErr([...before, ...multi.events.slice(0, -1)])).toEqual({
+      kind: "malformed_commit",
+      commitId: multi.id,
+      reason: "count_mismatch",
+    });
+
+    // 등록 커밋을 빼면 관리 Work 의 첫 이벤트가 work_created 가 아니다.
+    const registration = journal.commits[0];
+    if (registration === undefined) throw new Error("expected registration");
+    const rest = journal.commits.slice(1).flatMap((c) => c.events);
+    const restFirst = rest[0];
+    if (restFirst === undefined) throw new Error("expected later events");
+    expect(foldErr(rest)).toEqual({
+      kind: "inconsistent_stream",
+      eventId: restFirst.id,
+      reason: "first_event_not_work_created",
+    });
+    // 등록 커밋을 다른 커밋 ID 로 다시 덧붙이면 이미 있는 Work 의 work_created 다.
+    const again = registration.events.map((e) => ({
+      ...e,
+      commit: { ...e.commit, id: "cmt_again000000001" },
+    }));
+    const createdAgain = again.find((e) => e.type === "work_created");
+    if (createdAgain === undefined) throw new Error("expected work_created");
+    expect(foldErr([...events, ...again])).toEqual({
+      kind: "inconsistent_stream",
+      eventId: createdAgain.id,
+      reason: "duplicate_work_created",
+    });
+    // 같은 커밋 안에서 새 Work 의 work_created 가 두 번 나온다.
+    const createdAt = multi.events.findIndex((e) => e.type === "work_created");
+    const created = multi.events[createdAt];
+    if (created === undefined) throw new Error("expected occurrence work_created");
+    const twice = [
+      ...multi.events.slice(0, createdAt + 1),
+      { ...created, id: "evt_twice000000001" },
+      ...multi.events.slice(createdAt + 1),
+    ].map((e, i, all) => ({ ...e, commit: { ...e.commit, index: i + 1, count: all.length } }));
+    expect(foldErr([...before, ...twice])).toEqual({
+      kind: "inconsistent_stream",
+      eventId: "evt_twice000000001",
+      reason: "duplicate_work_created",
+    });
+  });
+});
+
+describe("SC-008·SC-010·SC-011: 정의 초안·회차 출처의 판독 경계", () => {
+  it("Error: 필수 키가 빠지거나 amends 가 null 이면 draft_malformed 하나다 (test_SC010_required_keys_and_null_amends_malformed)", () => {
+    const deps = definitionDeps("killdraftkeys2");
+    const reasons = (content: unknown): string[] =>
+      definitionInvalidReasons(issuesOf(proposeDraft(deps, content).outcome));
+    const base = definitionDraft();
+    for (const key of ["title", "activation", "template", "maxOpenOccurrences"]) {
+      const { [key]: _omitted, ...rest } = base;
+      void _omitted;
+      expect(reasons(rest), key).toEqual(["draft_malformed"]);
+    }
+    expect(reasons({ ...base, amends: null })).toEqual(["draft_malformed"]);
+    expect(reasons(base)).toEqual([]);
+  });
+
+  it("Error: 관리 Work 가 다른 정의를 개정하려는 초안은 amends_not_steward 하나다 (test_SC009_steward_amending_other_definition_not_steward)", () => {
+    const r = registerDefinition(definitionDeps("killamendother"));
+    const other = nextEntityId(r.journal.deps.ids, "workDefinition");
+    r.journal.ensurePlanning(r.stewardId, dayAt(0, "06:00"));
+    const proposeWith = (definitionId: WorkDefinitionId) =>
+      r.journal.propose(
+        r.stewardId,
+        r.journal.replanBase(r.stewardId, {
+          definition: definitionDraft({
+            amends: {
+              definitionId,
+              expectedRevision: r.journal.definition(r.definitionId).revision,
+            },
+          }),
+        }),
+        dayAt(0, "06:00"),
+      );
+    expect(definitionInvalidReasons(issuesOf(proposeWith(other)))).toEqual(["amends_not_steward"]);
+  });
+
+  it("Edge: 템플릿 판정 문맥에는 기준 member 가 없어 Task ID 참조는 미지 의존이다 (test_SC011_template_task_refs_have_no_base_members)", () => {
+    const deps = definitionDeps("killtplbase");
+    // 판정 문맥의 기준 member 목록이 비어 있음을 본다 — 어떤 문자열 참조도(변이 도구의 대체 표식 포함) 기준
+    // member 로 풀리지 않는다.
+    for (const ref of ["tsk_AAAAAAAAAAAAAAAAAAAAAAAAAA", "Stryker was here"]) {
+      const content = definitionDraft({
+        template: [templateDraft("digest", { dependsOn: [{ taskId: ref as TaskId }] })],
+      });
+      const kinds = templateIssues(issuesOf(proposeDraft(deps, content).outcome)).map(
+        (i) => i["kind"],
+      );
+      expect(kinds, ref).toContain("unknown_dependency");
+      expect(kinds, ref).not.toContain("dependency_outside_revision");
+    }
+  });
+
+  it("Error: 명령 경로의 회차 출처 Work 생성과 정의 템플릿 출처 제안은 지정 detail 로 거절된다 (test_SC008_reserved_occurrence_and_template_sources_refused)", () => {
+    const deps = definitionDeps("killreserved");
+    const projectId = mustOk(parseProjectId("prj_reservedsource"));
+    const create = (source: unknown) =>
+      createWork(deps, {
+        kind: "create_work",
+        meta: meta(DEF_NOW),
+        projectId,
+        title: "t",
+        objective: "t",
+        source,
+      } as never);
+    expect(
+      create({
+        kind: "definition_occurrence",
+        definitionId: "wdf_AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        definitionRevision: 1,
+        occurrenceId: "occ_AAAAAAAAAAAAAAAAAAAAAAAAAA",
+        input: {},
+      }),
+    ).toEqual({
+      kind: "rejected",
+      rejection: {
+        reason: "invalid_input",
+        detail: "definition_occurrence_by_materialization_only",
+      },
+    });
+    expect(create({ kind: "markdown", documentId: "doc-x" }).kind).toBe("committed");
+
+    const { journal, workId } = markdownWorkInPlanning(definitionDeps("killreservedplan"));
+    const propose = (source: string) =>
+      journal.propose(
+        workId,
+        { basePlanRevision: 0, source, tasks: [], retain: [] } as never,
+        DEF_NOW,
+      );
+    expect(propose("definition_template")).toEqual({
+      kind: "rejected",
+      rejection: { reason: "invalid_input", detail: "definition_template_source_reserved" },
+    });
+  });
+});
+
+describe("SC-048: schedule_task 의 계약 입력 재계산 — Task 기록 패치 경계", () => {
+  const LISTENER = {
+    kind: "signal",
+    version: 1,
+    triggerId: "listener",
+    sourceId: FIXTURE_SIGNAL_SOURCE,
+    signal: FIXTURE_SIGNAL_NAME,
+  } as unknown as TriggerSpec;
+  const AT_FIRE = at("2026-01-01T01:00:00Z");
+
+  function readyTasks(seed: string) {
+    const { journal, ids } = startJournal(
+      [
+        draft("timed", { trigger: atTrigger("timed", { kind: "skip" }) }),
+        draft("listener", { trigger: LISTENER }),
+        draft("retry"),
+      ],
+      testDeps(seed),
+    );
+    for (const ref of ["timed", "listener", "retry"]) validate(journal, ids[ref] as TaskId);
+    return {
+      journal,
+      timed: ids["timed"] as TaskId,
+      listener: ids["listener"] as TaskId,
+      retry: ids["retry"] as TaskId,
+    };
+  }
+  const scheduleId = (taskId: TaskId, triggerId = "timed") =>
+    mustOk(
+      deriveOccurrenceId({
+        kind: "schedule",
+        ownerId: taskId,
+        triggerId,
+        scheduledForUtc: AT_FIRE,
+        recurrenceIndex: 0,
+      }),
+    );
+  const schedule = (
+    journal: Journal,
+    taskId: TaskId,
+    occurrenceId: string,
+    cause: "schedule" | "external_signal" | "retry",
+  ) =>
+    taskCommand(journal.deps, journal.aggregate, taskId, {
+      kind: "schedule_task",
+      occurrenceId: occurrenceId as never,
+      cause,
+    });
+  const condition = (detail: string) => ({
+    kind: "rejected",
+    rejection: { reason: "condition_not_met", detail },
+  });
+
+  it("Error: 예정 시각이 문자열이 아닌 기록은 occurrence_id_mismatch, 파생 불가 Trigger ID 는 불변식 위반이다 (test_SC048_patched_schedule_record_refused_or_invariant)", () => {
+    const { journal, timed } = readyTasks("killtaskrec1");
+    const trigger = journal.task(timed).trigger as unknown as Record<string, unknown>;
+    const valid = scheduleId(timed);
+    const nonString = patchTask(journal.aggregate, timed, {
+      trigger: { ...trigger, scheduledForUtc: 5 } as never,
+    });
+    expect(
+      taskCommand(journal.deps, nonString, timed, {
+        kind: "schedule_task",
+        occurrenceId: valid,
+        cause: "schedule",
+      }),
+    ).toEqual(condition("occurrence_id_mismatch"));
+    const badTriggerId = patchTask(journal.aggregate, timed, {
+      trigger: { ...trigger, triggerId: "" } as never,
+    });
+    expect(() =>
+      taskCommand(journal.deps, badTriggerId, timed, {
+        kind: "schedule_task",
+        occurrenceId: valid,
+        cause: "schedule",
+      }),
+    ).toThrow(DomainInvariantError);
+    // 대조: 기록이 온전하면 예약되고 시각 원인 예약은 원인 이벤트 키를 싣지 않는다.
+    const scheduled = journal.apply(schedule(journal, timed, valid, "schedule"));
+    const payload = payloadOf(scheduled, "task_scheduled");
+    expect(Object.keys(payload).sort()).toEqual(["cause", "occurrenceId"]);
+  });
+
+  it("Error: 신호 이름만 다른 수용 참조는 signal_source_mismatch 다 (test_SC048_signal_name_mismatch_refused)", () => {
+    const { journal, listener } = readyTasks("killtaskrec2");
+    const otherName = withPendingSignalAcceptance(journal.aggregate, listener, {
+      signalName: "other_signal",
+    });
+    expect(
+      taskCommand(journal.deps, otherName.aggregate, listener, {
+        kind: "schedule_task",
+        occurrenceId: otherName.occurrenceId,
+        cause: "external_signal",
+      }),
+    ).toEqual(condition("signal_source_mismatch"));
+    const same = withPendingSignalAcceptance(journal.aggregate, listener);
+    expect(
+      taskCommand(journal.deps, same.aggregate, listener, {
+        kind: "schedule_task",
+        occurrenceId: same.occurrenceId,
+        cause: "external_signal",
+      }).kind,
+    ).toBe("committed");
+  });
+
+  it("Error: 재시도 대기 기록이 없는 RETRY_WAIT 는 불변식 위반이다 (test_SC048_retry_wait_without_record_invariant)", () => {
+    const { journal, retry } = readyTasks("killtaskrec3");
+    journal.apply(taskCommand(journal.deps, journal.aggregate, retry, { kind: "start_attempt" }));
+    const attemptId = journal.task(retry).openAttempt?.attemptId;
+    if (attemptId === undefined) throw new Error("expected open attempt");
+    journal.apply(
+      executeCommand(journal.deps, journal.aggregate, {
+        kind: "record_attempt_outcome",
+        taskId: retry,
+        expectedRevision: journal.task(retry).revision,
+        meta: meta(at("2026-01-01T00:00:00Z")),
+        attemptId,
+        outcome: { kind: "failed", code: "fixture_retryable" },
+      }),
+    );
+    expect(journal.task(retry).state).toBe("RETRY_WAIT");
+    const { lastRetryWait: _wait, ...withoutWait } = journal.task(retry);
+    void _wait;
+    const patched = {
+      ...journal.aggregate,
+      tasks: { ...journal.aggregate.tasks, [retry]: withoutWait },
+    };
+    expect(() =>
+      taskCommand(journal.deps, patched, retry, {
+        kind: "schedule_task",
+        occurrenceId: scheduleId(retry, "retry"),
+        cause: "retry",
+      }),
+    ).toThrow(DomainInvariantError);
+  });
+});
+
+describe("SC-014·SC-029·SC-045: 정의 레코드 패치 경계 — 재검증·신호 일치·보류 신호·활성화 형태", () => {
+  it("Edge: 정의 revision 이 바뀌어도 정의 개정을 싣지 않은 대기 제안은 재검증하지 않는다 (test_SC014_revision_change_revalidates_only_amending_proposals)", () => {
+    const r = registerDefinition(definitionDeps("killrevalpatch"));
+    r.journal.proposeAmendment(r.definitionId, { title: "pending" }, dayAt(0, "06:00"));
+    const stewardId = r.stewardId;
+    expect(r.journal.work(stewardId).work.state).toBe("WAITING_APPROVAL");
+    const withProposalDefinition = (definition: unknown) => {
+      const j = new WorkflowJournal(r.journal.deps, r.journal.state, r.journal.commits);
+      j.patchWork(stewardId, (agg) => {
+        const pending = agg.work.pendingProposal;
+        if (pending === undefined) throw new Error("expected pending proposal");
+        const { definition: _d, ...rest } = pending;
+        void _d;
+        // 기준 계획 revision 을 어긋나게 해 재검증하면 무효가 되는 제안으로 둔다.
+        const next = {
+          ...rest,
+          basePlanRevision: 99,
+          ...(definition === "absent" ? {} : { definition }),
+        };
+        return { ...agg, work: { ...agg.work, pendingProposal: next as never } };
+      });
+      return j;
+    };
+    const withoutAmends = { ...definitionDraft(), title: "creation draft" };
+    for (const [label, definition] of [
+      ["null", null],
+      ["absent", "absent"],
+      ["creation", withoutAmends],
+    ] as const) {
+      const j = withProposalDefinition(definition);
+      const judged = j.control(r.definitionId, "pause", dayAt(0, "07:00"));
+      expect(judged.kind, label).toBe("accepted");
+      expect(typesOf(commitOf(judged)), label).not.toContain("work_plan_withdrawn");
+      expect(j.work(stewardId).work.state, label).toBe("WAITING_APPROVAL");
+    }
+    // 정의 revision 이 그대로인 회차 해소 커밋은 개정 제안도 재검증하지 않는다.
+    const amendingUnchanged = withProposalDefinition(
+      r.journal.work(stewardId).work.pendingProposal?.definition,
+    );
+    const materialized = amendingUnchanged.resolveDue(r.definitionId, dayAt(0));
+    expect(typesOf(commitOf(materialized))).not.toContain("work_plan_withdrawn");
+    expect(amendingUnchanged.work(stewardId).work.state).toBe("WAITING_APPROVAL");
+    // 대조: 정의 개정을 실은 같은 제안은 철회된다.
+    const amending = withProposalDefinition(
+      r.journal.work(stewardId).work.pendingProposal?.definition,
+    );
+    const judged = amending.control(r.definitionId, "pause", dayAt(0, "07:00"));
+    expect(typesOf(commitOf(judged))).toContain("work_plan_withdrawn");
+  });
+
+  it("Error: Task Trigger 가 미등록 종류이거나 외부 신호 발화가 아니면 출처·이름이 같아도 일치하지 않는다 (test_SC045_task_trigger_must_be_registered_external_firing)", () => {
+    const { journal, ids } = startJournal(
+      [
+        draft("listener", {
+          trigger: {
+            kind: "signal",
+            version: 1,
+            triggerId: "listener",
+            sourceId: FIXTURE_SIGNAL_SOURCE,
+            signal: FIXTURE_SIGNAL_NAME,
+          } as unknown as TriggerSpec,
+        }),
+      ],
+      testDeps("killtasktrigger"),
+    );
+    const listener = ids["listener"] as TaskId;
+    validate(journal, listener);
+    const trigger = journal.task(listener).trigger as unknown as Record<string, unknown>;
+    const judge = (aggregate: WorkAggregate, occ: string) =>
+      judgeTaskExternalSignal(
+        journal.deps,
+        aggregate,
+        externalSignal(journal.deps, {
+          subject: { taskId: listener },
+          sourceOccurrenceId: occ,
+          receivedAt: at("2026-01-01T00:05:00Z"),
+        }),
+        at("2026-01-01T00:05:00Z"),
+      );
+    const unregistered = patchTask(journal.aggregate, listener, {
+      trigger: { ...trigger, kind: "no_such_trigger" } as never,
+    });
+    expect(judge(unregistered, "o-1").kind).toBe("rejected");
+    const scheduleFiring = patchTask(journal.aggregate, listener, {
+      trigger: {
+        ...(atTrigger("listener", { kind: "skip" }) as unknown as Record<string, unknown>),
+        sourceId: FIXTURE_SIGNAL_SOURCE,
+        signal: FIXTURE_SIGNAL_NAME,
+      } as never,
+    });
+    expect(judge(scheduleFiring, "o-2").kind).toBe("rejected");
+    expect(judge(journal.aggregate, "o-3").kind).toBe("accepted");
+  });
+
+  it("Error: 정의 활성화가 신호 발화가 아니거나 신호 형태가 없으면 출처·이름이 같아도 일치하지 않는다 (test_SC045_definition_activation_must_be_signal_shaped)", () => {
+    const outcomeWith = (seed: string, activation: unknown) => {
+      const r = registerDefinition(definitionDeps(seed), { draft: signalDefinitionDraft() });
+      r.journal.patchWork(r.stewardId, (agg) => ({
+        ...agg,
+        definition: {
+          ...(agg.definition as unknown as Record<string, unknown>),
+          activation,
+        } as never,
+      }));
+      return r.journal.external(r.definitionId, "s-1", dayAt(0)).kind;
+    };
+    expect(
+      outcomeWith("killdefact1", {
+        ...(dailyActivation() as unknown as Record<string, unknown>),
+        sourceId: FIXTURE_SIGNAL_SOURCE,
+        signal: FIXTURE_SIGNAL_NAME,
+      }),
+    ).toBe("rejected");
+    const { sourceId: _s, ...noSource } = signalActivation() as unknown as Record<string, unknown>;
+    void _s;
+    expect(outcomeWith("killdefact2", noSource)).toBe("rejected");
+    expect(outcomeWith("killdefact3", signalActivation())).toBe("accepted");
+  });
+
+  it("Edge: 신호 발화가 아닌 활성화로의 개정은 출처·이름 필드가 같아도 보류 신호 회차를 받지 않는다 (test_SC044_non_signal_activation_never_accepts_held_signals)", () => {
+    const at = BUILTIN_TRIGGERS.find((t) => t.kind === "at");
+    if (at === undefined) throw new Error("expected at trigger");
+    // 예약 발화 활성화이면서 신호 활성화와 같은 출처·이름 필드를 싣는 등록 확장 유형.
+    const tagged = {
+      ...at,
+      kind: "at_tagged",
+      schema: (at.schema as z.ZodObject).extend({
+        kind: z.literal("at_tagged"),
+        sourceId: z.string(),
+        signal: z.string(),
+      }),
+    };
+    const registries = mustOk(
+      createBuiltinRegistries({ taskTypes: [GENERIC_TASK_TYPE], triggers: [tagged] }),
+    );
+    const r = registerDefinition(definitionDeps("killtaggedheld", registries), {
+      draft: signalDefinitionDraft(),
+    });
+    r.journal.control(r.definitionId, "pause", dayAt(0, "06:00"));
+    r.journal.external(r.definitionId, "h-1", dayAt(0, "06:10"));
+    r.journal.control(r.definitionId, "resume", dayAt(0, "06:20"));
+    const activation = {
+      ...(dailyActivation() as unknown as Record<string, unknown>),
+      kind: "at_tagged",
+      sourceId: FIXTURE_SIGNAL_SOURCE,
+      signal: FIXTURE_SIGNAL_NAME,
+    } as unknown as TriggerSpec;
+    expect(r.journal.amend(r.definitionId, { activation }, dayAt(0, "06:30")).kind).toBe(
+      "accepted",
+    );
+    expect(r.journal.definition(r.definitionId).activation).toEqual(activation);
+    expect(r.journal.definition(r.definitionId).held).toEqual([]);
+  });
+
+  it("Edge: 신호 입력이 없는 보류 신호 회차는 새 신호 활성화가 받지 않고 건너뛴다 (test_SC029_held_signal_without_signal_input_skipped_on_amendment)", () => {
+    const r = registerDefinition(definitionDeps("killheldnosig"), {
+      draft: signalDefinitionDraft(),
+    });
+    r.journal.control(r.definitionId, "pause", dayAt(0, "06:00"));
+    r.journal.external(r.definitionId, "h-1", dayAt(0, "06:10"));
+    r.journal.control(r.definitionId, "resume", dayAt(0, "06:20"));
+    r.journal.patchWork(r.stewardId, (agg) => {
+      const definition = agg.definition;
+      if (definition === undefined) throw new Error("expected definition");
+      const held = definition.held.map((h) => {
+        const { signal: _sig, ...input } = h.input;
+        void _sig;
+        return { ...h, input };
+      });
+      return { ...agg, definition: { ...definition, held } };
+    });
+    const granted = r.journal.amend(
+      r.definitionId,
+      { activation: signalActivation({ triggerId: "on_signal2" }) },
+      dayAt(0, "06:30"),
+    );
+    expect(granted.kind).toBe("accepted");
+    expect(r.journal.definition(r.definitionId).held).toEqual([]);
+  });
+
+  it("Error: 대기 행이 있는데 활성화가 일정 형태가 아니거나 타임존을 읽을 수 없으면 불변식 위반이다 (test_SC041_pending_row_needs_schedule_activation_view)", () => {
+    // 타임존을 읽지 않는 포트 — 회차 현지 날짜 재계산이 타임존을 처음 읽는 곳이 되게 한다.
+    const zoneBlind: RecurrenceExpander = {
+      firstAtOrAfter: (a, t) =>
+        testDailyRecurrence.firstAtOrAfter({ ...a, timezone: "UTC" } as never, t),
+      periodOf: (a, t) => testDailyRecurrence.periodOf({ ...a, timezone: "UTC" } as never, t),
+    };
+    const patched = (seed: string, patch: (activation: Record<string, unknown>) => unknown) => {
+      const r = registerDefinition(definitionDeps(seed, undefined, zoneBlind));
+      r.journal.patchWork(r.stewardId, (agg) => {
+        const definition = agg.definition;
+        if (definition === undefined) throw new Error("expected definition");
+        return {
+          ...agg,
+          definition: {
+            ...definition,
+            activation: patch(definition.activation as unknown as Record<string, unknown>) as never,
+          },
+        };
+      });
+      return () => r.journal.resolveDue(r.definitionId, dayAt(0));
+    };
+    expect(patched("killviewsig", () => signalActivation())).toThrow(DomainInvariantError);
+    // 중지 해소도 도래한 대기 행을 이전 활성화로 전개하므로 같은 검사를 거친다.
+    const stopping = registerDefinition(definitionDeps("killviewstop", undefined, zoneBlind));
+    stopping.journal.patchWork(stopping.stewardId, (agg) => ({
+      ...agg,
+      definition: {
+        ...(agg.definition as NonNullable<WorkAggregate["definition"]>),
+        activation: signalActivation(),
+      },
+    }));
+    expect(() =>
+      stopping.journal.control(stopping.definitionId, "stop", dayAt(0, "08:00")),
+    ).toThrow(DomainInvariantError);
+    expect(patched("killviewtz", (a) => ({ ...a, timezone: "Not/AZone" }))).toThrow(
+      DomainInvariantError,
+    );
+    expect(patched("killviewok", (a) => a)().kind).toBe("committed");
+  });
+});
+
+describe("SC-005: 정의 이벤트 fold 의 대상 정의 검사", () => {
+  it("Error: 다른 정의를 가리키는 정의 이벤트·관리 중인 Work 의 두 번째 정의 생성은 fold 가 던진다 (test_SC005_fold_rejects_foreign_definition_events)", () => {
+    const r = registerDefinition(definitionDeps("killfolddef"));
+    r.journal.control(r.definitionId, "pause", dayAt(0, "06:00"));
+    const events = r.journal.commits.flatMap((c) => c.events);
+    expect(() => foldWorkflowEvents(events)).not.toThrow();
+    const foreign = nextEntityId(r.journal.deps.ids, "workDefinition");
+    const retargeted = events.map((e) =>
+      e.type === "work_definition_paused"
+        ? { ...e, payload: { ...e.payload, definitionId: foreign } }
+        : e,
+    );
+    expect(() => foldWorkflowEvents(retargeted as never)).toThrow(/관리하지 않는다/);
+    const created = events.find((e) => e.type === "work_definition_created");
+    if (created === undefined) throw new Error("expected created event");
+    const again = {
+      ...created,
+      id: "evt_againcreated001",
+      commit: { id: "cmt_againcreated001", index: 1, count: 1 },
+    };
+    expect(() => foldWorkflowEvents([...events, again] as never)).toThrow(/이미 정의/);
+    // 정의를 관리하지 않는 Work 의 정의 이벤트.
+    const m = registerAndMaterializeFirst(definitionDeps("killfoldnodef"));
+    const mEvents = m.journal.commits.flatMap((c) => c.events);
+    const created2 = mEvents.find((e) => e.type === "work_created" && e.workId === m.firstWorkId);
+    if (created2 === undefined) throw new Error("expected occurrence work_created");
+    const pausedOnOccurrence = {
+      ...created2,
+      id: "evt_pausedonocc0001",
+      type: "work_definition_paused",
+      commit: { id: "cmt_pausedonocc0001", index: 1, count: 1 },
+      payload: {
+        definitionId: m.definitionId,
+        pauseOrigin: { kind: "template_invalid", actorSource: "adde_self" },
+      },
+    };
+    expect(() => foldWorkflowEvents([...mEvents, pausedOnOccurrence] as never)).toThrow(
+      /관리하지 않는다/,
+    );
+  });
+});
+
+describe("SC-049·SC-050: 회차 결합의 생산자 형태·제공 필드·해석 방어", () => {
+  const signalShape = {
+    sourceId: z.string(),
+    signalName: z.string(),
+    sourceOccurrenceId: z.string(),
+    payload: z.unknown(),
+  };
+  const consumerWithEvent = (event: z.ZodType) => ({
+    ...OCCURRENCE_CONSUMER_TASK_TYPE,
+    schema: z.strictObject({ event: event.optional() }),
+    inputFields: {},
+  });
+  const templateKinds = (seed: string, consumer: TaskTypeDescriptor) =>
+    templateIssues(
+      issuesOf(
+        proposeDraft(
+          occurrenceConsumerDeps(seed, consumer),
+          signalDefinitionDraft({ template: [bindingTemplate("event", "signal")] }),
+        ).outcome,
+      ),
+    );
+
+  it("Error: 신호 payload 를 좁힌 소비자·상속 멤버 이름 키를 가진 소비자는 증명하지 않는다 (test_SC049_signal_binding_unprovable_consumers)", () => {
+    const narrowPayload = consumerWithEvent(
+      z.strictObject({ ...signalShape, payload: z.string() }),
+    );
+    const inheritedKey = consumerWithEvent(
+      z.strictObject({ ...signalShape, toString: z.string().optional() }),
+    );
+    for (const [seed, consumer] of [
+      ["killbindpayload", narrowPayload],
+      ["killbindinherited", inheritedKey],
+    ] as const) {
+      expect(templateKinds(seed, consumer), seed).toEqual([
+        {
+          kind: "binding_schema_incompatible",
+          draftRef: "consumer",
+          field: "event",
+          reason: "not_provable",
+        },
+      ]);
+    }
+    expect(templateKinds("killbindok", consumerWithEvent(z.strictObject(signalShape)))).toEqual([]);
+  });
+
+  /** 신호 정의의 회차 Work 와 event ← signal 결합 Task. */
+  function boundSignalOccurrence(seed: string) {
+    const r = registerDefinition(occurrenceConsumerDeps(seed), {
+      draft: signalDefinitionDraft({ template: [bindingTemplate("event", "signal")] }),
+    });
+    r.journal.external(r.definitionId, "s-1", dayAt(0));
+    const workId = r.journal.occurrenceWorkIds(r.definitionId)[0];
+    if (workId === undefined) throw new Error("expected occurrence work");
+    const taskId = r.journal.work(workId).work.memberTaskIds[0];
+    if (taskId === undefined) throw new Error("expected bound task");
+    return { r, workId, taskId };
+  }
+
+  it("Error: 회차 입력에 없는 필드를 결합한 템플릿은 materialize 시점에 무효다 (test_SC050_template_binding_to_absent_input_field_invalid)", () => {
+    const r = registerDefinition(occurrenceConsumerDeps("killbindabsent"), {
+      draft: signalDefinitionDraft({ template: [bindingTemplate("event", "signal")] }),
+    });
+    // 레코드 패치: 신호 회차 입력에 없는 scheduledForUtc 결합(초안 검증이 막는 상태 — 다른 생성 경로 대용).
+    r.journal.patchWork(r.stewardId, (agg) => ({
+      ...agg,
+      definition: {
+        ...(agg.definition as NonNullable<WorkAggregate["definition"]>),
+        template: [bindingTemplate("when", "scheduledForUtc")] as never,
+      },
+    }));
+    const judged = r.journal.external(r.definitionId, "s-1", dayAt(0));
+    expect(typesOf(commitOf(judged))).toContain("work_definition_paused");
+    expect(typesOf(commitOf(judged))).not.toContain("work_created");
+  });
+
+  it("Error: 정규 JSON 이 아니거나 소비자 스키마를 어기거나 선언에 없는 필드의 회차 값은 해석 불변식 위반이다 (test_SC050_resolution_defends_occurrence_values)", () => {
+    const { r, workId, taskId } = boundSignalOccurrence("killbindresolve");
+    const aggregate = r.journal.work(workId);
+    const task = r.journal.task(workId, taskId);
+    const withSignal = (signal: unknown) => {
+      const source = aggregate.work.source as unknown as { input: Record<string, unknown> };
+      return patchWork(aggregate, {
+        source: { ...(source as object), input: { ...source.input, signal } } as never,
+      });
+    };
+    const registries = r.journal.deps.registries;
+    const original = (source: unknown) =>
+      (source as { input: { signal: Record<string, unknown> } }).input.signal;
+    const signal = original(aggregate.work.source);
+    expect(resolveBoundInputs(registries, aggregate, task).ok).toBe(true);
+    expect(() =>
+      resolveBoundInputs(registries, withSignal({ ...signal, payload: Number.NaN }), task),
+    ).toThrow(DomainInvariantError);
+    expect(() =>
+      resolveBoundInputs(registries, withSignal({ ...signal, sourceId: 5 }), task),
+    ).toThrow(DomainInvariantError);
+    const undeclared = {
+      ...task,
+      inputBindings: { nope: { from: "occurrence", field: "signal" } },
+    } as unknown as TaskRecord;
+    expect(() => resolveBoundInputs(registries, aggregate, undeclared)).toThrow(
+      DomainInvariantError,
+    );
+  });
+});
+
+describe("SC-059: 정의 대기 행 취소 이벤트의 fold", () => {
+  it("Edge: 현재 대기 행을 취소하는 이벤트는 대기 행을 비우고 그 ID 를 취소 목록 끝에 둔다 (test_SC042_fold_cancel_of_current_pending_row_clears_and_retires)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("killcancelfold"));
+    const events = r.journal.commits.flatMap((c) => c.events);
+    const pending = r.journal.definition(r.definitionId).pendingSchedule;
+    if (pending === undefined) throw new Error("expected pending row");
+    const template = events.find((e) => e.type === "trigger_fired");
+    if (template === undefined) throw new Error("expected trigger_fired");
+    const cancel = (row: {
+      occurrenceId: string;
+      scheduledForUtc: string;
+      recurrenceIndex: number;
+    }) => ({
+      ...template,
+      id: "evt_cancelfold00001",
+      type: "trigger_canceled",
+      commit: { id: "cmt_cancelfold00001", index: 1, count: 1 },
+      payload: {
+        definitionId: r.definitionId,
+        triggerId: "daily",
+        occurrenceId: row.occurrenceId,
+        scheduledForUtc: row.scheduledForUtc,
+        recurrenceIndex: row.recurrenceIndex,
+        reason: "definition_revised",
+      },
+    });
+    const foldedDefinition = (extra: unknown) => {
+      const folded = foldWorkflowEvents([...events, extra] as never);
+      if (!folded.ok) throw new Error(`fold failed ${JSON.stringify(folded.error)}`);
+      const definition = findSteward(folded.value, r.definitionId)?.definition;
+      if (definition === undefined) throw new Error("expected folded definition");
+      return definition;
+    };
+
+    const current = foldedDefinition(cancel(pending));
+    expect(current.pendingSchedule).toBeUndefined();
+    expect(current.retiredOccurrenceIds.at(-1)).toBe(pending.occurrenceId);
+    expect(current.retiredOccurrenceIds).toHaveLength(1);
+
+    // 대조: 다른 ID 를 취소하는 같은 커밋은 대기 행을 두고 ID 만 등록한다.
+    const otherId = deriveOccurrenceId({
+      kind: "schedule",
+      ownerId: r.definitionId,
+      triggerId: "daily",
+      scheduledForUtc: dayAt(5),
+      recurrenceIndex: 5,
+    });
+    if (!otherId.ok) throw new Error("expected occurrence id");
+    const other = foldedDefinition(
+      cancel({ occurrenceId: otherId.value, scheduledForUtc: dayAt(5), recurrenceIndex: 5 }),
+    );
+    expect(other.pendingSchedule?.occurrenceId).toBe(pending.occurrenceId);
+    expect(other.retiredOccurrenceIds).toEqual([otherId.value]);
+  });
+});
+
+describe("SC-048: Task 외부 신호 수용 참조의 fold", () => {
+  const LISTENER = {
+    kind: "signal",
+    version: 1,
+    triggerId: "listener",
+    sourceId: FIXTURE_SIGNAL_SOURCE,
+    signal: FIXTURE_SIGNAL_NAME,
+  } as unknown as TriggerSpec;
+
+  /** READY 리스너 Task 의 이전 이벤트 열과 외부 신호 수용 커밋. */
+  function acceptedListener(seed: string) {
+    const { journal, ids } = startJournal(
+      [draft("listener", { trigger: LISTENER })],
+      testDeps(seed),
+    );
+    const taskId = ids["listener"] as TaskId;
+    validate(journal, taskId);
+    const judged = judgeTaskExternalSignal(
+      journal.deps,
+      journal.aggregate,
+      externalSignal(journal.deps, {
+        subject: { taskId },
+        sourceOccurrenceId: "o-1",
+        receivedAt: KILL_NOW,
+      }),
+      KILL_NOW,
+    );
+    if (judged.kind !== "accepted") throw new Error(`expected accepted, got ${judged.kind}`);
+    expect(eventTypes(judged.commit)).toEqual(["signal_accepted", "task_scheduled"]);
+    const accepted = judged.commit.events[0];
+    if (accepted === undefined) throw new Error("expected signal_accepted");
+    return {
+      taskId,
+      prior: journal.commits.flatMap((c) => c.events),
+      whole: judged.commit.events,
+      accepted,
+    };
+  }
+
+  /** 그 이벤트 하나만 담은 커밋으로 바꾼다. */
+  const alone = <E extends { readonly commit: object }>(event: E): E => ({
+    ...event,
+    commit: { ...event.commit, index: 1, count: 1 },
+  });
+
+  it("Edge: 수용과 예약을 나눈 커밋을 접으면 수용 참조가 Task 기록에 남는다 (test_SC048_fold_split_acceptance_commit_keeps_pending_reference)", () => {
+    const { taskId, prior, whole, accepted } = acceptedListener("killaccsplit");
+    const split = foldEvents([...prior, alone(accepted)]);
+    if (!split.ok) throw new Error(`fold failed ${JSON.stringify(split.error)}`);
+    expect(split.value.tasks[taskId]?.pendingSignalAcceptance).toEqual({
+      eventId: accepted.id,
+      occurredAt: accepted.occurredAt,
+      sourceId: FIXTURE_SIGNAL_SOURCE,
+      signalName: FIXTURE_SIGNAL_NAME,
+    });
+
+    // 대조: 원래 커밋은 같은 커밋의 예약이 참조를 소비한다.
+    const together = foldEvents([...prior, ...whole]);
+    if (!together.ok) throw new Error(`fold failed ${JSON.stringify(together.error)}`);
+    expect(together.value.tasks[taskId]?.pendingSignalAcceptance).toBeUndefined();
+
+    // 대조: 정의 대상 외부 신호 수용은 관리 Work 의 Task 기록을 바꾸지 않는다.
+    const r = registerDefinition(definitionDeps("killaccdef"), {
+      draft: signalDefinitionDraft(),
+      tasks: STEWARD_MEMBER,
+    });
+    const tasksBefore = r.journal.steward(r.definitionId).tasks;
+    commitOf(r.journal.external(r.definitionId, "s-1", dayAt(0)));
+    // 관리 Work 스트림만 남긴다 — 회차 Work 와 함께 낸 커밋은 스트림 안 번호로 다시 매긴다.
+    const stewardEvents = r.journal.commits.flatMap((c) => {
+      const own = c.events.filter((e) => e.workId === r.stewardId);
+      return own.map((e, i) => ({
+        ...e,
+        commit: { ...e.commit, index: i + 1, count: own.length },
+      }));
+    });
+    expect(stewardEvents.map((e) => e.type)).toContain("signal_accepted");
+    const steward = foldEvents(stewardEvents);
+    if (!steward.ok) throw new Error(`fold failed ${JSON.stringify(steward.error)}`);
+    expect(steward.value.tasks).toEqual(tasksBefore);
+  });
+
+  it("Error: trigger 없는 Task 외부 신호 수용 이벤트를 접으면 가드가 던진다 (test_SC048_fold_task_acceptance_without_trigger_throws_guard_error)", () => {
+    const { prior, accepted } = acceptedListener("killaccnotrigger");
+    const payload = Object.fromEntries(
+      Object.entries(accepted.payload as unknown as Record<string, unknown>).filter(
+        ([key]) => key !== "trigger",
+      ),
+    );
+    const stripped = alone({ ...accepted, payload });
+    let thrown: unknown;
+    try {
+      foldEvents([...prior, stripped as never]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+  });
+});
+
+describe("SC-042: 마지막 해소 장부와 개정 시작점", () => {
+  const STEPS = "kill-steps";
+  // 회차 1(D+1 07:00)은 개정이 취소한 기존 대기 행과 같은 ID 다 — 해소가 미도래 잃는 회차로 기록해 장부를 now 뒤로 올린다.
+  const port = testStepRecurrence({
+    rule: STEPS,
+    period: "utc_hour",
+    steps: [
+      { scheduledForUtc: dayAt(1, "05:00"), recurrenceIndex: 0 },
+      { scheduledForUtc: dayAt(1), recurrenceIndex: 1 },
+      { scheduledForUtc: dayAt(2), recurrenceIndex: 2 },
+    ],
+  });
+
+  const committed = (outcome: { kind: string; commit?: DomainCommit }): DomainCommit => {
+    if (outcome.commit === undefined) throw new Error(`expected a commit, got ${outcome.kind}`);
+    return outcome.commit;
+  };
+
+  it("Edge: 장부가 now 뒤에 있으면 개정 탐색은 장부 다음부터 시작한다 (test_SC042_amendment_start_after_ledger_ahead_of_now)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("killledgerahead", undefined, port));
+    committed(
+      r.journal.amend(r.definitionId, { activation: stepActivation(STEPS) }, dayAt(0, "08:00")),
+    );
+    committed(r.journal.resolveDue(r.definitionId, dayAt(1, "05:00")));
+    expect(r.journal.definition(r.definitionId).lastResolvedSchedule).toEqual({
+      scheduledForUtc: dayAt(1),
+      recurrenceIndex: 1,
+    });
+    // 새 활성화의 D+1 06:45 는 now(06:30) 뒤·장부(07:00) 앞이고 장부와 다른 시 단위 주기다.
+    const amended = committed(
+      r.journal.amend(
+        r.definitionId,
+        { activation: dailyActivation({ localTime: "06:45" }) },
+        dayAt(1, "06:30"),
+      ),
+    );
+    const next = payloadsOf(amended, "work_definition_revised")[0]?.["nextSchedule"] as
+      { scheduledForUtc: string } | undefined;
+    expect(next?.scheduledForUtc).toBe(dayAt(2, "06:45"));
+    expect(r.journal.definition(r.definitionId).pendingSchedule?.scheduledForUtc).toBe(
+      dayAt(2, "06:45"),
+    );
+
+    // 대조: 장부가 now 앞이면 now 부터 찾아 같은 날 06:45 를 고른다.
+    const plain = registerAndMaterializeFirst(definitionDeps("killledgerbehind"));
+    plain.journal.completeWork(plain.firstWorkId, dayAt(0, "09:00"));
+    committed(plain.journal.resolveDue(plain.definitionId, dayAt(1)));
+    const behind = committed(
+      plain.journal.amend(
+        plain.definitionId,
+        { activation: dailyActivation({ localTime: "06:45" }) },
+        dayAt(1, "08:00"),
+      ),
+    );
+    const behindNext = payloadsOf(behind, "work_definition_revised")[0]?.["nextSchedule"] as
+      { scheduledForUtc: string } | undefined;
+    expect(behindNext?.scheduledForUtc).toBe(dayAt(2, "06:45"));
+  });
+
+  it("Edge: 장부와 같은 시각의 회차 값은 장부를 바꾸지 않는다 (test_SC042_ledger_equal_instant_keeps_current_value)", () => {
+    const patched = registerAndMaterializeFirst(definitionDeps("killledgereq"));
+    const ledger = { scheduledForUtc: dayAt(1), recurrenceIndex: 77 };
+    // 레코드 패치: 다음 회차와 같은 시각·다른 회차 번호의 장부. 명령 경로로 만들 수 없어 다른 생성 경로 대용으로 둔다.
+    patched.journal.patchWork(patched.stewardId, (aggregate) => {
+      const definition = aggregate.definition;
+      if (definition === undefined) throw new Error("steward has no definition");
+      return { ...aggregate, definition: { ...definition, lastResolvedSchedule: ledger } };
+    });
+    patched.journal.completeWork(patched.firstWorkId, dayAt(0, "09:00"));
+    const fired = committed(patched.journal.resolveDue(patched.definitionId, dayAt(1)));
+    expect(payloadsOf(fired, "trigger_fired").map((f) => f["recurrenceIndex"])).toEqual([1]);
+    expect(patched.journal.definition(patched.definitionId).lastResolvedSchedule).toEqual(ledger);
+
+    // 대조: 패치하지 않으면 더 늦은 회차 값을 받는다.
+    const plain = registerAndMaterializeFirst(definitionDeps("killledgerlt"));
+    plain.journal.completeWork(plain.firstWorkId, dayAt(0, "09:00"));
+    committed(plain.journal.resolveDue(plain.definitionId, dayAt(1)));
+    expect(plain.journal.definition(plain.definitionId).lastResolvedSchedule).toEqual({
+      scheduledForUtc: dayAt(1),
+      recurrenceIndex: 1,
+    });
+  });
+});
+
+describe("SC-019: 취소 출처 파서의 거절 값", () => {
+  it("Error: 인증 형태·종류 밖 필드·필드 형의 거절마다 오류 값 전체가 정해져 있다 (test_SC019_cancel_origin_parser_errors_exact)", () => {
+    const control = {
+      kind: "control_request",
+      actorSource: "unknown",
+      controlRequestId: "ctl_a1",
+      keyId: "k",
+    };
+    const vault = { kind: "vault_signal", actorSource: "human_local", signalId: "sig_a1" };
+    const cascade = { kind: "work_cascade", actorSource: "adde_self", workEventId: "evt_a1" };
+    const dropped = { kind: "replan_dropped", actorSource: "adde_self", workEventId: "evt_a2" };
+    const rows: readonly [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown>,
+      string,
+      string,
+    ][] = [
+      [
+        "keyId missing",
+        { ...control, keyId: undefined },
+        control,
+        "cancelOrigin",
+        "control_request_auth_shape_invalid",
+      ],
+      [
+        "keyId empty",
+        { ...control, keyId: "" },
+        control,
+        "cancelOrigin",
+        "control_request_auth_shape_invalid",
+      ],
+      [
+        "not ctl_ id",
+        { ...control, controlRequestId: "req-1" },
+        control,
+        "cancelOrigin",
+        "control_request_auth_shape_invalid",
+      ],
+      [
+        "vault + keyId",
+        { ...vault, keyId: "k" },
+        vault,
+        "cancelOrigin.keyId",
+        "not_allowed_for_kind",
+      ],
+      [
+        "vault + workEventId",
+        { ...vault, workEventId: "evt_a3" },
+        vault,
+        "cancelOrigin.workEventId",
+        "not_allowed_for_kind",
+      ],
+      [
+        "control + signalId",
+        { ...control, signalId: "sig_a2" },
+        control,
+        "cancelOrigin.signalId",
+        "not_allowed_for_kind",
+      ],
+      [
+        "cascade + controlRequestId",
+        { ...cascade, controlRequestId: "ctl_a2" },
+        cascade,
+        "cancelOrigin.controlRequestId",
+        "not_allowed_for_kind",
+      ],
+      [
+        "dropped + provenance",
+        { ...dropped, provenance: {} },
+        dropped,
+        "cancelOrigin.provenance",
+        "not_allowed_for_kind",
+      ],
+      [
+        "numeric signalId",
+        { ...vault, signalId: 5 },
+        vault,
+        "cancelOrigin.signalId",
+        "required_for_vault_signal",
+      ],
+      [
+        "not evt_ workEventId",
+        { ...cascade, workEventId: "wev-1" },
+        cascade,
+        "cancelOrigin.workEventId",
+        "required_for_kind",
+      ],
+      [
+        "non-object provenance",
+        { ...vault, provenance: "p" },
+        vault,
+        "cancelOrigin.provenance",
+        "not_an_object",
+      ],
+      [
+        "ill-typed actor",
+        { ...control, actor: { kind: "user" } },
+        control,
+        "cancelOrigin.actor",
+        "not_a_string",
+      ],
+      [
+        "numeric reason",
+        { ...control, reason: 42 },
+        control,
+        "cancelOrigin.reason",
+        "not_a_string",
+      ],
+    ];
+    for (const [label, raw, fixed, field, reason] of rows) {
+      const input = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== undefined));
+      expect(parseCancelOrigin(input), label).toEqual({
+        ok: false,
+        error: { kind: "value_format", field, reason },
+      });
+      // 대조: 문제 필드만 고친 입력은 통과하고 결과에는 검사한 필드만 있다.
+      const parsed = parseCancelOrigin(fixed);
+      expect(parsed.ok, label).toBe(true);
+      if (parsed.ok)
+        expect(Object.keys(parsed.value).sort(), label).toEqual(Object.keys(fixed).sort());
+    }
+    const unknownKey = parseCancelOrigin({ ...control, note: "x" });
+    expect(unknownKey.ok && Object.keys(unknownKey.value).sort()).toEqual([
+      "actorSource",
+      "controlRequestId",
+      "keyId",
+      "kind",
+    ]);
+    // 신호 ID 의 sig_ 형식은 보지 않는다.
+    expect(parseCancelOrigin({ ...vault, signalId: "not-sig" })).toEqual({
+      ok: true,
+      value: { kind: "vault_signal", actorSource: "human_local", signalId: "not-sig" },
+    });
+  });
+});
+
+// ---- 판정 기록 재점검 판별 — 레코드 패치·공개 호출·손수 만든 등록부로 만든 입력 ----
+
+function patchDefinitionRecord(
+  journal: WorkflowJournal,
+  stewardId: WorkId,
+  patch: (definition: DefinitionRecord) => DefinitionRecord,
+): void {
+  journal.patchWork(stewardId, (aggregate) => {
+    if (aggregate.definition === undefined) throw new Error("steward has no definition");
+    return { ...aggregate, definition: patch(aggregate.definition) };
+  });
+}
+
+function patchActivation(
+  journal: WorkflowJournal,
+  stewardId: WorkId,
+  fields: Record<string, unknown>,
+): void {
+  patchDefinitionRecord(journal, stewardId, (d) => ({
+    ...d,
+    activation: { ...(d.activation as object), ...fields } as unknown as TriggerSpec,
+  }));
+}
+
+/** 등록부 값의 Trigger descriptor 하나를 바꾼다 — `createDomainRegistries` 를 거치지 않은 등록부. */
+function withTriggerDescriptor(
+  base: DomainRegistries,
+  kind: string,
+  patch: (descriptor: TriggerDescriptor | undefined) => TriggerDescriptor,
+): DomainRegistries {
+  return {
+    ...base,
+    triggers: {
+      get: (id, version) =>
+        id === kind ? patch(base.triggers.get(id, version)) : base.triggers.get(id, version),
+      list: () => base.triggers.list(),
+    },
+  };
+}
+
+function commitOrThrow(outcome: { kind: string; commit?: DomainCommit }): DomainCommit {
+  if (outcome.commit === undefined || (outcome.kind !== "committed" && outcome.kind !== "accepted"))
+    throw new Error(`expected a commit, got ${JSON.stringify(outcome)}`);
+  return outcome.commit;
+}
+
+/** 정의 입력이 아니라 레코드 패치로 둔 신호 회차 하나. */
+function strayHeldSignal(definitionId: WorkDefinitionId) {
+  const occurrenceId = mustOk(
+    deriveOccurrenceId({
+      kind: "event_caused",
+      ownerId: definitionId,
+      triggerId: "on_signal",
+      causingEvent: { id: entityId("event", "evt_stray00001"), occurredAt: dayAt(0, "12:00") },
+    }),
+  );
+  return {
+    occurrenceId,
+    triggerId: "on_signal",
+    originalInstant: dayAt(0, "12:00"),
+    input: {
+      occurrenceId,
+      definitionId,
+      signal: {
+        sourceId: FIXTURE_SIGNAL_SOURCE,
+        signalName: FIXTURE_SIGNAL_NAME,
+        sourceOccurrenceId: "stray",
+        payload: {},
+      },
+    },
+  } as unknown as DefinitionRecord["held"][number];
+}
+
+describe("판정 기록 재점검: 조립·연쇄·ID 충돌", () => {
+  it("Edge: 공개 조립의 지연 head 는 meta 의 원인 ID 를 받는다 (test_SC046_public_assemble_commit_deferred_head_takes_meta_causation)", () => {
+    const r = registerDefinition(definitionDeps("killr03"));
+    const head = (seed: string) =>
+      ({
+        type: "signal_accepted",
+        payload: {
+          signalId: entityId("signal", `sig_${seed}`),
+          signalType: "replan_requested",
+          dedupKey: `k-${seed}`,
+          subject: { workId: r.stewardId },
+        },
+        workId: r.stewardId,
+      }) as never;
+    const withCause = assembleCommit(
+      r.journal.deps,
+      r.journal.work(r.stewardId),
+      { head: head("a1"), then: () => [] },
+      { ...meta(dayAt(0)), causationId: "evt_cause00001" },
+    );
+    expect(withCause.commit.events[0]?.causationId).toBe("evt_cause00001");
+    const withoutCause = assembleCommit(
+      r.journal.deps,
+      r.journal.work(r.stewardId),
+      { head: head("a2"), then: () => [] },
+      meta(dayAt(0)),
+    );
+    expect(withoutCause.commit.events[0]?.causationId).toBeUndefined();
+  });
+
+  it("Edge: 현재 동작 고정(계약 아님) — 다중 Work 커밋은 관리 Work 의 의존 연쇄를 돌린다 (test_SC023_multi_work_commit_runs_steward_dependency_cascade)", () => {
+    const stewardSegment = (patched: boolean, seed: string) => {
+      const r = registerDefinition(definitionDeps(seed), {
+        tasks: [templateDraft("a"), templateDraft("b", { dependsOn: [{ draftRef: "a" }] })],
+      });
+      const [a, b] = r.journal.work(r.stewardId).work.taskIds;
+      if (a === undefined || b === undefined) throw new Error("expected two steward tasks");
+      const cause = entityId("event", "evt_depfail0001");
+      if (patched) {
+        // 레코드 패치: 의존 대상이 FAILED 이고 의존 Task 가 READY 인 관리 Work — 명령 경로로는 연쇄가 같은 커밋에서 정리하므로 다른 생성 경로 대용으로 둔다.
+        r.journal.patchWork(r.stewardId, (agg) =>
+          patchTask(
+            patchTask(agg, a, {
+              state: "FAILED",
+              terminalRef: {
+                eventId: cause,
+                occurredAt: dayAt(0, "06:00"),
+                position: { commitSeq: 1, index: 1 },
+              },
+            }),
+            b,
+            { state: "READY" },
+          ),
+        );
+      }
+      const commit = commitOrThrow(r.journal.resolveDue(r.definitionId, dayAt(0)));
+      return { events: commit.events.filter((e) => e.workId === r.stewardId), b, cause };
+    };
+    const { events, b, cause } = stewardSegment(true, "killr04");
+    expect(events.map((e) => e.type)).toEqual(["trigger_fired", "task_blocked", "work_blocked"]);
+    const blocked = events[1];
+    expect(blocked?.taskId).toBe(b);
+    expect(blocked?.causationId).toBe(cause);
+    expect(events[2]?.causationId).toBe(blocked?.id);
+    expect(stewardSegment(false, "killr04c").events.map((e) => e.type)).not.toContain(
+      "task_blocked",
+    );
+  });
+
+  it("Error: 새 회차 Work ID 가 상태에 이미 있으면 materialize 가 불변식 오류로 닫힌다 (test_SC016_materialize_into_existing_work_id_fails_closed)", () => {
+    const peek = registerAndMaterializeFirst(definitionDeps("killr05"));
+    const r = registerDefinition(definitionDeps("killr05"));
+    const steward = r.journal.work(r.stewardId);
+    // 레코드 패치: 다음 회차 Work ID 를 이미 가진 Work — ID 생성기가 이 커밋에서 발급하므로 명령 경로로 만들 수 없어 다른 생성 경로 대용으로 둔다.
+    const occupant = {
+      ...steward,
+      work: { ...steward.work, id: peek.firstWorkId },
+      definition: undefined,
+    } as unknown as WorkAggregate;
+    r.journal.state = { works: { ...r.journal.state.works, [peek.firstWorkId]: occupant } };
+    const stateBefore = r.journal.state;
+    const commitsBefore = r.journal.commits.length;
+    expect(() => r.journal.resolveDue(r.definitionId, dayAt(0))).toThrow(DomainInvariantError);
+    expect(r.journal.state).toBe(stateBefore);
+    expect(r.journal.commits).toHaveLength(commitsBefore);
+    const clean = registerDefinition(definitionDeps("killr05"));
+    expect(clean.journal.resolveDue(clean.definitionId, dayAt(0)).kind).toBe("committed");
+  });
+});
+
+describe("판정 기록 재점검: 섞인 보류 목록·정책 필드", () => {
+  it("Edge: 현재 동작 고정(계약 아님) — fire_once_now 는 일정 보류만 대체하고 신호 회차는 남긴다 (test_SC029_fire_once_now_supersedes_only_schedule_held)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("killr06f"));
+    commitOrThrow(r.journal.resolveDue(r.definitionId, dayAt(1)));
+    const d1 = r.journal.definition(r.definitionId).held[0]?.occurrenceId;
+    const stray = strayHeldSignal(r.definitionId);
+    // 레코드 패치: 일정 정의 보류 목록 앞의 신호 회차 — 일정 정의는 신호 회차를 만들지 않으므로 다른 생성 경로 대용으로 둔다.
+    patchDefinitionRecord(r.journal, r.stewardId, (d) => ({ ...d, held: [stray, ...d.held] }));
+    const commit = commitOrThrow(r.journal.resolveDue(r.definitionId, dayAt(2)));
+    expect(
+      payloadsOf(commit, "work_definition_occurrences_skipped").map((p) => p["heldOccurrenceIds"]),
+    ).toEqual([[d1]]);
+    expect(r.journal.definition(r.definitionId).held.map((h) => h.originalInstant)).toEqual([
+      stray.originalInstant,
+      dayAt(2),
+    ]);
+  });
+
+  it("Edge: 현재 동작 고정(계약 아님) — catch_up_bounded 밀어내기는 일정 보류만 센다 (test_SC030_catch_up_eviction_counts_only_schedule_held)", () => {
+    const r = registerAndMaterializeFirst(
+      definitionDeps("killr06c"),
+      definitionDraft({
+        activation: dailyActivation({ misfire: { kind: "catch_up_bounded", maxCatchUp: 1 } }),
+      }),
+    );
+    commitOrThrow(r.journal.resolveDue(r.definitionId, dayAt(1)));
+    const d1 = r.journal.definition(r.definitionId).held[0]?.occurrenceId;
+    const stray = strayHeldSignal(r.definitionId);
+    // 레코드 패치: 일정 정의 보류 목록 앞의 신호 회차(다른 생성 경로 대용 — 일정 정의는 신호 회차를 만들지 않는다).
+    patchDefinitionRecord(r.journal, r.stewardId, (d) => ({ ...d, held: [stray, ...d.held] }));
+    const commit = commitOrThrow(r.journal.resolveDue(r.definitionId, dayAt(2)));
+    const evicted = payloadsOf(commit, "work_definition_occurrences_skipped").flatMap(
+      (p) => p["heldOccurrenceIds"] as string[],
+    );
+    expect(evicted).toEqual([d1]);
+    expect(r.journal.definition(r.definitionId).held.map((h) => h.occurrenceId)).toContain(
+      stray.occurrenceId,
+    );
+  });
+
+  it("Edge: 현재 동작 고정(계약 아님) — 신호 입력을 가진 일정 보류도 신호 활성화 개정이 건너뛴다 (test_SC044_amendment_skips_schedule_held_with_signal_input)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("killr06a"));
+    commitOrThrow(r.journal.resolveDue(r.definitionId, dayAt(1)));
+    const d1 = r.journal.definition(r.definitionId).held[0];
+    if (d1 === undefined) throw new Error("expected held");
+    // 레코드 패치: 일정 보류 회차에 새 활성화와 같은 출처·이름의 신호 입력(다른 생성 경로 대용 — 일정 회차 입력에는 신호가 없다).
+    patchDefinitionRecord(r.journal, r.stewardId, (d) => ({
+      ...d,
+      held: d.held.map((h) => ({
+        ...h,
+        input: {
+          ...h.input,
+          signal: {
+            sourceId: FIXTURE_SIGNAL_SOURCE,
+            signalName: FIXTURE_SIGNAL_NAME,
+            sourceOccurrenceId: "stray",
+            payload: {},
+          },
+        } as never,
+      })),
+    }));
+    const grant = commitOrThrow(
+      r.journal.amend(r.definitionId, { activation: signalActivation() }, dayAt(1, "08:00")),
+    );
+    const skipped = payloadsOf(grant, "work_definition_occurrences_skipped");
+    expect(skipped.map((p) => p["reason"])).toContain("definition_revised");
+    expect(skipped.flatMap((p) => p["heldOccurrenceIds"] as string[])).toContain(d1.occurrenceId);
+    expect(r.journal.definition(r.definitionId).held).toEqual([]);
+  });
+
+  it("Error: 모르는 지연 정책 종류는 후보 경로에서 불변식 오류다 — 대조 칸(놓친 회차 없는 제때 해소)은 현재 동작 고정(계약 아님) (test_SC030_unknown_misfire_kind_fails_closed)", () => {
+    const late = registerDefinition(definitionDeps("killr07a"));
+    // 레코드 패치: 등록부가 받지 않는 지연 정책 종류(다른 생성 경로 대용).
+    patchActivation(late.journal, late.stewardId, { misfire: { kind: "later" } });
+    const commitsBefore = late.journal.commits.length;
+    expect(() => late.journal.resolveDue(late.definitionId, dayAt(0), { late: true })).toThrow(
+      DomainInvariantError,
+    );
+    expect(late.journal.commits).toHaveLength(commitsBefore);
+
+    const onTime = registerDefinition(definitionDeps("killr07b"));
+    patchActivation(onTime.journal, onTime.stewardId, { misfire: { kind: "later" } });
+    const commit = commitOrThrow(onTime.journal.resolveDue(onTime.definitionId, dayAt(0)));
+    expect(typesOf(commit)[0]).toBe("trigger_fired");
+  });
+
+  it("Edge: 현재 동작 고정(계약 아님) — fire_once_now 는 남는 maxCatchUp 을 읽지 않는다 (test_SC029_fire_once_now_ignores_stray_max_catch_up)", () => {
+    const run = (seed: string, stray: boolean) => {
+      const r = registerAndMaterializeFirst(definitionDeps(seed));
+      // 레코드 패치: fire_once_now 에 남은 maxCatchUp(다른 생성 경로 대용 — 초안 검증이 막는다).
+      if (stray)
+        patchActivation(r.journal, r.stewardId, {
+          misfire: { kind: "fire_once_now", maxCatchUp: 0 },
+        });
+      return commitOrThrow(r.journal.resolveDue(r.definitionId, dayAt(2)));
+    };
+    const patched = run("killr07f", true);
+    const plain = run("killr07g", false);
+    expect(typesOf(patched)).toEqual(typesOf(plain));
+    expect(
+      payloadsOf(patched, "work_definition_occurrences_skipped").map((p) => p["reason"]),
+    ).toEqual(["superseded_by_later"]);
+  });
+
+  it("Error: 정수가 아닌 maxCatchUp 은 같은 해소의 보류를 밀어내기 전에 불변식 오류다 (test_SC030_non_integer_max_catch_up_fails_closed)", () => {
+    const run = (seed: string, maxCatchUp: number) => {
+      const r = registerAndMaterializeFirst(definitionDeps(seed));
+      // 레코드 패치: 정수가 아닌 maxCatchUp(다른 생성 경로 대용 — 초안 검증이 막는다).
+      patchActivation(r.journal, r.stewardId, {
+        misfire: { kind: "catch_up_bounded", maxCatchUp },
+      });
+      return r;
+    };
+    const fraction = run("killr08a", 1.5);
+    const commitsBefore = fraction.journal.commits.length;
+    expect(() => fraction.journal.resolveDue(fraction.definitionId, dayAt(2))).toThrow(
+      DomainInvariantError,
+    );
+    expect(fraction.journal.commits).toHaveLength(commitsBefore);
+    const whole = run("killr08b", 1);
+    expect(whole.journal.resolveDue(whole.definitionId, dayAt(2)).kind).toBe("committed");
+  });
+
+  it("Edge: 현재 동작 고정(계약 아님) — 일정 정의는 남은 maxOccurrences 로 중지하지 않는다 (test_SC039_schedule_definition_ignores_draft_max_occurrences)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("killr09"));
+    commitOrThrow(r.journal.resolveDue(r.definitionId, dayAt(1)));
+    r.journal.completeTask(r.firstWorkId, firstTaskOf(r.journal, r.firstWorkId), dayAt(1, "08:00"));
+    // 레코드 패치: 일정 정의의 maxOccurrences(다른 생성 경로 대용 — 일정 정의 초안은 가질 수 없다).
+    patchDefinitionRecord(r.journal, r.stewardId, (d) => ({ ...d, maxOccurrences: 1 }));
+    const released = commitOrThrow(r.journal.release(r.definitionId, dayAt(1, "09:00")));
+    expect(typesOf(released)).not.toContain("work_definition_stopped");
+    expect(r.journal.definition(r.definitionId).state).toBe("ACTIVE");
+  });
+});
+
+describe("판정 기록 재점검: 손상된 triggerId·같은 시각 건너뜀·배열 종류", () => {
+  it("Error: 빈 일정 triggerId 는 해소에서 불변식 오류다 (test_SC021_corrupt_schedule_trigger_id_fails_closed)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("killr10a"));
+    // 레코드 패치: 빈 triggerId(다른 생성 경로 대용 — 초안 검증이 막는다).
+    patchActivation(r.journal, r.stewardId, { triggerId: "" });
+    const commitsBefore = r.journal.commits.length;
+    expect(() => r.journal.resolveDue(r.definitionId, dayAt(1))).toThrow(DomainInvariantError);
+    expect(r.journal.commits).toHaveLength(commitsBefore);
+  });
+
+  it("Error: 구분 문자를 담은 신호 triggerId 는 외부 신호에서 불변식 오류다 (test_SC022_corrupt_signal_trigger_id_fails_closed)", () => {
+    const r = registerDefinition(definitionDeps("killr10b"), { draft: signalDefinitionDraft() });
+    // 레코드 패치: U+001F 를 담은 triggerId(다른 생성 경로 대용).
+    patchActivation(r.journal, r.stewardId, { triggerId: "a\u001fb" });
+    const commitsBefore = r.journal.commits.length;
+    expect(() => r.journal.external(r.definitionId, "s-1", dayAt(0))).toThrow(DomainInvariantError);
+    expect(r.journal.commits).toHaveLength(commitsBefore);
+  });
+
+  it("Error: 빈 Task Trigger triggerId 는 외부 신호에서 불변식 오류다 (test_SC046_corrupt_task_trigger_id_fails_closed)", () => {
+    const listener = {
+      kind: "signal",
+      version: 1,
+      triggerId: "listener",
+      sourceId: FIXTURE_SIGNAL_SOURCE,
+      signal: FIXTURE_SIGNAL_NAME,
+    } as unknown as TriggerSpec;
+    const { journal, ids } = startJournal(
+      [draft("listener", { trigger: listener })],
+      testDeps("killr10c"),
+    );
+    const taskId = ids["listener"] as TaskId;
+    validate(journal, taskId);
+    const trigger = journal.task(taskId).trigger as unknown as Record<string, unknown>;
+    // 레코드 패치: 빈 triggerId(다른 생성 경로 대용 — 계획 검증이 막는다).
+    const patched = patchTask(journal.aggregate, taskId, {
+      trigger: { ...trigger, triggerId: "" } as unknown as TriggerSpec,
+    });
+    const signal = externalSignal(journal.deps, {
+      subject: { taskId },
+      sourceOccurrenceId: "o-1",
+      receivedAt: KILL_NOW,
+    });
+    expect(() => judgeTaskExternalSignal(journal.deps, patched, signal, KILL_NOW)).toThrow(
+      DomainInvariantError,
+    );
+  });
+
+  it("Edge: 현재 동작 고정(계약 아님) — 같은 원래 시각의 건너뜀 항목은 앞 항목을 장부에 남긴다 (test_SC033_equal_instant_skip_items_keep_first_as_last_resolved)", () => {
+    const r = registerAndMaterializeFirst(definitionDeps("killr11"));
+    commitOrThrow(r.journal.resolveDue(r.definitionId, dayAt(1)));
+    // 레코드 패치: 같은 원래 시각·다른 회차 번호의 보류 회차(다른 생성 경로 대용 — 계열 시각은 엄격히 는다).
+    patchDefinitionRecord(r.journal, r.stewardId, (d) => {
+      const first = d.held[0];
+      if (first === undefined) throw new Error("expected held");
+      const twin = {
+        ...first,
+        occurrenceId: scheduleOccurrenceId(r.definitionId, "daily", dayAt(1), 7),
+        recurrenceIndex: 7,
+      };
+      return { ...d, held: [first, twin] };
+    });
+    const stopped = commitOrThrow(r.journal.control(r.definitionId, "stop", dayAt(1, "08:00")));
+    expect(
+      payloadsOf(stopped, "work_definition_occurrences_skipped")[0]?.["lastResolvedSchedule"],
+    ).toEqual({ scheduledForUtc: dayAt(1), recurrenceIndex: 1 });
+  });
+
+  it("Error: 배열 kind 활성화 초안은 스키마 판정 전에 descriptor 미등록이다 — 이슈 사유는 현재 동작 고정(계약 아님) (test_SC010_array_activation_kind_is_descriptor_unknown)", () => {
+    const deps = definitionDeps("killr12a");
+    const draftContent = definitionDraft();
+    const reasons = definitionInvalidReasons(
+      issuesOf(
+        proposeDraft(deps, {
+          ...draftContent,
+          activation: { ...(dailyActivation() as unknown as object), kind: ["at"] },
+        }).outcome,
+      ),
+    );
+    expect(reasons).toEqual(["activation_descriptor_unknown"]);
+  });
+
+  it("Error: 현재 동작 고정(계약 아님) — 배열 kind 신호 활성화의 외부 신호는 trigger_mismatch 다 (test_SC045_array_kind_signal_activation_in_state_mismatches)", () => {
+    const r = registerDefinition(definitionDeps("killr12b"), { draft: signalDefinitionDraft() });
+    // 레코드 패치: 배열 kind(다른 생성 경로 대용 — 초안 검증이 막는다).
+    patchActivation(r.journal, r.stewardId, { kind: ["signal"] });
+    const before = r.journal.definition(r.definitionId);
+    const judged = r.journal.external(r.definitionId, "s-1", dayAt(0));
+    expect(judged.kind).toBe("rejected");
+    if (judged.kind === "rejected") expect(judged.reason).toBe("trigger_mismatch");
+    expect(typesOf(commitOf(judged))).not.toContain("trigger_fired");
+    expect(r.journal.definition(r.definitionId)).toEqual(before);
+  });
+});
+
+describe("판정 기록 재점검: 손수 만든 등록부", () => {
+  it("Error: 발화·파생 짝이 어긋난 일정 descriptor 는 일정 활성화로 받지 않는다 (test_SC051_hand_built_registry_pair_violation_not_schedule_activation)", () => {
+    const base = definitionDeps("killr13a").registries;
+    const variants: readonly [string, (d: TriggerDescriptor) => TriggerDescriptor][] = [
+      ["derivation none", (d) => ({ ...d, occurrenceDerivation: { kind: "none" } })],
+      ["firing on_ready", (d) => ({ ...d, firing: "on_ready" })],
+    ];
+    variants.forEach(([label, change], i) => {
+      const registries = withTriggerDescriptor(base, "at", (d) => {
+        if (d === undefined) throw new Error("expected at descriptor");
+        return change(d);
+      });
+      const reasons = definitionInvalidReasons(
+        issuesOf(
+          proposeDraft(definitionDeps(`killr13a${i}`, registries), definitionDraft()).outcome,
+        ),
+      );
+      expect(reasons, label).toEqual(["activation_kind_not_allowed"]);
+    });
+  });
+
+  it("Error: 예약 원인은 파생이 schedule 인 descriptor 를 요구한다 (test_SC048_schedule_cause_requires_schedule_derivation_descriptor)", () => {
+    const base = testDeps("killr13b");
+    const registries = withTriggerDescriptor(base.registries, "at", (d) => {
+      if (d === undefined) throw new Error("expected at descriptor");
+      return { ...d, occurrenceDerivation: { kind: "none" } };
+    });
+    const deps = { ...base, registries };
+    const trigger = atTrigger("timed", { kind: "fire_once_now" });
+    const { journal, ids } = startJournal([draft("timed", { trigger })], deps);
+    const taskId = ids["timed"] as TaskId;
+    validate(journal, taskId);
+    const before = journal.task(taskId);
+    const occurrenceId = mustOk(
+      deriveOccurrenceId({
+        kind: "schedule",
+        ownerId: taskId,
+        triggerId: "timed",
+        scheduledForUtc: (trigger as unknown as { scheduledForUtc: UtcInstant }).scheduledForUtc,
+        recurrenceIndex: 0,
+      }),
+    );
+    const outcome = taskCommand(journal.deps, journal.aggregate, taskId, {
+      kind: "schedule_task",
+      occurrenceId,
+      cause: "schedule",
+    });
+    expect(outcome).toEqual({
+      kind: "rejected",
+      rejection: { reason: "condition_not_met", detail: "occurrence_derivation_not_schedule" },
+    });
+    expect(journal.task(taskId)).toEqual(before);
+  });
+
+  it("Edge: 현재 동작 고정(계약 아님) — 출처 필드 없는 신호 발화 활성화로 개정하면 보류 신호 회차를 건너뛴다 (test_SC044_signal_firing_activation_without_signal_fields_skips_held)", () => {
+    const bareKind = "bare_signal";
+    const base = definitionDeps("killr13c").registries;
+    const signalDescriptor = base.triggers.get("signal", 1);
+    if (signalDescriptor === undefined) throw new Error("expected signal descriptor");
+    const registries = withTriggerDescriptor(base, bareKind, () => ({
+      ...signalDescriptor,
+      kind: bareKind,
+      title: "bare signal",
+      schema: z.strictObject({
+        kind: z.literal(bareKind),
+        version: z.literal(1),
+        triggerId: z.string(),
+      }),
+    }));
+    const r = registerDefinition(definitionDeps("killr13c", registries), {
+      draft: signalDefinitionDraft(),
+      tasks: STEWARD_MEMBER,
+    });
+    for (const s of ["open", "h1"]) commitOrThrow(r.journal.external(r.definitionId, s, dayAt(0)));
+    const heldIds = r.journal.definition(r.definitionId).held.map((h) => h.occurrenceId);
+    expect(heldIds).toHaveLength(1);
+    const grant = commitOrThrow(
+      r.journal.amend(
+        r.definitionId,
+        {
+          activation: {
+            kind: bareKind,
+            version: 1,
+            triggerId: "on_signal",
+          } as unknown as TriggerSpec,
+        },
+        dayAt(0, "08:00"),
+      ),
+    );
+    expect(
+      payloadsOf(grant, "work_definition_occurrences_skipped").flatMap(
+        (p) => p["heldOccurrenceIds"] as string[],
+      ),
+    ).toEqual(heldIds);
+    expect(r.journal.definition(r.definitionId).held).toEqual([]);
+  });
+});
+
+describe("SC-063: 상태 키와 work.id 가 다른 관리 Work", () => {
+  it("Error: 관리 Work 의 상태 키와 work.id 가 다르면 정의 입력 셋이 불변식 오류로 닫힌다 (test_SC063_state_key_work_id_mismatch_fails_closed)", () => {
+    const paths = ["control", "external", "resolve"] as const;
+    const setup = (path: (typeof paths)[number], seed: string) =>
+      path === "external"
+        ? registerDefinition(definitionDeps(seed), { draft: signalDefinitionDraft() })
+        : registerDefinition(definitionDeps(seed));
+    const act = (r: ReturnType<typeof setup>, path: (typeof paths)[number]) =>
+      path === "control"
+        ? r.journal.control(r.definitionId, "pause", dayAt(0, "01:00"))
+        : path === "external"
+          ? r.journal.external(r.definitionId, "s-1", dayAt(0))
+          : r.journal.resolveDue(r.definitionId, dayAt(0));
+    for (const path of paths) {
+      const r = setup(path, `killj2${path}`);
+      const steward = r.journal.work(r.stewardId);
+      // 상태 재구성: 키는 그대로 두고 work.id 만 다른 ID — 다중 Work 상태를 임의로 만든 입력(다른 생성 경로 대용).
+      r.journal.state = {
+        works: {
+          ...r.journal.state.works,
+          [r.stewardId]: {
+            ...steward,
+            work: { ...steward.work, id: nextEntityId(r.journal.deps.ids, "work") },
+          },
+        },
+      };
+      const stateBefore = r.journal.state;
+      const commitsBefore = r.journal.commits.length;
+      expect(() => act(r, path), path).toThrow(DomainInvariantError);
+      expect(r.journal.state, path).toBe(stateBefore);
+      expect(r.journal.commits, path).toHaveLength(commitsBefore);
+
+      const clean = setup(path, `killj2${path}ok`);
+      expect(["accepted", "committed"], path).toContain(act(clean, path).kind);
+    }
+  });
+});
+
+describe("SC-019: 취소 출처 파서 진입·선택 필드와 중지 출처 필드 유무", () => {
+  it("Error: 파서 진입의 객체·종류·출처·회차 이벤트 ID 거절은 반환 전체가 정해져 있다 (test_SC019_cancel_origin_parser_entry_rejections_exact)", () => {
+    const evt = nextEntityId(testDeps("killrw6a").ids, "event");
+    const failure = (field: string, reason: string) => ({
+      ok: false,
+      error: { kind: "value_format", field, reason },
+    });
+    const rows: readonly [string, unknown, unknown][] = [
+      ["null", null, failure("cancelOrigin", "not_an_object")],
+      ["string", "work_cascade", failure("cancelOrigin", "not_an_object")],
+      ["array", [], failure("cancelOrigin", "not_an_object")],
+      [
+        "unknown string kind",
+        { kind: "bogus", actorSource: "adde_self", workEventId: evt },
+        failure("cancelOrigin.kind", "unknown_kind"),
+      ],
+      [
+        "numeric kind",
+        { kind: 7, actorSource: "adde_self", workEventId: evt },
+        failure("cancelOrigin.kind", "unknown_kind"),
+      ],
+      [
+        "unknown actorSource",
+        { kind: "work_cascade", actorSource: "robot", workEventId: evt },
+        failure("cancelOrigin.actorSource", "unknown_actor_source"),
+      ],
+      [
+        "missing workEventId",
+        { kind: "work_cascade", actorSource: "adde_self" },
+        failure("cancelOrigin.workEventId", "required_for_kind"),
+      ],
+      [
+        "numeric workEventId",
+        { kind: "replan_dropped", actorSource: "adde_self", workEventId: 42 },
+        failure("cancelOrigin.workEventId", "required_for_kind"),
+      ],
+    ];
+    for (const [label, raw, expected] of rows) {
+      expect(parseCancelOrigin(raw), label).toStrictEqual(expected);
+    }
+    // 대조: 같은 꼴의 맞는 입력은 같은 값으로 통과한다.
+    const valid = { kind: "work_cascade", actorSource: "adde_self", workEventId: evt };
+    expect(parseCancelOrigin(valid)).toStrictEqual({ ok: true, value: valid });
+  });
+
+  it("Happy: 파서 수용은 선택 필드를 있을 때만 싣고 반환 전체가 입력과 같다 (test_SC019_cancel_origin_parser_ok_values_exact)", () => {
+    const ids = testDeps("killrw6b").ids;
+    const evt = nextEntityId(ids, "event");
+    const sig = nextEntityId(ids, "signal");
+    const ctl = nextEntityId(ids, "controlRequest");
+    const rows: readonly [string, Record<string, unknown>][] = [
+      [
+        "(a) vault + provenance + user actor + reason",
+        {
+          kind: "vault_signal",
+          actorSource: "human_local",
+          signalId: sig,
+          provenance: { channel: "vault", note: "n1" },
+          actor: { kind: "user", id: "u1" },
+          reason: "stop",
+        },
+      ],
+      ["(b) vault bare", { kind: "vault_signal", actorSource: "human_local", signalId: sig }],
+      [
+        "(c) work cascade + session actor",
+        {
+          kind: "work_cascade",
+          actorSource: "adde_self",
+          workEventId: evt,
+          actor: { kind: "session", sid: "s1" },
+        },
+      ],
+      [
+        "(d) control request + empty reason",
+        {
+          kind: "control_request",
+          actorSource: "unknown",
+          controlRequestId: ctl,
+          keyId: "k1",
+          reason: "",
+        },
+      ],
+    ];
+    for (const [label, raw] of rows) {
+      expect(parseCancelOrigin(raw), label).toStrictEqual({ ok: true, value: raw });
+    }
+  });
+
+  it("Edge: 종류 필드가 빠진 취소 출처의 중지 출처에는 그 키가 없다 (test_SC019_cascade_stop_origin_omits_absent_kind_fields)", () => {
+    const rows: readonly [Record<string, unknown>, Record<string, unknown>][] = [
+      [
+        { kind: "vault_signal", actorSource: "human_local" },
+        { kind: "work_cascade", actorSource: "human_local" },
+      ],
+      [
+        { kind: "control_request", actorSource: "unknown" },
+        { kind: "work_cascade", actorSource: "unknown" },
+      ],
+      [
+        { kind: "control_request", actorSource: "unknown", controlRequestId: "ctl_x" },
+        { kind: "work_cascade", actorSource: "unknown", controlRequestId: "ctl_x" },
+      ],
+      [
+        { kind: "control_request", actorSource: "unknown", keyId: "k" },
+        { kind: "work_cascade", actorSource: "unknown", keyId: "k" },
+      ],
+    ];
+    rows.forEach(([origin, expected], i) => {
+      const r = registerDefinition(definitionDeps(`killrw6c${i}`));
+      const { commit } = assembleCommit(
+        r.journal.deps,
+        r.journal.work(r.stewardId),
+        [mkEvent("work_canceled", { origin } as never, { workId: r.stewardId })],
+        meta(ACTION_AT, origin["actorSource"] as ActorSource),
+      );
+      expect(
+        payloadsOf(commit, "work_definition_stopped")[0]?.["stopOrigin"],
+        JSON.stringify(origin),
+      ).toStrictEqual(expected);
+    });
+  });
+
+  it("Happy: 공개 decideWorkCommand 의 Work 취소 이벤트는 그 Work 를 가리킨다 (test_SC019_decide_cancel_work_event_carries_work_id)", () => {
+    const { deps, aggregate } = reachWorkState("ACTIVE");
+    const origin = controlRequestCancelOrigin(deps);
+    const command: WorkCommand = {
+      kind: "cancel_work",
+      origin,
+      expectedRevision: aggregate.work.revision,
+      meta: meta(KILL_NOW, "unknown"),
+    };
+    expect(decideWorkCommand(deps, aggregate, command)).toStrictEqual({
+      kind: "events",
+      events: [{ type: "work_canceled", payload: { origin }, workId: aggregate.work.id }],
+    });
+  });
+});
+
+describe("독립 재검증 2회차 판별 — 신호 상한 보류·반환 애그리거트 키·제어 상태 적격", () => {
+  it("Error: 신호 상한에 닿은 기록에서 보류된 신호 회차는 같은 커밋의 중지 건너뜀에 들고 보류 목록이 빈다 (test_SC039_signal_bound_hold_skipped_by_same_commit_stop)", () => {
+    const setup = (seed: string) => {
+      const r = registerDefinition(definitionDeps(seed), {
+        draft: signalDefinitionDraft({ maxOpenOccurrences: 1, maxOccurrences: 3 }),
+        tasks: STEWARD_MEMBER,
+      });
+      commitOrThrow(r.journal.external(r.definitionId, "s1", dayAt(0)));
+      return r;
+    };
+    const r = setup("killc1a");
+    // 레코드 패치: 일생 materialize 수와 같은 신호 상한(다른 생성 경로 대용 — 상한 도달 커밋이 멈춘다).
+    patchDefinitionRecord(r.journal, r.stewardId, (d) => ({
+      ...d,
+      maxOccurrences: d.materialized.length,
+    }));
+    const commit = commitOrThrow(r.journal.external(r.definitionId, "s2", dayAt(0, "01:00")));
+    const heldIds = payloadsOf(commit, "work_definition_occurrence_held").map(
+      (p) => p["occurrenceId"],
+    );
+    expect(heldIds).toHaveLength(1);
+    expect(typesOf(commit)).toContain("work_definition_stopped");
+    const skips = payloadsOf(commit, "work_definition_occurrences_skipped");
+    expect(skips.map((p) => p["reason"])).toEqual(["definition_stopped"]);
+    expect(skips[0]?.["heldOccurrenceIds"]).toEqual(heldIds);
+    const after = r.journal.definition(r.definitionId);
+    expect(after.state).toBe("STOPPED");
+    expect(after.held).toEqual([]);
+
+    // 대조: 상한 아래 기록에서는 같은 신호가 보류만 되고 보류 목록에 남는다.
+    const room = setup("killc1b");
+    const held = commitOrThrow(room.journal.external(room.definitionId, "s2", dayAt(0, "01:00")));
+    expect(typesOf(held)).not.toContain("work_definition_stopped");
+    const roomHeld = payloadsOf(held, "work_definition_occurrence_held").map(
+      (p) => p["occurrenceId"],
+    );
+    expect(room.journal.definition(room.definitionId).held.map((h) => h.occurrenceId)).toEqual(
+      roomHeld,
+    );
+  });
+
+  it("Happy: 정의를 관리하지 않는 Work 의 공개 반환 애그리거트에는 definition 키가 없다 (test_SC016_aggregate_without_definition_has_no_definition_key)", () => {
+    const deps = definitionDeps("killc2");
+    const created = createWork(deps, {
+      kind: "create_work",
+      meta: meta(DEF_NOW),
+      projectId: mustOk(parseProjectId("prj_killc2project0001")),
+      title: "plain work",
+      objective: "plain work",
+      source: { kind: "markdown", documentId: "doc-killc2" },
+    });
+    if (created.kind !== "committed") throw new Error(`expected commit, got ${created.kind}`);
+    expect(Object.hasOwn(created.aggregate, "definition")).toBe(false);
+    const { journal, workId } = markdownWorkInPlanning(definitionDeps("killc2b"));
+    expect(Object.hasOwn(journal.work(workId), "definition")).toBe(false);
+    // 대조: 관리 Work 는 정의 키를 가진다.
+    const r = registerDefinition(definitionDeps("killc2c"));
+    expect(Object.hasOwn(r.journal.work(r.stewardId), "definition")).toBe(true);
+  });
+
+  it("Error: 기록 상태가 세 정의 상태 밖이면 중지 제어는 unexpected_state 로 거절된다 (test_SC034_stop_on_unknown_definition_state_refused)", () => {
+    const r = registerDefinition(definitionDeps("killc4a"));
+    // 레코드 패치: 계약 열거 밖 상태 값(다른 생성 경로 대용 — evolve 는 세 상태만 쓴다).
+    patchDefinitionRecord(r.journal, r.stewardId, (d) => ({ ...d, state: "X" as never }));
+    const judged = r.journal.control(r.definitionId, "stop", dayAt(0, "01:00"));
+    expect(judged.kind).toBe("rejected");
+    if (judged.kind === "rejected") expect(judged.reason).toBe("unexpected_state");
+    expect(r.journal.definition(r.definitionId).state).toBe("X");
+    // 대조: ACTIVE 정의의 같은 중지는 수용된다.
+    const ok = registerDefinition(definitionDeps("killc4b"));
+    expect(ok.journal.control(ok.definitionId, "stop", dayAt(0, "01:00")).kind).toBe("accepted");
+  });
+});
+
+describe("독립 재검증 2회차 판별 — 중지 출처·공유 인증 형태·파서 결과", () => {
+  it("Edge: 중지 출처의 출처는 취소 origin 이 아니라 명령 meta 출처다 (test_SC019_cascade_stop_origin_actor_source_from_meta)", () => {
+    const rows: readonly [ActorSource, ActorSource][] = [
+      ["human_local", "unknown"],
+      ["human_local", "human_local"],
+    ];
+    rows.forEach(([originSource, metaSource], i) => {
+      const r = registerDefinition(definitionDeps(`killb2${i}`));
+      const signalId = nextEntityId(r.journal.deps.ids, "signal");
+      const origin = { kind: "vault_signal", actorSource: originSource, signalId };
+      const { commit } = assembleCommit(
+        r.journal.deps,
+        r.journal.work(r.stewardId),
+        [mkEvent("work_canceled", { origin } as never, { workId: r.stewardId })],
+        meta(ACTION_AT, metaSource),
+      );
+      expect(
+        payloadsOf(commit, "work_definition_stopped")[0]?.["stopOrigin"],
+        `${originSource}/${metaSource}`,
+      ).toStrictEqual({ kind: "work_cascade", actorSource: metaSource, signalId });
+    });
+  });
+
+  it("Error: 문자열이 아닌 keyId 의 제어 요청은 정의 제어와 Work 취소 양쪽에서 거절된다 (test_SC019_non_string_key_id_refused_in_both_paths)", () => {
+    const rows: readonly [string, unknown, boolean][] = [
+      ["number", 5, false],
+      ["array", ["k"], false],
+      ["string", "k", true],
+    ];
+    rows.forEach(([label, keyId, shaped], i) => {
+      const { journal, definitionId } = registerDefinition(definitionDeps(`killb3a${i}`));
+      const controlRequestId = nextEntityId(journal.deps.ids, "controlRequest");
+      const channel = { kind: "control_request", controlRequestId, keyId } as never;
+      const paused = journal.control(definitionId, "pause", ACTION_AT, {
+        channel,
+        actorSource: "unknown",
+      });
+      const markdown = journal.createMarkdownWork(ACTION_AT);
+      const canceled = journal.onWork(
+        markdown,
+        {
+          kind: "cancel_work",
+          origin: {
+            kind: "control_request",
+            actorSource: "unknown",
+            controlRequestId,
+            keyId,
+          } as never,
+        },
+        ACTION_AT,
+        { actorSource: "unknown" },
+      );
+      if (shaped) {
+        expect(paused.kind, label).toBe("accepted");
+        expect(canceled.kind, label).toBe("committed");
+      } else {
+        expect(paused.kind, label).toBe("rejected");
+        if (paused.kind === "rejected") expect(paused.reason, label).toBe("provenance_not_human");
+        expect(canceled, label).toEqual({
+          kind: "rejected",
+          rejection: { reason: "invalid_input", detail: "cancel_origin_invalid" },
+        });
+      }
+    });
+  });
+
+  it("Happy: 파서 수용 결과의 actor 는 검사한 필드만 담는다 (test_SC019_cancel_origin_parser_actor_drops_extra_keys)", () => {
+    const sig = nextEntityId(testDeps("killb3b").ids, "signal");
+    const base = { kind: "vault_signal", actorSource: "human_local", signalId: sig };
+    expect(
+      parseCancelOrigin({ ...base, actor: { kind: "user", id: "u1", role: "admin" } }),
+    ).toStrictEqual({ ok: true, value: { ...base, actor: { kind: "user", id: "u1" } } });
+    expect(
+      parseCancelOrigin({ ...base, actor: { kind: "session", sid: "s1", note: 1 } }),
+    ).toStrictEqual({ ok: true, value: { ...base, actor: { kind: "session", sid: "s1" } } });
+  });
+});
+
+describe("독립 재검증 2회차 판별 — 정의 이벤트의 관리 Work 귀속(외부 신호·해제·취소 연쇄)", () => {
+  it("Error: sourceWorkId 가 다른 기록에서도 외부 신호·보류 해제·관리 Work 취소 연쇄의 정의 이벤트는 관리 Work 로 간다 (test_SC063_signal_release_cascade_events_follow_steward)", () => {
+    const registered = registerDefinition(definitionDeps("killc6"), {
+      draft: signalDefinitionDraft({ maxOpenOccurrences: 1 }),
+      tasks: STEWARD_MEMBER,
+    });
+    const { definitionId, stewardId } = registered;
+    const other = registered.journal.createMarkdownWork(dayAt(0, "00:10"));
+    const commits = registered.journal.commits.map((c) => ({
+      ...c,
+      events: c.events.map((e) => {
+        if (e.type !== "work_definition_created") return e;
+        const payload = e.payload as unknown as { definition: Record<string, unknown> };
+        return {
+          ...e,
+          payload: { ...payload, definition: { ...payload.definition, sourceWorkId: other } },
+        } as unknown as typeof e;
+      }),
+    })) as DomainCommit[];
+    const folded = foldWorkflowEvents(commits.flatMap((c) => c.events));
+    if (!folded.ok) throw new Error(`fold failed ${JSON.stringify(folded.error)}`);
+    const journal = new WorkflowJournal(registered.journal.deps, folded.value, commits);
+    expect(journal.definition(definitionId).sourceWorkId).toBe(other);
+
+    const steps: readonly [string, () => DomainCommit][] = [
+      ["signal materialize", () => commitOrThrow(journal.external(definitionId, "s1", dayAt(0)))],
+      ["signal hold", () => commitOrThrow(journal.external(definitionId, "s2", dayAt(0, "01:00")))],
+      [
+        "release",
+        () => {
+          const first = journal.occurrenceWorkIds(definitionId)[0];
+          if (first === undefined) throw new Error("expected an occurrence work");
+          commitOrThrow(journal.cancelWork(first, dayAt(0, "02:00")));
+          return commitOrThrow(journal.release(definitionId, dayAt(0, "02:30")));
+        },
+      ],
+      [
+        "steward cancel cascade",
+        () =>
+          commitOrThrow(
+            journal.onWork(
+              stewardId,
+              { kind: "cancel_work", origin: vaultOrigin(journal.deps) },
+              dayAt(0, "03:00"),
+              { actorSource: "human_local" },
+            ),
+          ),
+      ],
+    ];
+    for (const [label, step] of steps) {
+      const commit = step();
+      // 정의 이벤트 — 페이로드 최상위에 definitionId 를 싣는 이벤트(정의 전이·건너뜀·보류·발화).
+      const definitionEvents = commit.events.filter((e) =>
+        Object.hasOwn(e.payload as object, "definitionId"),
+      );
+      expect(definitionEvents.length, label).toBeGreaterThan(0);
+      for (const e of definitionEvents)
+        expect(e.workId as WorkId | undefined, label).toBe(stewardId);
+      expect(
+        commit.events.some((e) => e.workId === other),
+        label,
+      ).toBe(false);
+      expect(journal.folded(), label).toEqual(journal.state);
+    }
+    expect(journal.definition(definitionId).state).toBe("STOPPED");
   });
 });

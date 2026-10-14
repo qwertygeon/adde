@@ -113,7 +113,12 @@ describe("SC-003: 값 타입이 계약 정의와 일치하고 정의 밖 값은 
     for (const kind of CANCEL_ORIGIN_KINDS) {
       if (kind === "control_request") {
         expect(
-          parseCancelOrigin({ kind, actorSource: "unknown", controlRequestId: "ctl_x1" }).ok,
+          parseCancelOrigin({
+            kind,
+            actorSource: "unknown",
+            controlRequestId: "ctl_x1",
+            keyId: "fixture-key",
+          }).ok,
         ).toBe(true);
       } else if (kind === "vault_signal") {
         expect(parseCancelOrigin({ kind, actorSource: "human_local", signalId: "sig_x1" }).ok).toBe(

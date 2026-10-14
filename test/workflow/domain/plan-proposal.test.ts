@@ -260,15 +260,19 @@ describe("SC-022: 제안 digest 는 내용으로만 정해진다", () => {
     expect(failedCommit.aggregate.work.state).toBe("FAILED");
 
     // 같은 비JSON 내용이라도 사전 거절 사유가 있으면 기록 없이 거절된다.
-    for (const [extra, reason] of [
-      [{ basePlanRevision: 3 }, "condition_not_met"],
-      [{ definition: { title: "slot" } }, "unsupported_in_this_phase"],
-    ] as const) {
+    for (const [extra, reason] of [[{ basePlanRevision: 3 }, "condition_not_met"]] as const) {
       for (const onInvalid of [undefined, "fail_work"] as const) {
         const refused = commitWith(withFunction(extra), onInvalid);
         expectNoCommitRefusal(refused.outcome, reason);
       }
     }
+    // 정의 초안은 사전 거절이 아니라 검증 단계에서 다뤄진다 — 형태가 틀린 초안은 그 이슈 하나로 끝난다.
+    const malformedDraft = commitWith(
+      planInput([draft("x", { input: {} })], { definition: { title: "slot" } }),
+    );
+    expect(invalidIssues(malformedDraft.outcome)).toEqual([
+      { kind: "definition_invalid", reason: "draft_malformed" },
+    ]);
 
     // 대조: 함수 값만 뺀 같은 계획은 커밋된다.
     const plain = commitWith(planInput([draft("x", { input: {} })]));
@@ -1476,29 +1480,59 @@ describe("SC-034: 무효 제안에 대한 grant 는 철회 커밋 뒤 낡음으�
   });
 });
 
-describe("SC-035: 반복 정의에 걸친 제안은 미지원으로 거절된다", () => {
-  it("Happy: 정의 초안을 실은 제안·직접 커밋이 모두 unsupported_in_this_phase 다 (test_SC035_definition_draft_refused_on_both_paths)", () => {
+describe("SC-035: 반복 정의에 걸친 제안은 필수 승인을 거치고 템플릿 출처 명령은 거절된다", () => {
+  /** 정의 초안을 낼 수 있는 markdown 출처 Work 의 계획 단계 — markdown 출처 create_work 경로 대용 레코드 패치. */
+  function markdownPlanning(): { deps: DomainDeps; aggregate: WorkAggregate } {
     const { deps, aggregate } = reachWorkState("PLANNING");
-    const plan = planInput([draft("a")], { definition: { title: "recurring" } });
-    expectNoCommitRefusal(proposePlanOn(deps, aggregate, plan), "unsupported_in_this_phase");
-    expectNoCommitRefusal(commitPlanOn(deps, aggregate, plan), "unsupported_in_this_phase");
+    return {
+      deps,
+      aggregate: patchWork(aggregate, { source: { kind: "markdown", documentId: "doc-sc035" } }),
+    };
+  }
+  const DEFINITION_DRAFT = {
+    title: "recurring",
+    activation: {
+      kind: "signal",
+      version: 1,
+      triggerId: "on_signal",
+      sourceId: "fixture_source",
+      signal: "fixture_ready",
+    },
+    template: [draft("t")],
+    maxOpenOccurrences: 1,
+  };
+
+  it("Happy: 정의 초안을 실은 제안은 승인 대기로 가고 직접 커밋은 필수 승인 거절이다 (test_SC035_definition_draft_refused_on_both_paths)", () => {
+    const { deps, aggregate } = markdownPlanning();
+    const plan = planInput([draft("a")], { definition: DEFINITION_DRAFT });
+    const proposed = committedCommit(proposePlanOn(deps, aggregate, plan));
+    expect(proposed.aggregate.work.state).toBe("WAITING_APPROVAL");
+    expectNoCommitRefusal(
+      commitPlanOn(deps, aggregate, plan),
+      "condition_not_met",
+      "mandatory_plan_approval_required",
+    );
   });
 
-  it("Edge: definition_template 출처도 같다 (test_SC035_definition_template_source_refused)", () => {
-    const { deps, aggregate } = reachWorkState("PLANNING");
+  it("Edge: definition_template 출처 명령은 invalid_input 이다 (test_SC035_definition_template_source_refused)", () => {
+    const { deps, aggregate } = markdownPlanning();
     const plan = planInput([draft("a")], { source: "definition_template" });
-    expectNoCommitRefusal(proposePlanOn(deps, aggregate, plan), "unsupported_in_this_phase");
-    expectNoCommitRefusal(commitPlanOn(deps, aggregate, plan), "unsupported_in_this_phase");
+    expectNoCommitRefusal(proposePlanOn(deps, aggregate, plan), "invalid_input");
+    expectNoCommitRefusal(commitPlanOn(deps, aggregate, plan), "invalid_input");
   });
 
   it("Error: 거절은 Work 상태·revision 을 바꾸지 않고, 같은 계획에서 정의만 빼면 수용된다 (test_SC035_refusal_keeps_state_and_revision)", () => {
-    const { deps, aggregate } = reachWorkState("PLANNING");
-    const refused = commitPlanOn(deps, aggregate, planInput([draft("a")], { definition: {} }));
+    const { deps, aggregate } = markdownPlanning();
+    const refused = commitPlanOn(
+      deps,
+      aggregate,
+      planInput([draft("a")], { definition: DEFINITION_DRAFT }),
+    );
     expect(committedChain(refused)).toEqual([]);
     expect(aggregate.work.state).toBe("PLANNING");
     const accepted = committedCommit(commitPlanOn(deps, aggregate, planInput([draft("a")])));
     expect(accepted.aggregate.work.revision).toBe(aggregate.work.revision + 1);
-    // 출처가 두 값 밖이면 미지원이 아니라 invalid_input 이다(런타임 우회 입력).
+    // 출처가 두 값 밖이면 invalid_input 이다(런타임 우회 입력).
     const unknownSource = planInput([draft("a")], {
       source: "imported" as unknown as "planner",
     });

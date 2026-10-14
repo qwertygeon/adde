@@ -71,3 +71,20 @@ export type {
   BoundInput,
   BindingResolutionFailure,
 } from "./task-result/binding.js";
+export * from "./timezone-recompute.js";
+export * from "./definition/model.js";
+export {
+  workflowStateOf,
+  withWork,
+  findSteward,
+  openOccurrenceCount,
+  foldWorkflowEvents,
+} from "./definition/commit.js";
+export type { StewardWork, WorkflowState } from "./definition/commit.js";
+export { buildTemplateProposal, templateProposalDigest } from "./definition/draft.js";
+export type { TemplateProposalCheck } from "./definition/draft.js";
+export { materializationBlocker } from "./definition/occurrence.js";
+export { executeDefinitionCommand, judgeDefinitionSignal } from "./definition/engine.js";
+export type { WorkflowOutcome, WorkflowSignalJudgement } from "./definition/engine.js";
+export { judgeTaskExternalSignal } from "./external-signal.js";
+export { providedOccurrenceFields } from "./task-result/binding.js";

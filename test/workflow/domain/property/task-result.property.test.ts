@@ -4,11 +4,8 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import * as z from "zod";
-import {
-  checkReportedOutputs,
-  proveSchemaSubset,
-  shapeOf,
-} from "../../../../src/workflow/domain/index.js";
+import { proveSchemaSubset, shapeOf } from "../../../../src/workflow/domain/index.js";
+import { checkReportedOutputs } from "../../../../src/workflow/domain/internal.js";
 import { testDeps } from "../helpers/fixtures.js";
 import { AGENT_GOAL_INPUT, AGENT_GOAL_TYPE, independentDigest } from "../helpers/scenario.js";
 

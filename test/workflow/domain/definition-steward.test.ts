@@ -1,11 +1,7 @@
 // 관리 Work 파생 상태·중지 뒤 완료·관리 Work 취소 연쇄·취소 출처 검증·재계획 독립.
 import { describe, expect, it } from "vitest";
-import {
-  assembleCommit,
-  judgeSignal,
-  mkEvent,
-  nextEntityId,
-} from "../../../src/workflow/domain/index.js";
+import { judgeSignal, nextEntityId } from "../../../src/workflow/domain/index.js";
+import { mkEvent, assembleCommit } from "../../../src/workflow/domain/internal.js";
 import type {
   ActorSource,
   CancelOrigin,
@@ -365,6 +361,17 @@ describe("SC-019: 취소 출처는 인증 형태·종류 필드를 검사하고 
         },
         "unknown",
       ],
+      [
+        "(g) out-of-kind note",
+        {
+          kind: "control_request",
+          actorSource: "unknown",
+          controlRequestId: ctl(),
+          keyId: "k1",
+          note: "x",
+        },
+        "unknown",
+      ],
     ];
     for (const [label, origin, actorSource] of cases) {
       const outcome = journal.onWork(
@@ -382,7 +389,7 @@ describe("SC-019: 취소 출처는 인증 형태·종류 필드를 검사하고 
     expect(journal.definition(definitionId)).toEqual(before);
     expect(journal.work(stewardId)).toEqual(stewardBefore);
 
-    // 대조: 갖춘 제어 요청 취소는 커밋되고 이벤트에는 검사한 필드만 실린다(덧붙인 note 없음).
+    // 대조: 갖춘 제어 요청 취소는 커밋되고 이벤트에는 검사한 필드만 실린다.
     const controlRequestId = ctl();
     const accepted = commitOfOutcome(
       journal.onWork(
@@ -394,7 +401,6 @@ describe("SC-019: 취소 출처는 인증 형태·종류 필드를 검사하고 
             actorSource: "unknown",
             controlRequestId,
             keyId: "k1",
-            note: "x",
           } as unknown as CancelOrigin,
         },
         ACTION_AT,

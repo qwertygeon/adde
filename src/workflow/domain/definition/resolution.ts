@@ -130,12 +130,14 @@ function stopResolution(
   const items: SkipItem[] = [];
   if (pending !== undefined) {
     if (isDue(pending, now)) {
-      items.push(...dueRowsOf(deps, definition, activation, pending, now).map(skipItemOfRow));
+      for (const row of dueRowsOf(deps, definition, activation, pending, now)) {
+        items.push(skipItemOfRow(row));
+      }
     } else {
       out.push(canceledEvent(definition, pending, "definition_stopped"));
     }
   }
-  items.push(...held.map(skipItemOfHeld));
+  for (const occurrence of held) items.push(skipItemOfHeld(occurrence));
   const skipped = skipEvent(definition, items, "definition_stopped");
   if (skipped !== undefined) out.push(skipped);
   return out;
@@ -306,7 +308,16 @@ export function decideAmendment(
     : nextRow === undefined;
   if (exhausted) {
     out.push(stoppedEvent(definition, SERIES_EXHAUSTED));
-    out.push(...stopResolution(deps, definition, draft.activation, undefined, keptHeld, now));
+    for (const event of stopResolution(
+      deps,
+      definition,
+      draft.activation,
+      undefined,
+      keptHeld,
+      now,
+    )) {
+      out.push(event);
+    }
   }
   return out;
 }

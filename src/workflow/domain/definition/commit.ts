@@ -223,7 +223,7 @@ export function assembleWorkflowCommit(
       decided: b.decided,
       ...(b.causationId !== undefined ? { causationId: b.causationId } : {}),
     }));
-    staged.push(...newStaged);
+    for (const item of newStaged) staged.push(item);
     const current = scratchOf(workId);
     const identity = identityOf(workId);
     const envs = newStaged.map((s, i) =>
@@ -422,6 +422,8 @@ const CATALOG_BY_NAME = new Map<string, (typeof EVENT_CATALOG)[number]>(
  * 이벤트 전체 로그를 접는다. 이벤트마다 카탈로그 이름·도메인 생산 표기·스키마 버전 1·`workId` 를 검사하고,
  * 커밋 그룹(index 1..count 연속·count 일치)을 확인한 뒤 커밋마다 `workId` 로 나눠 Work 별로 적용한다.
  * 처음 보는 Work 의 구간은 `work_created` 로 시작해야 한다.
+ * 입력 이벤트 열을 신뢰한다 — 엔진 커밋이나 그 저장 로그를 재생한다는 전제이고, 위 검사 밖의 페이로드 의미·출처는 다시 판정하지
+ * 않는다.
  */
 export function foldWorkflowEvents(
   events: readonly WorkflowEventEnvelope[],

@@ -111,7 +111,10 @@ describe("SC-051: 새 TaskType 이 등록만으로 종결까지 간다", () => {
       for (const match of content.matchAll(specifierRe)) {
         const spec = match[1] ?? "";
         if (!spec.includes("/src/")) continue;
-        (spec.endsWith("/src/workflow/domain/index.js") ? barrel : other).push(spec);
+        const allowed =
+          spec.endsWith("/src/workflow/domain/index.js") ||
+          spec.endsWith("/src/workflow/domain/internal.js");
+        (allowed ? barrel : other).push(spec);
       }
       return { barrel, other };
     };

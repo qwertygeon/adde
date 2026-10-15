@@ -14,7 +14,7 @@ import { addMs, hasPassed } from "./values.js";
 import type { UtcInstant } from "./values.js";
 import { isSatisfyingTerminal, isTerminalTaskState } from "./task-state.js";
 import { isTaskSubjectDecision } from "./pending-decision.js";
-import type { PendingDecisionKind } from "./pending-decision.js";
+import type { PendingDecision, PendingDecisionKind } from "./pending-decision.js";
 import type { TaskCommand, AttemptOutcome } from "./commands.js";
 import type { DecidedEvent } from "./events.js";
 import { mkEvent } from "./events.js";
@@ -27,9 +27,21 @@ import {
   requiresPreExecutionApproval,
 } from "./policy/pre-execution-approval.js";
 import { scheduleCauseDeclared } from "./policy/trigger-cause.js";
-import { OUTPUT_SCHEMA_VIOLATION, prepareReportedOutputs } from "./task-result/outputs.js";
+import {
+  OUTPUT_SCHEMA_VIOLATION,
+  copyFailureIssues,
+  prepareReportedOutputs,
+} from "./task-result/outputs.js";
 import { bindingUnsatisfiedProducerIds, resolveBoundInputs } from "./task-result/binding.js";
 import type { BoundInput } from "./task-result/binding.js";
+import type { IsolatedCopyFailure } from "./derivation/canonical-json.js";
+import {
+  commandCancelOrigin,
+  isAttemptOutcomeKind,
+  isOwnMember,
+  isPlainRecord,
+  pendingDecisionOf,
+} from "./entry/shape.js";
 
 export interface TimeEvaluation {
   readonly validityPassed: boolean;
@@ -176,21 +188,21 @@ export interface AttemptRouting {
   readonly jitterDrawMs?: number;
 }
 
-/** 시도 결과로 주차할 때 원인별로 허용하는 결정 종류. */
-const PARK_DECISION_KIND: Readonly<
-  Record<
-    | "gate_denied"
-    | "executor_blocked"
-    | "dispatcher_refused"
-    | "effect_dead_lettered"
-    | "dispatch_orphaned"
-    | "dispatch_withdrawn",
-    PendingDecisionKind
-  >
+/**
+ * blocked 결과로 주차할 때 원인별로 허용하는 결정 종류. 결과 종류 표와 섞지 않는다 — 섞으면 결과 종류
+ * 이름을 원인으로 적은 blocked 결과가 task_awaiting_human.cause 형 밖 값으로 커밋된다.
+ */
+const BLOCKED_CAUSE_DECISION_KIND: Readonly<
+  Record<"gate_denied" | "executor_blocked" | "dispatcher_refused", PendingDecisionKind>
 > = {
   gate_denied: "tool_permission_denied_unattended",
   executor_blocked: "tool_permission_denied_unattended",
   dispatcher_refused: "tool_permission_denied_unattended",
+};
+/** blocked 밖 시도 결과로 주차할 때 결과 종류별로 허용하는 결정 종류. */
+const PARKED_OUTCOME_DECISION_KIND: Readonly<
+  Record<"effect_dead_lettered" | "dispatch_orphaned" | "dispatch_withdrawn", PendingDecisionKind>
+> = {
   effect_dead_lettered: "dead_letter_resolution_required",
   dispatch_orphaned: "dead_letter_resolution_required",
   dispatch_withdrawn: "dead_letter_resolution_required",
@@ -259,12 +271,29 @@ function rejected(rejection: CommandRejection): TaskDecideOutcome {
   return { kind: "rejected", rejection };
 }
 
-/** 명령 kind 가 현재 상태에서 가질 수 있는 행 존재 → 행 조건 판정(사전 검사의 나머지 단계는 engine.ts). */
+/**
+ * 시도 결과의 형 — 평범한 객체, 여덟 종류 중 하나, 있는 결정 필드는 대기 결정 형. 어기면 거절 detail.
+ */
+function attemptOutcomeShapeIssue(raw: unknown): string | undefined {
+  if (!isPlainRecord(raw) || !isAttemptOutcomeKind(raw["kind"])) return "attempt_outcome_malformed";
+  for (const field of ["decision", "deadLetterDecision"]) {
+    if (raw[field] !== undefined && pendingDecisionOf(raw[field]) === undefined) {
+      return "pending_decision_malformed";
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 명령 kind 가 현재 상태에서 가질 수 있는 행 존재 → 행 조건 판정(사전 검사의 나머지 단계는 engine.ts).
+ * isolated 는 진입 사본이 격리한 완료 보고 출력·evidence 의 실패다 — 있으면 완료를 출력 위반 실패로 바꾼다.
+ */
 export function decideTaskCommand(
   deps: DomainDeps,
   task: TaskRecord,
   command: TaskCommand,
   aggregate: WorkAggregate,
+  isolated: readonly IsolatedCopyFailure[] = [],
 ): TaskDecideOutcome {
   const taskId = task.id;
   switch (command.kind) {
@@ -370,13 +399,18 @@ export function decideTaskCommand(
     }
     case "start_attempt": {
       if (task.state === "READY") {
-        if (requiresPreExecutionApproval(task)) {
-          return events(preExecutionApprovalPark(deps, task, command.meta.now));
+        // 준비 즉시 시작에는 발화 occurrence 가 없다. 무효한 시작 명령이 승인 결정을 열지 않게 발화 선언
+        // 검사를 승인 주차보다 먼저 한다.
+        if (command.firedOccurrenceId !== undefined) {
+          return rejected(rejectInvalidInput("fired_occurrence_not_allowed_for_ready"));
         }
         const trigger = deps.registries.triggers.get(task.trigger.kind, task.trigger.version);
         if (trigger === undefined) return rejected(rejectCondition("descriptor_unknown"));
         if (trigger.firing !== "on_ready") {
           return rejected(rejectCondition("READY 시작은 준비 즉시 발화하는 Trigger 만"));
+        }
+        if (requiresPreExecutionApproval(task)) {
+          return events(preExecutionApprovalPark(deps, task, command.meta.now));
         }
       } else if (task.state === "SCHEDULED") {
         if (requiresPreExecutionApproval(task)) return rejected(rejectAwaitingApproval());
@@ -439,19 +473,21 @@ export function decideTaskCommand(
     }
     case "park_awaiting_human": {
       if (task.state !== "READY" && task.state !== "SCHEDULED") return rejected(rejectNotInTable());
-      if (!isTaskSubjectDecision(command.decision) || command.decision.taskId !== taskId) {
+      const cause: unknown = command.cause;
+      if (cause !== "unattended_eligibility_refused") {
+        return rejected(rejectInvalidInput("park_cause_invalid"));
+      }
+      const decision = pendingDecisionOf(command.decision);
+      if (decision === undefined) return rejected(rejectInvalidInput("pending_decision_malformed"));
+      if (!isTaskSubjectDecision(decision) || decision.taskId !== taskId) {
         return rejected(rejectInvalidInput("decision 이 이 Task 주체가 아님"));
       }
-      if (command.decision.kind !== "tool_permission_denied_unattended") {
+      if (decision.kind !== "tool_permission_denied_unattended") {
         return rejected(rejectInvalidInput("무인 적격 거절 결정이 아님"));
       }
       if (requiresPreExecutionApproval(task)) return rejected(rejectAwaitingApproval());
       return events(
-        mkEvent(
-          "task_awaiting_human",
-          { pendingDecision: command.decision, cause: command.cause },
-          { taskId },
-        ),
+        mkEvent("task_awaiting_human", { pendingDecision: decision, cause }, { taskId }),
       );
     }
     case "record_attempt_outcome": {
@@ -459,10 +495,21 @@ export function decideTaskCommand(
       if (task.openAttempt === undefined || task.openAttempt.attemptId !== command.attemptId) {
         return rejected(rejectCondition("attemptId 가 열린 attempt 와 다름"));
       }
+      const shapeIssue = attemptOutcomeShapeIssue(command.outcome);
+      if (shapeIssue !== undefined) return rejected(rejectInvalidInput(shapeIssue));
       const attemptId = task.openAttempt.attemptId;
       const attemptNo = task.openAttempt.attemptNo;
       let outcome: AttemptOutcome = command.outcome;
-      if (outcome.kind === "completed") {
+      if (outcome.kind === "completed" && isolated.length > 0) {
+        // 정규 JSON 이 아닌 보고 출력·evidence 는 출력 위반 실패 attempt 다. 실패 attempt 는 출력 값을 기록하지
+        // 않으므로 마스킹·크기 검사를 거치지 않는다.
+        outcome = {
+          kind: "failed",
+          code: OUTPUT_SCHEMA_VIOLATION,
+          outputIssues: copyFailureIssues(isolated),
+          ...(outcome.jitterDrawMs !== undefined ? { jitterDrawMs: outcome.jitterDrawMs } : {}),
+        };
+      } else if (outcome.kind === "completed") {
         const reported = outcome.outputs === undefined ? {} : outcome.outputs;
         const prepared = prepareReportedOutputs(deps, task, reported);
         if (prepared.ok) {
@@ -514,21 +561,24 @@ export function decideTaskCommand(
           );
         }
         case "RUNNING>BLOCKED_AWAITING_HUMAN:task_awaiting_human": {
-          const decision =
+          const declared: unknown =
             "decision" in outcome
               ? outcome.decision
               : "deadLetterDecision" in outcome
                 ? outcome.deadLetterDecision
                 : undefined;
-          if (decision === undefined)
+          if (declared === undefined)
             return rejected(rejectInvalidInput("blocked 결과에 decision 없음"));
+          const decision = pendingDecisionOf(declared) as PendingDecision;
           if (!isTaskSubjectDecision(decision) || decision.taskId !== taskId) {
             return rejected(rejectInvalidInput("decision 이 이 Task 주체가 아님"));
           }
-          const parkReason = outcome.kind === "blocked" ? outcome.cause : outcome.kind;
-          const expectedKind = (
-            PARK_DECISION_KIND as Readonly<Record<string, PendingDecisionKind | undefined>>
-          )[parkReason];
+          const parkTable: Readonly<Record<string, PendingDecisionKind>> =
+            outcome.kind === "blocked" ? BLOCKED_CAUSE_DECISION_KIND : PARKED_OUTCOME_DECISION_KIND;
+          const parkReason: unknown = outcome.kind === "blocked" ? outcome.cause : outcome.kind;
+          const expectedKind = isOwnMember(parkTable, parkReason)
+            ? parkTable[parkReason]
+            : undefined;
           if (expectedKind === undefined || decision.kind !== expectedKind) {
             return rejected(rejectInvalidInput("주차 원인과 결정 종류가 맞지 않음"));
           }
@@ -575,8 +625,10 @@ export function decideTaskCommand(
     }
     case "abandon_retries": {
       if (task.state !== "RETRY_WAIT") return rejected(rejectNotInTable());
-      const kind =
-        command.cause === "retry_budget_exhausted" ? "retry_budget_exhausted" : "retries_abandoned";
+      const kind: unknown = command.cause;
+      if (kind !== "retry_budget_exhausted" && kind !== "retries_abandoned") {
+        return rejected(rejectInvalidInput("abandon_cause_invalid"));
+      }
       return events(mkEvent("task_failed", { reason: { kind } }, { taskId }));
     }
     case "expire": {
@@ -652,25 +704,27 @@ export function decideTaskCommand(
     }
     case "cancel_task": {
       if (isTerminalTaskState(task.state)) return rejected(rejectNotInTable());
-      if (command.origin.kind === "vault_signal" && command.origin.actorSource !== "human_local") {
-        return rejected(rejectInvalidInput("vault_signal 취소는 human_local 필수"));
-      }
+      const parsedOrigin = commandCancelOrigin(command.origin, command.meta.actorSource);
+      if (!parsedOrigin.ok) return rejected(rejectInvalidInput(parsedOrigin.error));
+      const origin = parsedOrigin.value;
       if (task.state === "WAITING_CONFIRMATION") {
         return events(
           mkEvent(
             "confirmation_cancelled",
             {
               confirmationId: task.confirmationId as import("./ids.js").ConfirmationId,
-              origin: command.origin,
+              origin,
             },
             { taskId },
           ),
         );
       }
-      return events(mkEvent("task_canceled", { origin: command.origin }, { taskId }));
+      return events(mkEvent("task_canceled", { origin }, { taskId }));
     }
     case "skip_task": {
       if (isTerminalTaskState(task.state)) return rejected(rejectNotInTable());
+      if (!isPlainRecord(command.reason))
+        return rejected(rejectInvalidInput("skip_reason_malformed"));
       return events(
         mkEvent(
           "task_skipped",

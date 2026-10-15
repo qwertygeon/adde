@@ -7,6 +7,7 @@ import {
   DomainInvariantError,
 } from "../../../src/workflow/domain/index.js";
 import type {
+  ActorSource,
   DomainDeps,
   FanOutMemberState,
   TaskId,
@@ -66,12 +67,16 @@ function ownerWithChildren(
   const ownerId = taskIds["owner"];
   if (ownerId === undefined) throw new Error("expected owner task");
   let current = aggregate;
-  const command = (taskId: TaskId, body: Record<string, unknown> & { kind: string }): void => {
+  const command = (
+    taskId: TaskId,
+    body: Record<string, unknown> & { kind: string },
+    actorSource: ActorSource = "adde_self",
+  ): void => {
     current = mustCommit(
       executeCommand(deps, current, {
         taskId,
         expectedRevision: requireTaskFor(current, taskId).revision,
-        meta: meta(NOW),
+        meta: meta(NOW, actorSource),
         ...body,
       } as Parameters<typeof executeCommand>[2]),
     ).aggregate;
@@ -113,7 +118,7 @@ function ownerWithChildren(
         },
       });
     if (target === "CANCELED")
-      command(taskId, { kind: "cancel_task", origin: controlRequestCancelOrigin(deps) });
+      command(taskId, { kind: "cancel_task", origin: controlRequestCancelOrigin(deps) }, "unknown");
     if (requireTaskFor(current, taskId).state !== target)
       throw new Error(`fixture: ${label} reached ${requireTaskFor(current, taskId).state}`);
   }

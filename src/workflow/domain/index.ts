@@ -12,14 +12,27 @@ export * from "./trigger.js";
 export * from "./task-policy.js";
 export * from "./aggregate.js";
 export * from "./commands.js";
-export * from "./events.js";
+export type * from "./events.js";
+export {
+  DEFINITION_TRANSITION_EVENT_TYPES,
+  DOMAIN_EVENT_PRODUCERS,
+  RECORD_ONLY_EVENT_TYPES,
+  TASK_REMINDER_EVENT_TYPES,
+  TASK_REVISION_EVENT_TYPES,
+  WORKFLOW_EVENT_SCHEMA_VERSION,
+  WORK_EVENT_TYPES,
+  parseEventType,
+} from "./events.js";
 export * from "./plan-graph.js";
 export * from "./completion.js";
 export * from "./evolve.js";
-export * from "./task-decide.js";
-export * from "./work-decide.js";
-export * from "./cascade.js";
-export * from "./engine.js";
+export type * from "./task-decide.js";
+export { evaluateTime, isActivationSatisfied, routeAttemptOutcome } from "./task-decide.js";
+export type * from "./work-decide.js";
+export type * from "./cascade.js";
+export type * from "./engine.js";
+export { createWork, executeCommand } from "./engine.js";
+export { isEngineCommit } from "./entry/seal.js";
 export * from "./signals.js";
 export * from "./fold.js";
 export * from "./derivation/occurrence-id.js";
@@ -35,19 +48,26 @@ export * from "./builtins/index.js";
 export * from "./validation/reaction-spec.js";
 export * from "./validation/task-validation.js";
 export * from "./policy/approval-surface.js";
-export * from "./policy/pre-execution-approval.js";
+export type * from "./policy/pre-execution-approval.js";
+export { requiresPreExecutionApproval } from "./policy/pre-execution-approval.js";
 export * from "./policy/fan-out.js";
 export * from "./policy/retry.js";
 export * from "./policy/misfire.js";
 export * from "./policy/spawn-limits.js";
 export * from "./policy/trigger-cause.js";
-export * from "./derivation/canonical-json.js";
+export type * from "./derivation/canonical-json.js";
+export {
+  CANONICAL_JSON_MAX_DEPTH,
+  canonicalJson,
+  canonicalJsonDigest,
+  canonicalJsonFrozenCopy,
+  canonicalJsonSnapshot,
+  utf8ByteLength,
+} from "./derivation/canonical-json.js";
 export {
   planProposalDigest,
   planMembershipChange,
   judgeMandatoryPlanApproval,
-  planPreconditionRejection,
-  validatePlanProposal,
 } from "./plan/proposal.js";
 export type {
   PlanProposalSource,
@@ -59,11 +79,17 @@ export type {
   MandatoryApprovalJudgement,
   PlanProposalCheck,
   PlanProposalContent,
+  PlanPreconditionCode,
 } from "./plan/proposal.js";
 export * from "./plan/replan.js";
 export * from "./task-result/data-schema.js";
 export * from "./task-result/schema-shape.js";
-export * from "./task-result/outputs.js";
+export type * from "./task-result/outputs.js";
+export {
+  OUTPUT_SCHEMA_VIOLATION,
+  prepareAcceptanceOutputs,
+  prepareReportedOutputs,
+} from "./task-result/outputs.js";
 export { resolveBoundInputs, bindingUnsatisfiedProducerIds } from "./task-result/binding.js";
 export type {
   OccurrenceBindingField,

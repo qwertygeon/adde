@@ -304,9 +304,8 @@ export type GrantResume =
   | { readonly to: "READY" }
   | {
       readonly to: "SCHEDULED";
-      readonly occurrence:
-        | { readonly kind: "given"; readonly occurrenceId: OccurrenceId }
-        | { readonly kind: "dead_letter_retry" };
+      /** 재개 occurrence 는 도메인이 Task 기록에서 파생한다(dead-letter 재시도). */
+      readonly occurrence: { readonly kind: "dead_letter_retry" };
     };
 
 export type DecisionApplication =
@@ -316,6 +315,12 @@ export type DecisionApplication =
   /** 커밋되는 내용은 Work 가 보유한 대기 제안뿐이다. */
   | { readonly kind: "plan_grant" }
   | { readonly kind: "plan_deny" };
+
+/** 행 표와 각 행 배열을 동결한다 — 진입 검사가 이 표의 자기 소유 키로 명령 종류를 판정한다. */
+function freezeRows(table: Readonly<Record<string, readonly string[]>>): void {
+  for (const rows of Object.values(table)) Object.freeze(rows);
+  Object.freeze(table);
+}
 
 // ---------------------------------------------------------------------------
 // 명령 kind → 도달 가능한 전이 행 ID (SC-005·SC-018 SoT). 행 ID 는 contract/task-transitions.ts·
@@ -383,7 +388,9 @@ export const TASK_COMMAND_ROWS: Readonly<Record<TaskCommand["kind"], readonly st
 } as const;
 
 /** 전이 행 없이 판정하는 명령 — 엔진 사전 검사가 빈 행 목록을 허용한다. */
-export const TASK_NON_ROW_COMMANDS: readonly TaskCommand["kind"][] = ["present_late_result"];
+export const TASK_NON_ROW_COMMANDS: readonly TaskCommand["kind"][] = Object.freeze([
+  "present_late_result",
+]);
 
 export const WORK_COMMAND_ROWS: Readonly<
   Record<WorkCommand["kind"] | "create_work", readonly string[]>
@@ -402,6 +409,9 @@ export const WORK_COMMAND_ROWS: Readonly<
     "ANY_NONTERMINAL>CANCELED:work_canceled",
   ],
 } as const;
+
+freezeRows(TASK_COMMAND_ROWS);
+freezeRows(WORK_COMMAND_ROWS);
 
 /** 명령이 아닌 경로로만 생산되는 행: 연쇄. */
 export const TASK_CASCADE_ROWS: readonly string[] = [

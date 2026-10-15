@@ -7,10 +7,10 @@ import {
   judgeSignal,
   nextEntityId,
   deriveOccurrenceId,
-  decideDependencyCascadeRound,
   parsePendingDecision,
   BUILTIN_REACTIONS,
 } from "../../../src/workflow/domain/index.js";
+import { decideDependencyCascadeRound } from "../../../src/workflow/domain/internal.js";
 import type {
   DomainDeps,
   WorkAggregate,
@@ -339,7 +339,7 @@ describe("SC-035: 승인 채널 거절 차단은 수리 해제되지 않는다",
       kind: "cancel_task",
       taskId,
       expectedRevision: requireTaskFor(aggregate, taskId).revision,
-      meta: meta(NOW),
+      meta: meta(NOW, "unknown"),
       origin: controlRequestCancelOrigin(deps),
     });
     expect(outcome.kind).toBe("committed");

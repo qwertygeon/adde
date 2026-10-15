@@ -14,6 +14,7 @@ import type { ValidationIssue } from "./validation/task-validation.js";
 import type { TaskStateName } from "./task-state.js";
 import type { DefinitionDraftInvalidReason } from "./definition/model.js";
 import type { OccurrenceBindingField } from "./task-result/binding.js";
+import type { PlanPreconditionCode } from "./plan/proposal.js";
 
 export type RelationEdgeKind = "dependency" | "parent" | "causal";
 
@@ -128,6 +129,11 @@ export type PlanValidationIssue =
       readonly reason: "skipped" | "output_absent";
     }
   | { readonly kind: "proposal_digest_mismatch" }
+  /** 내용·digest 는 맞지만 Work 가 보유한 대기 제안(ID·digest)이 아니다. */
+  | { readonly kind: "proposal_not_held" }
+  | { readonly kind: "proposal_precondition_unmet"; readonly reason: PlanPreconditionCode }
+  /** 보존 대상 기준 member 인데 Work 에 Task 레코드가 없다. */
+  | { readonly kind: "retained_record_missing"; readonly taskId: TaskId }
   | { readonly kind: "definition_invalid"; readonly reason: DefinitionDraftInvalidReason }
   /** 정의 템플릿을 회차 Work 의 첫 계획으로 검증한 이슈. */
   | { readonly kind: "definition_template_issue"; readonly issue: PlanValidationIssue }

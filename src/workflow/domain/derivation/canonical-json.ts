@@ -57,11 +57,71 @@ function isPlainRecord(value: object): boolean {
   return proto === Object.prototype || proto === null;
 }
 
+/**
+ * 경로 규칙 하나. path 는 루트에서 객체 키로만 내려가는 경로이고 그 자리의 값을 깊이 0 의 컨테이너로 다시
+ * 센다(그 값 자체의 canonicalJsonFrozenCopy 와 같은 깊이 경계). isolate 면 그 아래 직렬화 실패를 잡아 그
+ * 키를 빼고 실패를 기록한다.
+ */
+export interface CopyPathRule {
+  readonly path: readonly string[];
+  readonly isolate: boolean;
+}
+
+/** 격리 규칙 아래에서 난 직렬화 실패. path 는 root 기준 상대 위치(원래 키). */
+export interface IsolatedCopyFailure {
+  readonly root: readonly string[];
+  readonly reason: CanonicalJsonErrorReason;
+  readonly path: readonly (string | number)[];
+}
+
+interface RuleContext {
+  readonly rules: readonly CopyPathRule[];
+  readonly isolated: IsolatedCopyFailure[];
+}
+
+/** 규칙이 없으면 isolated 에 넣는 일이 없다. */
+const NO_RULES: RuleContext = Object.freeze({ rules: Object.freeze([]), isolated: [] });
+
+function ruleAt(
+  rules: readonly CopyPathRule[],
+  path: readonly (string | number)[],
+): CopyPathRule | undefined {
+  return rules.find(
+    (rule) =>
+      rule.path.length === path.length && rule.path.every((segment, i) => segment === path[i]),
+  );
+}
+
+/**
+ * 격리 규칙 자리의 값을 깊이 0 부터 직렬화한다. 조상 집합 사본을 써서 실패 뒤 바깥 조상 집합이 오염되지
+ * 않고(바깥 조상으로의 순환은 사본에도 있어 검출된다), 실패하면 경로 길이를 되돌린 뒤 undefined.
+ */
+function serializeIsolated(
+  member: unknown,
+  path: (string | number)[],
+  ancestors: Set<object>,
+  rule: CopyPathRule,
+  context: RuleContext,
+): string | undefined {
+  const length = path.length;
+  try {
+    return serialize(member, path, new Set(ancestors), 0, context);
+  } catch (error) {
+    if (!(error instanceof CanonicalJsonFailure)) throw error;
+    path.length = length;
+    context.isolated.push(
+      Object.freeze({ root: rule.path, reason: error.reason, path: error.path.slice(length) }),
+    );
+    return undefined;
+  }
+}
+
 function serialize(
   value: unknown,
   path: (string | number)[],
   ancestors: Set<object>,
   depth: number,
+  context: RuleContext,
 ): string {
   if (value === null) return "null";
   switch (typeof value) {
@@ -95,7 +155,7 @@ function serialize(
       const element: unknown = container[index];
       path.push(index);
       if (element === undefined) throw new CanonicalJsonFailure("undefined_in_array", [...path]);
-      parts.push(serialize(element, path, ancestors, depth + 1));
+      parts.push(serialize(element, path, ancestors, depth + 1, context));
       path.pop();
     }
     ancestors.delete(container);
@@ -110,7 +170,15 @@ function serialize(
     const member = record[key];
     if (member !== undefined) {
       const serializedKey = serializeString(key, [...path]);
-      parts.push(`${serializedKey}:${serialize(member, path, ancestors, depth + 1)}`);
+      const rule = ruleAt(context.rules, path);
+      if (rule === undefined) {
+        parts.push(`${serializedKey}:${serialize(member, path, ancestors, depth + 1, context)}`);
+      } else if (!rule.isolate) {
+        parts.push(`${serializedKey}:${serialize(member, path, ancestors, 0, context)}`);
+      } else {
+        const text = serializeIsolated(member, path, ancestors, rule, context);
+        if (text !== undefined) parts.push(`${serializedKey}:${text}`);
+      }
     }
     path.pop();
   }
@@ -121,7 +189,7 @@ function serialize(
 /** RFC 8785. 객체 키는 UTF-16 코드 단위 사전순, 값이 undefined 인 속성은 생략, -0 은 "0". */
 export function canonicalJson(value: unknown): Result<string, CanonicalJsonError> {
   try {
-    return ok(serialize(value, [], new Set(), 0));
+    return ok(serialize(value, [], new Set(), 0, NO_RULES));
   } catch (error) {
     if (error instanceof CanonicalJsonFailure) {
       return err({ kind: "canonical_json", reason: error.reason, path: error.path });
@@ -181,4 +249,34 @@ export function canonicalJsonFrozenCopy(value: unknown): Result<unknown, Canonic
   const snapshot = canonicalJsonSnapshot(value);
   if (!snapshot.ok) return snapshot;
   return ok(snapshot.value.value);
+}
+
+/**
+ * 경로 규칙을 적용한 canonicalJsonFrozenCopy. 직렬화는 한 번이고 속성마다 한 번 읽는다. 규칙 경로의 값은
+ * 깊이 0 의 루트로 다시 세고, 격리 규칙 아래 실패는 그 키를 뺀 채 isolated 에 모은다. 격리 밖 실패는
+ * 전체 실패다. 규칙이 없으면 canonicalJsonFrozenCopy 와 같은 값을 낸다.
+ */
+export function canonicalJsonFrozenCopyWithRules(
+  value: unknown,
+  rules: readonly CopyPathRule[],
+): Result<
+  { readonly value: unknown; readonly isolated: readonly IsolatedCopyFailure[] },
+  CanonicalJsonError
+> {
+  const isolated: IsolatedCopyFailure[] = [];
+  let text: string;
+  try {
+    text = serialize(value, [], new Set(), 0, { rules, isolated });
+  } catch (error) {
+    if (error instanceof CanonicalJsonFailure) {
+      return err({ kind: "canonical_json", reason: error.reason, path: error.path });
+    }
+    throw error;
+  }
+  return ok(
+    Object.freeze({
+      value: deepFreeze(JSON.parse(text) as unknown),
+      isolated: Object.freeze(isolated),
+    }),
+  );
 }

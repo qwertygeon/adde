@@ -28,6 +28,15 @@ import { assembleWorkflowCommit, findSteward, withWork } from "./definition/comm
 import type { StewardWork } from "./definition/commit.js";
 import { decideSignalOccurrence } from "./definition/occurrence.js";
 import type { WorkflowSignalJudgement } from "./definition/engine.js";
+import { EXTERNAL_SIGNAL_COPY_RULES, copyEntry } from "./entry/copy.js";
+import {
+  canonicalInstant,
+  isActorSourceValue,
+  isEntityIdText,
+  isPlainRecord,
+  soleSubjectKey,
+} from "./entry/shape.js";
+import { sealOutcome } from "./entry/seal.js";
 
 /** 대상이 판정에 내놓는 관측 — 앞 검사가 통과한 뒤에만 다음 항목을 본다. */
 export interface ExternalSignalSubjectView {
@@ -178,8 +187,10 @@ function taskTriggerMatches(deps: DomainDeps, task: TaskRecord, signal: External
 }
 
 /**
- * Task 대상 외부 신호. 수용하면 같은 커밋에서 수용 이벤트를 원인으로 예약한다 — 수용 이벤트 ID·시각이
- * 정해진 뒤 occurrence 를 파생한다.
+ * Task 대상 외부 신호. 신호를 정규 JSON 동결 사본으로 한 번 뜨고(payload 는 깊이 루트), 진입 형(최상위 객체·
+ * 진입 시각·출처 열거·subject 가 정확히 taskId 하나이고 Task ID 형식)을 본 뒤 판정한다 — 형 위반은 기록 없는
+ * invalid_input 이다. 수용하면 같은 커밋에서 수용 이벤트를 원인으로 예약한다 — 수용 이벤트 ID·시각이 정해진 뒤
+ * occurrence 를 파생한다. 결과의 커밋은 표식·동결된다.
  */
 export function judgeTaskExternalSignal(
   deps: DomainDeps,
@@ -187,12 +198,35 @@ export function judgeTaskExternalSignal(
   received: ExternalSignal,
   now: UtcInstant,
 ): SignalJudgement {
-  const signal = Object.freeze({ ...received });
-  const target = signal.subject as { readonly taskId?: unknown };
-  if (typeof target.taskId !== "string") {
-    return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+  const copied = copyEntry(received, EXTERNAL_SIGNAL_COPY_RULES);
+  if (!copied.ok || !isPlainRecord(copied.value)) return sealOutcome(invalidExternalInput());
+  const signal = copied.value;
+  const instant = canonicalInstant(now);
+  if (instant === undefined) return sealOutcome(invalidExternalInput());
+  if (!isActorSourceValue(signal.actorSource)) return sealOutcome(invalidExternalInput());
+  const subject = soleSubjectKey(signal.subject);
+  if (subject === undefined || subject.key !== "taskId" || !isEntityIdText("task", subject.value)) {
+    return sealOutcome(invalidExternalInput());
   }
-  const taskId = target.taskId as TaskId;
+  return sealOutcome(
+    judgeTaskExternalSignalOn(deps, aggregate, signal, subject.value as TaskId, instant),
+  );
+}
+
+function invalidExternalInput(): {
+  readonly kind: "not_applicable";
+  readonly rejection: { readonly reason: "invalid_input" };
+} {
+  return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+}
+
+function judgeTaskExternalSignalOn(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  signal: ExternalSignal,
+  taskId: TaskId,
+  now: UtcInstant,
+): SignalJudgement {
   const task = taskOf(aggregate, taskId);
   const outcome = externalSignalOutcome(signal, taskId, () =>
     task === undefined

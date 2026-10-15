@@ -5,6 +5,7 @@
 import { type Result, ok, err } from "../result.js";
 import { sha256, utf8 } from "./hash.js";
 import type { DerivationError } from "./occurrence-id.js";
+import { valueText } from "./value-text.js";
 import type {
   ConfirmationId,
   DecisionId,
@@ -84,62 +85,77 @@ function hasUnpairedSurrogate(text: string): boolean {
   return UNPAIRED_SURROGATE_RE.test(text);
 }
 
-function nonEmpty(field: string, value: string): Result<string, DerivationError> {
+/** 문자열이고 비어 있지 않은 필드. */
+function textField(field: string, value: unknown): Result<string, DerivationError> {
+  if (typeof value !== "string") {
+    return err({ kind: "derivation_input", field, reason: "not_a_string" });
+  }
   if (value.length === 0) return err({ kind: "derivation_input", field, reason: "empty" });
   return ok(value);
 }
 
+/**
+ * 키 구성 필드는 모두 valueText 로 보간한다 — 계약 형(문자열 ID·수 revision) 입력의 키는 템플릿 보간과 같은
+ * 글자이고, 계약 밖 JSON 값도 예외 없이 키가 된다.
+ */
 export function deriveSignalDedupKey(
   input: SignalDedupInput,
 ): Result<SignalDedupKey, DerivationError> {
+  const t = valueText;
   switch (input.signalType) {
     case "confirmation_decision":
       return ok(
-        `confirmation_decision:${input.confirmationId}:${input.expectedRevision}:${input.decision}` as SignalDedupKey,
+        `confirmation_decision:${t(input.confirmationId)}:${t(input.expectedRevision)}:${t(input.decision)}` as SignalDedupKey,
       );
     case "input_provided": {
-      const q = nonEmpty("questionId", input.questionId);
+      const q = textField("questionId", input.questionId);
       if (!q.ok) return q;
       return ok(
-        `input_provided:${input.subjectId}:${input.questionId}:${input.answerContentHash}` as SignalDedupKey,
+        `input_provided:${t(input.subjectId)}:${q.value}:${t(input.answerContentHash)}` as SignalDedupKey,
       );
     }
     case "cancel_requested":
-      return ok(`cancel_requested:${input.subjectId}:${input.expectedRevision}` as SignalDedupKey);
+      return ok(
+        `cancel_requested:${t(input.subjectId)}:${t(input.expectedRevision)}` as SignalDedupKey,
+      );
     case "human_decision":
       return ok(
-        `human_decision:${input.decisionId}:${input.expectedRevision}:${input.choice}` as SignalDedupKey,
+        `human_decision:${t(input.decisionId)}:${t(input.expectedRevision)}:${t(input.choice)}` as SignalDedupKey,
       );
     case "delegation_response":
       return ok(
-        `delegation_response:${input.taskId}:${input.expectedRevision}:${input.occurrenceId}:${input.responseContentHash}` as SignalDedupKey,
+        `delegation_response:${t(input.taskId)}:${t(input.expectedRevision)}:${t(input.occurrenceId)}:${t(input.responseContentHash)}` as SignalDedupKey,
       );
     case "replan_requested":
-      return ok(`replan_requested:${input.workId}:${input.expectedRevision}` as SignalDedupKey);
+      return ok(
+        `replan_requested:${t(input.workId)}:${t(input.expectedRevision)}` as SignalDedupKey,
+      );
     case "definition_control":
       return ok(
-        `definition_control:${input.definitionId}:${input.expectedRevision}:${input.action}` as SignalDedupKey,
+        `definition_control:${t(input.definitionId)}:${t(input.expectedRevision)}:${t(input.action)}` as SignalDedupKey,
       );
     case "agent_result":
-      return ok(`agent_result:${input.dispatchId}:${input.resultContentHash}` as SignalDedupKey);
+      return ok(
+        `agent_result:${t(input.dispatchId)}:${t(input.resultContentHash)}` as SignalDedupKey,
+      );
     case "external_signal": {
-      const sourceId = nonEmpty("sourceId", input.sourceId);
+      const sourceId = textField("sourceId", input.sourceId);
       if (!sourceId.ok) return sourceId;
-      const signalName = nonEmpty("signalName", input.signalName);
+      const signalName = textField("signalName", input.signalName);
       if (!signalName.ok) return signalName;
-      const sourceOccurrenceId = nonEmpty("sourceOccurrenceId", input.sourceOccurrenceId);
+      const sourceOccurrenceId = textField("sourceOccurrenceId", input.sourceOccurrenceId);
       if (!sourceOccurrenceId.ok) return sourceOccurrenceId;
       for (const [field, value] of [
-        ["sourceId", input.sourceId],
-        ["signalName", input.signalName],
-        ["sourceOccurrenceId", input.sourceOccurrenceId],
+        ["sourceId", sourceId.value],
+        ["signalName", signalName.value],
+        ["sourceOccurrenceId", sourceOccurrenceId.value],
       ] as const) {
         if (hasUnpairedSurrogate(value)) {
           return err({ kind: "derivation_input", field, reason: "unpaired_surrogate" });
         }
       }
-      const tuple = JSON.stringify([input.sourceId, input.signalName, input.sourceOccurrenceId]);
-      return ok(`external_signal:${input.subjectId}:${tuple}` as SignalDedupKey);
+      const tuple = JSON.stringify([sourceId.value, signalName.value, sourceOccurrenceId.value]);
+      return ok(`external_signal:${t(input.subjectId)}:${tuple}` as SignalDedupKey);
     }
     default: {
       const exhaustive: never = input;

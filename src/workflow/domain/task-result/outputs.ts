@@ -9,12 +9,17 @@ import type { ResultId, AttemptId, TaskId, EventId } from "../ids.js";
 import type { UtcInstant } from "../values.js";
 import type { ContentHash } from "../derivation/dedup-key.js";
 import { contentHashOf } from "../derivation/dedup-key.js";
-import type { CanonicalJsonErrorReason } from "../derivation/canonical-json.js";
+import type {
+  CanonicalJsonErrorReason,
+  IsolatedCopyFailure,
+} from "../derivation/canonical-json.js";
 import {
   canonicalJsonFrozenCopy,
   canonicalJsonSnapshot,
   utf8ByteLength,
 } from "../derivation/canonical-json.js";
+import { forbiddenKeyPath } from "../derivation/forbidden-key.js";
+import { wellFormedPath, wellFormedText } from "../derivation/value-text.js";
 import type { DomainRegistries } from "../registry/registries.js";
 import type { AcceptanceOutputSource } from "../registry/descriptors.js";
 import { resolveTaskOutputs } from "../registry/outputs.js";
@@ -47,6 +52,12 @@ export type OutputIssue =
     }
   | {
       readonly code: "outputs_not_json";
+      readonly reason: CanonicalJsonErrorReason;
+      readonly path: readonly (string | number)[];
+    }
+  /** path 는 evidence 루트 기준 위치 */
+  | {
+      readonly code: "evidence_not_json";
       readonly reason: CanonicalJsonErrorReason;
       readonly path: readonly (string | number)[];
     }
@@ -87,39 +98,29 @@ function isPresent(record: Record<string, unknown>, name: string): boolean {
   return Object.hasOwn(record, name) && record[name] !== undefined;
 }
 
-const FORBIDDEN_KEY = "__proto__";
-
-/**
- * 값 안 own "__proto__" 키의 첫 위치(객체 키 정렬·배열 순서의 깊이 우선). zod 객체 파싱은 그 키를 알 수
- * 없는 키로 보고하지 않고 출력에서 버리므로, 스키마가 막는 키를 실은 보고가 위반 없이 통과하지 않게 한다.
- */
-function forbiddenKeyPath(
-  value: unknown,
-  path: (string | number)[],
-): readonly (string | number)[] | undefined {
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index += 1) {
-      path.push(index);
-      const found = forbiddenKeyPath(value[index], path);
-      if (found !== undefined) return found;
-      path.pop();
-    }
-    return undefined;
-  }
-  if (typeof value !== "object" || value === null) return undefined;
-  const record = value as Record<string, unknown>;
-  for (const key of Object.keys(record).sort()) {
-    path.push(key);
-    if (key === FORBIDDEN_KEY) return [...path];
-    const found = forbiddenKeyPath(record[key], path);
-    if (found !== undefined) return found;
-    path.pop();
-  }
-  return undefined;
+function pathSegment(segment: PropertyKey): string | number {
+  return typeof segment === "number" ? segment : wellFormedText(String(segment));
 }
 
-function pathSegment(segment: PropertyKey): string | number {
-  return typeof segment === "number" ? segment : String(segment);
+/**
+ * 진입 사본의 격리 실패를 출력 위반 이슈로 옮긴다 — 보고 출력 루트는 outputs_not_json, evidence 루트는
+ * evidence_not_json. 출력 → evidence 순이고 경로는 정규화한다.
+ */
+export function copyFailureIssues(
+  isolated: readonly IsolatedCopyFailure[],
+): readonly OutputIssue[] {
+  const outputs: OutputIssue[] = [];
+  const evidence: OutputIssue[] = [];
+  for (const failure of isolated) {
+    const path = wellFormedPath(failure.path);
+    if (failure.root[failure.root.length - 1] === "evidence") {
+      evidence.push({ code: "evidence_not_json", reason: failure.reason, path });
+    } else {
+      outputs.push({ code: "outputs_not_json", reason: failure.reason, path });
+    }
+  }
+  for (const issue of evidence) outputs.push(issue);
+  return outputs;
 }
 
 interface SafeParser {
@@ -157,7 +158,11 @@ export function checkReportedOutputs(
     return {
       ok: false,
       issues: [
-        { code: "outputs_not_json", reason: captured.error.reason, path: captured.error.path },
+        {
+          code: "outputs_not_json",
+          reason: captured.error.reason,
+          path: wellFormedPath(captured.error.path),
+        },
       ],
     };
   }
@@ -168,7 +173,7 @@ export function checkReportedOutputs(
   const issues: OutputIssue[] = [];
   for (const name of Object.keys(copy).sort()) {
     if (isPresent(copy, name) && !declaredNames.has(name)) {
-      issues.push({ code: "output_undeclared", output: name });
+      issues.push({ code: "output_undeclared", output: wellFormedText(name) });
     }
   }
 
@@ -194,9 +199,13 @@ export function checkReportedOutputs(
       continue;
     }
     const value = copy[output.name];
-    const forbidden = forbiddenKeyPath(value, []);
+    const forbidden = forbiddenKeyPath(value);
     if (forbidden !== undefined) {
-      issues.push({ code: "output_forbidden_key", output: output.name, path: forbidden });
+      issues.push({
+        code: "output_forbidden_key",
+        output: output.name,
+        path: wellFormedPath(forbidden),
+      });
       continue;
     }
     const result = schema.safeParse(value);
@@ -222,7 +231,11 @@ export function checkReportedOutputs(
     return {
       ok: false,
       issues: [
-        { code: "outputs_not_json", reason: snapshot.error.reason, path: snapshot.error.path },
+        {
+          code: "outputs_not_json",
+          reason: snapshot.error.reason,
+          path: wellFormedPath(snapshot.error.path),
+        },
       ],
     };
   }
@@ -285,11 +298,13 @@ export function prepareAcceptanceOutputs(
   const descriptor = deps.registries.taskTypes.get(task.type.id, task.type.version);
   if (descriptor === undefined) return { ok: false, issues: [{ code: "task_type_unknown" }] };
   const declared = descriptor.acceptanceOutputs ?? {};
-  const outputs = Object.fromEntries(
-    Object.keys(declared).map((name) => {
-      const source = declared[name] as AcceptanceOutputSource;
-      return [name, ACCEPTANCE_VALUE[source](decidedAt)];
-    }),
+  const outputs = Object.freeze(
+    Object.fromEntries(
+      Object.keys(declared).map((name) => {
+        const source = declared[name] as AcceptanceOutputSource;
+        return [name, ACCEPTANCE_VALUE[source](decidedAt)];
+      }),
+    ),
   );
   return prepareReportedOutputs(deps, task, outputs);
 }

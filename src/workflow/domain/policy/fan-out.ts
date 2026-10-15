@@ -5,6 +5,7 @@
  */
 import { DomainInvariantError } from "../result.js";
 import type { TaskId } from "../ids.js";
+import { valueText } from "../derivation/value-text.js";
 import type { WorkAggregate } from "../aggregate.js";
 
 export interface FanOutMemberState {
@@ -33,7 +34,7 @@ export function evaluateFanOutConcurrency(
   members: readonly FanOutMemberState[],
 ): FanOutEvaluation {
   if (!Number.isSafeInteger(bound) || bound < 1) {
-    throw new DomainInvariantError(`fan-out 한도는 양의 정수여야 한다: ${String(bound)}`);
+    throw new DomainInvariantError(`fan-out 한도는 양의 정수여야 한다: ${valueText(bound)}`);
   }
   const held = members.filter(holdsSlot).length;
   const available = Math.max(0, bound - held);

@@ -28,6 +28,8 @@ export function recordedCommit(
     case "rejected_stale":
     case "forged_provenance":
       return outcome.commit;
+    case "stale_after_withdrawal":
+      return outcome.commits[1];
     case "rejected":
       return "commit" in outcome ? outcome.commit : outcome.record;
     case "not_applicable":

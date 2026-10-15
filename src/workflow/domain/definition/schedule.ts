@@ -9,6 +9,7 @@ import type { UtcInstant } from "../values.js";
 import { addMs, instantMs, parseUtcInstant } from "../values.js";
 import type { TriggerSpec } from "../trigger.js";
 import { deriveOccurrenceId } from "../derivation/occurrence-id.js";
+import { valueText } from "../derivation/value-text.js";
 import type { DomainDeps } from "../engine.js";
 import type {
   DefinitionRecord,
@@ -62,7 +63,7 @@ export function nextStep(
   const recurrenceIndex: unknown = step.recurrenceIndex;
   if (!isCanonicalInstant(scheduledForUtc)) {
     throw new DomainInvariantError(
-      `반복 전개 포트가 정규 UTC 표기가 아닌 회차를 냈다: ${String(scheduledForUtc)}`,
+      `반복 전개 포트가 정규 UTC 표기가 아닌 회차를 냈다: ${valueText(scheduledForUtc)}`,
     );
   }
   if (instantMs(scheduledForUtc) < instantMs(atOrAfter)) {
@@ -76,7 +77,7 @@ export function nextStep(
     recurrenceIndex < 0
   ) {
     throw new DomainInvariantError(
-      `반복 전개 포트가 0 이상 안전 정수가 아닌 회차 번호를 냈다: ${String(recurrenceIndex)}`,
+      `반복 전개 포트가 0 이상 안전 정수가 아닌 회차 번호를 냈다: ${valueText(recurrenceIndex)}`,
     );
   }
   const until = view.recurrence.until;

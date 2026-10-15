@@ -25,6 +25,8 @@ import type {
 } from "../commands.js";
 import type { ReactionSpec } from "./reaction-spec.js";
 import { checkReactionSpecs } from "./reaction-spec.js";
+import { forbiddenKeyPath } from "../derivation/forbidden-key.js";
+import { wellFormedPath, wellFormedText } from "../derivation/value-text.js";
 
 export type ValidationIssueArea = "identity" | "input" | "trigger" | "policy" | "reactions";
 
@@ -39,6 +41,7 @@ export interface ValidationIssue {
     | "input_not_object"
     | "input_field_invalid"
     | "input_unknown_field"
+    | "input_forbidden_key"
     | "trigger_invalid"
     | "recurrence_not_allowed_on_task_trigger"
     | "policy_invalid"
@@ -109,7 +112,7 @@ function identityFrom(raw: unknown, idKey: "id" | "kind", positive: boolean): Id
 }
 
 function pathSegment(segment: PropertyKey): string | number {
-  return typeof segment === "number" ? segment : String(segment);
+  return typeof segment === "number" ? segment : wellFormedText(String(segment));
 }
 
 function inputIssues(
@@ -124,7 +127,11 @@ function inputIssues(
   for (const issue of parsed.error.issues) {
     if (issue.path.length === 0 && issue.code === "unrecognized_keys") {
       for (const key of issue.keys) {
-        unknownIssues.push({ area: "input", path: [key], code: "input_unknown_field" });
+        unknownIssues.push({
+          area: "input",
+          path: [wellFormedText(key)],
+          code: "input_unknown_field",
+        });
       }
       continue;
     }
@@ -265,7 +272,12 @@ export function validateTask(
   if (!inputIsObject) {
     issues.push({ area: "input", path: [], code: "input_not_object" });
   } else {
-    issues.push(...inputIssues(taskType, input, taskTypeFieldProfile(taskType).schemaKeys));
+    const forbidden = forbiddenKeyPath(input);
+    if (forbidden !== undefined) {
+      issues.push({ area: "input", path: wellFormedPath(forbidden), code: "input_forbidden_key" });
+    }
+    const schemaKeys = taskTypeFieldProfile(taskType).schemaKeys;
+    for (const issue of inputIssues(taskType, input, schemaKeys)) issues.push(issue);
   }
 
   const trigger = parseTrigger(triggerDescriptor, declaration.trigger, issues);

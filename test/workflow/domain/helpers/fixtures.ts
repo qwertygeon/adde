@@ -576,7 +576,7 @@ export function reachTaskState(
           kind: "cancel_task",
           taskId,
           expectedRevision: requireTask(ready, taskId).revision,
-          meta: meta(now),
+          meta: meta(now, "unknown"),
           origin,
         }),
       ).aggregate,
@@ -952,7 +952,7 @@ export function decidePlan(
   );
 }
 
-/** 판정·명령 결과의 커밋을 저장 순서로(preceding 먼저). 없으면 []. */
+/** 판정·명령 결과의 커밋을 저장 순서로(철회 커밋 먼저). 없으면 []. */
 export function committedChain(outcome: CommandOutcome | SignalJudgement): readonly DomainCommit[] {
   switch (outcome.kind) {
     case "committed":
@@ -961,9 +961,9 @@ export function committedChain(outcome: CommandOutcome | SignalJudgement): reado
     case "forged_provenance":
       return [outcome.commit];
     case "rejected_stale":
-      return outcome.preceding !== undefined
-        ? [outcome.preceding.commit, outcome.commit]
-        : [outcome.commit];
+      return [outcome.commit];
+    case "stale_after_withdrawal":
+      return outcome.commits;
     case "rejected":
       if ("commit" in outcome) return [outcome.commit];
       return outcome.record !== undefined ? [outcome.record] : [];

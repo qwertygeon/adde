@@ -30,7 +30,11 @@ const CATALOG_BY_NAME = new Map<string, (typeof EVENT_CATALOG)[number]>(
   EVENT_CATALOG.map((row) => [row.name, row]),
 );
 
-/** 한 Work 의 이벤트 스트림(커밋 순). 첫 커밋은 `work_created` 여야 한다. */
+/**
+ * 한 Work 의 이벤트 스트림(커밋 순). 첫 커밋은 `work_created` 여야 한다.
+ * 입력 이벤트 열을 신뢰한다 — 엔진 커밋이나 그 저장 로그를 재생한다는 전제이고, 형식·커밋 그룹 검사 밖의 페이로드 의미·출처는 다시
+ * 판정하지 않는다.
+ */
 export function foldEvents(
   events: readonly WorkflowEventEnvelope[],
 ): Result<WorkAggregate, FoldError> {

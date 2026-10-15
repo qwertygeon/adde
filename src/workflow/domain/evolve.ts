@@ -143,7 +143,10 @@ function withoutOpenAttemptOrPark(current: TaskRecord): TaskRecord {
   return omitFields(current, ["openAttempt", "parkedAttemptId"]);
 }
 
-/** 한 커밋(같은 `commit.id`)의 이벤트를 순서대로 적용한다. 첫 커밋은 `work_created` 여야 한다. */
+/**
+ * 한 커밋(같은 `commit.id`)의 이벤트를 순서대로 적용한다. 첫 커밋은 `work_created` 여야 한다.
+ * 입력 이벤트 열을 신뢰한다 — 엔진 커밋이나 그 저장 로그를 재생한다는 전제이고, 페이로드의 의미·출처를 다시 판정하지 않는다.
+ */
 export function evolveCommit(
   aggregate: WorkAggregate | undefined,
   events: readonly DomainEvent[],

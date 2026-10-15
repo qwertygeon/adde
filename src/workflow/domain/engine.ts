@@ -1,7 +1,9 @@
 /**
  * createWork·executeCommand(커밋 조립·envelope·순서) — design.md §2 "실행 모델"·§3 "커밋 파이프라인"
- * 그대로. 사전 검사 순서: 대상 존재 → (Task 명령) 종결 여부 → `expectedRevision` 일치 → 명령 kind 가
- * 현재 상태에서 가질 수 있는 행 존재 → (Task 명령) 재계획 게이트 → 행 조건.
+ * 그대로. 공개 진입은 명령을 정규 JSON 동결 사본으로 한 번 뜨고 진입 형(최상위·meta·명령 종류·Task ID 형식)을
+ * 본 뒤 그 사본으로 판정하며, 결과의 커밋을 표식·동결한다. 사전 검사 순서: 대상 존재 → (Task 명령) 종결 여부 →
+ * `expectedRevision` 일치 → 명령 kind 가 현재 상태에서 가질 수 있는 행 존재 → (Task 명령) 재계획 게이트 →
+ * 행 조건.
  */
 import type { IdGenerator, EventId, CommitId } from "./ids.js";
 import { nextEntityId } from "./ids.js";
@@ -34,6 +36,17 @@ import { isReplanGatedTaskCommand, isReplanWaitHeld } from "./plan/replan.js";
 import type { RecurrenceExpander } from "./definition/model.js";
 import { decideStop, workCascadeStopOrigin } from "./definition/resolution.js";
 import type { CausingEventRef } from "./derivation/occurrence-id.js";
+import type { IsolatedCopyFailure } from "./derivation/canonical-json.js";
+import { DomainInvariantError } from "./result.js";
+import { COMMAND_COPY_RULES, copyEntry } from "./entry/copy.js";
+import {
+  isCommandMetaShape,
+  isEntityIdText,
+  isOwnMember,
+  isPlainRecord,
+  withCanonicalNow,
+} from "./entry/shape.js";
+import { sealOutcome } from "./entry/seal.js";
 
 export interface OperationalDefaults {
   readonly agentDispatchDeadlineMs: number;
@@ -121,9 +134,14 @@ function buildEnvelope(
   const projectId = isWorkCreated
     ? (payload["projectId"] as string)
     : (work as WorkAggregate["work"]).projectId;
-  const workId =
-    staged.decided.workId ??
-    (isWorkCreated ? (payload["workId"] as string) : (work as WorkAggregate["work"]).id);
+  // 단일 Work 조립 — 결정 이벤트가 다른 Work 를 가리키면 그 Work 의 스트림에 섞이므로 막는다.
+  const workId = isWorkCreated ? (payload["workId"] as string) : (work as WorkAggregate["work"]).id;
+  const decidedWorkId = staged.decided.workId;
+  if (decidedWorkId !== undefined && decidedWorkId !== workId) {
+    throw new DomainInvariantError(
+      `결정 이벤트 ${staged.decided.type} 의 workId ${decidedWorkId} 가 조립 대상 Work ${workId} 와 다르다`,
+    );
+  }
   const correlationId = isWorkCreated
     ? (payload["correlationId"] as string)
     : (work as WorkAggregate["work"]).correlationId;
@@ -173,7 +191,7 @@ export function assembleCommit(
       decided: b.decided,
       ...(b.causationId !== undefined ? { causationId: b.causationId } : {}),
     }));
-    staged.push(...newStaged);
+    for (const item of newStaged) staged.push(item);
     const envs = newStaged.map((s, i) =>
       buildEnvelope(scratch?.work, commitId, startIndex + i + 1, 0, meta, s),
     );
@@ -328,7 +346,29 @@ export function assembleCommit(
   return { commit: { id: commitId, events: finalEvents }, aggregate: finalAggregate };
 }
 
-export function createWork(deps: DomainDeps, command: CreateWorkCommand): CommandOutcome {
+function invalidInput(detail?: string): {
+  readonly kind: "rejected";
+  readonly rejection: CommandRejection;
+} {
+  return {
+    kind: "rejected",
+    rejection: { reason: "invalid_input", ...(detail !== undefined ? { detail } : {}) },
+  };
+}
+
+/**
+ * Work 생성. 명령을 정규 JSON 동결 사본으로 한 번 뜨고 최상위·meta 형을 본 뒤 그 사본으로 판정한다 — 형
+ * 위반은 커밋 없는 invalid_input 이다. 결과의 커밋은 표식·동결된다.
+ */
+export function createWork(deps: DomainDeps, received: CreateWorkCommand): CommandOutcome {
+  const copied = copyEntry(received);
+  if (!copied.ok || !isPlainRecord(copied.value) || !isCommandMetaShape(copied.value.meta)) {
+    return sealOutcome(invalidInput());
+  }
+  return sealOutcome(createWorkOn(deps, withCanonicalNow(copied.value)));
+}
+
+function createWorkOn(deps: DomainDeps, command: CreateWorkCommand): CommandOutcome {
   const decided = decideCreateWork(deps, command);
   if (decided.kind === "rejected") return { kind: "rejected", rejection: decided.rejection };
   const { commit, aggregate } = assembleCommit(deps, undefined, decided.events, {
@@ -345,24 +385,52 @@ function isTaskCommand(command: WorkflowCommand): command is TaskCommand {
 }
 
 /**
- * 명령을 진입에서 한 번만 읽은 얕은 동결 사본. 접근자·Proxy 가 읽을 때마다 다른 값을 내도 재계획 게이트·판정·기록이
- * 같은 값을 보게 한다. 최상위와 `meta`(null 이 아닌 객체일 때)의 자기 열거 속성만 읽고 중첩 값은 참조 그대로 둔다.
+ * Task·Work 명령 실행. 명령을 정규 JSON 동결 사본으로 한 번 뜬다 — 접근자·Proxy 가 읽을 때마다 다른 값을 내도
+ * 재계획 게이트·판정·기록이 같은 값을 본다. 계획은 깊이 루트, 완료 보고의 출력·evidence 는 격리 경로다. 진입 형
+ * (최상위·meta·명령 종류·Task ID 형식) 위반과 사본 실패는 커밋 없는 invalid_input 이고, 격리 실패는 완료 보고일
+ * 때만 판정으로 넘어가 출력 위반 실패 attempt 가 된다. 결과의 커밋은 표식·동결된다.
  */
-function captureCommand(received: WorkflowCommand): WorkflowCommand {
-  const top = { ...received };
-  const captured =
-    typeof top.meta === "object" && top.meta !== null
-      ? { ...top, meta: Object.freeze({ ...top.meta }) }
-      : top;
-  return Object.freeze(captured);
-}
-
 export function executeCommand(
   deps: DomainDeps,
   aggregate: WorkAggregate,
   received: WorkflowCommand,
 ): CommandOutcome {
-  const command = captureCommand(received);
+  const copied = copyEntry(received, COMMAND_COPY_RULES);
+  if (!copied.ok || !isPlainRecord(copied.value) || !isCommandMetaShape(copied.value.meta)) {
+    return sealOutcome(invalidInput());
+  }
+  const command = withCanonicalNow(copied.value);
+  if (isTaskCommand(command)) {
+    if (!isOwnMember(TASK_COMMAND_ROWS, command.kind)) {
+      return sealOutcome(invalidInput("unknown_command"));
+    }
+    if (!isEntityIdText("task", command.taskId)) return sealOutcome(invalidInput());
+  } else {
+    // Work 생성은 createWork 진입만 받는다 — 행 표에는 있지만 명령 실행의 종류가 아니다.
+    const kind: string = command.kind;
+    if (!isOwnMember(WORK_COMMAND_ROWS, kind) || kind === "create_work") {
+      return sealOutcome(invalidInput("unknown_command"));
+    }
+  }
+  const isolated = copied.isolated;
+  if (isolated.length > 0 && !isCompletedOutcomeReport(command)) {
+    return sealOutcome(invalidInput());
+  }
+  return sealOutcome(executeCommandOn(deps, aggregate, command, isolated));
+}
+
+function isCompletedOutcomeReport(command: WorkflowCommand): boolean {
+  if (command.kind !== "record_attempt_outcome") return false;
+  const outcome: unknown = command.outcome;
+  return isPlainRecord(outcome) && outcome["kind"] === "completed";
+}
+
+function executeCommandOn(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  command: WorkflowCommand,
+  isolated: readonly IsolatedCopyFailure[],
+): CommandOutcome {
   const meta = {
     now: command.meta.now,
     actorSource: command.meta.actorSource,
@@ -429,7 +497,7 @@ export function executeCommand(
     ) {
       return { kind: "rejected", rejection: { reason: "replan_open" } };
     }
-    const decided = decideTaskCommand(deps, task, command, aggregate);
+    const decided = decideTaskCommand(deps, task, command, aggregate, isolated);
     if (decided.kind === "rejected") return { kind: "rejected", rejection: decided.rejection };
     const { commit, aggregate: nextAggregate } = assembleCommit(
       deps,

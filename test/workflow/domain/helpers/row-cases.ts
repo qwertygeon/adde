@@ -686,7 +686,7 @@ put("confirmation_cancelled", "WAITING_CONFIRMATION", "CANCELED", {
       kind: "cancel_task",
       taskId,
       expectedRevision: requireTaskFor(before, taskId).revision,
-      meta: meta(NOW),
+      meta: meta(NOW, "unknown"),
       origin: controlRequestCancelOrigin(deps),
     }),
 });
@@ -709,7 +709,7 @@ for (const state of [
         kind: "cancel_task",
         taskId,
         expectedRevision: requireTaskFor(before, taskId).revision,
-        meta: meta(NOW),
+        meta: meta(NOW, "unknown"),
         origin: controlRequestCancelOrigin(deps),
       }),
   });
@@ -1203,7 +1203,7 @@ putWork("work_blocked", "ACTIVE", "BLOCKED", {
       kind: "cancel_task",
       taskId: memberId,
       expectedRevision: requireTaskFor(before, memberId).revision,
-      meta: meta(NOW),
+      meta: meta(NOW, "unknown"),
       origin: controlRequestCancelOrigin(deps),
     });
   },
@@ -1336,7 +1336,7 @@ putWork("work_completed", "BLOCKED", "COMPLETED", {
       kind: "cancel_task",
       taskId: t2,
       expectedRevision: requireTaskFor(before, t2).revision,
-      meta: meta(NOW),
+      meta: meta(NOW, "human_local"),
       origin,
     });
   },

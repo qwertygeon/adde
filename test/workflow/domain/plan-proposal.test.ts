@@ -6,8 +6,11 @@ import {
   executeCommand,
   judgeMandatoryPlanApproval,
   judgeSignal,
-  validatePlanProposal,
 } from "../../../src/workflow/domain/index.js";
+import {
+  planPreconditionRejection,
+  validatePlanProposal,
+} from "../../../src/workflow/domain/internal.js";
 import type {
   CommandOutcome,
   DecisionApplication,
@@ -217,15 +220,13 @@ describe("SC-022: 제안 digest 는 내용으로만 정해진다", () => {
     expect(content["workId"]).toBe(aggregate.work.id);
     expect(digest).toBe(payload["digest"]);
     expect(digest).toBe(independentDigest(content));
-    // 정규 JSON 이 될 수 없는 내용(고립 서러게이트 제목)은 digest 를 만들지 않고 계획 무효다.
-    const notCanonical = committedCommit(
-      commitPlanOn(deps, aggregate, planInput([{ ...KEY_ORDER_A, title: "broken \uD800" }])),
+    // 정규 JSON 이 될 수 없는 내용(고립 서러게이트 제목)은 digest 를 만들지 않고 커밋 없이 거절된다.
+    const notCanonical = commitPlanOn(
+      deps,
+      aggregate,
+      planInput([{ ...KEY_ORDER_A, title: "broken \uD800" }]),
     );
-    const issues = payloadOf(notCanonical.commit, "work_plan_invalid")[
-      "issues"
-    ] as readonly Issue[];
-    expect(issues.map((i) => i.kind)).toContain("proposal_not_canonical_json");
-    expect(eventTypes(notCanonical.commit)).not.toContain("task_created");
+    expect(notCanonical).toEqual({ kind: "rejected", rejection: { reason: "invalid_input" } });
   });
 
   it("Error: 정규 JSON 이 될 수 없는 계획 내용은 사전 거절을 지난 뒤에만 proposal_not_canonical_json 하나로 무효다 (test_SC022_non_canonical_plan_content_invalid_only_after_preconditions)", () => {
@@ -247,25 +248,23 @@ describe("SC-022: 제안 digest 는 내용으로만 정해진다", () => {
       { kind: "proposal_not_canonical_json", path: ["tasks", 0, "input", "note"] },
     ];
 
-    const stay = commitWith(withFunction());
-    expect(invalidIssues(stay.outcome)).toEqual(ONLY_ISSUE);
-    const stayed = committedCommit(stay.outcome);
-    expect(eventTypes(stayed.commit)).not.toContain("work_failed");
-    expect(stayed.aggregate.work.state).toBe("PLANNING");
-
-    const failed = commitWith(withFunction(), "fail_work");
-    expect(invalidIssues(failed.outcome)).toEqual(ONLY_ISSUE);
-    const failedCommit = committedCommit(failed.outcome);
-    expect(eventTypes(failedCommit.commit)).toEqual(["work_plan_invalid", "work_failed"]);
-    expect(failedCommit.aggregate.work.state).toBe("FAILED");
-
-    // 같은 비JSON 내용이라도 사전 거절 사유가 있으면 기록 없이 거절된다.
-    for (const [extra, reason] of [[{ basePlanRevision: 3 }, "condition_not_met"]] as const) {
+    // 공개 진입: 함수 값 계획은 사본을 뜰 수 없어 사전 거절 사유와 무관하게 커밋 없는 invalid_input 이다.
+    for (const extra of [undefined, { basePlanRevision: 3 }] as const) {
       for (const onInvalid of [undefined, "fail_work"] as const) {
         const refused = commitWith(withFunction(extra), onInvalid);
-        expectNoCommitRefusal(refused.outcome, reason);
+        expectNoCommitRefusal(refused.outcome, "invalid_input");
       }
     }
+
+    // 내부 진입: 사전 거절이 먼저이고, 그것을 지난 내용만 proposal_not_canonical_json 하나로 무효다.
+    const { aggregate: planning } = reachWorkState("PLANNING");
+    expect(planPreconditionRejection(planning.work, withFunction({ basePlanRevision: 3 }))).toEqual(
+      expect.objectContaining({ reason: "condition_not_met" }),
+    );
+    expect(planPreconditionRejection(planning.work, withFunction())).toBeUndefined();
+    const check = validatePlanProposal(testDeps("ppnoncanon"), planning, withFunction());
+    expect(check.valid).toBe(false);
+    if (!check.valid) expect(check.issues).toEqual(ONLY_ISSUE);
     // 정의 초안은 사전 거절이 아니라 검증 단계에서 다뤄진다 — 형태가 틀린 초안은 그 이슈 하나로 끝난다.
     const malformedDraft = commitWith(
       planInput([draft("x", { input: {} })], { definition: { title: "slot" } }),
@@ -394,8 +393,8 @@ describe("SC-024: 기준 revision 이 다른 제안은 커밋되지 않는다", 
     // 레코드 패치: 다른 생성 경로로 plan revision 이 움직인 상태 대용.
     const moved = patchWork(waiting, { planRevision: 1 });
     const judged = planDecision(new Journal(deps, moved, []), "grant");
-    expect(judged.kind).toBe("rejected_stale");
-    if (judged.kind !== "rejected_stale") return;
+    expect(judged.kind).toBe("stale_after_withdrawal");
+    if (judged.kind !== "stale_after_withdrawal") return;
     const chain = committedChain(judged);
     expect(chain.map(eventTypes)).toEqual([["work_plan_withdrawn"], ["signal_rejected_stale"]]);
     const [withdrawal] = chain;
@@ -576,7 +575,7 @@ describe("SC-025: 승인 대기 제안과 다른 내용은 커밋될 수 없다"
       pendingProposal: { ...pending, tasks: [{ ...first, title: "tampered" }, ...rest] },
     });
     const judged = planDecision(new Journal(deps, tampered, []), "grant");
-    expect(judged.kind).toBe("rejected_stale");
+    expect(judged.kind).toBe("stale_after_withdrawal");
     const chain = committedChain(judged);
     expect(chain.map(eventTypes)).toEqual([["work_plan_withdrawn"], ["signal_rejected_stale"]]);
     const [withdrawal] = chain;
@@ -594,8 +593,9 @@ describe("SC-025: 승인 대기 제안과 다른 내용은 커밋될 수 없다"
 
   it("Error: 공개 배럴은 검증 없이 커밋 이벤트를 조립하는 함수를 내보내지 않는다 (test_SC025_barrel_hides_unvalidated_commit_builder)", () => {
     expect("buildPlanCommitEvents" in domain).toBe(false);
-    // 대조: 검증을 거치는 제안 검증 함수는 공개돼 있다.
-    expect("validatePlanProposal" in domain).toBe(true);
+    expect("validatePlanProposal" in domain).toBe(false);
+    // 대조: 검증을 거치는 공개 진입은 공개돼 있다.
+    expect("executeCommand" in domain).toBe(true);
   });
 
   it("Edge: 직접 커밋은 계획 입력을 한 번만 읽고 그 값으로 검증·커밋한다 — 읽을 때마다 값이 바뀌는 접근자도 검증한 값이 커밋된다 (test_SC025_direct_commit_reads_plan_input_once_and_commits_validated_content)", () => {
@@ -1424,8 +1424,8 @@ describe("SC-034: 무효 제안에 대한 grant 는 철회 커밋 뒤 낡음으�
   it("Happy: 결과 커밋이 둘(철회, 낡음)이고 최종 Work 가 PLANNING 이다 (test_SC034_invalid_grant_yields_withdrawal_then_stale)", () => {
     const { deps, waiting } = driftedWaiting();
     const judged = planDecision(new Journal(deps, waiting, []), "grant");
-    expect(judged.kind).toBe("rejected_stale");
-    if (judged.kind !== "rejected_stale") return;
+    expect(judged.kind).toBe("stale_after_withdrawal");
+    if (judged.kind !== "stale_after_withdrawal") return;
     expect(judged.reason).toBe("token_mismatch");
     const chain = committedChain(judged);
     expect(chain.map(eventTypes)).toEqual([["work_plan_withdrawn"], ["signal_rejected_stale"]]);
@@ -1436,7 +1436,7 @@ describe("SC-034: 무효 제안에 대한 grant 는 철회 커밋 뒤 낡음으�
     expect((withdrawn["issues"] as readonly Issue[]).map((i) => i.kind)).toContain("draft_invalid");
     const after = applyCommits(waiting, chain);
     expect(after.work.state).toBe("PLANNING");
-    expect(judged.preceding?.aggregate.work.state).toBe("PLANNING");
+    expect(judged.aggregate.work.state).toBe("PLANNING");
   });
 
   it("Edge: 수용 키가 선점되지 않아 같은 키의 다음 신호가 duplicate 가 아니다 (test_SC034_invalid_grant_reserves_no_key)", () => {

@@ -739,11 +739,11 @@ export class WorkflowJournal {
         this.state = withWork(this.state, outcome.aggregate);
         return;
       case "rejected_stale":
-        if (outcome.preceding !== undefined) {
-          this.commits.push(outcome.preceding.commit);
-          this.state = withWork(this.state, outcome.preceding.aggregate);
-        }
         this.commits.push(outcome.commit);
+        return;
+      case "stale_after_withdrawal":
+        this.commits.push(...outcome.commits);
+        this.state = withWork(this.state, outcome.aggregate);
         return;
       default:
         // 기록 전용 커밋은 상태를 바꾸지 않는다 — 이력에만 남긴다.

@@ -327,16 +327,15 @@ describe("SC-032: 계획 승인 grant 의 재검증 무효는 철회 뒤 낡음�
       { kind: "plan_grant" },
       NOW,
     );
-    expect(judged.kind).toBe("rejected_stale");
-    if (judged.kind !== "rejected_stale") return;
-    const preceding = judged.preceding;
-    if (preceding === undefined) throw new Error("expected preceding withdrawal commit");
-    expect(eventTypes(preceding.commit)).toEqual(["work_plan_withdrawn"]);
-    expect(payloadOf(preceding.commit, "work_plan_withdrawn")["cause"]).toBe("no_longer_validates");
-    expect(eventTypes(judged.commit)).toEqual(["signal_rejected_stale"]);
-    expect(eventTypes(judged.commit)).not.toContain("work_plan_committed");
-    expect(preceding.aggregate.work.state).toBe("PLANNING");
-    expect(preceding.aggregate.acceptedSignalKeys).toEqual(aggregate.acceptedSignalKeys);
+    expect(judged.kind).toBe("stale_after_withdrawal");
+    if (judged.kind !== "stale_after_withdrawal") return;
+    const [withdrawal, stale] = judged.commits;
+    expect(eventTypes(withdrawal)).toEqual(["work_plan_withdrawn"]);
+    expect(payloadOf(withdrawal, "work_plan_withdrawn")["cause"]).toBe("no_longer_validates");
+    expect(eventTypes(stale)).toEqual(["signal_rejected_stale"]);
+    expect(eventTypes(stale)).not.toContain("work_plan_committed");
+    expect(judged.aggregate.work.state).toBe("PLANNING");
+    expect(judged.aggregate.acceptedSignalKeys).toEqual(aggregate.acceptedSignalKeys);
 
     const after = applyCommits(aggregate, committedChain(judged));
     expect(after.work.state).toBe("PLANNING");

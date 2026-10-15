@@ -11,7 +11,7 @@ import type { CommandRejection, DomainDeps } from "./engine.js";
 import type { PendingDecision } from "./pending-decision.js";
 import type { PlanValidationIssue } from "./plan-graph.js";
 import type { PlanProposal, PlanProposalContent, PlanProposalInput } from "./plan/proposal.js";
-import { parseCancelOrigin } from "./values.js";
+import { commandCancelOrigin, isPlainRecord } from "./entry/shape.js";
 import {
   buildPlanCommitEvents,
   planInputEnvelope,
@@ -41,9 +41,12 @@ function rejectNotInTable(): CommandRejection {
 
 /** 회차 Work 는 정의 회차의 materialize 만 만든다 — 명령 경로의 `definition_occurrence` 는 거절한다. */
 export function decideCreateWork(deps: DomainDeps, command: CreateWorkCommand): WorkDecideOutcome {
+  if (!isPlainRecord(command.source)) return rejected(rejectInvalidInput("work_source_malformed"));
   if (command.source.kind === "definition_occurrence") {
     return rejected(rejectInvalidInput("definition_occurrence_by_materialization_only"));
   }
+  if (!isCommandWorkSource(command.source))
+    return rejected(rejectInvalidInput("work_source_malformed"));
   const workId = nextEntityId(deps.ids, "work");
   const correlationId = command.correlationId ?? workId;
   return events(
@@ -111,6 +114,9 @@ export function decideWorkCommand(
     }
     case "request_work_input": {
       if (work.state !== "PLANNING") return rejected(rejectNotInTable());
+      if (!Array.isArray(command.requests)) {
+        return rejected(rejectInvalidInput("input_requests_not_array"));
+      }
       return events(mkEvent("work_input_requested", { requests: command.requests }, { workId }));
     }
     case "receive_work_input": {
@@ -162,10 +168,20 @@ export function decideWorkCommand(
       }
       // 계획 단계에는 계획 승인 결정이 없으므로 직접 커밋은 결정 ID 를 싣지 않는다.
       const proposal = proposalOf(deps, work.id, check.content, check.digest);
-      return events(...buildPlanCommitEvents(deps, proposal, check.membership, {}));
+      return {
+        kind: "events",
+        events: buildPlanCommitEvents(deps, proposal, check.membership, {}),
+      };
     }
     case "fail_planning": {
       if (work.state !== "PLANNING") return rejected(rejectNotInTable());
+      const declaredInvalid: unknown = command.invalidPlan;
+      if (
+        declaredInvalid !== undefined &&
+        (!isPlainRecord(declaredInvalid) || !Array.isArray(declaredInvalid["issues"]))
+      ) {
+        return rejected(rejectInvalidInput("invalid_plan_malformed"));
+      }
       if (command.invalidPlan !== undefined) {
         return events(
           mkEvent("work_plan_invalid", { issues: command.invalidPlan.issues }, { workId }),
@@ -203,23 +219,28 @@ export function decideWorkCommand(
       }
       // 관리 Work 취소는 정의 중지 출처로 이어지므로 취소 출처를 검사한다 — Work 취소는 노트 신호와 제어
       // 요청만 낼 수 있고, 기록되는 출처는 명령 출처와 같아야 한다(키 보유자의 취소가 사람 결정으로 남지 않게).
-      const parsed = parseCancelOrigin(command.origin);
-      if (!parsed.ok) return rejected(rejectInvalidInput("cancel_origin_invalid"));
-      const origin = parsed.value;
-      if (origin.kind !== "vault_signal" && origin.kind !== "control_request") {
-        return rejected(rejectInvalidInput("cancel_origin_kind_not_allowed"));
-      }
-      if (origin.kind === "vault_signal" && origin.actorSource !== "human_local") {
-        return rejected(rejectInvalidInput("vault_signal 취소는 human_local 필수"));
-      }
-      if (origin.actorSource !== command.meta.actorSource) {
-        return rejected(rejectInvalidInput("cancel_origin_actor_source_mismatch"));
-      }
-      return events(mkEvent("work_canceled", { origin }, { workId }));
+      const parsed = commandCancelOrigin(command.origin, command.meta.actorSource);
+      if (!parsed.ok) return rejected(rejectInvalidInput(parsed.error));
+      return events(mkEvent("work_canceled", { origin: parsed.value }, { workId }));
     }
     default: {
       const exhaustive: never = command;
       throw new Error(`decideWorkCommand: 알 수 없는 명령 ${String(exhaustive)}`);
     }
+  }
+}
+
+/** 명령 경로 Work 출처의 종류 열거와 종류별 필드 형. 정의 회차 출처는 판정이 앞에서 따로 거절한다. */
+function isCommandWorkSource(source: unknown): boolean {
+  if (!isPlainRecord(source)) return false;
+  switch (source["kind"]) {
+    case "markdown":
+      return typeof source["documentId"] === "string";
+    case "cli":
+      return true;
+    case "spawn":
+      return typeof source["causingTaskId"] === "string";
+    default:
+      return false;
   }
 }

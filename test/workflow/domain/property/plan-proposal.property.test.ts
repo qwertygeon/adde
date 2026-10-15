@@ -6,8 +6,8 @@ import {
   canonicalJsonFrozenCopy,
   executeCommand,
   judgeMandatoryPlanApproval,
-  validatePlanProposal,
 } from "../../../../src/workflow/domain/index.js";
+import { validatePlanProposal } from "../../../../src/workflow/domain/internal.js";
 import type {
   PlanTaskDraft,
   TaskId,

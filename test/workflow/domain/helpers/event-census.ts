@@ -22,6 +22,7 @@ import { TASK_ROW_CASES, WORK_ROW_CASES } from "./row-cases.js";
 import { signalFactorCases } from "./signal-cases.js";
 import {
   basePolicy,
+  committedChain,
   draft,
   meta,
   mustCommit,
@@ -69,9 +70,8 @@ export function collectCoreProducedTypes(): ReadonlySet<string> {
   // signal_rejected_stale·signal_ignored_duplicate·signal_rejected 등)가 빠진다 — 신호 요인 케이스를 더한다.
   for (const c of signalFactorCases()) {
     try {
-      const judged = c.run();
-      if (judged.kind !== "not_applicable")
-        for (const e of judged.commit.events) produced.add(e.type);
+      for (const commit of committedChain(c.run()))
+        for (const e of commit.events) produced.add(e.type);
     } catch {
       // 판정 자체 실패는 신호 판정 시험이 전담.
     }

@@ -35,6 +35,16 @@ import type {
   NonStaleReason,
 } from "./engine.js";
 import { assembleCommit } from "./engine.js";
+import { evolveCommit } from "./evolve.js";
+import { copyEntry } from "./entry/copy.js";
+import {
+  canonicalInstant,
+  isActorSourceValue,
+  isDecisionSignalType,
+  isEntityIdText,
+  isPlainRecord,
+} from "./entry/shape.js";
+import { sealOutcome } from "./entry/seal.js";
 
 /** 키 문법 밖의 값은 관측 기록 대상이 아니다 — 후보 키를 만들기 전에 거절한다. */
 const CONFIRMATION_DECISIONS: ReadonlySet<string> = new Set(["accept", "reject", "cancel"]);
@@ -48,12 +58,14 @@ export type SignalJudgement =
       readonly aggregate: WorkAggregate;
     }
   | { readonly kind: "duplicate"; readonly dedupKey: SignalDedupKey; readonly commit: DomainCommit }
+  | { readonly kind: "rejected_stale"; readonly reason: StaleReason; readonly commit: DomainCommit }
   | {
-      readonly kind: "rejected_stale";
+      readonly kind: "stale_after_withdrawal";
       readonly reason: StaleReason;
-      readonly commit: DomainCommit;
-      /** 무효 grant 의 앞선 철회 커밋. 호출자는 preceding.commit → commit 순으로 저장한다. */
-      readonly preceding?: { readonly commit: DomainCommit; readonly aggregate: WorkAggregate };
+      /** 저장 순서 — [철회 커밋, 낡음 기록 커밋]. 각 커밋은 바로 앞 커밋을 적용한 애그리거트 기준이다. */
+      readonly commits: readonly [DomainCommit, DomainCommit];
+      /** 두 커밋을 순서대로 적용한 애그리거트. */
+      readonly aggregate: WorkAggregate;
     }
   | { readonly kind: "rejected"; readonly reason: NonStaleReason; readonly commit: DomainCommit }
   | { readonly kind: "forged_provenance"; readonly commit: DomainCommit }
@@ -85,11 +97,78 @@ function record(
   return assembleCommit(deps, aggregate, [event], baseMeta(signal, now)).commit;
 }
 
+/**
+ * Task grant 의 재개 형 — READY, 또는 dead-letter 재시도 occurrence 의 SCHEDULED. 재개 occurrence 를
+ * 호출자가 지정하는 형태는 없다.
+ */
+function isGrantResumeShape(resume: unknown): boolean {
+  if (!isPlainRecord(resume)) return false;
+  if (resume["to"] === "READY") return true;
+  if (resume["to"] !== "SCHEDULED") return false;
+  const occurrence = resume["occurrence"];
+  return isPlainRecord(occurrence) && occurrence["kind"] === "dead_letter_retry";
+}
+
 function isAccepted(aggregate: WorkAggregate, key: SignalDedupKey): boolean {
   return aggregate.acceptedSignalKeys.includes(key);
 }
 
+function invalidSignalInput(): {
+  readonly kind: "not_applicable";
+  readonly rejection: CommandRejection;
+} {
+  return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+}
+
+/** 결정 신호 종류별 조회 ID 의 형식 — 형식이 맞는 ID 는 일반 객체 조회에서 상속 속성 이름이 될 수 없다. */
+function hasDecisionSignalShape(signal: Readonly<Record<string, unknown>>): boolean {
+  const type = signal["type"];
+  if (!isDecisionSignalType(type)) return false;
+  switch (type) {
+    case "confirmation_decision":
+      return isEntityIdText("task", signal["taskId"]);
+    case "human_decision":
+      return isEntityIdText("decision", signal["decisionId"]);
+    case "cancel_requested": {
+      const subject = signal["subject"];
+      if (!isPlainRecord(subject)) return false;
+      return !Object.hasOwn(subject, "taskId") || isEntityIdText("task", subject["taskId"]);
+    }
+    case "replan_requested":
+      return true;
+    default: {
+      const exhaustive: never = type;
+      throw new Error(`결정 신호 형: 알 수 없는 종류 ${String(exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * 결정 신호 판정. 신호·적용 입력을 정규 JSON 동결 사본으로 한 번 뜨고, 진입 형(최상위 객체·진입 시각·신호
+ * 출처 열거·종류·조회 ID 형식)을 본 뒤 판정한다 — 형 위반은 기록 없는 invalid_input 이다. 출처 열거 밖·누락은
+ * 출처 거절 기록보다 앞에서 거절한다(출처 없는 기록이 커밋되지 않게). 결과의 커밋은 표식·동결된다.
+ */
 export function judgeSignal(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  received: DecisionSignal,
+  receivedApplication: DecisionApplication,
+  now: UtcInstant,
+): SignalJudgement {
+  const signal = copyEntry(received);
+  const application = copyEntry(receivedApplication);
+  if (!signal.ok || !application.ok) return sealOutcome(invalidSignalInput());
+  if (!isPlainRecord(signal.value) || !isPlainRecord(application.value)) {
+    return sealOutcome(invalidSignalInput());
+  }
+  const instant = canonicalInstant(now);
+  if (instant === undefined) return sealOutcome(invalidSignalInput());
+  if (!isActorSourceValue(signal.value.actorSource)) return sealOutcome(invalidSignalInput());
+  if (!hasDecisionSignalShape(signal.value)) return sealOutcome(invalidSignalInput());
+  return sealOutcome(judgeSignalOn(deps, aggregate, signal.value, application.value, instant));
+}
+
+function judgeSignalOn(
   deps: DomainDeps,
   aggregate: WorkAggregate,
   signal: DecisionSignal,
@@ -508,6 +587,7 @@ function judgeHumanDecisionForTask(
   if (signal.choice === "grant") {
     if (application.kind !== "task_grant")
       return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+    if (!isGrantResumeShape(application.resume)) return invalidSignalInput();
     // 실행 전 승인은 READY 로만 돌아간다 — 대기 요청 enqueue·예약은 승인 뒤 READY 에서 다시 판정된다.
     if (
       task.pendingDecision.kind === "pre_execution_approval" &&
@@ -524,25 +604,19 @@ function judgeHumanDecisionForTask(
         ),
       ];
     } else {
-      const occurrenceId =
-        application.resume.occurrence.kind === "given"
-          ? application.resume.occurrence.occurrenceId
-          : deriveOccurrenceId({
-              kind: "execution_retry",
-              ownerId: taskId,
-              triggerId: task.trigger.triggerId,
-              // grant 이벤트(자신)를 원인으로 삼는다 — 파생은 occurredAt·attemptNo 만 쓴다(GAP-012).
-              causingEvent: { occurredAt: now },
-              attemptNo: task.lastAttemptNo + 1,
-            });
-      const occId =
-        typeof occurrenceId === "string"
-          ? occurrenceId
-          : occurrenceId.ok
-            ? occurrenceId.value
-            : undefined;
-      if (occId === undefined)
+      // 재개 occurrence 는 Task 기록에서 파생한다 — 호출자가 지정하지 않는다.
+      const occurrenceId = deriveOccurrenceId({
+        kind: "execution_retry",
+        ownerId: taskId,
+        triggerId: task.trigger.triggerId,
+        // grant 이벤트(자신)를 원인으로 삼는다 — 파생은 occurredAt·attemptNo 만 쓴다.
+        causingEvent: { occurredAt: now },
+        attemptNo: task.lastAttemptNo + 1,
+      });
+      if (!occurrenceId.ok) {
         return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
+      }
+      const occId = occurrenceId.value;
       transitionEvents = [
         mkEvent(
           "human_decision_granted",
@@ -799,7 +873,8 @@ function decideDefinitionCommitEvents(
 
 /**
  * 무효 제안 grant — 철회를 그 자체 커밋으로 기록한 뒤 철회 뒤 애그리거트에서 같은 신호를 다시
- * 판정한다. 대기 결정이 닫혔으므로 낡음 기록이 나오고, 수용 키는 선점하지 않는다.
+ * 판정한다. 대기 결정이 닫혔으므로 낡음 기록이 나오고, 수용 키는 선점하지 않는다. 두 커밋은 저장 순서대로
+ * 정렬된 목록 하나로 낸다.
  */
 function withdrawInvalidGrant(
   deps: DomainDeps,
@@ -828,15 +903,17 @@ function withdrawInvalidGrant(
     ],
     baseMeta(signal, now),
   );
-  const rejudged = judgeSignal(deps, withdrawal.aggregate, signal, application, now);
+  const rejudged = judgeSignalOn(deps, withdrawal.aggregate, signal, application, now);
   if (rejudged.kind !== "rejected_stale") {
     throw new DomainInvariantError(
       `무효 grant 철회 뒤 재판정이 낡음 기록이 아니다: ${rejudged.kind}`,
     );
   }
   return {
-    ...rejudged,
-    preceding: { commit: withdrawal.commit, aggregate: withdrawal.aggregate },
+    kind: "stale_after_withdrawal",
+    reason: rejudged.reason,
+    commits: [withdrawal.commit, rejudged.commit],
+    aggregate: evolveCommit(withdrawal.aggregate, rejudged.commit.events),
   };
 }
 
@@ -1111,6 +1188,30 @@ function judgeReplanRequested(
  * 판정한다(ADR-012, DEC-004). 통과(`staleness_passed`)는 이벤트·키 claim 없이 후보 키만 돌려준다(CUT-003).
  */
 export function judgeDelegationResponseStaleness(
+  deps: DomainDeps,
+  aggregate: WorkAggregate,
+  received: DelegationResponseSignal,
+  currentDelegationOccurrenceId: import("./ids.js").OccurrenceId | undefined,
+  now: UtcInstant,
+): DelegationStalenessJudgement {
+  const signal = copyEntry(received);
+  if (!signal.ok || !isPlainRecord(signal.value)) return sealOutcome(invalidSignalInput());
+  const instant = canonicalInstant(now);
+  if (instant === undefined) return sealOutcome(invalidSignalInput());
+  if (!isActorSourceValue(signal.value.actorSource)) return sealOutcome(invalidSignalInput());
+  if (!isEntityIdText("task", signal.value.taskId)) return sealOutcome(invalidSignalInput());
+  return sealOutcome(
+    judgeDelegationResponseStalenessOn(
+      deps,
+      aggregate,
+      signal.value,
+      currentDelegationOccurrenceId,
+      instant,
+    ),
+  );
+}
+
+function judgeDelegationResponseStalenessOn(
   deps: DomainDeps,
   aggregate: WorkAggregate,
   signal: DelegationResponseSignal,

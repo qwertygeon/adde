@@ -11,26 +11,18 @@ import {
   parseDataSchema,
   proveSchemaSubset,
   shapeOf,
-  decideTaskCommand,
-  decideWorkCommand,
   executeCommand,
   judgeSignal,
   judgeDelegationResponseStaleness,
   nextEntityId,
-  validatePlanProposal,
   planMembershipChange,
   judgeMandatoryPlanApproval,
-  planPreconditionRejection,
   planProposalDigest,
-  decideReplanDroppedCancellations,
-  decidePendingProposalRevalidation,
-  decideDependencyCascadeRound,
   isActivationSatisfied,
   resolveBoundInputs,
   bindingUnsatisfiedProducerIds,
   DomainInvariantError,
   OUTPUT_SCHEMA_VIOLATION,
-  checkReportedOutputs,
   prepareAcceptanceOutputs,
   createTaskTypeRegistry,
   parsePendingDecision,
@@ -50,6 +42,7 @@ import {
   materializationBlocker,
   executeDefinitionCommand,
   createWork,
+  deriveSignalDedupKey,
   parseProjectId,
   parseCancelOrigin,
   localToUtc,
@@ -61,16 +54,31 @@ import {
   workflowStateOf,
   findSteward,
   foldEvents,
-  assembleCommit,
-  mkEvent,
   foldWorkflowEvents,
   openOccurrenceCount,
   withWork,
   buildTemplateProposal,
   templateProposalDigest,
 } from "../../../src/workflow/domain/index.js";
+import {
+  decideTaskCommand,
+  decideWorkCommand,
+  validatePlanProposal,
+  planPreconditionRejection,
+  decideReplanDroppedCancellations,
+  decidePendingProposalRevalidation,
+  decideDependencyCascadeRound,
+  checkReportedOutputs,
+  assembleCommit,
+  mkEvent,
+} from "../../../src/workflow/domain/internal.js";
 import type {
   ActorSource,
+  CancelOrigin,
+  CommandOutcome,
+  DefinitionControlSignal,
+  ExternalSignal,
+  SignalJudgement,
   SchemaShape,
   PlanTaskDraft,
   PlanProposalInput,
@@ -110,6 +118,7 @@ import {
   patchWork,
   decidePlan,
   planInput,
+  reachDeadLetterParked,
   reachTaskState,
   reachWorkState,
   requireTaskFor,
@@ -127,7 +136,7 @@ import {
   probeTaskType,
   testRegistries,
 } from "./helpers/registry-fixtures.js";
-import { eventTypes, payloadOf } from "./helpers/commits.js";
+import { eventTypes, payloadOf, recordedCommit } from "./helpers/commits.js";
 import {
   OCCURRENCE_CONSUMER,
   WorkflowJournal,
@@ -200,7 +209,7 @@ describe("SC-007: 계획 승인 grant 의 revision 불일치 분기", () => {
     expect(stale.kind).toBe("rejected_stale");
     if (stale.kind === "rejected_stale") {
       expect(stale.reason).toBe("revision_mismatch");
-      expect(stale.preceding).toBeUndefined();
+      expect("commits" in stale).toBe(false);
     }
     const chain = committedChain(stale);
     expect(chain.map(eventTypes)).toEqual([["signal_rejected_stale"]]);
@@ -227,6 +236,7 @@ function decideOnTaskIn(
   state: TaskStateName,
   body: (deps: DomainDeps, taskId: TaskId) => TaskCommandBody,
   trigger?: TriggerSpec,
+  actorSource: ActorSource = "adde_self",
 ) {
   const { deps, aggregate, taskId } = reachTaskState(
     state,
@@ -238,7 +248,7 @@ function decideOnTaskIn(
     ...body(deps, taskId),
     taskId,
     expectedRevision: task.revision,
-    meta: meta(KILL_NOW),
+    meta: meta(KILL_NOW, actorSource),
   } as TaskCommand;
   return decideTaskCommand(deps, task, command, aggregate);
 }
@@ -272,6 +282,8 @@ describe("SC-007: Task 명령 판정의 상태 적격 검사", () => {
       readonly body: (deps: DomainDeps, taskId: TaskId) => TaskCommandBody;
       /** 명령이 Trigger 선언과 맞아야 하는 경우의 Task Trigger(두 상태 모두 같은 Trigger). */
       readonly trigger?: TriggerSpec;
+      /** 명령 meta 출처 — 취소 명령은 취소 origin 출처와 같아야 한다. */
+      readonly actorSource?: ActorSource;
     }[] = [
       {
         label: "complete_validation",
@@ -349,6 +361,7 @@ describe("SC-007: Task 명령 판정의 상태 적격 검사", () => {
         wrong: "COMPLETED",
         right: "READY",
         body: (deps) => ({ kind: "cancel_task", origin: controlRequestCancelOrigin(deps) }),
+        actorSource: "unknown",
       },
       {
         label: "skip_task",
@@ -376,9 +389,11 @@ describe("SC-007: Task 명령 판정의 상태 적격 검사", () => {
       },
     ];
     for (const c of cases) {
-      expectNotInTable(decideOnTaskIn(c.wrong, c.body, c.trigger));
+      expectNotInTable(decideOnTaskIn(c.wrong, c.body, c.trigger, c.actorSource));
       if (c.right !== undefined) {
-        expect(decideOnTaskIn(c.right, c.body, c.trigger).kind, c.label).toBe("events");
+        expect(decideOnTaskIn(c.right, c.body, c.trigger, c.actorSource).kind, c.label).toBe(
+          "events",
+        );
       }
     }
   });
@@ -2045,6 +2060,7 @@ describe("SC-026: 보존 member 참조와 결합 생산자 판정", () => {
       [g, c, GHOST_TASK],
     );
     expect(issues).toEqual([
+      { kind: "retained_record_missing", taskId: GHOST_TASK },
       {
         kind: "binding_producer_not_member",
         draftRef: "n",
@@ -2052,10 +2068,13 @@ describe("SC-026: 보존 member 참조와 결합 생산자 판정", () => {
         ref: { taskId: GHOST_TASK },
       },
     ]);
-    // 필수 판정: 레코드 없는 보존 member 만으로는 필수 member 가 없다.
+    // 필수 판정: 레코드 없는 보존 member 는 무효 이슈이고 그것만으로는 필수 member 가 없다.
     expect(
       proposalIssues(deps, aggregate, [draft("x", { policy: optionalPolicy() })], [GHOST_TASK]),
-    ).toEqual([{ kind: "no_terminal_required_member" }]);
+    ).toEqual([
+      { kind: "retained_record_missing", taskId: GHOST_TASK },
+      { kind: "no_terminal_required_member" },
+    ]);
     // membership·필수 승인: 보존하지 않은 레코드 없는 member 는 탈락이고 필수 판정에서 빠진다.
     expect(planMembershipChange(aggregate, [g]).dropped).toContain(GHOST_TASK);
     expect(
@@ -2277,9 +2296,9 @@ describe("SC-025: grant 의 보유 제안 재검증과 커밋 내용", () => {
       pendingProposal: { ...pending, tasks: [{ ...first, title: "\uD800" }, ...rest] },
     });
     const judged = planDecision(new Journal(deps, patched, []), "grant");
-    expect(judged.kind).toBe("rejected_stale");
-    const chain = committedChain(judged);
-    const [withdrawal] = chain;
+    expect(judged.kind).toBe("stale_after_withdrawal");
+    if (judged.kind !== "stale_after_withdrawal") return;
+    const [withdrawal] = judged.commits;
     if (withdrawal === undefined) throw new Error("expected withdrawal commit");
     expect(payloadOf(withdrawal, "work_plan_withdrawn")["issues"]).toEqual([
       { kind: "proposal_not_canonical_json", path: ["tasks", 0, "title"] },
@@ -3516,7 +3535,10 @@ describe("SC-025: 보유 제안 재검증은 보유 내용 전체를 한 사본�
     const definition = normalized.content.definition;
     const digest = mustOk(planProposalDigest(aggregate.work.id, { ...held, definition }));
     // 레코드 패치: 정의 자리를 가진 보유 제안(다른 생성 경로 대용) — digest 는 그 내용으로 다시 계산한다.
-    const patched = patchWork(aggregate, { pendingProposal: { ...held, definition, digest } });
+    const patched = patchWork(aggregate, {
+      pendingProposal: { ...held, definition, digest },
+      pendingProposalDigest: digest,
+    });
     const granted = decidePlan(deps, patched, "grant");
     expect(granted.kind).toBe("accepted");
     const types = committedChain(granted).flatMap(eventTypes);
@@ -3637,7 +3659,7 @@ describe("SC-041: 금지 키 첫 위치의 키 순서", () => {
 });
 
 describe("SC-010: 명령 진입 포착의 meta 처리", () => {
-  it("Error: meta 가 객체가 아닌 명령(null·undefined)은 포착이 그대로 두어 첫 사용에서 TypeError 이고, 객체 meta 명령은 판정된다 (test_SC010_command_capture_leaves_non_object_meta_to_fail_at_first_use)", () => {
+  it("Error: meta 가 객체가 아닌 명령(null·undefined)은 진입에서 커밋 없는 invalid_input 이고, 객체 meta 명령은 판정된다 (test_SC010_command_capture_leaves_non_object_meta_to_fail_at_first_use)", () => {
     const { journal, ids } = startJournal([draft("member")], testDeps("killmeta"));
     const member = ids["member"] as TaskId;
     validate(journal, member);
@@ -3649,13 +3671,12 @@ describe("SC-010: 명령 진입 포착의 meta 처리", () => {
     // 런타임 우회: 타입이 막는 meta 값(다른 생성 경로 대용).
     for (const bad of [null, undefined])
       expect(
-        () =>
-          executeCommand(journal.deps, journal.aggregate, {
-            ...base,
-            meta: bad,
-          } as unknown as TaskCommand),
+        executeCommand(journal.deps, journal.aggregate, {
+          ...base,
+          meta: bad,
+        } as unknown as TaskCommand),
         String(bad),
-      ).toThrow(TypeError);
+      ).toEqual({ kind: "rejected", rejection: { reason: "invalid_input" } });
     // 대조: 객체 meta 는 같은 명령이 커밋된다.
     expect(
       executeCommand(journal.deps, journal.aggregate, {
@@ -4844,15 +4865,15 @@ describe("SC-023: 정의 명령의 진입 포착과 입력 경계", () => {
     } as never);
     expect(outcome.kind).toBe("committed");
     expect(reads).toEqual({ now: 1, actorSource: 1, actor: 1, causationId: 1 });
-    // 객체가 아닌 meta 는 복사하지 않고 그대로 읽어 던진다(커밋하지 않는다).
-    expect(() =>
+    // 객체가 아닌 meta 는 진입에서 커밋 없이 거절된다.
+    expect(
       executeDefinitionCommand(r.journal.deps, r.journal.state, {
         kind: "resolve_due_schedule",
         definitionId: r.definitionId,
         occurrenceId: pending.occurrenceId,
         meta: null,
       } as never),
-    ).toThrow(TypeError);
+    ).toEqual({ kind: "rejected", rejection: { reason: "invalid_input" } });
     const unknown = executeDefinitionCommand(r.journal.deps, r.journal.state, {
       kind: "rewind",
       meta: meta(dayAt(0)),
@@ -7086,5 +7107,769 @@ describe("독립 재검증 2회차 판별 — 정의 이벤트의 관리 Work �
       expect(journal.folded(), label).toEqual(journal.state);
     }
     expect(journal.definition(definitionId).state).toBe("STOPPED");
+  });
+});
+
+// ---- 진입 하드닝 판별 — 진입 래퍼·종류별 형·출처·상태 적격·검증 이슈의 생존·미커버 변이 ----
+
+const ENTRY_INVALID = { kind: "rejected", rejection: { reason: "invalid_input" } } as const;
+const SIGNAL_INVALID = { kind: "not_applicable", rejection: { reason: "invalid_input" } } as const;
+
+function cancelVaultBody(deps: DomainDeps): Pick<TaskCommand & { kind: "cancel_task" }, "origin"> {
+  return {
+    origin: {
+      kind: "vault_signal",
+      actorSource: "human_local",
+      signalId: nextEntityId(deps.ids, "signal"),
+    } as CancelOrigin,
+  };
+}
+
+function onTaskEntry(
+  state: TaskStateName,
+  body: (deps: DomainDeps, taskId: TaskId) => Record<string, unknown>,
+  actorSource: ActorSource = "human_local",
+) {
+  const { deps, aggregate, taskId } = reachTaskState(state);
+  const task = requireTaskFor(aggregate, taskId);
+  const outcome = executeCommand(deps, aggregate, {
+    ...body(deps, taskId),
+    taskId,
+    expectedRevision: task.revision,
+    meta: meta(KILL_NOW, actorSource),
+  } as unknown as TaskCommand);
+  return { deps, aggregate, taskId, outcome };
+}
+
+describe("SC-064: 진입 일곱의 최상위 null·진입 시각 형", () => {
+  it("Error: 최상위 null 은 모든 진입에서 예외 없이 invalid_input 이고 시각이 아닌 now 는 신호 진입에서 invalid_input 이다 (test_SC064_null_root_and_non_instant_now_rejected_per_entry)", () => {
+    const { deps, aggregate, taskId } = reachTaskState("READY");
+    const nul = null as never;
+    expect(executeCommand(deps, aggregate, nul)).toEqual(ENTRY_INVALID);
+    expect(createWork(deps, nul)).toEqual(ENTRY_INVALID);
+    const r = registerDefinition(definitionDeps("killentrynull"));
+    expect(executeDefinitionCommand(r.journal.deps, r.state, nul)).toEqual(ENTRY_INVALID);
+    expect(judgeDefinitionSignal(r.journal.deps, r.state, nul, DEF_NOW)).toEqual(SIGNAL_INVALID);
+    expect(judgeTaskExternalSignal(deps, aggregate, nul, KILL_NOW)).toEqual(SIGNAL_INVALID);
+    expect(judgeSignal(deps, aggregate, nul, { kind: "none" }, KILL_NOW)).toEqual(SIGNAL_INVALID);
+    expect(judgeDelegationResponseStaleness(deps, aggregate, nul, undefined, KILL_NOW)).toEqual(
+      SIGNAL_INVALID,
+    );
+    const badNow = "2026-01-01" as UtcInstant;
+    const control = controlSignal(r.journal.deps, {
+      definitionId: r.definitionId,
+      expectedRevision: r.journal.definition(r.definitionId).revision,
+      action: "pause",
+    });
+    expect(judgeDefinitionSignal(r.journal.deps, r.state, control, badNow)).toEqual(SIGNAL_INVALID);
+    const external = externalSignal(deps, { subject: { taskId }, sourceOccurrenceId: "occ-1" });
+    expect(judgeTaskExternalSignal(deps, aggregate, external, badNow)).toEqual(SIGNAL_INVALID);
+    const delegation = {
+      type: "delegation_response",
+      taskId,
+      signalId: nextEntityId(deps.ids, "signal"),
+      expectedRevision: requireTaskFor(aggregate, taskId).revision,
+      actorSource: "human_local",
+      receivedAt: KILL_NOW,
+      occurrenceId: "occ_00000000000000000000000000",
+      responseContentHash: "0".repeat(64),
+    } as unknown as DelegationResponseSignal;
+    expect(
+      judgeDelegationResponseStaleness(deps, aggregate, delegation, undefined, badNow),
+    ).toEqual(SIGNAL_INVALID);
+    // 대조: 같은 신호에 정규 시각이면 형 검사를 지나 판정에 이른다.
+    expect(judgeDefinitionSignal(r.journal.deps, r.state, control, DEF_NOW)).not.toEqual(
+      SIGNAL_INVALID,
+    );
+    expect(judgeTaskExternalSignal(deps, aggregate, external, KILL_NOW)).not.toEqual(
+      SIGNAL_INVALID,
+    );
+    expect(
+      judgeDelegationResponseStaleness(deps, aggregate, delegation, undefined, KILL_NOW),
+    ).not.toEqual(SIGNAL_INVALID);
+  });
+});
+
+describe("SC-005: 명령 진입 거절의 상세 유무", () => {
+  it("Edge: 알 수 없는 명령 종류만 unknown_command 상세를 싣고 그 밖의 진입 형 위반은 상세 키가 없다 (test_SC005_unknown_command_detail_only_for_kind_violation)", () => {
+    const unknownTask = onTaskEntry("READY", () => ({ kind: "no_such_command" }));
+    expect(unknownTask.outcome).toStrictEqual({
+      kind: "rejected",
+      rejection: { reason: "invalid_input", detail: "unknown_command" },
+    });
+    const { deps, aggregate } = reachWorkState("ACTIVE");
+    const createAsWork = executeCommand(deps, aggregate, {
+      kind: "create_work",
+      expectedRevision: aggregate.work.revision,
+      meta: meta(KILL_NOW),
+    } as unknown as WorkCommand);
+    expect(createAsWork).toStrictEqual({
+      kind: "rejected",
+      rejection: { reason: "invalid_input", detail: "unknown_command" },
+    });
+    const badId = executeCommand(deps, aggregate, {
+      kind: "cancel_task",
+      taskId: "constructor",
+      expectedRevision: 0,
+      meta: meta(KILL_NOW, "human_local"),
+      ...cancelVaultBody(deps),
+    } as unknown as TaskCommand);
+    expect(badId).toStrictEqual({ kind: "rejected", rejection: { reason: "invalid_input" } });
+  });
+
+  it("Edge: 형식이 맞지만 없는 Task ID 는 기록 없는 unknown_subject 이다 (test_SC005_well_formed_absent_task_unknown_subject)", () => {
+    const { deps, aggregate } = reachTaskState("READY");
+    const absent = executeCommand(deps, aggregate, {
+      kind: "cancel_task",
+      taskId: entityId("task", "tsk_absentmember0001"),
+      expectedRevision: 0,
+      meta: meta(KILL_NOW, "human_local"),
+      ...cancelVaultBody(deps),
+    } as TaskCommand);
+    expect(absent).toStrictEqual({ kind: "rejected", rejection: { reason: "unknown_subject" } });
+  });
+});
+
+describe("SC-011: 완료 보고가 아닌 명령의 격리 자리 실패", () => {
+  it("Error: 완료 결과 모양의 비JSON 출력을 실은 다른 명령은 상세 없는 invalid_input 이고 같은 명령에서 그 필드를 빼면 커밋된다 (test_SC011_isolated_failure_on_non_report_command_rejected)", () => {
+    const stray = onTaskEntry("READY", (deps) => ({
+      kind: "cancel_task",
+      ...cancelVaultBody(deps),
+      outcome: { kind: "completed", outputs: { n: Number.NaN } },
+    }));
+    expect(stray.outcome).toStrictEqual({
+      kind: "rejected",
+      rejection: { reason: "invalid_input" },
+    });
+    expect(requireTaskFor(stray.aggregate, stray.taskId).state).toBe("READY");
+    const clean = onTaskEntry("READY", (deps) => ({
+      kind: "cancel_task",
+      ...cancelVaultBody(deps),
+    }));
+    expect(clean.outcome.kind).toBe("committed");
+  });
+});
+
+describe("SC-012: 진입 사본의 접근자 예외 전파", () => {
+  it("Edge: 격리 자리·격리 밖의 접근자 예외는 실패 attempt·거절로 바뀌지 않고 그대로 던져진다 (test_SC012_accessor_exception_propagates_from_entry_copy)", () => {
+    class AccessorFault extends Error {}
+    const throwing = (): Record<string, unknown> =>
+      Object.defineProperty({}, "x", {
+        enumerable: true,
+        get() {
+          throw new AccessorFault("accessor");
+        },
+      });
+    expect(() => recordOnRunning(() => ({ kind: "completed", outputs: throwing() }))).toThrow(
+      AccessorFault,
+    );
+    expect(() =>
+      recordOnRunning(() => ({ kind: "completed", outputs: {}, evidence: throwing() })),
+    ).toThrow(AccessorFault);
+    const { deps, aggregate, taskId } = reachTaskState("READY");
+    expect(() =>
+      executeCommand(deps, aggregate, {
+        kind: "cancel_task",
+        taskId,
+        expectedRevision: requireTaskFor(aggregate, taskId).revision,
+        meta: meta(KILL_NOW, "human_local"),
+        origin: throwing(),
+      } as unknown as TaskCommand),
+    ).toThrow(AccessorFault);
+    // 대조: 같은 자리의 평범한 값은 완료로 커밋된다.
+    const plain = recordOnRunning(() => ({ kind: "completed", outputs: {} }));
+    expect(plain.commit.events.map((e) => e.type)).toContain("task_completed");
+  });
+});
+
+describe("SC-050: 계획 초안 틀", () => {
+  const frameBroken: Record<string, (d: PlanTaskDraft) => unknown> = {
+    typeNotObject: (d) => ({ ...d, type: "generic_task" }),
+    typeIdNotString: (d) => ({ ...d, type: { id: 1, version: 1 } }),
+    typeVersionNotNumber: (d) => ({ ...d, type: { id: "generic_task", version: "1" } }),
+    dependsOnNotArray: (d) => ({ ...d, dependsOn: "a" }),
+    dependsOnPrimitive: (d) => ({ ...d, dependsOn: [5] }),
+    dependsOnEmptyRef: (d) => ({ ...d, dependsOn: [{}] }),
+    dependsOnNumberRef: (d) => ({ ...d, dependsOn: [{ draftRef: 1 }] }),
+    parentEmptyRef: (d) => ({ ...d, parent: {} }),
+    triggerMissing: (d) => {
+      const { trigger: _t, ...rest } = d;
+      void _t;
+      return rest;
+    },
+  };
+
+  it("Error: 틀을 어긴 계획 초안은 계획 사전 거절이고 같은 초안의 틀이 맞으면 사전 거절이 없다 (test_SC050_plan_draft_frame_violations_rejected)", () => {
+    const { aggregate } = reachWorkState("PLANNING");
+    for (const [name, broken] of Object.entries(frameBroken)) {
+      const plan = planInput([broken(draft("a")) as PlanTaskDraft]);
+      expect(planPreconditionRejection(aggregate.work, plan), name).toEqual({
+        reason: "invalid_input",
+        detail: "계획 초안 틀이 아님",
+      });
+    }
+    expect(planPreconditionRejection(aggregate.work, planInput([draft("a")]))).toBeUndefined();
+    expect(
+      planPreconditionRejection(
+        aggregate.work,
+        planInput([
+          draft("a"),
+          draft("b", { dependsOn: [{ draftRef: "a" }], parent: { draftRef: "a" } }),
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("Error: 정의 템플릿 원소가 틀을 어기면 draft_malformed 이다 (test_SC050_definition_template_frame_violation_malformed)", () => {
+    const deps = definitionDeps("killtemplateframe");
+    const reasons = (content: unknown): string[] =>
+      definitionInvalidReasons(issuesOf(proposeDraft(deps, content).outcome));
+    const base = definitionDraft();
+    const template = (base as { template: readonly PlanTaskDraft[] }).template;
+    const first = template[0] as PlanTaskDraft;
+    for (const [name, broken] of Object.entries(frameBroken)) {
+      expect(reasons({ ...base, template: [broken(first)] }), name).toEqual(["draft_malformed"]);
+    }
+    expect(reasons(base)).not.toContain("draft_malformed");
+  });
+});
+
+describe("SC-009: 대기 결정 형·종류별 형 위반의 고정 상세", () => {
+  it("Error: 결정·결과 형 위반은 지정 상세 글자로 거절된다 (test_SC009_fixed_details_for_decision_and_outcome_shape)", () => {
+    const park = (decision: (deps: DomainDeps, taskId: TaskId) => unknown) =>
+      onTaskEntry("READY", (deps, taskId) => ({
+        kind: "park_awaiting_human",
+        cause: "unattended_eligibility_refused",
+        decision: decision(deps, taskId),
+      })).outcome;
+    const invalidWith = (detail: string) => ({
+      kind: "rejected",
+      rejection: { reason: "invalid_input", detail },
+    });
+    expect(
+      park((deps, taskId) => ({
+        ...taskSubjectPendingDecision(deps, taskId, KILL_NOW),
+        surfaceDeliveries: "none",
+      })),
+    ).toEqual(invalidWith("pending_decision_malformed"));
+    expect(park((deps, taskId) => taskSubjectPendingDecision(deps, taskId, KILL_NOW)).kind).toBe(
+      "committed",
+    );
+    const { deps, aggregate, taskId } = reachTaskState("RUNNING");
+    const task = requireTaskFor(aggregate, taskId);
+    const record = (outcome: unknown) =>
+      executeCommand(deps, aggregate, {
+        kind: "record_attempt_outcome",
+        taskId,
+        expectedRevision: task.revision,
+        meta: meta(KILL_NOW),
+        attemptId: task.openAttempt?.attemptId,
+        outcome,
+      } as unknown as TaskCommand);
+    expect(record({ kind: "no_such_outcome" })).toEqual(invalidWith("attempt_outcome_malformed"));
+    expect(record({ kind: "blocked", cause: "gate_denied", decision: { id: "dec_x" } })).toEqual(
+      invalidWith("pending_decision_malformed"),
+    );
+    const skip = onTaskEntry("READY", () => ({ kind: "skip_task", reason: "misfire" }));
+    expect(skip.outcome).toEqual(invalidWith("skip_reason_malformed"));
+  });
+
+  it("Error: 주차 결정이 다른 Task 주체이거나 무인 적격 거절이 아니면 거절되고, 결정 없는 blocked 결과는 예외 없이 거절된다 (test_SC009_park_decision_subject_and_kind_checked)", () => {
+    const other = entityId("task", "tsk_othermember00001");
+    const wrongSubject = onTaskEntry("READY", (deps) => ({
+      kind: "park_awaiting_human",
+      cause: "unattended_eligibility_refused",
+      decision: taskSubjectPendingDecision(deps, other, KILL_NOW),
+    }));
+    expect(wrongSubject.outcome.kind).toBe("rejected");
+    if (wrongSubject.outcome.kind === "rejected") {
+      expect(wrongSubject.outcome.rejection.reason).toBe("invalid_input");
+    }
+    const wrongKind = onTaskEntry("READY", (deps, taskId) => ({
+      kind: "park_awaiting_human",
+      cause: "unattended_eligibility_refused",
+      decision: deadLetterDecision(deps, taskId, KILL_NOW),
+    }));
+    expect(wrongKind.outcome.kind).toBe("rejected");
+    if (wrongKind.outcome.kind === "rejected") {
+      expect(wrongKind.outcome.rejection.reason).toBe("invalid_input");
+    }
+    const blockedWithout = recordOnRunningRaw({ kind: "blocked", cause: "gate_denied" });
+    expect(blockedWithout.kind).toBe("rejected");
+    if (blockedWithout.kind === "rejected") {
+      expect(blockedWithout.rejection.reason).toBe("invalid_input");
+    }
+  });
+});
+
+function recordOnRunningRaw(outcome: unknown): CommandOutcome {
+  const { deps, aggregate, taskId } = reachTaskState("RUNNING");
+  const task = requireTaskFor(aggregate, taskId);
+  return executeCommand(deps, aggregate, {
+    kind: "record_attempt_outcome",
+    taskId,
+    expectedRevision: task.revision,
+    meta: meta(KILL_NOW),
+    attemptId: task.openAttempt?.attemptId,
+    outcome,
+  } as unknown as TaskCommand);
+}
+
+describe("SC-052: 예약 Task 시작의 발화 occurrence 대조", () => {
+  it("Error: 예약 Task 의 시작은 예약 occurrence 와 같은 발화 occurrence 만 수용한다 (test_SC052_scheduled_start_requires_matching_fired_occurrence)", () => {
+    const start = (fired: unknown) =>
+      onTaskEntry(
+        "SCHEDULED",
+        (_deps, _taskId) => ({
+          kind: "start_attempt",
+          ...(fired === undefined ? {} : { firedOccurrenceId: fired }),
+        }),
+        "adde_self",
+      );
+    const { aggregate, taskId } = reachTaskState("SCHEDULED");
+    const scheduled = requireTaskFor(aggregate, taskId).scheduledOccurrenceId;
+    expect(scheduled).toBeDefined();
+    for (const fired of [undefined, "occ_00000000000000000000000000"]) {
+      const outcome = start(fired).outcome;
+      expect(outcome.kind, String(fired)).toBe("rejected");
+      if (outcome.kind === "rejected") expect(outcome.rejection.reason).toBe("condition_not_met");
+    }
+    const ok = start(scheduled).outcome;
+    expect(ok.kind).toBe("committed");
+  });
+});
+
+describe("SC-009: 재시도 포기의 실패 사유 기록", () => {
+  it("Edge: abandon_retries 의 task_failed 는 받은 원인을 사유 종류로 싣는다 (test_SC009_abandon_retries_failure_reason_payload)", () => {
+    for (const cause of ["retries_abandoned", "retry_budget_exhausted"]) {
+      const { outcome } = onTaskEntry(
+        "RETRY_WAIT",
+        () => ({ kind: "abandon_retries", cause }),
+        "adde_self",
+      );
+      const commit = mustCommit(outcome).commit;
+      expect(payloadOf(commit, "task_failed"), cause).toEqual({ reason: { kind: cause } });
+    }
+  });
+});
+
+describe("SC-008: 입력 요청 기록", () => {
+  it("Edge: request_work_input 은 받은 요청 배열을 그대로 기록한다 (test_SC008_work_input_requests_recorded)", () => {
+    const { deps, aggregate } = reachWorkState("PLANNING");
+    const requests = [{ field: "subject", question: "What?" }];
+    const outcome = executeCommand(deps, aggregate, {
+      kind: "request_work_input",
+      expectedRevision: aggregate.work.revision,
+      meta: meta(KILL_NOW),
+      requests,
+    } as unknown as WorkCommand);
+    const commit = mustCommit(outcome).commit;
+    expect(commit.events.find((e) => e.type === "work_input_requested")?.workId).toBe(
+      aggregate.work.id,
+    );
+    expect(payloadOf(commit, "work_input_requested")).toEqual({ requests });
+  });
+});
+
+describe("SC-016: 내부 진입 decideTaskCommand 의 격리 기본값", () => {
+  it("Edge: 다섯째 인자 없이 부른 완료 보고는 실패 attempt 가 아니라 완료다 (test_SC016_decide_task_command_default_isolated_is_empty)", () => {
+    const { deps, aggregate, taskId } = reachTaskState("RUNNING");
+    const task = requireTaskFor(aggregate, taskId);
+    const decided = decideTaskCommand(
+      deps,
+      task,
+      {
+        kind: "record_attempt_outcome",
+        taskId,
+        expectedRevision: task.revision,
+        meta: meta(KILL_NOW),
+        attemptId: task.openAttempt?.attemptId,
+        outcome: { kind: "completed", outputs: {} },
+      } as unknown as TaskCommand,
+      aggregate,
+    );
+    expect(decided.kind).toBe("events");
+    if (decided.kind === "events") {
+      expect(decided.events.map((e) => e.type)).toEqual(["task_completed"]);
+    }
+  });
+});
+
+describe("SC-045·SC-047: grant 재개 형과 재개 occurrence 파생", () => {
+  function parkedGrant(
+    resume: unknown,
+    applicationKind = "task_grant",
+    patch?: (aggregate: WorkAggregate, taskId: TaskId) => WorkAggregate,
+  ) {
+    const parked = reachDeadLetterParked();
+    const aggregate =
+      patch === undefined ? parked.aggregate : patch(parked.aggregate, parked.taskId);
+    const task = requireTaskFor(aggregate, parked.taskId);
+    const decisionId = task.pendingDecision?.id;
+    if (decisionId === undefined) throw new Error("expected pending decision");
+    return judgeSignal(
+      parked.deps,
+      aggregate,
+      humanDecision(decisionId, task.revision, parked.deps),
+      { kind: applicationKind, resume } as never,
+      KILL_NOW,
+    );
+  }
+  const SCHEDULED_RESUME = { to: "SCHEDULED", occurrence: { kind: "dead_letter_retry" } };
+
+  it("Error: READY·SCHEDULED 밖의 재개 대상과 task_grant 가 아닌 적용은 재개 형이 맞아도 invalid_input 이다 (test_SC045_resume_target_and_application_kind_checked)", () => {
+    expect(parkedGrant({ ...SCHEDULED_RESUME, to: "RUNNING" })).toEqual(SIGNAL_INVALID);
+    expect(parkedGrant(SCHEDULED_RESUME, "plan_grant")).toEqual(SIGNAL_INVALID);
+    expect(parkedGrant({ to: "READY" }, "task_deny")).toEqual(SIGNAL_INVALID);
+    // 대조: 같은 결정에 task_grant 의 dead-letter 재시도 재개는 수용된다.
+    expect(parkedGrant(SCHEDULED_RESUME).kind).toBe("accepted");
+  });
+
+  it("Error: 재개 occurrence 를 파생할 수 없는 Task 기록이면 invalid_input 이다 (test_SC047_underivable_resume_occurrence_rejected)", () => {
+    const blanked = parkedGrant(SCHEDULED_RESUME, "task_grant", (aggregate, taskId) =>
+      patchTask(aggregate, taskId, {
+        trigger: { ...requireTaskFor(aggregate, taskId).trigger, triggerId: "" },
+      } as never),
+    );
+    expect(blanked).toEqual(SIGNAL_INVALID);
+  });
+});
+
+describe("SC-037: 취소 요청 신호의 subject 판정과 기록", () => {
+  function cancelRequested(
+    subject: unknown,
+    actorSource: ActorSource = "human_local",
+  ): { judged: SignalJudgement; aggregate: WorkAggregate; taskId: TaskId } {
+    const { deps, aggregate, taskId } = reachTaskState("READY");
+    const signal = {
+      type: "cancel_requested",
+      subject:
+        typeof subject === "function"
+          ? (subject as (t: TaskId, w: WorkId) => unknown)(taskId, aggregate.work.id)
+          : subject,
+      signalId: nextEntityId(deps.ids, "signal"),
+      expectedRevision: requireTaskFor(aggregate, taskId).revision,
+      actorSource,
+      receivedAt: KILL_NOW,
+    } as unknown as DecisionSignal;
+    return {
+      judged: judgeSignal(deps, aggregate, signal, { kind: "none" }, KILL_NOW),
+      aggregate,
+      taskId,
+    };
+  }
+
+  it("Error: 형식이 아닌 taskId subject 는 invalid_input, 다른 Work 를 가리키는 subject 는 unknown_subject 이다 (test_SC037_cancel_requested_subject_checked)", () => {
+    expect(cancelRequested({ taskId: "constructor" }).judged).toEqual(SIGNAL_INVALID);
+    expect(cancelRequested({ workId: "wrk_otherwork000000001" }).judged).toEqual({
+      kind: "not_applicable",
+      rejection: { reason: "unknown_subject" },
+    });
+    // 대조: 자기 Work subject 는 subject 판정을 지나 revision 판정에 이른다.
+    expect(cancelRequested((_t: TaskId, w: WorkId) => ({ workId: w })).judged.kind).toBe(
+      "rejected_stale",
+    );
+  });
+
+  it("Edge: 사람 아닌 출처 거절 기록은 판정한 subject 를 싣는다 (test_SC037_cancel_requested_record_carries_subject)", () => {
+    const onTask = cancelRequested((t: TaskId) => ({ taskId: t }), "agent_session");
+    const taskCommit = recordedCommit(onTask.judged);
+    if (taskCommit === undefined) throw new Error("expected record");
+    expect(payloadOf(taskCommit, "signal_rejected")["subject"]).toEqual({ taskId: onTask.taskId });
+    const onWork = cancelRequested((_t: TaskId, w: WorkId) => ({ workId: w }), "agent_session");
+    const workCommit = recordedCommit(onWork.judged);
+    if (workCommit === undefined) throw new Error("expected record");
+    expect(payloadOf(workCommit, "signal_rejected")["subject"]).toEqual({
+      workId: onWork.aggregate.work.id,
+    });
+  });
+});
+
+describe("SC-043: Task 외부 신호 subject 의 키 이름", () => {
+  it("Error: Task ID 형식 값이라도 taskId 가 아닌 키의 subject 는 invalid_input 이다 (test_SC043_task_id_value_under_other_key_rejected)", () => {
+    const { deps, aggregate, taskId } = reachTaskState("READY");
+    const signal = externalSignal(deps, { subject: { taskId }, sourceOccurrenceId: "occ-key" });
+    const renamed = { ...signal, subject: { workId: taskId } } as unknown as ExternalSignal;
+    expect(judgeTaskExternalSignal(deps, aggregate, renamed, KILL_NOW)).toEqual(SIGNAL_INVALID);
+    expect(judgeTaskExternalSignal(deps, aggregate, signal, KILL_NOW)).not.toEqual(SIGNAL_INVALID);
+  });
+});
+
+describe("SC-039: 외부 신호 후보 키의 문자열 필드 오류", () => {
+  it("Error: 문자열이 아닌 signalName·sourceOccurrenceId 는 그 필드 이름의 not_a_string 파생 오류다 (test_SC039_external_key_field_names_in_error)", () => {
+    const base = {
+      signalType: "external_signal",
+      subjectId: "tsk_keyfieldsubject01",
+      sourceId: "src",
+      signalName: "name",
+      sourceOccurrenceId: "occ-1",
+    } as const;
+    for (const field of ["sourceId", "signalName", "sourceOccurrenceId"] as const) {
+      expect(deriveSignalDedupKey({ ...base, [field]: 5 } as never), field).toEqual({
+        ok: false,
+        error: { kind: "derivation_input", field, reason: "not_a_string" },
+      });
+    }
+    expect(deriveSignalDedupKey(base as never).ok).toBe(true);
+  });
+});
+
+describe("SC-055: Task 입력 검증 이슈의 경로", () => {
+  const LIST_TYPE = probeTaskType({
+    id: "probe_list_input",
+    schema: z.strictObject({
+      items: z.array(z.string()),
+      tags: z.record(z.string(), z.number()).optional(),
+    }),
+    inputFields: { items: { question: "Items?", safetyRelevant: false } },
+    outputs: {},
+  });
+  const validateInput = (type: { id: string; version: number }, input: unknown) =>
+    validateTask(testRegistries({ taskTypes: [LIST_TYPE] }), {
+      type,
+      input,
+      trigger: { kind: "immediate", version: 1, triggerId: "path" },
+      policy: basePolicy(),
+    } as never);
+
+  it("Edge: 모르는 필드는 그 키 하나의 경로로, 배열 위치는 수로, 외톨이 surrogate 키는 대체 글자로 남는다 (test_SC055_input_issue_paths_unknown_index_and_surrogate)", () => {
+    const unknown = validateInput({ id: "generic_task", version: 1 }, { note: "a", zzz: 1 });
+    expect(unknown.exit).toBe("validation_failed");
+    if (unknown.exit === "validation_failed") {
+      expect(unknown.issues).toEqual([
+        { area: "input", path: ["zzz"], code: "input_unknown_field" },
+      ]);
+    }
+    const indexed = validateInput({ id: LIST_TYPE.id, version: 1 }, { items: ["a", 5] });
+    expect(indexed.exit).toBe("validation_failed");
+    if (indexed.exit === "validation_failed") {
+      const paths = indexed.issues.map((i) => i.path);
+      expect(paths).toEqual([["items", 1]]);
+      expect(typeof (paths[0] as readonly unknown[])[1]).toBe("number");
+    }
+    const surrogate = validateInput(
+      { id: LIST_TYPE.id, version: 1 },
+      { items: [], tags: { "\uD800": "x" } },
+    );
+    expect(surrogate.exit).toBe("validation_failed");
+    if (surrogate.exit === "validation_failed") {
+      expect(surrogate.issues.map((i) => i.path)).toEqual([["tags", "�"]]);
+    }
+  });
+});
+
+describe("SC-006: 외부 신호 페이로드와 계획의 깊이 루트는 격리가 아니다", () => {
+  it("Error: 비JSON 페이로드는 신호 전체 거절이고 같은 신호의 JSON 페이로드는 판정에 이른다 (test_SC006_non_json_payload_rejects_whole_signal)", () => {
+    const { deps, aggregate, taskId } = reachTaskState("READY");
+    const signal = (payload: unknown) =>
+      externalSignal(deps, { subject: { taskId }, sourceOccurrenceId: "occ-pay", payload });
+    expect(judgeTaskExternalSignal(deps, aggregate, signal({ n: Number.NaN }), KILL_NOW)).toEqual(
+      SIGNAL_INVALID,
+    );
+    expect(judgeTaskExternalSignal(deps, aggregate, signal({ n: 1 }), KILL_NOW)).not.toEqual(
+      SIGNAL_INVALID,
+    );
+    const r = registerDefinition(definitionDeps("killpayloadroot"));
+    const onDefinition = (payload: unknown) =>
+      externalSignal(r.journal.deps, {
+        subject: { definitionId: r.definitionId },
+        sourceOccurrenceId: "occ-def-pay",
+        payload,
+      });
+    expect(
+      judgeDefinitionSignal(r.journal.deps, r.state, onDefinition({ n: Number.NaN }), DEF_NOW),
+    ).toEqual(SIGNAL_INVALID);
+    expect(
+      judgeDefinitionSignal(r.journal.deps, r.state, onDefinition({ n: 1 }), DEF_NOW),
+    ).not.toEqual(SIGNAL_INVALID);
+  });
+
+  it("Error: 완료 보고에 실린 비JSON 계획 필드는 실패 attempt 가 아니라 명령 거절이다 (test_SC011_non_json_plan_field_on_completed_report_rejected)", () => {
+    const outcome = recordOnRunningCommand(
+      { kind: "completed", outputs: {} },
+      { plan: { n: Number.NaN } },
+    );
+    expect(outcome).toStrictEqual({ kind: "rejected", rejection: { reason: "invalid_input" } });
+    expect(
+      recordOnRunningCommand({ kind: "completed", outputs: {} }, { plan: { n: 1 } }).kind,
+    ).toBe("committed");
+  });
+});
+
+function recordOnRunningCommand(outcome: unknown, extra: Record<string, unknown>): CommandOutcome {
+  const { deps, aggregate, taskId } = reachTaskState("RUNNING");
+  const task = requireTaskFor(aggregate, taskId);
+  return executeCommand(deps, aggregate, {
+    kind: "record_attempt_outcome",
+    taskId,
+    expectedRevision: task.revision,
+    meta: meta(KILL_NOW),
+    attemptId: task.openAttempt?.attemptId,
+    outcome,
+    ...extra,
+  } as unknown as TaskCommand);
+}
+
+describe("SC-036: 후보 키의 수 표기", () => {
+  it("Edge: 유한하지 않은 수도 십진 표기 글자로 후보 키에 실린다 (test_SC036_non_finite_number_key_text)", () => {
+    const key = (expectedRevision: number) =>
+      deriveSignalDedupKey({
+        signalType: "human_decision",
+        decisionId: "dec_keytextdecision01",
+        expectedRevision,
+        choice: "grant",
+      } as never);
+    expect(key(Number.NaN)).toEqual({
+      ok: true,
+      value: "human_decision:dec_keytextdecision01:NaN:grant",
+    });
+    expect(key(Number.POSITIVE_INFINITY)).toEqual({
+      ok: true,
+      value: "human_decision:dec_keytextdecision01:Infinity:grant",
+    });
+    expect(key(3)).toEqual({ ok: true, value: "human_decision:dec_keytextdecision01:3:grant" });
+  });
+});
+
+describe("SC-003: 결정 신호 진입 시각", () => {
+  it("Error: 시각이 아닌 now 의 결정 신호는 invalid_input 이고 정규 시각이면 판정에 이른다 (test_SC003_decision_signal_non_instant_now_rejected)", () => {
+    const { deps, aggregate, taskId } = reachTaskState("READY");
+    const signal = {
+      type: "cancel_requested",
+      subject: { taskId },
+      signalId: nextEntityId(deps.ids, "signal"),
+      expectedRevision: requireTaskFor(aggregate, taskId).revision,
+      actorSource: "human_local",
+      receivedAt: KILL_NOW,
+    } as unknown as DecisionSignal;
+    expect(
+      judgeSignal(deps, aggregate, signal, { kind: "none" }, "yesterday" as UtcInstant),
+    ).toEqual(SIGNAL_INVALID);
+    expect(judgeSignal(deps, aggregate, signal, { kind: "none" }, KILL_NOW).kind).toBe("accepted");
+  });
+});
+
+describe("SC-011: 열린 attempt 없는 실행 중 Task 와 격리 실패의 결과 종류", () => {
+  it("Error: 열린 attempt 가 없는 실행 중 기록의 결과 보고는 예외 없이 condition_not_met 이다 (test_SC011_running_without_open_attempt_condition_not_met)", () => {
+    const { deps, aggregate, taskId } = reachTaskState("RUNNING");
+    const task = requireTaskFor(aggregate, taskId);
+    const patched = patchTask(aggregate, taskId, { openAttempt: undefined } as never);
+    const outcome = executeCommand(deps, patched, {
+      kind: "record_attempt_outcome",
+      taskId,
+      expectedRevision: task.revision,
+      meta: meta(KILL_NOW),
+      attemptId: task.openAttempt?.attemptId,
+      outcome: { kind: "failed", code: "fixture_retryable" },
+    } as unknown as TaskCommand);
+    expect(outcome.kind).toBe("rejected");
+    if (outcome.kind === "rejected") expect(outcome.rejection.reason).toBe("condition_not_met");
+  });
+
+  it("Edge: 내부 진입으로 격리 실패를 넘겨도 완료가 아닌 결과는 그 결과대로 라우팅된다 (test_SC011_isolated_failures_convert_only_completed)", () => {
+    const { deps, aggregate, taskId } = reachTaskState("RUNNING");
+    const task = requireTaskFor(aggregate, taskId);
+    const command = {
+      kind: "record_attempt_outcome",
+      taskId,
+      expectedRevision: task.revision,
+      meta: meta(KILL_NOW),
+      attemptId: task.openAttempt?.attemptId,
+      outcome: { kind: "failed", code: "fixture_retryable" },
+    } as unknown as TaskCommand;
+    const isolated = [{ root: ["outcome", "outputs"], reason: "non_finite_number", path: ["n"] }];
+    const withIsolated = decideTaskCommand(deps, task, command, aggregate, isolated as never);
+    const without = decideTaskCommand(deps, task, command, aggregate, []);
+    expect(withIsolated).toEqual(without);
+    expect(JSON.stringify(withIsolated)).not.toContain(OUTPUT_SCHEMA_VIOLATION);
+  });
+
+  it("Edge: 출력 위반 실패로 바꾼 완료 보고는 받은 jitter 만 싣고 없으면 그 키가 없다 (test_SC011_converted_failure_carries_jitter_only_when_given)", () => {
+    const retry = {
+      maxAttempts: 3,
+      initialDelayMs: 1_000,
+      maxDelayMs: 60_000,
+      backoff: "fixed",
+      retryableErrors: [OUTPUT_SCHEMA_VIOLATION],
+    } as const;
+    const jittered = recordOnRunning(
+      () => ({ kind: "completed", outputs: { n: Number.NaN }, jitterDrawMs: 200 }),
+      { retry: { ...retry, jitterMs: 500 } } as never,
+    );
+    const waitWith = payloadOf(jittered.commit, "task_retry_wait");
+    expect(waitWith["jitterDrawMs"]).toBe(200);
+    expect(waitWith["retryDelayMs"]).toBe(1_200);
+    expect((waitWith["outcome"] as Record<string, unknown>)["jitterDrawMs"]).toBe(200);
+    const plain = recordOnRunning(() => ({ kind: "completed", outputs: { n: Number.NaN } }), {
+      retry,
+    } as never);
+    const waitWithout = payloadOf(plain.commit, "task_retry_wait");
+    expect(Object.hasOwn(waitWithout, "jitterDrawMs")).toBe(false);
+    expect(Object.keys(waitWithout["outcome"] as object).sort()).toEqual([
+      "code",
+      "kind",
+      "outputIssues",
+    ]);
+  });
+});
+
+describe("SC-009·SC-052·SC-006: 남은 결정 필드 형·예약 occurrence 부재·제어 신호의 페이로드 자리", () => {
+  it("Error: 형이 어긋난 deadLetterDecision 도 pending_decision_malformed 이다 (test_SC009_malformed_dead_letter_decision_fixed_detail)", () => {
+    expect(
+      recordOnRunningRaw({ kind: "effect_dead_lettered", deadLetterDecision: { id: "dec_x" } }),
+    ).toEqual({
+      kind: "rejected",
+      rejection: { reason: "invalid_input", detail: "pending_decision_malformed" },
+    });
+  });
+
+  it("Error: 예약 occurrence 가 없는 예약 기록에 발화 occurrence 없는 시작은 condition_not_met 이다 (test_SC052_scheduled_start_without_any_occurrence_rejected)", () => {
+    const { deps, aggregate, taskId } = reachTaskState("SCHEDULED");
+    const task = requireTaskFor(aggregate, taskId);
+    const patched = patchTask(aggregate, taskId, { scheduledOccurrenceId: undefined } as never);
+    const outcome = executeCommand(deps, patched, {
+      kind: "start_attempt",
+      taskId,
+      expectedRevision: task.revision,
+      meta: meta(KILL_NOW),
+    } as unknown as TaskCommand);
+    expect(outcome.kind).toBe("rejected");
+    if (outcome.kind === "rejected") expect(outcome.rejection.reason).toBe("condition_not_met");
+  });
+
+  it("Error: 정의 제어 신호의 비JSON payload 필드는 신호 전체 거절이다 (test_SC006_control_signal_non_json_payload_field_rejected)", () => {
+    const r = registerDefinition(definitionDeps("killcontrolpayload"));
+    const control = controlSignal(r.journal.deps, {
+      definitionId: r.definitionId,
+      expectedRevision: r.journal.definition(r.definitionId).revision,
+      action: "pause",
+    });
+    const stray = { ...control, payload: { n: Number.NaN } } as unknown as DefinitionControlSignal;
+    expect(judgeDefinitionSignal(r.journal.deps, r.state, stray, DEF_NOW)).toEqual(SIGNAL_INVALID);
+    expect(judgeDefinitionSignal(r.journal.deps, r.state, control, DEF_NOW).kind).toBe("accepted");
+  });
+});
+
+describe("SC-049: 보유 제안 재검증의 digest 계산 실패", () => {
+  it("Error: 레코드 패치로 Work ID 에 외톨이 surrogate 가 들어가면 grant 재검증은 불변식 예외로 끝나고 정상 ID 면 커밋된다 (test_SC049_held_digest_failure_is_invariant_error)", () => {
+    const { deps, aggregate } = reachWorkState("WAITING_APPROVAL");
+    const withWorkId = (id: string): WorkAggregate => {
+      const pending = aggregate.work.pendingDecision as unknown as Record<string, unknown>;
+      const subjects = Object.fromEntries(
+        Object.entries(aggregate.decisionSubjects).map(([key, ref]) => [
+          key,
+          { ...(ref as object), workId: id },
+        ]),
+      );
+      return {
+        ...aggregate,
+        work: { ...aggregate.work, id, pendingDecision: { ...pending, workId: id } },
+        decisionSubjects: subjects,
+      } as unknown as WorkAggregate;
+    };
+    expect(() => planDecision(new Journal(deps, withWorkId("wrk_\uD800"), []), "grant")).toThrow(
+      DomainInvariantError,
+    );
+    expect(planDecision(new Journal(deps, aggregate, []), "grant").kind).toBe("accepted");
   });
 });

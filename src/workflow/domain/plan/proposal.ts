@@ -32,6 +32,8 @@ import {
   providedOccurrenceFields,
 } from "../task-result/binding.js";
 import { validateDefinitionDraft } from "../definition/draft.js";
+import { wellFormedPath } from "../derivation/value-text.js";
+import { isPlanDraftFrame } from "../entry/shape.js";
 
 export type PlanProposalSource = "planner" | "definition_template";
 
@@ -192,29 +194,68 @@ export function judgeMandatoryPlanApproval(
   return { required: reasons.length > 0, reasons, removedTerminalRequiredTaskIds };
 }
 
+/** 계획 사전 거절 사유 — 검사 순서대로. */
+export type PlanPreconditionCode =
+  | "plan_not_object"
+  | "source_reserved"
+  | "source_unknown"
+  | "tasks_retain_not_arrays"
+  | "base_revision_mismatch"
+  | "draft_frame_invalid";
+
+function preconditionCodeOf(
+  work: WorkRecord,
+  plan: PlanProposalInput,
+  checkRevision: boolean,
+): PlanPreconditionCode | undefined {
+  const input = planInputEnvelope(plan);
+  if (!isPlainObject(input)) return "plan_not_object";
+  if (input.source === "definition_template") return "source_reserved";
+  if (typeof input.source !== "string" || !PLAN_PROPOSAL_SOURCES.includes(input.source)) {
+    return "source_unknown";
+  }
+  const tasks = input.tasks;
+  if (!Array.isArray(tasks) || !Array.isArray(input.retain)) return "tasks_retain_not_arrays";
+  if (checkRevision && input.basePlanRevision !== work.planRevision) {
+    return "base_revision_mismatch";
+  }
+  for (const draft of tasks) {
+    if (!isPlanDraftFrame(draft)) return "draft_frame_invalid";
+  }
+  return undefined;
+}
+
 /**
- * 정의 템플릿 출처(materialize 만 만든다) → invalid_input, source 밖 값 → invalid_input,
- * basePlanRevision 불일치 → condition_not_met. 없으면 undefined. 입력은 planInputEnvelope 로 한 번 읽는다.
+ * 계획 사전 거절의 첫 사유 — 객체 아님 → 정의 템플릿 출처(materialize 만 만든다) → 출처 밖 값 → tasks·retain
+ * 비배열 → 기준 revision 불일치 → 초안 틀 위반. 없으면 undefined. 입력은 planInputEnvelope 로 한 번 읽는다.
  */
+export function planPreconditionCode(
+  work: WorkRecord,
+  plan: PlanProposalInput,
+): PlanPreconditionCode | undefined {
+  return preconditionCodeOf(work, plan, true);
+}
+
+const PRECONDITION_REJECTIONS: Readonly<Record<PlanPreconditionCode, CommandRejection>> =
+  Object.freeze({
+    plan_not_object: { reason: "invalid_input", detail: "plan 이 객체가 아님" },
+    source_reserved: { reason: "invalid_input", detail: "definition_template_source_reserved" },
+    source_unknown: { reason: "invalid_input", detail: "제안 출처가 정의된 값이 아님" },
+    tasks_retain_not_arrays: { reason: "invalid_input", detail: "tasks·retain 은 배열이어야 한다" },
+    base_revision_mismatch: {
+      reason: "condition_not_met",
+      detail: "basePlanRevision 이 Work.planRevision 과 다름",
+    },
+    draft_frame_invalid: { reason: "invalid_input", detail: "계획 초안 틀이 아님" },
+  });
+
+/** 명령 경로의 사전 거절 — planPreconditionCode 의 사유를 호출마다 새 거절 값으로. 없으면 undefined. */
 export function planPreconditionRejection(
   work: WorkRecord,
   plan: PlanProposalInput,
 ): CommandRejection | undefined {
-  const input = planInputEnvelope(plan);
-  if (!isPlainObject(input)) return { reason: "invalid_input", detail: "plan 이 객체가 아님" };
-  if (input.source === "definition_template") {
-    return { reason: "invalid_input", detail: "definition_template_source_reserved" };
-  }
-  if (typeof input.source !== "string" || !PLAN_PROPOSAL_SOURCES.includes(input.source)) {
-    return { reason: "invalid_input", detail: "제안 출처가 정의된 값이 아님" };
-  }
-  if (!Array.isArray(input.tasks) || !Array.isArray(input.retain)) {
-    return { reason: "invalid_input", detail: "tasks·retain 은 배열이어야 한다" };
-  }
-  if (input.basePlanRevision !== work.planRevision) {
-    return { reason: "condition_not_met", detail: "basePlanRevision 이 Work.planRevision 과 다름" };
-  }
-  return undefined;
+  const code = planPreconditionCode(work, plan);
+  return code === undefined ? undefined : { ...PRECONDITION_REJECTIONS[code] };
 }
 
 interface DraftCheck {
@@ -364,7 +405,7 @@ export function checkPlanContentOn(
   if (!captured.ok) {
     return {
       valid: false,
-      issues: [{ kind: "proposal_not_canonical_json", path: captured.error.path }],
+      issues: [{ kind: "proposal_not_canonical_json", path: wellFormedPath(captured.error.path) }],
     };
   }
   const input = captured.value as PlanProposalInput;
@@ -389,7 +430,7 @@ export function checkPlanContentOn(
 
   // 3. 초안
   const draftCheck = checkDrafts(deps, input.tasks);
-  issues.push(...draftCheck.issues);
+  for (const issue of draftCheck.issues) issues.push(issue);
 
   // 4. 보존 집합(retain 순)
   const seen = new Set<string>();
@@ -404,11 +445,11 @@ export function checkPlanContentOn(
       continue;
     }
     const task = aggregate.tasks[taskId];
-    if (
-      task !== undefined &&
-      isTerminalTaskState(task.state) &&
-      !isSatisfyingTerminal(task.state)
-    ) {
+    if (task === undefined) {
+      issues.push({ kind: "retained_record_missing", taskId });
+      continue;
+    }
+    if (isTerminalTaskState(task.state) && !isSatisfyingTerminal(task.state)) {
       issues.push({ kind: "retained_terminal_unsatisfying", taskId, state: task.state });
     }
   }
@@ -470,14 +511,18 @@ export function checkPlanContentOn(
     workSource: work.source,
     occurrenceFields,
   };
-  for (const draft of input.tasks) issues.push(...checkDraftBindings(bindingContext, draft));
+  for (const draft of input.tasks) {
+    for (const issue of checkDraftBindings(bindingContext, draft)) issues.push(issue);
+  }
 
   // 7b. 정의 초안 — 초안 무효는 제안 전체를 무효로 만든다.
   const definitionCheck =
     input.definition === undefined
       ? undefined
       : validateDefinitionDraft(deps, aggregate, input.definition);
-  if (definitionCheck !== undefined) issues.push(...definitionCheck.issues);
+  if (definitionCheck !== undefined) {
+    for (const issue of definitionCheck.issues) issues.push(issue);
+  }
 
   // 8. 결과 membership 에 terminal-required member 가 있어야 한다 — 정의 초안을 싣거나 정의를 관리(했던)
   //    Work 는 정의가 그 Work 를 붙들므로 예외다.
@@ -512,7 +557,10 @@ export function checkPlanContentOn(
       : {}),
   });
   if (!contentCopy.ok) {
-    issues.push({ kind: "proposal_not_canonical_json", path: contentCopy.error.path });
+    issues.push({
+      kind: "proposal_not_canonical_json",
+      path: wellFormedPath(contentCopy.error.path),
+    });
   }
   if (issues.length > 0 || !contentCopy.ok) return { valid: false, issues };
   const content = contentCopy.value as PlanProposalContent;
@@ -538,8 +586,10 @@ export function planProposalInputOf(proposal: PlanProposal): PlanProposalInput {
 
 /**
  * 보유 제안 재검증(grant·대기 제안 재검증 공통). 보유 내용을 사본으로 한 번 읽어 무결성·검증·커밋에 같은
- * 사본을 쓴다. 사본의 digest 가 보유 digest 와 다르면 승인 대상과 다른 내용이라 무효다. 유효하면 커밋할
- * 제안은 재정규화한 내용이 아니라 승인된 digest 의 내용(사본)이다.
+ * 사본을 쓴다. 사본의 digest 가 보유 digest 와 다르면 승인 대상과 다른 내용이라 무효다. 내용과 digest 가
+ * 맞아도 Work 가 보유한 제안(ID·digest)이 아니면 무효이고, 새 제안과 같은 사전 거절 조건(기준 revision 은
+ * 검증의 base_revision_mismatch 가 다룬다)에 걸려도 무효다. 유효하면 커밋할 제안은 재정규화한 내용이 아니라
+ * 승인된 digest 의 내용(사본)이다.
  */
 export function revalidateHeldProposal(
   deps: DomainDeps,
@@ -552,7 +602,7 @@ export function revalidateHeldProposal(
   if (!captured.ok) {
     return {
       valid: false,
-      issues: [{ kind: "proposal_not_canonical_json", path: captured.error.path }],
+      issues: [{ kind: "proposal_not_canonical_json", path: wellFormedPath(captured.error.path) }],
     };
   }
   const content = captured.value as PlanProposalContent;
@@ -562,6 +612,17 @@ export function revalidateHeldProposal(
   }
   if (digest.value !== heldDigest) {
     return { valid: false, issues: [{ kind: "proposal_digest_mismatch" }] };
+  }
+  const work = aggregate.work;
+  if (heldId !== work.pendingProposalId || heldDigest !== work.pendingProposalDigest) {
+    return { valid: false, issues: [{ kind: "proposal_not_held" }] };
+  }
+  const precondition = preconditionCodeOf(work, content as PlanProposalInput, false);
+  if (precondition !== undefined) {
+    return {
+      valid: false,
+      issues: [{ kind: "proposal_precondition_unmet", reason: precondition }],
+    };
   }
   const check = validatePlanProposal(deps, aggregate, content);
   if (!check.valid) return check;

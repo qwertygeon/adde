@@ -1026,7 +1026,7 @@ describe("SC-006: 취소 명령의 vault 출처는 human_local 이어야 한다"
         kind: "cancel_task",
         taskId,
         expectedRevision: requireTaskFor(aggregate, taskId).revision,
-        meta: meta(NOW),
+        meta: meta(NOW, actorSource),
         origin: vaultCancelOrigin(deps, actorSource),
       });
     const refused = cancelTask("agent_session");

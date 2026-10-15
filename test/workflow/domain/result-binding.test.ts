@@ -382,7 +382,7 @@ describe("SC-037: 결합 위반은 각각 계획 무효다", () => {
     ).aggregate;
     expect(waiting.work.state).toBe("WAITING_APPROVAL");
     const drifted = planDecision(new Journal(safetyDriftDeps("sc037s5"), waiting, []), "grant");
-    expect(drifted.kind).toBe("rejected_stale");
+    expect(drifted.kind).toBe("stale_after_withdrawal");
     const chain = committedChain(drifted);
     expect(chain.map(eventTypes)).toEqual([["work_plan_withdrawn"], ["signal_rejected_stale"]]);
     const [withdrawal] = chain;

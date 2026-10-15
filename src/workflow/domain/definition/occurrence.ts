@@ -206,7 +206,7 @@ function holdWithPolicy(
   if (misfire.kind === "fire_once_now") {
     const superseded = run.held.filter(isScheduleOccurrence);
     run.held = run.held.filter((h) => !isScheduleOccurrence(h));
-    run.skipItems.push(...superseded.map(skipItemOfHeld));
+    for (const prior of superseded) run.skipItems.push(skipItemOfHeld(prior));
     run.held.push(occurrence);
     run.actions.push({ kind: "hold", occurrence, cause });
     return;
@@ -387,7 +387,9 @@ function assemblePieces(
     };
     const withoutPending: DefinitionRecord = { ...remaining };
     delete (withoutPending as { pendingSchedule?: unknown }).pendingSchedule;
-    stewardEvents.push(...decideStop(run.deps, withoutPending, seriesExhaustedOrigin(), now));
+    for (const event of decideStop(run.deps, withoutPending, seriesExhaustedOrigin(), now)) {
+      stewardEvents.push(event);
+    }
   }
   flushSteward();
   return pieces;
@@ -515,24 +517,26 @@ export function resolveDueSchedule(
   const missed = issuable.filter((row) => row !== onTime);
 
   const run = startRun(deps, state, target.steward);
-  run.lostItems.push(
-    ...rows.filter((row) => retired.has(row.occurrenceId)).map(skipItemOfRow),
-    ...due.lostAhead.map(skipItemOfRow),
-  );
+  for (const row of rows) {
+    if (retired.has(row.occurrenceId)) run.lostItems.push(skipItemOfRow(row));
+  }
+  for (const row of due.lostAhead) run.lostItems.push(skipItemOfRow(row));
   const skipLike = isSkipLike(misfire);
   const skipReason: SkipReason = skipLike ? "misfire_skip" : "superseded_by_later";
   let candidates: readonly ScheduleRow[];
   if (missed.length === 0) {
     candidates = onTime === undefined ? [] : [onTime];
   } else if (skipLike) {
-    run.skipItems.push(...missed.map(skipItemOfRow));
+    for (const row of missed) run.skipItems.push(skipItemOfRow(row));
     candidates = onTime === undefined ? [] : [onTime];
   } else if (misfire.kind === "fire_once_now") {
-    run.skipItems.push(...issuable.slice(0, -1).map(skipItemOfRow));
+    for (const row of issuable.slice(0, -1)) run.skipItems.push(skipItemOfRow(row));
     candidates = [lastIssuable];
   } else {
     const keep = Math.min(catchUpLimitOf(misfire), issuable.length);
-    run.skipItems.push(...issuable.slice(0, issuable.length - keep).map(skipItemOfRow));
+    for (const row of issuable.slice(0, issuable.length - keep)) {
+      run.skipItems.push(skipItemOfRow(row));
+    }
     candidates = issuable.slice(issuable.length - keep);
   }
   for (const row of candidates) {

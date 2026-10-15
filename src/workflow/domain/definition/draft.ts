@@ -19,6 +19,7 @@ import type { DomainDeps } from "../engine.js";
 import type { PlanValidationIssue } from "../plan-graph.js";
 import type { PlanProposalContent, ProposedTaskDraft } from "../plan/proposal.js";
 import { checkPlanContentOn } from "../plan/proposal.js";
+import { isPlanDraftFrame } from "../entry/shape.js";
 import type { OccurrenceBindingField } from "../task-result/binding.js";
 import { providedOccurrenceFields } from "../task-result/binding.js";
 import { OCCURRENCE_FIELDS_BY_FIRING } from "../contract/occurrence-input.js";
@@ -122,6 +123,9 @@ function shapeOf(raw: unknown): ShapedDraft | undefined {
   const title = raw["title"];
   const template = raw["template"];
   if (typeof title !== "string" || !Array.isArray(template)) return undefined;
+  for (const draft of template) {
+    if (!isPlanDraftFrame(draft)) return undefined;
+  }
   const amends = parseAmends(raw["amends"]);
   if (amends === "malformed") return undefined;
   return {

@@ -3,11 +3,11 @@
 import { describe, expect, it } from "vitest";
 import {
   DomainInvariantError,
-  checkReportedOutputs,
   executeCommand,
   parseDataSchema,
   validateTask,
 } from "../../../src/workflow/domain/index.js";
+import { checkReportedOutputs } from "../../../src/workflow/domain/internal.js";
 import type {
   DomainCommit,
   DomainDeps,

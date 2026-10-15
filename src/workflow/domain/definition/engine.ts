@@ -1,6 +1,6 @@
 /**
- * 정의 진입점 — 회차 명령과 정의 대상 신호. 진입에서 명령 최상위와 `meta` 를 한 번만 읽어 얕은 동결
- * 사본으로 판정한다(기존 명령 진입과 같은 방식).
+ * 정의 진입점 — 회차 명령과 정의 대상 신호. 진입에서 명령·신호를 정규 JSON 동결 사본으로 한 번 뜨고 진입
+ * 형을 본 뒤 그 사본으로 판정한다(Work 명령 진입과 같은 방식). 결과의 커밋은 표식·동결된다.
  */
 import type { DefinitionCommand, DefinitionControlSignal, ExternalSignal } from "../commands.js";
 import type { UtcInstant } from "../values.js";
@@ -19,6 +19,17 @@ import { assembleWorkflowCommit } from "./commit.js";
 import { judgeDefinitionControl } from "./control.js";
 import type { OccurrenceDecision } from "./occurrence.js";
 import { releaseHeldOccurrence, resolveDueSchedule } from "./occurrence.js";
+import { EXTERNAL_SIGNAL_COPY_RULES, copyEntry } from "../entry/copy.js";
+import {
+  canonicalInstant,
+  isActorSourceValue,
+  isCommandMetaShape,
+  isPlainRecord,
+  soleSubjectKey,
+  withCanonicalNow,
+} from "../entry/shape.js";
+import { sealOutcome } from "../entry/seal.js";
+import type { WorkDefinitionId } from "../ids.js";
 
 export type WorkflowOutcome =
   | { readonly kind: "committed"; readonly commit: DomainCommit; readonly state: WorkflowState }
@@ -45,13 +56,15 @@ export type WorkflowSignalJudgement =
     }
   | { readonly kind: "not_applicable"; readonly rejection: CommandRejection };
 
-function captureDefinitionCommand(received: DefinitionCommand): DefinitionCommand {
-  const top = { ...received };
-  const captured =
-    typeof top.meta === "object" && top.meta !== null
-      ? { ...top, meta: Object.freeze({ ...top.meta }) }
-      : top;
-  return Object.freeze(captured);
+function invalidInput(): { readonly kind: "rejected"; readonly rejection: CommandRejection } {
+  return { kind: "rejected", rejection: { reason: "invalid_input" } };
+}
+
+function invalidSignalInput(): {
+  readonly kind: "not_applicable";
+  readonly rejection: CommandRejection;
+} {
+  return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
 }
 
 function occurrenceCommandFieldsValid(command: {
@@ -66,7 +79,18 @@ export function executeDefinitionCommand(
   state: WorkflowState,
   received: DefinitionCommand,
 ): WorkflowOutcome {
-  const command = captureDefinitionCommand(received);
+  const copied = copyEntry(received);
+  if (!copied.ok || !isPlainRecord(copied.value) || !isCommandMetaShape(copied.value.meta)) {
+    return sealOutcome(invalidInput());
+  }
+  return sealOutcome(executeDefinitionCommandOn(deps, state, withCanonicalNow(copied.value)));
+}
+
+function executeDefinitionCommandOn(
+  deps: DomainDeps,
+  state: WorkflowState,
+  command: DefinitionCommand,
+): WorkflowOutcome {
   const meta: CommitMeta = {
     now: command.meta.now,
     actorSource: command.meta.actorSource,
@@ -113,31 +137,51 @@ export function executeDefinitionCommand(
   return { kind: "committed", commit: assembled.commit, state: assembled.state };
 }
 
-/** 정의 제어 신호와 정의 대상 외부 신호. Task 대상 외부 신호는 Work 단위 판정의 몫이다. */
+/**
+ * 정의 제어 신호와 정의 대상 외부 신호. Task 대상 외부 신호는 Work 단위 판정의 몫이다. 신호를 정규 JSON 동결
+ * 사본으로 한 번 뜨고(payload 는 깊이 루트), 진입 형(최상위 객체·진입 시각·출처 열거)을 본 뒤 판정한다. 외부
+ * 신호의 subject 는 정확히 definitionId 하나여야 한다.
+ */
 export function judgeDefinitionSignal(
   deps: DomainDeps,
   state: WorkflowState,
   received: DefinitionControlSignal | ExternalSignal,
   now: UtcInstant,
 ): WorkflowSignalJudgement {
-  const signal = Object.freeze({ ...received });
+  const copied = copyEntry(received, EXTERNAL_SIGNAL_COPY_RULES);
+  if (!copied.ok || !isPlainRecord(copied.value)) return sealOutcome(invalidSignalInput());
+  const instant = canonicalInstant(now);
+  if (instant === undefined) return sealOutcome(invalidSignalInput());
+  if (!isActorSourceValue(copied.value.actorSource)) return sealOutcome(invalidSignalInput());
+  return sealOutcome(judgeDefinitionSignalOn(deps, state, copied.value, instant));
+}
+
+function judgeDefinitionSignalOn(
+  deps: DomainDeps,
+  state: WorkflowState,
+  signal: DefinitionControlSignal | ExternalSignal,
+  now: UtcInstant,
+): WorkflowSignalJudgement {
   switch (signal.type) {
     case "definition_control":
       return judgeDefinitionControl(deps, state, signal, now);
-    case "external_signal":
-      if (typeof signal.subject !== "object" || signal.subject === null) {
-        return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
-      }
-      if (!("definitionId" in signal.subject)) {
+    case "external_signal": {
+      const subject = soleSubjectKey(signal.subject);
+      if (subject?.key === "taskId") {
         return {
           kind: "not_applicable",
           rejection: { reason: "invalid_input", detail: "task_subject_not_definition_signal" },
         };
       }
-      if (typeof signal.subject.definitionId !== "string") {
-        return { kind: "not_applicable", rejection: { reason: "invalid_input" } };
-      }
-      return judgeDefinitionExternalSignal(deps, state, signal, signal.subject.definitionId, now);
+      if (subject?.key !== "definitionId") return invalidSignalInput();
+      return judgeDefinitionExternalSignal(
+        deps,
+        state,
+        signal,
+        subject.value as WorkDefinitionId,
+        now,
+      );
+    }
     default: {
       const unknownType: never = signal;
       void unknownType;
